@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MCP_CATALOG, PROJECT_PLACEHOLDER, addPastedServers, catalogServer, freeServerId, serverProblem } from './mcpCatalog'
+import { MCP_CATALOG, PROJECT_PLACEHOLDER, addPastedServers, catalogServer, freeServerId, serverIdProblem, serverProblem } from './mcpCatalog'
 import { sanitizeServerId } from './mcp'
 
 describe('MCP_CATALOG', () => {
@@ -59,6 +59,14 @@ describe('serverProblem', () => {
     expect(serverProblem({ ...base, env: { TOKEN: '' } }, [])).toBe('Fill in the TOKEN variable.')
     expect(serverProblem({ ...base, transport: 'http', command: '', url: 'ftp://x' }, [])).toMatch(/URL/)
     expect(serverProblem(base, [])).toBeNull()
+  })
+})
+
+describe('serverIdProblem', () => {
+  it('flags only an empty or taken id', () => {
+    expect(serverIdProblem('', [])).toMatch(/Give it an id/)
+    expect(serverIdProblem('github', ['github'])).toBe('There is already a server with the id github.')
+    expect(serverIdProblem('github', ['linear'])).toBeNull()
   })
 })
 

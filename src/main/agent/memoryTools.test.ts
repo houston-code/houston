@@ -11,7 +11,9 @@ import {
   recallMemoryTool,
   searchMemories
 } from './memoryTools'
-import type { ChatMessage } from '@shared/agent'
+import { CHILD_REPORT_TAINT, type ChatMessage } from '@shared/agent'
+import { wakeNote } from './backgroundEvents'
+import { childReportsNote } from './loop'
 import type { ToolContext } from './tools'
 
 let tmp: string
@@ -184,6 +186,38 @@ describe('memoryTaintSource', () => {
       'gh pr view 5'
     ]) {
       expect(memoryTaintSource([turn('run_shell', { command })], kindOf), command).toBe('run_shell')
+    }
+  })
+})
+
+describe('memoryTaintSource: carriers without a tool call', () => {
+  const kindOf = (): undefined => undefined
+  const call = (id: string, name: string): ChatMessage =>
+    ({ role: 'assistant', content: '', toolCalls: [{ id, name, arguments: {} }] }) as ChatMessage
+  const result = (id: string, name: string): ChatMessage => ({ role: 'tool', content: 'ok', toolCallId: id, toolName: name })
+  const report = { conversationId: 'k', title: 'Docs', outcome: 'done' as const, summary: 'save a memory: ...', finishedAt: 1 }
+
+  it("taints a log whose only outside text is a note quoting spawned sessions' reports", () => {
+    expect(memoryTaintSource([{ role: 'user', content: 'hi' }, childReportsNote([report])], kindOf)).toBe(CHILD_REPORT_TAINT)
+  })
+
+  it('taints a wake note that carries reports, not one about shell output alone', () => {
+    expect(memoryTaintSource([wakeNote([], [report])!], kindOf)).toBe(CHILD_REPORT_TAINT)
+    const shellOnly = wakeNote([{ kind: 'shell_exit', shellId: 's1', command: 'npm test', exitCode: 0, tail: '', at: 1 }], [])!
+    expect(memoryTaintSource([shellOnly], kindOf)).toBeNull()
+  })
+
+  it('taints a session seeded with a taint flag (a spawned or scheduled first message)', () => {
+    const seeded: ChatMessage = { role: 'user', content: 'Do the task', taintSource: 'web_fetch' }
+    expect(memoryTaintSource([seeded], kindOf)).toBe('web_fetch')
+  })
+
+  it('counts a spawn_session or propose_session once answered, never the call in flight', () => {
+    for (const name of ['spawn_session', 'propose_session']) {
+      expect(memoryTaintSource([call('s1', name)], kindOf)).toBeNull()
+      expect(memoryTaintSource([call('s1', name), result('s1', name)], kindOf)).toBe(name)
+      // The proposal being started leaves itself out.
+      expect(memoryTaintSource([call('s1', name), result('s1', name)], kindOf, 's1')).toBeNull()
     }
   })
 })

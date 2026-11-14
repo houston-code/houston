@@ -113,6 +113,32 @@ describe('testPermission', () => {
     expect(project).toMatchObject({ decision: 'ask', tier: 'project' })
   })
 
+  it("credits a deny to the tier that holds it, past a guardrail's earlier ask", async () => {
+    // The project's `ask` comes first in the list, but the user's deny wins wherever it
+    // sits, so the user's tier decided.
+    const res = await testPermission(
+      { ...base, workspace: '/repo', userRules: [{ action: 'deny', tool: 'run_shell', match: 'git *' }] },
+      deps({
+        loadProject: async () => ({ ...emptyProject, permissionRules: [{ action: 'ask', tool: 'run_shell', match: 'git *' }] })
+      })
+    )
+    expect(res).toEqual({ decision: 'deny', tier: 'user', userMatches: [0] })
+  })
+
+  it('denies when a user deny sits below a user allow for the same call', async () => {
+    const res = await testPermission(
+      {
+        ...base,
+        userRules: [
+          { action: 'allow', tool: 'run_shell', match: 'git status', exact: true },
+          { action: 'deny', tool: 'run_shell', match: 'git *' }
+        ]
+      },
+      deps()
+    )
+    expect(res).toEqual({ decision: 'deny', tier: 'user', userMatches: [0, 1] })
+  })
+
   it("applies a project's allow rules only when the folder is trusted, and after the user's", async () => {
     const projectWithAllow = async (): Promise<ProjectConfig> => ({
       ...emptyProject,

@@ -28,8 +28,8 @@ import { parseTightenOnlyRules } from './permissions'
  *    in-process, and why a non-root user who somehow could write it would only be
  *    able to restrict themselves, never escalate.
  *  - Highest precedence. Its rules are checked before the project's and before the
- *    user's, and matching is first-match-wins, so an admin `deny`/`ask` overrides
- *    any user `allow`. The user cannot loosen it from within the app: the Settings
+ *    user's, a matching `deny` wins wherever it sits, and otherwise the first match
+ *    decides, so an admin `deny`/`ask` overrides any user `allow`. The user cannot loosen it from within the app: the Settings
  *    editor only ever writes the user's own `settings.json`, never this file.
  *  - Locked by the filesystem, not by us. The "lock" is the OS permissions on the
  *    system path above (writable only by root / Administrators). Houston reads that

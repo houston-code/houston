@@ -63,11 +63,17 @@ export function PlanPanel({
   // and editor state carried over from the previous plan. The panel is not remounted
   // across the swap, so without this reset `effectiveBody` would render — and accept
   // would submit — the stale edit over the new plan. Keyed on `plan` identity: the
-  // parent passes a fresh payload for each presented plan.
+  // parent passes a fresh payload for each presented plan. Focus comes back to the
+  // panel too (its shortcuts work only there), unless the user is typing elsewhere or
+  // has moved on to another part of the app.
   useEffect(() => {
     setEditedBody(null)
     setEditing(false)
     setDraft('')
+    const root = rootRef.current
+    const el = document.activeElement
+    const idle = !el || el === document.body || (root !== null && root.contains(el))
+    if (root && idle && !isField(el)) root.focus()
   }, [plan])
 
   const accept = (): void =>
@@ -77,6 +83,12 @@ export function PlanPanel({
     setSuggestOpen(true)
     setTimeout(() => suggestRef.current?.focus(), 0)
   }
+  // The suggest box is going away with focus in it: keep focus in the panel so its
+  // shortcuts still work, rather than letting it fall to the page.
+  const closeSuggest = (): void => {
+    setSuggestOpen(false)
+    rootRef.current?.focus()
+  }
   const sendSuggestion = (): void => {
     const trimmed = note.trim()
     if (!trimmed) {
@@ -85,7 +97,7 @@ export function PlanPanel({
     }
     onResolve({ kind: 'suggest', note: trimmed })
     setNote('')
-    setSuggestOpen(false)
+    closeSuggest()
   }
 
   const enterEdit = (): void => {
@@ -338,14 +350,14 @@ export function PlanPanel({
                       sendSuggestion()
                     } else if (e.key === 'Escape') {
                       e.preventDefault()
-                      setSuggestOpen(false)
+                      closeSuggest()
                     }
                   }}
                   placeholder="What should change? e.g. “Debounce at 250ms and also persist on window blur.”"
                   aria-label="Suggested changes to the plan"
                 />
                 <div className="plan-panel__suggest-actions">
-                  <button className="btn btn--sm plan-panel__ghost" onClick={() => setSuggestOpen(false)}>
+                  <button className="btn btn--sm plan-panel__ghost" onClick={closeSuggest}>
                     Cancel
                   </button>
                   <button className="btn btn--sm btn--accent" onClick={sendSuggestion} disabled={!note.trim()}>
@@ -391,6 +403,11 @@ export function PlanPanel({
       </footer>
     </aside>
   )
+}
+
+/** A text field (typing there must not be taken over by the panel's shortcuts). */
+function isField(el: Element | null): boolean {
+  return el instanceof HTMLElement && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)
 }
 
 /**

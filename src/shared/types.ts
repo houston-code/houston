@@ -238,6 +238,14 @@ export function isApprovalPolicy(v: unknown): v is ApprovalPolicy {
 }
 
 /**
+ * The more restrictive of two approval policies, by their order in
+ * {@link APPROVAL_POLICIES} (plan is the most restrictive, full auto the least).
+ */
+export function leastPermissivePolicy(a: ApprovalPolicy, b: ApprovalPolicy): ApprovalPolicy {
+  return APPROVAL_POLICIES.indexOf(a) <= APPROVAL_POLICIES.indexOf(b) ? a : b
+}
+
+/**
  * Each policy's name as the user sees it, in both clients: the desktop's approval
  * menu and the terminal's `/approval` both print these, never the ids.
  */
@@ -494,7 +502,10 @@ export function removeFolderTrust(
 /**
  * A fine-grained permission rule, consulted before the approval policy. Matches a
  * tool (by name, or `*` for any) and a glob over the call's subject (shell
- * command, path, URL, or query). First match wins.
+ * command, path, URL, or query). A matching deny always wins; otherwise the first
+ * matching allow or ask decides. A deny or ask naming one file-editing tool
+ * (`write_file`, `edit_file`, `multi_edit`, `apply_patch`, `notebook_edit`) applies to
+ * all of them.
  */
 export interface PermissionRule {
   action: 'allow' | 'deny' | 'ask'
@@ -555,6 +566,20 @@ export interface ChatGroup {
   name: string
   /** Whether the group is collapsed in the sidebar. */
   collapsed?: boolean
+}
+
+/** The colors a chat label can take (see `LABEL_COLORS` in shared/chatLabels). */
+export type LabelColor = 'blue' | 'green' | 'orange' | 'purple' | 'red' | 'teal' | 'yellow' | 'pink'
+
+/**
+ * A user-defined chat label. Unlike a group, a chat can carry any number of labels.
+ * Definitions are app-level and persisted in settings; which labels a chat carries is
+ * stored on the conversation itself (ConversationMeta.labels).
+ */
+export interface ChatLabel {
+  id: string
+  name: string
+  color: LabelColor
 }
 
 /**
@@ -884,6 +909,14 @@ export interface AppSettings {
   tuiVerbose?: boolean
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
+  /** User-defined chat labels, in display order. */
+  chatLabels?: ChatLabel[]
+  /**
+   * Each sidebar section's label filter, keyed by section id (a group's id, or
+   * 'pinned', 'ungrouped', or an automatic section's id): the section shows only the
+   * chats carrying any of these labels. Absent or empty = the section is unfiltered.
+   */
+  sectionLabelFilters?: Record<string, string[]>
   /**
    * Collapsed state for the sidebar's built-in sections, keyed by section id
    * ('pinned', 'ungrouped'). Custom groups keep their own collapsed flag on the

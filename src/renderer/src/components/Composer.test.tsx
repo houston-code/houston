@@ -194,7 +194,7 @@ describe('Composer', () => {
     const input = screen.getByRole('textbox', { name: 'Message' })
     expect(screen.queryByText(ULTRATHINK_HINT)).toBeNull()
     fireEvent.change(input, { target: { value: 'why does this deadlock? ultrathink' } })
-    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT)
+    expect(screen.getByText(ULTRATHINK_HINT)).toHaveAttribute('role', 'status')
     // Talking about the word is not using it.
     fireEvent.change(input, { target: { value: 'what does "ultrathink" do?' } })
     expect(screen.queryByText(ULTRATHINK_HINT)).toBeNull()
@@ -203,11 +203,11 @@ describe('Composer', () => {
   it('words the hint by what the keyword will do on this model', () => {
     const { rerender } = render(<Composer {...baseProps()} ultrathinkEffect="already" />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'ultrathink' } })
-    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT_ALREADY)
+    expect(screen.getByText(ULTRATHINK_HINT_ALREADY)).toHaveAttribute('role', 'status')
     rerender(<Composer {...baseProps()} ultrathinkEffect="none" />)
-    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT_NONE)
+    expect(screen.getByText(ULTRATHINK_HINT_NONE)).toHaveAttribute('role', 'status')
     rerender(<Composer {...baseProps()} ultrathinkEffect="raises" />)
-    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT)
+    expect(screen.getByText(ULTRATHINK_HINT)).toHaveAttribute('role', 'status')
   })
 
   it('colours the keyword over the field only where it will raise the turn', () => {
@@ -291,6 +291,46 @@ describe('Composer', () => {
       'placeholder',
       'Set an API key for this model to start…'
     )
+  })
+
+  it('says why the box is off when a draft hides the placeholder', () => {
+    const { rerender } = render(<Composer {...baseProps()} />)
+    const input = type('ship the fix')
+    rerender(
+      <Composer {...baseProps({ disabled: true, disabledReason: 'Enter a valid worktree branch name to start…' })} />
+    )
+    expect(input).toBeDisabled()
+    expect(screen.getByText('Enter a valid worktree branch name to start.')).toHaveAttribute('role', 'status')
+  })
+
+  it('keeps the notice live region mounted, so each notice is announced', () => {
+    const { container } = render(<Composer {...baseProps()} />)
+    const region = container.querySelector('.composer__notice--live') as HTMLElement
+    expect(region).toHaveAttribute('role', 'status')
+    expect(region).toBeEmptyDOMElement()
+    fireEvent.keyDown(type('/vim'), { key: 'Enter' })
+    expect(container.querySelector('.composer__notice--live')).toBe(region)
+    expect(region).toHaveTextContent('/vim is a terminal command')
+  })
+
+  it('names ! in the idle placeholder when ! lines run in the terminal', () => {
+    render(<Composer {...baseProps({ onShellEscape: vi.fn() })} />)
+    expect(screen.getByRole('textbox')).toHaveAttribute(
+      'placeholder',
+      'Ask Houston anything…  (@ for files, / for commands, ! for the terminal, + for attachments)'
+    )
+  })
+
+  it('spells the send keys the way the shortcut sheet does', () => {
+    const { rerender } = render(<Composer {...baseProps()} />)
+    // jsdom isn't a Mac, so the keys read Ctrl and Shift.
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('title', 'Send (↵ · Shift+↵ for a new line)')
+    rerender(<Composer {...baseProps({ running: true })} />)
+    expect(screen.getByRole('button', { name: 'Queue' })).toHaveAttribute(
+      'title',
+      'Queue (Ctrl+↵): sent when this run finishes'
+    )
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', '↵ steers now, Ctrl+↵ queues for after this run.')
   })
 
   it('names the @, /, and + shortcuts in the idle placeholder', () => {
@@ -1350,6 +1390,23 @@ describe('Composer + attachment menu notices', () => {
     openMenu()
     fireEvent.click(screen.getByRole('menuitem', { name: /Paste from clipboard/ }))
     expect(await screen.findByText('The clipboard is empty.')).toBeInTheDocument()
+  })
+
+  it('says the clipboard holds an image when the model can\'t take it', async () => {
+    stubApi({ readClipboard: vi.fn().mockResolvedValue({ text: '', image: { mediaType: 'image/png', data: 'AA==' } }) })
+    render(<Composer {...baseProps({ vision: false })} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Paste from clipboard/ }))
+    expect(
+      await screen.findByText('The clipboard holds an image. Switch to a vision model to attach it.')
+    ).toBeInTheDocument()
+  })
+
+  it('lists every image format the upload takes', () => {
+    stubApi()
+    render(<Composer {...baseProps()} />)
+    openMenu()
+    expect(screen.getByRole('menuitem', { name: /Upload images/ })).toHaveTextContent('PNG, JPEG, GIF, WebP')
   })
 
   it('names how many binary files went without their contents', async () => {

@@ -65,7 +65,8 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { throttleNotice } from '@shared/rateLimit'
+import { quotaIsLow, quotaStatusText, throttleNotice, type ProviderQuota } from '@shared/rateLimit'
+import { providerQuota } from './providers/quota'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
@@ -83,7 +84,15 @@ import type { ConversationSettingsPatch, ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, deniedPromptText, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
-import { truncateVisible, stripControlChars, osc52Copy, osc8Link, visibleWidth, wrapAnsi } from './tui-wrap'
+import {
+  truncateVisible,
+  stripControlChars,
+  stripControlCharsKeepLines,
+  osc52Copy,
+  osc8Link,
+  visibleWidth,
+  wrapAnsi
+} from './tui-wrap'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -98,10 +107,11 @@ import {
   parseExportArgs,
   renderPermissionRules,
   renderRecap,
+  sessionPreviewLines,
   type ExportFormat
 } from './tui-sessions'
 import { htmlToAnsi } from './syntax'
-import type { PickerSpec, PickerOutcome } from './tui-picker'
+import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
 import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
 import { workspaceLabel } from '@shared/notify'
 import {
@@ -363,8 +373,10 @@ export function renderTodoList(todos: Todo[], paint: Painter): string {
  */
 export function renderToolStart(name: string, args: Record<string, unknown>, paint: Painter): string {
   const { verb, target } = describeToolCall(name, args)
-  // A tool the shared labels don't know keeps the old best-effort argument hint.
-  const hint = truncate((target || (verb === name ? toolArgHint(args) : '')).replace(/\s+/g, ' ').trim(), 80)
+  // A tool the shared labels don't know keeps the old best-effort argument hint. The
+  // hint is the model's argument (a command, a path), so its control characters go.
+  const raw = stripControlChars((target || (verb === name ? toolArgHint(args) : '')).replace(/\s+/g, ' '))
+  const hint = truncate(raw.trim(), 80)
   const suffix = hint ? `  ${paint(hint, 'dim')}` : ''
   return `${paint('·', 'dim')} ${paint(verb, 'cyan')}${suffix}`
 }
@@ -398,7 +410,7 @@ export function tagResultLines(rendered: string, tag: string, paint: Painter): s
 export function toolArgHint(args: Record<string, unknown>): string {
   for (const key of ['path', 'file', 'file_path', 'command', 'cmd', 'query', 'url', 'pattern']) {
     const v = args[key]
-    if (typeof v === 'string' && v.trim()) return truncate(v.replace(/\s+/g, ' ').trim(), 80)
+    if (typeof v === 'string' && v.trim()) return truncate(stripControlChars(v.replace(/\s+/g, ' ')).trim(), 80)
   }
   return ''
 }
@@ -418,6 +430,10 @@ export function renderApprovalPrompt(
   // and "deny" as "keep offline", not "block".
   // The egress question likewise comes after the proxy refused a host the allowlist
   // doesn't name; it decides that one host for the chat.
+  // The summary is the model's own text (for a shell call, the command itself), so a
+  // carriage return or an erase-line escape in it could overwrite what is about to be
+  // approved with something harmless. Its control characters go; its lines stay.
+  const summary = stripControlCharsKeepLines(ev.summary)
   if (ev.egressHost) {
     const host = stripControlChars(ev.egressHost)
     const head = paint(`A command tried to reach ${host}, which isn't on the sandbox's allowed domains.`, 'bold')
@@ -426,7 +442,7 @@ export function renderApprovalPrompt(
       'dim'
     )
     const keys = opts.picker ? '' : `\n${paint(`  [y] allow ${host} for this chat   [n] keep blocked`, 'dim')}`
-    return `\n${head}\n  ${ev.summary}\n${note}${keys}`
+    return `\n${head}\n  ${summary}\n${note}${keys}`
   }
   if (ev.shellNetwork) {
     const head = paint('This command could not reach the network.', 'bold')
@@ -435,7 +451,7 @@ export function renderApprovalPrompt(
       'dim'
     )
     const keys = opts.picker ? '' : `\n${paint('  [y] allow network for this chat   [n] keep offline', 'dim')}`
-    return `\n${head}\n  ${ev.summary}\n${note}${keys}`
+    return `\n${head}\n  ${summary}\n${note}${keys}`
   }
   const warn =
     ev.kind === 'shell' && ev.sandboxed === false
@@ -452,7 +468,7 @@ export function renderApprovalPrompt(
     : ''
   // A network grant reaches one destination; say which before the user picks it.
   const scope = ev.networkScope
-    ? `\n${paint(`  "Allow for run" covers ${ev.networkScope} for the rest of this chat.`, 'dim')}`
+    ? `\n${paint(`  "Allow for run" covers ${stripControlChars(ev.networkScope)} for the rest of this chat.`, 'dim')}`
     : ''
   // Named as the call's tool line names it ("Run", "Write"), not by its wire name.
   const head = paint(`Approve ${describeToolCall(ev.name, ev.args).verb}`, 'bold')
@@ -461,7 +477,7 @@ export function renderApprovalPrompt(
     ? ''
     : `\n${paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim')}` +
       paint('\n  …or type why not, and that goes back to the agent', 'dim')
-  return `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}${scope}${keys}`
+  return `\n${head} ${kind}\n  ${summary}${warn}${offline}${scope}${keys}`
 }
 
 /**
@@ -588,7 +604,9 @@ export function extractDiff(args: Record<string, unknown>): string | null {
 
 /** Colorize a unified diff, capped at `maxLines` so a huge edit doesn't flood the terminal. */
 export function colorizeDiff(diff: string, paint: Painter, maxLines = 40): string {
-  const lines = diff.split('\n')
+  // Built from the model's arguments: drop control characters so none can paint over
+  // the change being approved (tabs stay, as indentation).
+  const lines = stripControlCharsKeepLines(diff).split('\n')
   const shown = lines.slice(0, maxLines).map((l) => {
     // Header markers must be checked before +/- since `+++`/`---` also start with them.
     if (l.startsWith('+++') || l.startsWith('---') || l.startsWith('@@')) return paint(l, 'cyan')
@@ -676,7 +694,9 @@ export function renderToolResult(
   // for it, so a "✗ Run failed" line over the model-facing text would only repeat it.
   if (!ok && deniedPromptText(output) !== null) return ''
   if (ok && name === PRESENT_PLAN_TOOL) return paint(`  ↳ ${PLAN_OUTCOME_LABEL[planOutcome(output)]}`, 'dim')
-  const lines = output.split('\n')
+  // A command's output (or a fetched page, or an MCP result) can carry escapes that
+  // move the cursor or write the clipboard; show its text without them.
+  const lines = output.split('\n').map(stripControlCharsKeepLines)
   if (!ok) {
     // "✗ Run failed", matching the row above it, not the wire name.
     const failed = paint(`  ✗ ${describeToolCall(name, undefined).verb} failed`, 'red')
@@ -741,7 +761,7 @@ export function renderRecoveredOutput(
     return paint(`· no tool call #${index} (this conversation has ${results.length})`, 'yellow')
   }
   const picked = results[results.length - index]
-  const lines = picked.output.split('\n')
+  const lines = picked.output.split('\n').map(stripControlCharsKeepLines)
   const shown = lines.slice(0, OUTPUT_LINES)
   const head = paint(`▣ ${picked.name}`, 'bold') + paint(`  (${index} back, ${lines.length} lines)`, 'dim')
   const more =
@@ -860,7 +880,7 @@ export function renderEditSummary(preview: FileDiffPreview[], paint: Painter): s
   const files = preview.slice(0, EDIT_SUMMARY_FILES).map((f) => {
     const { added, removed } = diffStat(f.diff)
     const more = f.truncated ? '…' : ''
-    const name = f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path
+    const name = stripControlChars(f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path)
     const tag = f.created ? paint(' (new)', 'dim') : f.deleted ? paint(' (deleted)', 'dim') : ''
     const counts = [
       added || !removed ? paint(`+${added}${more}`, 'green') : '',
@@ -888,6 +908,8 @@ export interface StatusState {
   contextTokens: number
   /** The checked-out git branch, or null outside a repository (or on a detached HEAD). */
   branch?: string | null
+  /** The rate-limit quota the provider reported on its latest response, when it sent one. */
+  quota?: ProviderQuota
 }
 
 /** A path under the home folder written from `~` (`~/code/app`); any other path as is. */
@@ -920,6 +942,8 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
   parts.push(formatUsd(s.cost.cost))
   const ctx = renderContextUsage(s.contextTokens, s.model, paint)
   if (ctx) parts.push(ctx)
+  const quota = quotaStatusText(s.quota)
+  if (quota) parts.push(paint(quota, quotaIsLow(s.quota) ? 'yellow' : 'dim'))
   return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
 }
 
@@ -983,6 +1007,8 @@ export interface ResumeEntry {
   updatedAt: number
   /** Set when the desktop app has the chat unread: how its last turn ended. */
   unread?: UnreadOutcome
+  /** The folder the chat belongs to (shown when the picker lists every folder). */
+  workspace?: string
 }
 
 /** Persistence hooks, injected so the driver stays testable without a real store. */
@@ -1009,6 +1035,13 @@ export interface TuiPersist {
   get: (id: string) => ({ messages: ChatMessage[] } & ConversationSettingsPatch) | null
   /** Recent sessions in this folder whose title/content matches `query`. */
   search: (workspace: string, query: string) => ResumeEntry[]
+  /**
+   * Recent sessions in every folder, each with its `workspace`. Both absent: the
+   * resume picker has no "all folders" scope.
+   */
+  listAll?: () => ResumeEntry[]
+  /** Recent sessions in every folder whose title/content matches `query`. */
+  searchAll?: (query: string) => ResumeEntry[]
   /** Duplicate a conversation (fresh id, copied history); null if it can't be forked. */
   fork: (id: string) => { id: string } | null
   /** Give a conversation a title of the user's choosing. Absent ⇒ /rename is unavailable. */
@@ -1218,6 +1251,49 @@ export function runEndNotice(messages: ChatMessage[]): string | null {
   return noReply ? '· the last message got no reply: it was stopped' : '· the last run was stopped before it finished'
 }
 
+/** The desktop sidebar's state for a chat: failed in red, unread in blue, else nothing. */
+function unreadMark(c: ResumeEntry, paint: Painter): string {
+  return c.unread === 'error' ? `  ${paint('failed', 'red')}` : c.unread ? `  ${paint('● unread', 'blue')}` : ''
+}
+
+/** A chat's folder for the all-folders picker: home-relative, the last two segments. */
+export function sessionFolder(workspace: string | undefined, home = process.env.HOME): string {
+  if (!workspace) return ''
+  return shortCwd(stripControlChars(workspace).replace(/\\/g, '/'), home)
+}
+
+/**
+ * One row of the arrow-key `/resume` picker: the label (number and title, which the
+ * live filter matches) and the painted detail after it (when, unread state, folder,
+ * and a mark on the chat you're in). Pure.
+ */
+export function renderSessionRow(
+  c: ResumeEntry,
+  index: number,
+  opts: { now: number; paint: Painter; showFolder?: boolean; current?: boolean; home?: string }
+): { label: string; detail: string } {
+  const { paint } = opts
+  const num = index < 9 ? `${index + 1}.` : '  '
+  const title = stripControlChars(c.title) || 'New chat'
+  const folder = opts.showFolder ? sessionFolder(c.workspace, opts.home) : ''
+  const detail = [
+    `  ${paint(formatRelativeTime(c.updatedAt, opts.now), 'dim')}`,
+    unreadMark(c, paint),
+    opts.current ? `  ${paint('(this chat)', 'green')}` : '',
+    folder ? `  ${paint(folder, 'magenta')}` : ''
+  ].join('')
+  return { label: `${num} ${title}`, detail }
+}
+
+/** The arrow-key `/resume` picker's footer: every key it takes. */
+export function sessionPickerHint(o: { rename: boolean; remove: boolean; scope: boolean; all: boolean }): string {
+  const keys = ['↑/↓ move', 'enter open', '1-9 open row', 'type to filter']
+  if (o.rename) keys.push('ctrl-r rename')
+  if (o.remove) keys.push('ctrl-d or x delete')
+  if (o.scope) keys.push(o.all ? 'ctrl-a this folder' : 'ctrl-a all folders')
+  return [...keys, 'esc cancel'].join(' · ')
+}
+
 /** Render a numbered picker of recent conversations for `/resume`. */
 export function renderConversationList(convs: ResumeEntry[], now: number, paint: Painter): string {
   if (!convs.length) return paint('No saved sessions in this folder yet.', 'dim')
@@ -1225,9 +1301,7 @@ export function renderConversationList(convs: ResumeEntry[], now: number, paint:
   convs.forEach((c, i) => {
     const when = paint(formatRelativeTime(c.updatedAt, now), 'dim')
     // The same states the desktop sidebar shows: failed in red, unread in blue.
-    const mark =
-      c.unread === 'error' ? `  ${paint('failed', 'red')}` : c.unread ? `  ${paint('● unread', 'blue')}` : ''
-    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${c.title}  ${when}${mark}`)
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${stripControlChars(c.title)}  ${when}${unreadMark(c, paint)}`)
   })
   lines.push(paint('  Enter a number to resume, or anything else to cancel', 'dim'))
   return lines.join('\n')
@@ -1281,14 +1355,14 @@ export function formatRelativeTime(then: number, now: number): string {
 
 /** The question line of an `ask_user` prompt. */
 export function renderQuestionHeader(question: string, paint: Painter): string {
-  return `\n${paint('? ', 'magenta')}${paint(question, 'bold')}`
+  return `\n${paint('? ', 'magenta')}${paint(stripControlCharsKeepLines(question), 'bold')}`
 }
 
 /** The numbered options + typing hint for answering an `ask_user` question by hand. */
 export function renderQuestionChoices(options: QuestionOption[], multiSelect: boolean, paint: Painter): string {
   const lines = options.map((o, i) => {
-    const desc = o.description ? paint(`  (${o.description})`, 'dim') : ''
-    return `  ${paint(String(i + 1), 'cyan')}. ${o.label}${desc}`
+    const desc = o.description ? paint(`  (${stripControlChars(o.description)})`, 'dim') : ''
+    return `  ${paint(String(i + 1), 'cyan')}. ${stripControlChars(o.label)}${desc}`
   })
   const hint = multiSelect
     ? 'Enter numbers (comma-separated) or type an answer'
@@ -1371,15 +1445,17 @@ export function renderPlan(
   paint: Painter,
   opts: { actions?: boolean; width?: number; highlight?: (lang: string, code: string) => string } = {}
 ): string {
-  const lines = [`\n${paint('▣ Plan:', 'magenta')} ${paint(plan.title, 'bold')}`]
+  // Every part of the plan is the model's text, so none of it reaches the terminal
+  // with its control characters (the body's are dropped by the markdown renderer).
+  const lines = [`\n${paint('▣ Plan:', 'magenta')} ${paint(stripControlChars(plan.title), 'bold')}`]
   const body = plan.body?.trim()
   if (body) {
     lines.push('', renderMarkdownAnsi(body, { paint, width: opts.width ?? 0, highlight: opts.highlight }))
   } else {
-    if (plan.overview) lines.push('', plan.overview)
-    for (const step of plan.steps ?? []) lines.push(`  • ${step}`)
+    if (plan.overview) lines.push('', stripControlCharsKeepLines(plan.overview))
+    for (const step of plan.steps ?? []) lines.push(`  • ${stripControlChars(step)}`)
   }
-  if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.join(', ')}`, 'dim'))
+  if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.map(stripControlChars).join(', ')}`, 'dim'))
   const verify = planVerifySteps(plan)
   if (verify.length) lines.push('', paint(`Checks: ${verify.map(stripControlChars).join('; ')}`, 'dim'))
   // Houston's own answer to whether those checks can run here, worked out from the
@@ -1787,7 +1863,7 @@ export const HELP_TEXT = [
   '  /retry                run your last message again after a turn that failed',
   '  /review               adversarial review of your uncommitted changes',
   '  /init                 write or improve AGENTS.md, the instructions file for this project',
-  '  /resume [query]       list (or search) and reopen a saved session',
+  '  /resume [query]       pick a saved session to reopen (also /sessions): type to filter, 1-9 open a row, ctrl-r rename, ctrl-d or x delete, ctrl-a this folder or all folders',
   '  /spawned              list the background sessions the agent started; open one',
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
   '  /btw <question>       ask a quick side question; the answer stays out of this chat',
@@ -1849,7 +1925,8 @@ export const STARTUP_TIPS = [
   'Ctrl-R searches your earlier messages',
   'Ctrl-X Ctrl-E edits your message in $VISUAL or $EDITOR',
   'type while the agent works and press Enter to steer it',
-  'Shift-Enter or Ctrl-J starts a new line'
+  'Shift-Enter or Ctrl-J starts a new line',
+  '/resume filters saved chats as you type; Ctrl-A shows every folder'
 ]
 
 /**
@@ -2928,7 +3005,11 @@ export interface TuiDeps {
    */
   wake?: {
     register: (tryWake: (conversationId: string) => boolean) => void
-    take: (conversationId: string) => string | null
+    /**
+     * The note's text, or the note with its {@link ChatMessage.taintSource} (a note
+     * quoting spawned sessions' reports), which the turn's message keeps.
+     */
+    take: (conversationId: string) => string | Pick<ChatMessage, 'content' | 'taintSource'> | null
   }
   /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
@@ -3521,6 +3602,157 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         .join('')
   )
 
+  // After the chat you're in is deleted (/delete, or from the /resume picker): what
+  // was this chat's is dropped, and the next turn starts a fresh one.
+  const forgetDeletedChat = (): void => {
+    messages = []
+    conversationId = null
+    persistedSettings = null
+    pendingImages = []
+    contextTokens = 0
+    contextParts = null // /context must not show the deleted chat
+    lastRunId = null // /undo must not restore files from the deleted chat's run
+  }
+
+  /**
+   * The arrow-key `/resume` picker: rows filter live as you type (a title and content
+   * search), the highlighted chat is previewed under the list, Ctrl-R renames and
+   * Ctrl-D or `x` deletes in place, 1-9 open a row, and Ctrl-A switches between this
+   * folder and every folder. Resolves the chosen id, null on cancel, or undefined when
+   * the terminal can't show a picker (the caller falls back to the numbered list).
+   */
+  const pickSession = async (
+    persist: TuiPersist,
+    select: (spec: PickerSpec) => Promise<PickerOutcome>,
+    query: string,
+    initial: ResumeEntry[]
+  ): Promise<string | null | undefined> => {
+    const canScope = Boolean(persist.listAll && persist.searchAll)
+    let all = false
+    let deletedCurrent: string | null = null
+    const byId = new Map<string, ResumeEntry>()
+    // Each chat is read once per picker for its preview (and the delete question).
+    const read = new Map<string, ChatMessage[] | null>()
+    const messagesOf = (id: string): ChatMessage[] | null => {
+      if (!read.has(id)) {
+        try {
+          read.set(id, persist.get(id)?.messages ?? null)
+        } catch {
+          read.set(id, null)
+        }
+      }
+      return read.get(id) ?? null
+    }
+    const fetch = (q: string): ResumeEntry[] =>
+      all
+        ? q
+          ? persist.searchAll!(q)
+          : persist.listAll!()
+        : q
+          ? persist.search(opts.cwd, q)
+          : persist.list(opts.cwd)
+    const toOptions = (list: ResumeEntry[]): PickerOption[] => {
+      byId.clear()
+      const now = nowFn()
+      return list.map((c, i) => {
+        byId.set(c.id, c)
+        const row = renderSessionRow(c, i, { now, paint, showFolder: all, current: c.id === conversationId })
+        return { value: c.id, label: row.label, detail: row.detail }
+      })
+    }
+    const titleOf = (id: string | null): string =>
+      stripControlChars((id && byId.get(id)?.title) || '') || 'New chat'
+    const heading = (): string => (all ? 'Sessions in all folders' : 'Sessions in this folder')
+    const rows = (q: string): PickerOption[] => {
+      try {
+        return toOptions(fetch(q))
+      } catch {
+        return toOptions([])
+      }
+    }
+    const actions: PickerAction[] = []
+    if (persist.rename) {
+      actions.push({ id: 'rename', keys: ['ctrl-r'], input: { label: 'new title', initial: (o) => titleOf(o.value) } })
+    }
+    if (persist.remove) {
+      actions.push({
+        id: 'delete',
+        keys: ['ctrl-d', 'x'],
+        confirm: (o) => {
+          const title = titleOf(o.value)
+          if (o.value === conversationId) {
+            return `Delete "${title}"? It's the chat you're in: you'll be in a new chat. This cannot be undone.`
+          }
+          const msgs = messagesOf(o.value)
+          const count = msgs ? ` and its ${msgs.length} message(s)` : ''
+          return `Delete "${title}"${count}? This cannot be undone.`
+        }
+      })
+    }
+    if (canScope) actions.push({ id: 'scope', keys: ['ctrl-a'], global: true })
+    const hint = (): string =>
+      sessionPickerHint({ rename: !!persist.rename, remove: !!persist.remove, scope: canScope, all })
+    const outcome = await select({
+      title: heading(),
+      options: toOptions(initial),
+      filter: true,
+      initialQuery: query,
+      onQuery: rows,
+      digitCommits: true,
+      maxRows: 9,
+      empty: query ? 'no sessions match' : 'no saved sessions here yet',
+      hint: hint(),
+      actions,
+      preview: (o, width) => {
+        const c = byId.get(o.value)
+        if (!c) return []
+        return sessionPreviewLines(c, messagesOf(c.id), {
+          width,
+          paint,
+          when: formatRelativeTime(c.updatedAt, nowFn()),
+          ...(all && c.workspace ? { folder: sessionFolder(c.workspace) } : {})
+        })
+      },
+      onAction: (req) => {
+        if (req.id === 'scope') {
+          all = !all
+          // The hint names the other scope, so it changes too.
+          return {
+            options: rows(req.query.trim()),
+            title: heading(),
+            hint: hint(),
+            notice: all ? 'showing all folders' : 'showing this folder'
+          }
+        }
+        const id = req.value
+        if (!id) return { notice: 'nothing selected' }
+        const title = titleOf(id)
+        if (req.id === 'rename') {
+          const next = stripControlChars(req.text ?? '').trim()
+          if (!next || next === title) return { notice: 'title unchanged' }
+          persist.rename!(id, next)
+          return { options: rows(req.query.trim()), notice: `renamed to "${next}"` }
+        }
+        if (req.id === 'delete') {
+          persist.remove!(id)
+          read.delete(id)
+          if (id === conversationId) {
+            forgetDeletedChat()
+            deletedCurrent = title
+            return { options: rows(req.query.trim()), notice: `deleted "${title}", the chat you were in` }
+          }
+          return { options: rows(req.query.trim()), notice: `deleted "${title}"` }
+        }
+        return {}
+      }
+    })
+    // Say it in the transcript too: the picker's notice goes with the picker.
+    if (deletedCurrent) deps.io.out(paint(`· deleted "${deletedCurrent}"; this is a new chat\n`, 'dim'))
+    if (outcome.kind === 'commit') return outcome.value
+    if (outcome.kind === 'type') return undefined
+    return null
+  }
+
   for (;;) {
     // The update check resolves whenever it resolves; print it HERE, between turns,
     // where nothing else owns the screen. Writing it from the promise would land in
@@ -3555,7 +3787,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       `${
         providerId && model
           ? renderStatusLine(
-              { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens, branch },
+              {
+                providerId,
+                model,
+                policy,
+                cwd: opts.cwd,
+                cost: sessionCost,
+                contextTokens,
+                branch,
+                quota: providerQuota(providerId)
+              },
               columns(),
               paint
             )
@@ -3637,12 +3878,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Background work finished while the composer was idle: its news is this turn's
     // input. Taken now, not when it arrived, so a draft typed meanwhile still wins.
     let wakeTurn = false
+    // What the wake note carries from outside (see ChatMessage.taintSource), kept on
+    // the turn's message so the memory taint rule still sees it.
+    let wakeTaint: string | undefined
     if (wakeRequested) {
       wakeRequested = false
-      const note = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      const taken = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      const note = typeof taken === 'string' ? taken : (taken?.content ?? null)
       if (note) {
         raw = note
         wakeTurn = true
+        if (taken && typeof taken === 'object') wakeTaint = taken.taintSource
         deps.io.out(paint('· background work finished; continuing on its own\n', 'dim'))
       } else if (raw === null && !resetComposer) continue
     }
@@ -3754,11 +4000,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`· couldn't list sessions: ${(e as Error).message}\n`, 'dim'))
           continue
         }
-        deps.io.out(`${renderConversationList(convs, nowFn(), paint)}\n`)
-        if (!convs.length) continue
-        // discardPending like the other prompts, so type-ahead can't auto-select.
-        const ans = await deps.io.readLine('> ', { discardPending: true })
-        const id = ans === null ? null : parseResumeSelection(ans, convs)
+        // The arrow-key picker when the terminal has one: live filter, preview, and
+        // rename/delete in place. `undefined` means it isn't available here, so fall
+        // back to the numbered list and a typed answer.
+        let id: string | null | undefined
+        const canScope = Boolean(deps.persist.listAll && deps.persist.searchAll)
+        if (deps.io.select && (convs.length || canScope)) {
+          id = await pickSession(deps.persist, deps.io.select, query, convs)
+        }
+        if (id === undefined) {
+          deps.io.out(`${renderConversationList(convs, nowFn(), paint)}\n`)
+          if (!convs.length) continue
+          // discardPending like the other prompts, so type-ahead can't auto-select.
+          const ans = await deps.io.readLine('> ', { discardPending: true })
+          id = ans === null ? null : parseResumeSelection(ans, convs)
+        }
         if (!id) {
           deps.io.out(paint('· cancelled\n', 'dim'))
           continue
@@ -3854,13 +4110,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`· couldn't delete: ${(e as Error).message}\n`, 'yellow'))
           continue
         }
-        messages = []
-        conversationId = null
-        persistedSettings = null
-        pendingImages = []
-        contextTokens = 0
-        contextParts = null // /context must not show the deleted chat
-        lastRunId = null // /undo must not restore files from the deleted chat's run
+        forgetDeletedChat()
         deps.io.out(paint(`· deleted "${title}"; this is a new chat\n`, 'dim'))
         continue
       }
@@ -4536,7 +4786,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       role: 'user',
       content: text,
       ...(pendingImages.length ? { images: pendingImages } : {}),
-      ...(invokedAs ? { invokedAs } : {})
+      ...(invokedAs ? { invokedAs } : {}),
+      ...(wakeTurn && wakeTaint ? { taintSource: wakeTaint } : {})
     })
     pendingImages = [] // consumed by this turn
     // Lazily open a persisted conversation on the first turn so the session
@@ -4681,7 +4932,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       switch (e.type) {
         case 'reasoning':
           deps.io.setSpinnerLabel?.('Thinking')
-          deps.io.out(paint(e.delta, 'dim'))
+          deps.io.out(paint(stripControlCharsKeepLines(e.delta), 'dim'))
           roundShown = true
           break
         case 'turn_discarded':
@@ -4764,7 +5015,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'tool_progress': {
           if (!e.message.trim()) break
           const tag = callTag(e.callId)
-          deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(e.message.trim(), 80)}\n`, 'dim'))
+          deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(stripControlChars(e.message).trim(), 80)}\n`, 'dim'))
           break
         }
         case 'subagent_start':
@@ -4780,14 +5031,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'subagent':
           // Line mode can't update a row in place, so print discrete markers: a
           // start line, then a done/error line, indented under the parent tool.
-          deps.io.out(paint(`    ${subagentGlyph(e.status)} ${e.label}\n`, 'dim'))
+          deps.io.out(paint(`    ${subagentGlyph(e.status)} ${stripControlChars(e.label)}\n`, 'dim'))
           break
         case 'review_finding': {
           const line = printFinding(e.parentCallId, e.finding)
           if (line) {
             const s = e.finding.status
             const tone = s === 'confirmed' ? 'yellow' : s === 'candidate' ? undefined : 'dim'
-            const text = `      ${truncate(line, 120)}\n`
+            const text = `      ${truncate(stripControlChars(line), 120)}\n`
             deps.io.out(tone ? paint(text, tone) : text)
           }
           break
@@ -4796,13 +5047,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
           if (retryStreak === 0) {
             const line = e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `retrying (${retryProgress(e)})… ${e.message}`
-            deps.io.out(paint(`\n· ${line}\n`, 'yellow'))
+            deps.io.out(paint(`\n· ${stripControlCharsKeepLines(line)}\n`, 'yellow'))
           }
           retryStreak = e.attempt
           break
         case 'model_fallback':
           deps.io.setSpinnerLabel?.('Switching model')
-          deps.io.out(paint(`\n· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`, 'yellow'))
+          deps.io.out(
+            paint(`\n· ${stripControlCharsKeepLines(`${e.from} unavailable, falling back to ${e.to}… ${e.reason}`)}\n`, 'yellow')
+          )
           break
         case 'tool_approval':
           if (e.kind === 'write') promptedWrites.add(e.callId)
@@ -4898,7 +5151,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               const r = await deps.io.select({
                 title: '',
                 multiSelect: multi,
-                options: e.options.map((o) => ({ label: o.label, value: o.label, description: o.description }))
+                // Shown cleaned; the answer is still the label as the agent wrote it.
+                options: e.options.map((o) => ({
+                  label: stripControlChars(o.label),
+                  value: o.label,
+                  ...(o.description ? { description: stripControlChars(o.description) } : {})
+                }))
               })
               if (r.kind === 'commit') answer = r.value
               // cancel/type → fall through so the user can still type a custom answer
@@ -4916,8 +5174,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // values go to that external server), offer a decline, then collect one
           // line per field, re-prompting on invalid values.
           enqueue(async () => {
+            // Everything here but the field values is the remote server's text.
             deps.io.out(
-              `\n${paint(`MCP server "${e.serverId}" requests input:`, 'cyan')} ${e.message}\n`
+              `\n${paint(`MCP server "${stripControlChars(e.serverId)}" requests input:`, 'cyan')} ${stripControlCharsKeepLines(e.message)}\n`
             )
             const proceed = await deps.io.readLine('Provide it? [y/N] ', { discardPending: true })
             if (proceed === null || !/^y(es)?$/i.test(proceed.trim())) {
@@ -4929,7 +5188,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             }
             const raw: Record<string, string> = {}
             for (const f of e.fields) {
-              if (f.description) deps.io.out(paint(`  ${f.name}: ${f.description}\n`, 'dim'))
+              if (f.description) {
+                deps.io.out(paint(`  ${stripControlChars(f.name)}: ${stripControlCharsKeepLines(f.description)}\n`, 'dim'))
+              }
               for (;;) {
                 const hints = [
                   f.kind === 'enum' ? (f.options ?? []).join(' | ') : f.kind !== 'string' ? f.kind : '',
@@ -4937,7 +5198,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                 ]
                   .filter(Boolean)
                   .join('; ')
-                const ans = await deps.io.readLine(`${f.title ?? f.name}${hints ? ` (${hints})` : ''}: `, {
+                const label = stripControlChars(`${f.title ?? f.name}${hints ? ` (${hints})` : ''}`)
+                const ans = await deps.io.readLine(`${label}: `, {
                   discardPending: true
                 })
                 if (ans === null) {
@@ -4950,7 +5212,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                   raw[f.name] = ans
                   break
                 }
-                deps.io.out(paint(`· ${check.error}\n`, 'yellow'))
+                deps.io.out(paint(`· ${stripControlChars(check.error)}\n`, 'yellow'))
               }
             }
             const built = buildElicitationContent(e.fields, raw)
@@ -4988,7 +5250,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               paint(`\n· tried ${retryStreak} more time${retryStreak === 1 ? '' : 's'}, then stopped\n`, 'yellow')
             )
           }
-          deps.io.out(paint(`\nError: ${e.message}\n`, 'red'))
+          deps.io.out(paint(`\nError: ${stripControlCharsKeepLines(e.message)}\n`, 'red'))
           break
         case 'limit':
           deps.io.out(paint(`\n· ${limitNoticeText(e.reason)}\n`, 'yellow'))
@@ -4999,7 +5261,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension) — display-only, never
           // part of the model's context.
-          deps.io.out(paint(`\n· ${e.message}\n`, 'dim'))
+          deps.io.out(paint(`\n· ${stripControlCharsKeepLines(e.message)}\n`, 'dim'))
           break
         case 'runtime_missing':
           // Display-only: the model already got the hint in the run_shell result.

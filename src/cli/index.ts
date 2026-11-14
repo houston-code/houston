@@ -59,6 +59,7 @@ Usage:
   houston -p "<prompt>" [options]      one-shot run; assistant text on stdout (also --prompt)
   houston -p - [options] < task.md     one-shot run with the prompt read from stdin
   houston --acp                        serve the Agent Client Protocol on stdio, for editors
+                                       (--approval, --effort, --max-turns set its defaults)
 
   houston providers [...]              manage model providers and their API keys
   houston schedule-daemon [...]        fire scheduled runs while Houston is closed
@@ -78,8 +79,8 @@ Options:
                         --on-approval allow)
   --json                (-p) machine-readable: an init line, one JSON event per
                         line, then a {"type":"result",...} summary line
-  --effort <level>      (-p) reasoning effort for this run: off | low | medium | high | xhigh
-  --max-turns <n>       (-p) hard cap on model steps for this run
+  --effort <level>      (-p, --acp) reasoning effort for this run: off | low | medium | high | xhigh
+  --max-turns <n>       (-p, --acp) hard cap on model steps for each turn
   --max-cost <usd>      (-p) tell the agent to wrap up once the run costs this much
   --verify <command>    (-p) after the agent edits, run this check and send failures back
   --no-memory           (-p) run without the memories saved in earlier sessions
@@ -299,7 +300,13 @@ function isDirectRun(): boolean {
   return typeof require !== 'undefined' && require.main === module
 }
 
-if (isDirectRun()) {
+/**
+ * Start the CLI as a program: install the fatal handlers, run the invocation in
+ * `process.argv`, flush, and exit. The bundle calls this itself when run directly; the
+ * npm package's launcher (packaging/npm/houston.cjs) requires the bundle and calls it
+ * once Node's compile cache is on.
+ */
+export function startCli(): void {
   // Mirror the desktop headless path's fatal handling: log, one-line stderr, exit.
   process.on('uncaughtException', (err) => {
     logFatal('uncaughtException', err)
@@ -323,3 +330,5 @@ if (isDirectRun()) {
     exit(1)
   })
 }
+
+if (isDirectRun()) startCli()

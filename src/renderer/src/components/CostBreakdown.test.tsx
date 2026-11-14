@@ -120,6 +120,17 @@ describe('CostBreakdown', () => {
     rerender(<CostBreakdown usage={usage} contextWindow={null} meterPct={null} meterClass="" openSignal={1} />)
     expect(screen.getByRole('dialog', { name: 'Cost breakdown' })).toBeInTheDocument()
   })
+
+  it('stays closed when it mounts after /context was used earlier, and opens on the next one', () => {
+    // The app's counter never resets: a chip that appears later (a new chat's first
+    // reply) must not treat an old request as a new one.
+    const { rerender } = render(
+      <CostBreakdown usage={base} contextWindow={null} meterPct={null} meterClass="" openSignal={3} />
+    )
+    expect(screen.queryByRole('dialog')).toBeNull()
+    rerender(<CostBreakdown usage={base} contextWindow={null} meterPct={null} meterClass="" openSignal={4} />)
+    expect(screen.getByRole('dialog', { name: 'Cost breakdown' })).toBeInTheDocument()
+  })
 })
 
 function row(

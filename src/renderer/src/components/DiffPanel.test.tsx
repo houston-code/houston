@@ -277,6 +277,72 @@ describe('DiffPanel', () => {
     expect(screen.queryByText(/changed no files/)).not.toBeInTheDocument()
   })
 
+  it('shows Loading after a scope switch, not the previous scope as an empty new one', async () => {
+    const { getChatChanges } = installApi(sampleChanges)
+    let resolveChat: (v: ChatChanges) => void = () => {}
+    getChatChanges.mockImplementation(() => new Promise((r) => (resolveChat = r)))
+    render(<DiffPanel workspace="/repo" conversationId="c1" />)
+    await screen.findByText('src/foo.ts')
+    fireEvent.click(screen.getByRole('radio', { name: 'This chat' }))
+    // The working tree's files and totals are not this chat's.
+    expect(screen.getByText('Loading…')).toBeInTheDocument()
+    expect(screen.queryByText('This chat has changed no files.')).not.toBeInTheDocument()
+    expect(screen.queryByText('src/foo.ts')).not.toBeInTheDocument()
+    expect(screen.queryByText('+3')).not.toBeInTheDocument()
+    await act(async () => resolveChat({ files: [], added: 0, removed: 0, unavailable: 0 }))
+    expect(screen.getByText('This chat has changed no files.')).toBeInTheDocument()
+  })
+
+  it('offers git init only on the working-tree scope, never under "This chat"', async () => {
+    const { getChatChanges } = installApi({ isRepo: false, branch: null, files: [], added: 0, removed: 0 })
+    getChatChanges.mockImplementation(() => new Promise(() => {}))
+    render(<DiffPanel workspace="/repo" conversationId="c1" />)
+    expect(await screen.findByRole('button', { name: 'Initialize git repository' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: 'This chat' }))
+    expect(screen.queryByRole('button', { name: 'Initialize git repository' })).not.toBeInTheDocument()
+  })
+
+  it('reads git only while it shows, and again each time it comes back', async () => {
+    const { getWorkingTreeChanges } = installApi(sampleChanges)
+    const { rerender } = render(<DiffPanel workspace="/repo" active={false} />)
+    await act(async () => {})
+    expect(getWorkingTreeChanges).not.toHaveBeenCalled()
+    rerender(<DiffPanel workspace="/repo" active />)
+    expect(await screen.findByText('src/foo.ts')).toBeInTheDocument()
+    expect(getWorkingTreeChanges).toHaveBeenCalledTimes(1)
+    // Hidden then shown again: what it had stays up (no "Loading…") while it re-reads.
+    rerender(<DiffPanel workspace="/repo" active={false} running />)
+    rerender(<DiffPanel workspace="/repo" active={false} />)
+    expect(getWorkingTreeChanges).toHaveBeenCalledTimes(1)
+    rerender(<DiffPanel workspace="/repo" active />)
+    expect(screen.getByText('src/foo.ts')).toBeInTheDocument()
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument()
+    await waitFor(() => expect(getWorkingTreeChanges).toHaveBeenCalledTimes(2))
+  })
+
+  it('re-reads when the window regains focus, so a commit made elsewhere drops off the list', async () => {
+    vi.useFakeTimers()
+    try {
+      const { getWorkingTreeChanges } = installApi(sampleChanges)
+      render(<DiffPanel workspace="/repo" />)
+      await act(async () => {})
+      expect(screen.getByText('src/foo.ts')).toBeInTheDocument()
+      getWorkingTreeChanges.mockResolvedValue({ isRepo: true, branch: 'feature/x', files: [], added: 0, removed: 0 })
+      // A burst of focus events is one read.
+      act(() => {
+        window.dispatchEvent(new Event('focus'))
+        window.dispatchEvent(new Event('focus'))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      expect(getWorkingTreeChanges).toHaveBeenCalledTimes(2)
+      expect(screen.getByText('No uncommitted changes.')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('reverts a file only after confirming, sending what it showed', async () => {
     const { revertChange, getWorkingTreeChanges } = installApi(sampleChanges)
     render(<DiffPanel workspace="/repo" conversationId="c1" />)

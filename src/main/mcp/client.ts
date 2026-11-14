@@ -31,6 +31,7 @@ import {
   type ListedPages,
   type McpListKind
 } from './protocol'
+import { withTraceContext } from './trace'
 
 /**
  * A minimal MCP client over the stdio transport: it spawns the server process and
@@ -607,7 +608,7 @@ export class McpClient {
       }
     })
     try {
-      this.send({ jsonrpc: '2.0', id, method, params: sent })
+      this.send({ jsonrpc: '2.0', id, method, params: withTraceContext(sent) })
     } catch (e) {
       // A synchronous write failure (e.g. EPIPE on a closing pipe) must settle the
       // pending entry + timers; reject does both.

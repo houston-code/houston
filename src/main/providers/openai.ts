@@ -6,6 +6,7 @@ import { imageDataUrl, type ImageAttachment } from '@shared/images'
 import { openaiReasoningEffort, openaiSupportsReasoning } from './reasoning'
 import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
 import { ControlTagScrubber } from './control-tag-scrubber'
+import { LeadingThinkSplitter } from './think-tags'
 import { releaseDateFrom } from './release-date'
 import { parseToolArguments } from './tool-args'
 import {
@@ -19,7 +20,11 @@ import { SDK_MAX_RETRIES } from '../agent/retry'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
 
-export function toOpenAIMessages(system: string | undefined, messages: ChatMessage[]): OpenAIMessage[] {
+export function toOpenAIMessages(
+  system: string | undefined,
+  messages: ChatMessage[],
+  opts: { replayReasoningFor?: string } = {}
+): OpenAIMessage[] {
   const out: OpenAIMessage[] = []
   if (system) out.push({ role: 'system', content: system })
 
@@ -69,6 +74,15 @@ export function toOpenAIMessages(system: string | undefined, messages: ChatMessa
           type: 'function' as const,
           function: { name: tc.name, arguments: JSON.stringify(tc.arguments) }
         }))
+      }
+      // The reply's reasoning_details, returned as the host sent them, so a reasoning
+      // model routed through it can continue from its own state. Only the model that
+      // wrote them can use them; another model's are dropped.
+      if (opts.replayReasoningFor) {
+        const details = (m.reasoning ?? [])
+          .filter((b) => b.details?.length && (!b.model || b.model === opts.replayReasoningFor))
+          .flatMap((b) => b.details ?? [])
+        if (details.length) (msg as { reasoning_details?: unknown }).reasoning_details = details
       }
       out.push(msg)
     } else if (m.role === 'tool') {
@@ -149,6 +163,76 @@ export function maxTokensField(model: string, maxTokens: number): Record<string,
  */
 export type ChatCompletionsClient = Pick<OpenAI, 'chat'>
 
+/** Per-host behavior of the Chat Completions adapter. */
+export interface ChatCompletionsOptions {
+  /**
+   * Keep each reply's `reasoning_details` and send them back on the assistant message
+   * in later requests. OpenRouter asks for this so a reasoning model it routes (with
+   * signed or encrypted reasoning upstream) can continue its reasoning across tool
+   * calls. Other hosts reject or ignore the unknown field, so it is gated per host
+   * ({@link hostReplaysReasoningDetails}).
+   */
+  replayReasoningDetails?: boolean
+}
+
+/** Whether the host at `baseURL` wants `reasoning_details` replayed (OpenRouter). */
+export function hostReplaysReasoningDetails(baseURL: string | undefined): boolean {
+  if (!baseURL) return false
+  try {
+    const host = new URL(baseURL).hostname.toLowerCase()
+    return host === 'openrouter.ai' || host.endsWith('.openrouter.ai')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Collects a streamed reply's `reasoning_details` (OpenRouter). Each detail arrives in
+ * pieces keyed by its `index`, the text-bearing field (`text`, `summary`, or encrypted
+ * `data`) split across chunks; the pieces are joined back into whole details so they
+ * can be replayed as the host sent them.
+ */
+export class ReasoningDetailsAccumulator {
+  private readonly byKey = new Map<string, Record<string, unknown>>()
+
+  /** Add one chunk's details; returns the readable reasoning text they carry. */
+  add(details: unknown[]): string {
+    let text = ''
+    for (const [i, raw] of details.entries()) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+      const d = raw as Record<string, unknown>
+      const key = `${typeof d.index === 'number' ? d.index : `n${this.byKey.size + i}`}:${String(d.type ?? '')}`
+      const acc = this.byKey.get(key) ?? {}
+      for (const [k, v] of Object.entries(d)) {
+        if ((k === 'text' || k === 'summary' || k === 'data') && typeof v === 'string') {
+          acc[k] = (typeof acc[k] === 'string' ? (acc[k] as string) : '') + v
+        } else if (v !== undefined && v !== null) {
+          acc[k] = v
+        }
+      }
+      this.byKey.set(key, acc)
+      if (d.type === 'reasoning.text' && typeof d.text === 'string') text += d.text
+      else if (d.type === 'reasoning.summary' && typeof d.summary === 'string') text += d.summary
+    }
+    return text
+  }
+
+  get size(): number {
+    return this.byKey.size
+  }
+
+  list(): Array<Record<string, unknown>> {
+    return [...this.byKey.values()]
+  }
+
+  /** The readable reasoning across every detail. */
+  text(): string {
+    return this.list()
+      .map((d) => (typeof d.text === 'string' ? d.text : typeof d.summary === 'string' ? d.summary : ''))
+      .join('')
+  }
+}
+
 /**
  * Adapter for any host that speaks Chat Completions, over a caller-supplied client.
  *
@@ -160,7 +244,8 @@ export type ChatCompletionsClient = Pick<OpenAI, 'chat'>
  * expected to memoize.
  */
 export function createChatCompletionsProvider(
-  getClient: () => Promise<ChatCompletionsClient>
+  getClient: () => Promise<ChatCompletionsClient>,
+  opts: ChatCompletionsOptions = {}
 ): Provider {
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
@@ -175,7 +260,11 @@ export function createChatCompletionsProvider(
       // heuristic, covering host-routed reasoning models the regex doesn't know.
       const reasoningEffort = openaiReasoningEffort(req.model, req.reasoningEffort, req.reasoningCapable)
 
-      const messages = toOpenAIMessages(req.system, req.messages)
+      const messages = toOpenAIMessages(
+        req.system,
+        req.messages,
+        opts.replayReasoningDetails ? { replayReasoningFor: req.model } : {}
+      )
       // Explicit-caching upstreams (Claude/Qwen/Gemini via an aggregator) only
       // cache when breakpoints are present; the caller gates this per route.
       if (req.explicitCacheControl) markOpenAICacheBreakpoints(messages)
@@ -228,6 +317,35 @@ export function createChatCompletionsProvider(
       // (e.g. a `<tool_response>…</tool_response>` echo). All emitted text flows
       // through it; the trailing flush below catches any tag split across the end.
       const scrubber = new ControlTagScrubber()
+      const think = new LeadingThinkSplitter()
+      const reasoningDetails = new ReasoningDetailsAccumulator()
+
+      /** Route reply text: stream it, or hold it while it may be a tool call written as text. */
+      const onContent = (text: string): ProviderStreamEvent[] => {
+        if (!text) return []
+        const out: ProviderStreamEvent[] = []
+        if (contentMode === 'text') {
+          const clean = scrubber.push(text)
+          if (clean) out.push({ type: 'text', text: clean })
+          return out
+        }
+        heldContent += text
+        if (contentMode === 'undecided') {
+          const lead = heldContent.trimStart()
+          const verdict = lead ? classifyLead(lead) : 'wait'
+          if (verdict === 'tool') {
+            contentMode = 'hold'
+          } else if (verdict === 'text') {
+            // Ordinary prose: commit to streaming and flush what was buffered.
+            contentMode = 'text'
+            const clean = scrubber.push(heldContent)
+            if (clean) out.push({ type: 'text', text: clean })
+            heldContent = ''
+          }
+          // 'wait': an ambiguous prefix; keep buffering until it resolves.
+        }
+        return out
+      }
 
       for await (const chunk of stream) {
         // The usage-only chunk arrives last and has an empty `choices` array.
@@ -253,27 +371,23 @@ export function createChatCompletionsProvider(
           refused = true
           yield { type: 'text', text: refusalText }
         }
+        // Reasoning the host streams in its own field: `reasoning_details` (OpenRouter's
+        // structured form, which also repeats the text as `reasoning`), else
+        // `reasoning_content` (DeepSeek, vLLM, llama.cpp) or `reasoning` (Ollama, others).
+        const r = delta as { reasoning_content?: unknown; reasoning?: unknown; reasoning_details?: unknown } | undefined
+        if (Array.isArray(r?.reasoning_details)) {
+          const text = reasoningDetails.add(r.reasoning_details)
+          if (text) yield { type: 'reasoning', text }
+        } else if (typeof r?.reasoning_content === 'string' && r.reasoning_content) {
+          yield { type: 'reasoning', text: r.reasoning_content }
+        } else if (typeof r?.reasoning === 'string' && r.reasoning) {
+          yield { type: 'reasoning', text: r.reasoning }
+        }
         if (delta?.content) {
-          if (contentMode === 'text') {
-            const clean = scrubber.push(delta.content)
-            if (clean) yield { type: 'text', text: clean }
-          } else {
-            heldContent += delta.content
-            if (contentMode === 'undecided') {
-              const lead = heldContent.trimStart()
-              const verdict = lead ? classifyLead(lead) : 'wait'
-              if (verdict === 'tool') {
-                contentMode = 'hold'
-              } else if (verdict === 'text') {
-                // Ordinary prose — commit to streaming and flush what we buffered.
-                contentMode = 'text'
-                const clean = scrubber.push(heldContent)
-                if (clean) yield { type: 'text', text: clean }
-                heldContent = ''
-              }
-              // 'wait' — ambiguous prefix; keep buffering until it resolves.
-            }
-          }
+          // A leading <think> block is reasoning written into the reply itself.
+          const split = think.push(delta.content)
+          if (split.reasoning) yield { type: 'reasoning', text: split.reasoning }
+          for (const ev of onContent(split.content)) yield ev
         }
         if (delta?.tool_calls) {
           for (const tc of delta.tool_calls) {
@@ -291,6 +405,12 @@ export function createChatCompletionsProvider(
         }
         if (choice.finish_reason) finishReason = choice.finish_reason
       }
+
+      // Whatever the <think> splitter still holds: an unterminated block is reasoning,
+      // a reply too short to decide on is content.
+      const thinkTail = think.flush()
+      if (thinkTail.reasoning) yield { type: 'reasoning', text: thinkTail.reasoning }
+      for (const ev of onContent(thinkTail.content)) yield ev
 
       let hadToolCalls = toolAcc.length > 0
       // Tool calls follow any content in a Chat Completions reply, so at the output limit
@@ -331,6 +451,10 @@ export function createChatCompletionsProvider(
       yield {
         type: 'done',
         stopReason: mapFinishReason(finishReason, hadToolCalls),
+        // Replayed on the next request only where the host needs it (see opts).
+        ...(opts.replayReasoningDetails && reasoningDetails.size
+          ? { reasoning: [{ text: reasoningDetails.text(), details: reasoningDetails.list(), model: req.model }] }
+          : {}),
         ...(refused ? { refusal: 'refusal' } : finishReason === 'content_filter' ? { refusal: 'content_filter' } : {}),
         usage: {
           inputTokens,
@@ -370,7 +494,7 @@ export function createOpenAIProvider(
         })
     ))
 
-  return createChatCompletionsProvider(getClient)
+  return createChatCompletionsProvider(getClient, { replayReasoningDetails: hostReplaysReasoningDetails(baseURL) })
 }
 
 /**

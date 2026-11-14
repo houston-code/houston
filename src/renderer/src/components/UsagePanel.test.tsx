@@ -52,4 +52,22 @@ describe('UsagePanel', () => {
     fireEvent.blur(input)
     expect(onChange).toHaveBeenLastCalledWith(0)
   })
+
+  it('lists the last rate-limit state of each provider, and leaves the section out without one', async () => {
+    installApi()
+    const { unmount } = render(<UsagePanel costCeilingUsd={0} onChangeCostCeiling={vi.fn()} onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('shop')).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { name: 'Provider rate limits' })).toBeNull()
+    unmount()
+
+    installApi()
+    window.api.getRateLimits = vi.fn().mockResolvedValue([
+      { providerId: 'anthropic', observedAt: Date.now(), remainingRequests: 0, remainingTokens: 900, source: 'retry' }
+    ])
+    window.api.onRateLimitsChanged = vi.fn(() => () => {})
+    render(<UsagePanel costCeilingUsd={0} onChangeCostCeiling={vi.fn()} onClose={vi.fn()} />)
+    expect(await screen.findByRole('heading', { name: 'Provider rate limits' })).toBeInTheDocument()
+    expect(screen.getByText(/0 requests and 900 tokens left/)).toBeInTheDocument()
+    expect(screen.getByText('anthropic')).toBeInTheDocument()
+  })
 })

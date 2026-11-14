@@ -64,6 +64,21 @@ describe('CommitForm', () => {
     )
   })
 
+  it('names the remote for an unpublished branch and groups large counts', async () => {
+    api.gitBranchSync.mockResolvedValue({ branch: 'feat', upstream: null, ahead: 1234, remote: 'origin' })
+    render(<CommitForm workspace="/ws" hasChanges={false} onChanged={vi.fn()} />)
+    expect(await screen.findByText(`feat has ${(1234).toLocaleString()} commits not on origin.`)).toBeInTheDocument()
+  })
+
+  it('re-reads the branch whenever the Changes view re-reads the tree', async () => {
+    const { rerender } = render(<CommitForm workspace="/ws" hasChanges refreshSignal={1} onChanged={vi.fn()} />)
+    await waitFor(() => expect(api.gitBranchSync).toHaveBeenCalledTimes(1))
+    api.gitBranchSync.mockResolvedValue({ branch: 'feat', upstream: 'origin/feat', ahead: 3, remote: 'origin' })
+    rerender(<CommitForm workspace="/ws" hasChanges refreshSignal={2} onChanged={vi.fn()} />)
+    expect(await screen.findByRole('button', { name: 'Push 3 commits' })).toBeInTheDocument()
+    expect(api.gitBranchSync).toHaveBeenCalledTimes(2)
+  })
+
   it('shows nothing with no changes and nothing to push, and holds actions while a run is busy', async () => {
     const { container, unmount } = render(<CommitForm workspace="/ws" hasChanges={false} onChanged={vi.fn()} />)
     await act(async () => {})

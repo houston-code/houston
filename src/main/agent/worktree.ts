@@ -1,12 +1,15 @@
 import { execFile } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import type { ConversationWorktree, RepoInfo, WorktreeRemoval } from '@shared/agent'
 import { isSafeGitRef } from '@shared/git'
 import { parseWorktreePorcelain } from './git'
 import { GIT_ENV, hardenedGitArgs } from './gitRead'
 import { findGitEntry } from './gitEntry'
 import { lspManager } from './lsp/manager'
+import { resolveRepo } from './repoIdentity'
+import type { GitDirsIo } from './gitDirs'
 
 /**
  * Create and tear down git worktrees that back a conversation, so a chat can work
@@ -80,6 +83,36 @@ export function slugifyBranch(branch: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
   return slug || 'work'
+}
+
+/**
+ * The branch a session gets when it should have its own worktree but named none:
+ * `houston/<title-slug>-<suffix>`. The random suffix keeps two sessions with similar
+ * titles from colliding.
+ */
+export function autoBranchFor(title: string, suffix: string = randomBytes(3).toString('hex')): string {
+  const slug = slugifyBranch(title).slice(0, 40).replace(/-+$/, '') || 'session'
+  return `houston/${slug}-${suffix}`
+}
+
+/**
+ * The same folder outside Houston's own worktrees: for a workspace under
+ * `<repoRoot>/.houston/worktrees/<slug>`, the matching path in the main checkout
+ * (`<repoRoot>`, plus any subfolder below the slug); any other workspace unchanged.
+ * Used for what must outlive the chat that made it (a schedule), since a chat's
+ * worktree is disposable. Filesystem reads only, never throws.
+ */
+export function houstonWorktreeHome(workspace: string, io?: GitDirsIo): string {
+  try {
+    const repo = io ? resolveRepo(workspace, io) : resolveRepo(workspace)
+    if (repo.kind !== 'git') return workspace
+    const rel = relative(repo.root, repo.workspace)
+    const parts = rel.split(sep)
+    if (parts.length < 3 || join(parts[0]!, parts[1]!) !== WORKTREES_SUBDIR || !parts[2]) return workspace
+    return join(repo.root, ...parts.slice(3))
+  } catch {
+    return workspace
+  }
 }
 
 /**
@@ -184,6 +217,42 @@ export function pickDefaultBranch(originHead: string, branches: string[]): strin
   return [fromOrigin, 'main', 'master'].find((b) => b && branches.includes(b)) ?? null
 }
 
+/** Whether `p` exists as a symbolic link (not followed). */
+function isSymlink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Create `<repoRoot>/.houston/worktrees` and require that it really sits inside the
+ * repo. A committed `.houston` or `.houston/worktrees` symlink (`-> ../../..`) would
+ * otherwise send `git worktree add` to check a branch out anywhere the link points,
+ * outside the project and outside what the sandbox treats as the workspace.
+ */
+function ensureWorktreesDir(repoRoot: string): void {
+  const realRoot = realpathSync(repoRoot)
+  // One level at a time, checking each before going deeper, so nothing (not even an
+  // empty folder) is created through a link that leads out of the repo.
+  let dir = repoRoot
+  for (const part of WORKTREES_SUBDIR.split(sep)) {
+    dir = join(dir, part)
+    if (!existsSync(dir) && !isSymlink(dir)) mkdirSync(dir)
+    let real: string
+    try {
+      real = realpathSync(dir)
+    } catch {
+      throw new Error(`${WORKTREES_SUBDIR} is a broken link, so no worktree was created there.`)
+    }
+    const rel = relative(realRoot, real)
+    if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      throw new Error(`${WORKTREES_SUBDIR} links outside the repository, so no worktree was created there.`)
+    }
+  }
+}
+
 /** Append the worktrees-ignore line to `<repoRoot>/.git/info/exclude` if absent. Best-effort. */
 function ensureExcluded(repoRoot: string, exec: GitRun): Promise<void> {
   return exec(['rev-parse', '--git-common-dir'], repoRoot)
@@ -193,6 +262,9 @@ function ensureExcluded(repoRoot: string, exec: GitRun): Promise<void> {
       const dir = isAbsolute(commonDir) ? commonDir : join(repoRoot, commonDir)
       const infoDir = join(dir, 'info')
       const excludePath = join(infoDir, 'exclude')
+      // A link here (planted by anything that could write the git dir) would steer the
+      // append at a file elsewhere: leave the exclude alone rather than follow it.
+      if (isSymlink(infoDir) || isSymlink(excludePath)) return
       let current = ''
       try {
         current = readFileSync(excludePath, 'utf8')
@@ -257,7 +329,7 @@ export async function createWorktree(
     )
   }
   const path = worktreePath(repo.root, slugifyBranch(branch))
-  mkdirSync(join(repo.root, WORKTREES_SUBDIR), { recursive: true })
+  ensureWorktreesDir(repo.root)
   await ensureExcluded(repo.root, exec)
   const args = ['worktree', 'add', '-b', branch, path]
   if (input.base) args.push(input.base)

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest'
 import type { PreviewServer } from '@shared/preview'
-import { PreviewDock } from './PreviewDock'
+import { PreviewDock, resetPreviewMemory } from './PreviewDock'
 
 class FakeResizeObserver {
   observe(): void {}
@@ -19,6 +19,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.stubGlobal('ResizeObserver', FakeResizeObserver)
   window.api = api as unknown as typeof window.api
+  resetPreviewMemory()
 })
 
 const noop = (): void => {}
@@ -145,6 +146,20 @@ describe('PreviewDock', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show it' }))
     expect(screen.getByText('http://localhost:3002/')).toBeInTheDocument()
     expect(screen.queryByText(/preview closed/)).not.toBeInTheDocument()
+  })
+
+  it('remembers added addresses and closed panes when the side panel is hidden and shown again', () => {
+    const servers = [running('a', 'http://localhost:3001/'), running('b', 'http://localhost:3002/')]
+    const { unmount } = renderDock({ servers })
+    fireEvent.change(screen.getByLabelText('Add a localhost URL to preview'), { target: { value: '4321' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(screen.getByLabelText('Close preview of localhost:3002'))
+    unmount()
+
+    renderDock({ servers })
+    expect(screen.getByText('http://localhost:4321/')).toBeInTheDocument()
+    expect(screen.queryByText('http://localhost:3002/')).not.toBeInTheDocument()
+    expect(screen.getByText(/1 preview closed/)).toBeInTheDocument()
   })
 
   it('frees a closed pane\'s slot for a server past the cap', () => {
@@ -315,7 +330,7 @@ describe('PreviewDock tabs (Background tasks | Preview)', () => {
     expect(screen.queryByRole('tab', { name: 'Plan review' })).toBeNull()
   })
 
-  it('orders all five tabs, keeping Files mounted but Changes only while it shows', () => {
+  it('orders all five tabs, keeping Files and Changes mounted once they have shown', () => {
     const dock = (tab: 'changes' | 'files') => (
       <PreviewDock
         servers={[]}
@@ -342,11 +357,12 @@ describe('PreviewDock tabs (Background tasks | Preview)', () => {
     expect(screen.getByText('changes content')).toBeVisible()
     expect(screen.getByText('files content')).not.toBeVisible()
     rerender(dock('files'))
-    expect(screen.queryByText('changes content')).toBeNull()
+    // Hidden, not unmounted: a commit message or comment being written there survives.
+    expect(screen.getByText('changes content')).not.toBeVisible()
     expect(screen.getByText('files content')).toBeVisible()
   })
 
-  it('adds a Changes tab after Preview, rendering its content only while it shows', () => {
+  it('adds a Changes tab after Preview, rendering its content once it shows', () => {
     const onTabChange = vi.fn()
     const { rerender } = render(
       <PreviewDock

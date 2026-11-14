@@ -111,6 +111,15 @@ function callFilePaths(call: NonNullable<ChatMessage['toolCalls']>[number]): str
   return typeof path === 'string' ? [path] : []
 }
 
+/**
+ * The files a tool call works on: the `path` of a file tool, or every file an
+ * `apply_patch` envelope names. [] for any other tool.
+ */
+export function touchedFilePaths(call: NonNullable<ChatMessage['toolCalls']>[number]): string[] {
+  if (!FILE_TOOLS.has(call.name) && call.name !== 'apply_patch') return []
+  return callFilePaths(call)
+}
+
 /** Trim to `max` characters on a word-ish boundary, adding an ellipsis marker. */
 function clip(text: string, max: number): string {
   if (text.length <= max) return text

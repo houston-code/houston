@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { parseTuiArgs, type TuiOptions } from '../main/tui'
 import { parseHeadlessArgs, type HeadlessOptions } from '../main/headless'
+import { parseAcpArgs } from '../main/acp'
 import {
   readAllStdin,
   runTuiEntry,
@@ -168,7 +169,14 @@ export async function runCli(argv: string[], { version, usage, argvProblem }: Ru
   }
 
   const mode = selectRunMode(argv, process.cwd(), Boolean(process.stdin.isTTY), stdinIsPiped())
-  if (mode.kind === 'acp') return runAcpEntry({ version })
+  if (mode.kind === 'acp') {
+    const launch = parseAcpArgs(argv.slice(2))
+    if ('error' in launch) {
+      process.stderr.write(`houston: ${launch.error}\n`)
+      return 2
+    }
+    return runAcpEntry({ version }, launch)
+  }
   if (mode.kind === 'tui') return runTuiEntry(mode.options, { version })
   if (mode.kind === 'headless') return runHeadlessEntry(mode.options, { version })
 

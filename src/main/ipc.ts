@@ -84,6 +84,7 @@ import { isDirectory, LastChatStore, launchChat } from './lastChat'
 import { applyAppBadge, attentionCount, dotPng } from './appBadge'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
+import { providerQuotas } from './providers/quota'
 import {
   cancelRun,
   resolveApproval,
@@ -154,7 +155,7 @@ import {
 import { cancelCompaction, compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
-import { loadCommands } from './agent/commands'
+import { loadSlashCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
 import { registerCustomizeIpc } from './customizeIpc'
@@ -167,6 +168,8 @@ import {
 import { collectWorkingTreeChanges, collectWorkingTreeStats } from './agent/workingTree'
 import { branchSyncFor, commitAll, lookupPr, pushBranch, suggestCommitMessage } from './agent/gitActions'
 import { isKnownWorkspace } from './knownWorkspace'
+import type { OpenResult } from '@shared/editors'
+import type { FilePreview } from '@shared/files'
 import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
 import { collectChatChanges, revertChange } from './agent/changes'
 import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
@@ -230,9 +233,15 @@ import {
 import { realLoginAgentDeps } from './loginAgent'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 import { wireMediaProtocol } from './mediaProtocol'
+import { noteThrottle, onRateLimitChange, rateLimitSnapshot } from './rateLimitStore'
 
 /** A preferences export is a few KB; anything past this is not one. */
 const MAX_SETTINGS_FILE_BYTES = 2_000_000
+
+/** Whether a renderer-supplied workspace is a non-empty string naming a known project. */
+function knownWorkspaceArg(workspace: unknown): boolean {
+  return typeof workspace === 'string' && workspace !== '' && isKnownWorkspace(workspace)
+}
 
 /** Whether a usable key is stored for the provider, as settings report it. */
 function providerHasKey(providerId: string): boolean {
@@ -355,8 +364,18 @@ function runOutputTargets(sender: WebContents): WebContents[] {
   return out
 }
 
+/**
+ * Keep what a throttled retry said about the provider's quota, filed under the chat's
+ * provider, so it outlives the retry notice (see rateLimitStore.ts).
+ */
+export function noteRetryThrottle(conversationId: string, e: AgentEvent): void {
+  if (e.type !== 'retry' || !e.throttle) return
+  noteThrottle(peekConversation(conversationId)?.providerId, e.throttle)
+}
+
 /** Stream one agent event to the renderers, persisting usage totals along the way. */
 function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
+  noteRetryThrottle(conversationId, e)
   const ev = applyRunningUsage(conversationId, e)
   for (const wc of runOutputTargets(sender)) wc.send(IPC.agentEvent, ev)
   maybeNotify(sender, conversationId, ev)
@@ -480,6 +499,7 @@ function makeBroadcastIo(): DrainIO {
     imageGallery: true,
     liveShellOutput: true,
     emit: coalescedEmit((conversationId, e) => {
+      noteRetryThrottle(conversationId, e)
       const ev = applyRunningUsage(conversationId, e)
       toEach((wc) => wc.send(IPC.agentEvent, ev))
       const notifyVia = (windowShowing(conversationId) ?? targetWindow())?.webContents
@@ -665,7 +685,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Scheduled runs: persist under userData, fire through the spawn backend just
   // wired above (a fired occurrence is an ordinary background session in the
   // sidebar). start() also catches up occurrences missed while the app was closed.
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome) })
+  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask') })
   setSchedulerBackend(scheduler)
   // Scheduled runs while the app is closed: a login agent starts this app in its
   // windowless --schedule-daemon mode (Settings > Scheduled runs).
@@ -844,29 +864,30 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // One directory level for the Finder-like Files panel. The renderer expands
   // folders lazily, so each call lists only a directory's immediate children;
   // listDirectory realpaths the workspace and confines the subpath to it.
+  // The workspace must be one the app already knows (a recent project or a chat's
+  // folder), so a renderer bug or a compromised renderer can't browse, read or open
+  // files in an arbitrary folder through these handlers.
   handle(IPC.workspaceListDir, async (_event, workspace: string, relPath: string) =>
-    listDirectory(
-      typeof workspace === 'string' ? workspace : '',
-      typeof relPath === 'string' ? relPath : ''
-    )
+    knownWorkspaceArg(workspace)
+      ? listDirectory(workspace as string, typeof relPath === 'string' ? relPath : '')
+      : []
   )
 
   // Read a file selected in the Files panel for in-app preview. Confined to the
   // workspace; returns a text/image payload or a note kind for binary/oversize.
-  handle(IPC.workspaceReadFile, async (_event, workspace: string, relPath: string) =>
-    readWorkspaceFile(
-      typeof workspace === 'string' ? workspace : '',
-      typeof relPath === 'string' ? relPath : ''
-    )
+  handle(IPC.workspaceReadFile, async (_event, workspace: string, relPath: string): Promise<FilePreview> =>
+    knownWorkspaceArg(workspace)
+      ? readWorkspaceFile(workspace as string, typeof relPath === 'string' ? relPath : '')
+      : { kind: 'error', message: 'That folder is not an open project.' }
   )
 
   // Open a file selected in the Files panel in its OS default app. A user
-  // gesture; the target is confined to the workspace before shell.openPath.
-  handle(IPC.workspaceOpenPath, (_event, workspace: string, relPath: string) =>
-    openWorkspacePath(
-      typeof workspace === 'string' ? workspace : '',
-      typeof relPath === 'string' ? relPath : ''
-    )
+  // gesture; the target is confined to the workspace, and openWorkspacePath refuses
+  // links to another file type and shows launchable files in their folder instead.
+  handle(IPC.workspaceOpenPath, (_event, workspace: string, relPath: string): OpenResult =>
+    knownWorkspaceArg(workspace)
+      ? openWorkspacePath(workspace as string, typeof relPath === 'string' ? relPath : '')
+      : { ok: false, error: 'That folder is not an open project.' }
   )
 
   // Composer "+" menu: pick files in a native dialog and return their (capped)
@@ -1051,7 +1072,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.commandsList, async (_event, workspace: string) => {
     if (!workspace) return []
     try {
-      return await loadCommands(realpathSync(workspace))
+      return await loadSlashCommands(realpathSync(workspace))
     } catch {
       return []
     }
@@ -1200,6 +1221,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     testProviderKey(providerId, key)
   )
 
+  // The quota each provider's latest response reported (its ratelimit headers), for a
+  // quota readout. In-memory and read-only: it carries no key or request content.
+  handle(IPC.providerQuotas, () => providerQuotas())
+
   // Preflight: does this local model support tool calling? Only meaningful for an
   // Ollama-style (openai-compatible) provider; anything else returns null (unknown)
   // so the UI never shows a false warning.
@@ -1272,6 +1297,14 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.conversationScorecard, () => computeScorecard())
   // Local-only spend and tokens per day and per project, for the usage view.
   handle(IPC.conversationUsageReport, () => computeUsageReport())
+  // The last rate-limit state per provider, read once by each window and then followed
+  // through the broadcast (every window's status bar shows it).
+  handle(IPC.rateLimitList, () => rateLimitSnapshot())
+  onRateLimitChange((states) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.rateLimitChanged, states)
+    }
+  })
   handle(
     IPC.conversationCreate,
     async (
@@ -1445,7 +1478,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return { deleted: true, worktree }
     }
   )
-  // Rename / pin / archive / move-to-group. Does not affect the recency ordering.
+  // Rename / pin / archive / move-to-group / set labels. Does not affect the recency ordering.
   // Archiving also removes the chat's worktree when that loses nothing (clean and
   // merged); awaited so the list the renderer re-reads next already shows the chat
   // back at its repo root.
@@ -1454,7 +1487,13 @@ export function registerIpc(ready?: Promise<unknown>): void {
     async (
       _event,
       id: string,
-      patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
+      patch: {
+        title?: string
+        pinned?: boolean
+        archived?: boolean
+        groupId?: string | null
+        labels?: string[]
+      }
     ) => {
       organizeConversation(id, patch)
       if (patch.archived !== true) return

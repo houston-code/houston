@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync, existsSync, rmSync, symlinkSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
 import { runGitCapture, runReadGit } from './gitRead'
 import {
+  autoBranchFor,
+  houstonWorktreeHome,
   slugifyBranch,
   worktreePath,
   getRepoInfo,
@@ -326,6 +328,86 @@ describe('createWorktree', () => {
     await expect(createWorktree({ workspace: repo, branch: 'wip' }, exec)).rejects.toThrow(
       /pick an existing branch as the base \(lucid-meadow\)/
     )
+  })
+})
+
+/**
+ * A cloned repo can commit `.houston/worktrees` (or `.houston`) as a symlink. Followed
+ * blindly, `git worktree add` would check a branch out wherever it points, outside the
+ * project. Something able to write the git dir could also link `info/exclude` at a file
+ * elsewhere for the ignore-line append to grow.
+ */
+describe('createWorktree with planted links', () => {
+  const posixOnly = process.platform === 'win32' ? it.skip : it
+  const repoGit = (repo: string, calls: string[][]): GitRun =>
+    fakeGit(
+      {
+        'worktree list': () => worktreeList(repo),
+        'rev-parse --abbrev-ref': () => 'main\n',
+        'for-each-ref': () => 'main\n',
+        'rev-parse --git-common-dir': () => join(repo, '.git'),
+        'worktree add': () => ''
+      },
+      calls
+    )
+
+  posixOnly('refuses a .houston/worktrees that links out of the repo', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'wt-out-'))
+    const repo = mkdtempSync(join(tmpdir(), 'wt-repo-'))
+    mkdirSync(join(repo, '.git'), { recursive: true })
+    mkdirSync(join(repo, '.houston'))
+    symlinkSync(outside, join(repo, '.houston', 'worktrees'))
+    const calls: string[][] = []
+    await expect(createWorktree({ workspace: repo, branch: 'wip' }, repoGit(repo, calls))).rejects.toThrow(
+      /links outside the repository/
+    )
+    expect(calls.some((c) => c[1] === 'add')).toBe(false)
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  posixOnly('refuses a relative ../../.. link, and a .houston that links out, creating nothing there', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'wt-parent-'))
+    const repo = join(parent, 'repo')
+    mkdirSync(join(repo, '.git'), { recursive: true })
+    mkdirSync(join(repo, '.houston'))
+    symlinkSync('../../..', join(repo, '.houston', 'worktrees'))
+    const calls: string[][] = []
+    await expect(createWorktree({ workspace: repo, branch: 'wip' }, repoGit(repo, calls))).rejects.toThrow(
+      /links outside the repository/
+    )
+    rmSync(join(repo, '.houston'), { recursive: true, force: true })
+    const elsewhere = join(parent, 'elsewhere')
+    mkdirSync(elsewhere)
+    symlinkSync(elsewhere, join(repo, '.houston'))
+    await expect(createWorktree({ workspace: repo, branch: 'wip' }, repoGit(repo, calls))).rejects.toThrow(
+      /links outside the repository/
+    )
+    // Not even the worktrees folder was made through the link.
+    expect(existsSync(join(elsewhere, 'worktrees'))).toBe(false)
+    expect(calls.some((c) => c[1] === 'add')).toBe(false)
+    rmSync(parent, { recursive: true, force: true })
+  })
+
+  posixOnly('allows a .houston/worktrees link that stays inside the repo', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'wt-repo-'))
+    mkdirSync(join(repo, '.git'), { recursive: true })
+    mkdirSync(join(repo, 'trees'))
+    mkdirSync(join(repo, '.houston'))
+    symlinkSync('../trees', join(repo, '.houston', 'worktrees'))
+    const calls: string[][] = []
+    await createWorktree({ workspace: repo, branch: 'wip' }, repoGit(repo, calls))
+    expect(calls.some((c) => c[1] === 'add')).toBe(true)
+  })
+
+  posixOnly('leaves a linked info/exclude alone', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'wt-repo-'))
+    const victim = join(mkdtempSync(join(tmpdir(), 'wt-victim-')), 'profile')
+    writeFileSync(victim, 'keep\n')
+    mkdirSync(join(repo, '.git', 'info'), { recursive: true })
+    symlinkSync(victim, join(repo, '.git', 'info', 'exclude'))
+    await createWorktree({ workspace: repo, branch: 'wip' }, repoGit(repo, []))
+    expect(readFileSync(victim, 'utf8')).toBe('keep\n')
+    expect(lstatSync(join(repo, '.git', 'info', 'exclude')).isSymbolicLink()).toBe(true)
   })
 })
 
@@ -715,4 +797,68 @@ describe('worktree integration (real git)', () => {
       rmSync(repo, { recursive: true, force: true })
     }
   }, TIMEOUT)
+})
+
+describe('autoBranchFor', () => {
+  it('names a houston/ branch after the title with a suffix', () => {
+    expect(autoBranchFor('Fix the login bug', 'a1b2c3')).toBe('houston/fix-the-login-bug-a1b2c3')
+    expect(autoBranchFor('???', 'f00')).toBe('houston/work-f00')
+    expect(autoBranchFor('x', 'f00')).not.toBe(autoBranchFor('x'))
+  })
+})
+
+describe('houstonWorktreeHome', () => {
+  /** A real repo with one commit and a Houston worktree under .houston/worktrees. */
+  function repoWithWorktree(): { root: string; wt: string; cleanup: () => void } {
+    const base = mkdtempSync(join(tmpdir(), 'houston-wt-home-'))
+    const root = join(base, 'repo')
+    mkdirSync(root)
+    const git = (...args: string[]): string =>
+      execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd: root, encoding: 'utf8' })
+    git('init', '-q', '-b', 'main')
+    writeFileSync(join(root, 'a.txt'), 'a\n')
+    mkdirSync(join(root, 'src'))
+    writeFileSync(join(root, 'src', 'b.txt'), 'b\n')
+    git('add', '.')
+    git('commit', '-q', '-m', 'init')
+    const wt = join(root, '.houston', 'worktrees', 'feat')
+    git('worktree', 'add', '-q', '-b', 'feat', wt)
+    return { root, wt, cleanup: () => rmSync(base, { recursive: true, force: true }) }
+  }
+
+  it('maps a Houston worktree (and a folder inside it) to the main checkout', () => {
+    const { root, wt, cleanup } = repoWithWorktree()
+    try {
+      const real = (p: string): string => normalize(realpathSync(p))
+      expect(normalize(houstonWorktreeHome(wt))).toBe(real(root))
+      expect(normalize(houstonWorktreeHome(join(wt, 'src')))).toBe(join(real(root), 'src'))
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('leaves the main checkout, other linked worktrees, and plain folders alone', () => {
+    const { root, cleanup } = repoWithWorktree()
+    const plain = mkdtempSync(join(tmpdir(), 'houston-wt-plain-'))
+    const other = join(root, '..', 'elsewhere')
+    try {
+      execFileSync('git', ['worktree', 'add', '-q', '-b', 'other', other], { cwd: root })
+      expect(houstonWorktreeHome(root)).toBe(root)
+      expect(houstonWorktreeHome(join(root, 'src'))).toBe(join(root, 'src'))
+      expect(houstonWorktreeHome(other)).toBe(other)
+      expect(houstonWorktreeHome(plain)).toBe(plain)
+      // A folder merely named like the worktrees dir, in no repository, is not one.
+      const fake = join(plain, '.houston', 'worktrees', 'x')
+      mkdirSync(fake, { recursive: true })
+      expect(houstonWorktreeHome(fake)).toBe(fake)
+    } finally {
+      cleanup()
+      rmSync(plain, { recursive: true, force: true })
+    }
+  })
+
+  it('returns the workspace unchanged when it does not exist', () => {
+    const gone = join(tmpdir(), 'houston-wt-missing-' + Date.now(), '.houston', 'worktrees', 'x')
+    expect(houstonWorktreeHome(gone)).toBe(gone)
+  })
 })

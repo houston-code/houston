@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto'
 import type { ApprovalPolicy } from '@shared/types'
 import type { ChatMessage, Conversation, ProposalState, ToolCall } from '@shared/agent'
 import {
@@ -10,8 +9,9 @@ import {
   type SpawnSessionInput,
   type SpawnSessionResult
 } from './agent/spawn'
-import { parseContextArg, parseWorktreeArg } from './agent/tools'
-import { getRepoInfo, slugifyBranch } from './agent/worktree'
+import { getTool, parseContextArg, parseWorktreeArg } from './agent/tools'
+import { memoryTaintSource } from './agent/memoryTools'
+import { autoBranchFor, getRepoInfo } from './agent/worktree'
 import { getConversation, setProposalState } from './conversations'
 
 /**
@@ -78,14 +78,8 @@ export function proposalsIn(messages: ChatMessage[]): ProposalEntry[] {
   return out
 }
 
-/**
- * The branch a proposal gets when it didn't name one: `houston/<title-slug>-<suffix>`.
- * The random suffix keeps two proposals with similar titles from colliding.
- */
-export function autoBranchFor(title: string, suffix: string = randomBytes(3).toString('hex')): string {
-  const slug = slugifyBranch(title).slice(0, 40).replace(/-+$/, '') || 'session'
-  return `houston/${slug}-${suffix}`
-}
+/** The branch a proposal gets when it didn't name one (shared with spawn_session). */
+export { autoBranchFor }
 
 /** The store and spawn operations a proposal needs, injected so this stays testable. */
 export interface ProposalDeps {
@@ -151,6 +145,12 @@ async function spawnProposal(
   const worktree =
     args.worktree ?? ((await deps.isGitRepo(conv.workspace)) ? { branch: autoBranchFor(args.title) } : undefined)
 
+  // The proposal's prompt is the model's words. When the proposing chat had read
+  // outside text, the new session must know it, or its first message (which reads as
+  // the user's) would launder an injected instruction past the memory taint rule.
+  // Starting it is the user's click, but that click approves the session, not every
+  // memory it might save from that text.
+  const taintSource = memoryTaintSource(conv.messages, (n) => getTool(n)?.kind, callId)
   const result = await deps.spawn({
     title: args.title,
     prompt: args.prompt,
@@ -162,6 +162,7 @@ async function spawnProposal(
     parentConversationId: conv.id,
     // The user's own click: exempt from the cap on agent-started sessions.
     startedBy: 'user',
+    ...(taintSource ? { taintSource } : {}),
     ...(worktree ? { worktree } : {}),
     ...(args.context === 'fork' ? { history: forkableHistory(conv.messages) } : {})
   })

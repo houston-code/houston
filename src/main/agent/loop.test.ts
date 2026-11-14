@@ -51,6 +51,7 @@ import { MAX_PROVIDER_RETRIES } from './retry'
 import { SUBAGENT_COST_LANDING_NOTE } from './subagent'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import { turnCostUsd } from '@shared/usage'
+import { resetOllamaContextCache } from '../providers/ollama'
 import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
@@ -58,6 +59,7 @@ import { idleTimeoutFetch } from '../providers/idle-fetch'
 import { startFlakySseServer, type Hiccup } from '../test/flaky-sse-server'
 import { memoryStore } from './memoryStore'
 import { COMPACTION_SUMMARY_PREFIX } from './compaction'
+import { applyCompaction } from './compact'
 import {
   restoreCheckpoint,
   reapplyCheckpoint,
@@ -246,7 +248,11 @@ vi.mock('./tools', async (importActual) => {
     getTool: (name: string): unknown => h.probeTools.find((t) => t.schema.name === name) ?? actual.getTool(name)
   }
 })
-vi.mock('./git', () => ({ gitContext: async () => h.gitContext }))
+// The rest of ./git stays real: the spawn worktree default reads the repository through it.
+vi.mock('./git', async (importActual) => ({
+  ...(await importActual<typeof import('./git')>()),
+  gitContext: async () => h.gitContext
+}))
 vi.mock('./shells', async (importActual) => {
   const actual = await importActual<typeof import('./shells')>()
   return { ...actual, listShells: () => h.shells ?? actual.listShells() }
@@ -365,6 +371,17 @@ function scripted(turns: ProviderStreamEvent[][]): Provider {
       for (const ev of turn) yield ev
     }
   }
+}
+
+/** Make `dir` a git repository with one commit on `main`. */
+function gitRepoWithCommit(dir: string): void {
+  const git = (...args: string[]): void => {
+    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd: dir })
+  }
+  git('init', '-q', '-b', 'main')
+  writeFileSync(join(dir, 'README.md'), 'hi\n')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
 }
 
 let ws: string
@@ -5403,6 +5420,519 @@ describe('writable subagent unconfined-shell gate', () => {
   })
 })
 
+describe('tool-call batches between encumbered calls', () => {
+  /**
+   * A meeting point for `n` concurrent calls: each one that arrives waits for the rest.
+   * Resolves true once all have arrived, or false after `timeoutMs` (so a call that ran
+   * alone fails its assertion instead of hanging the test).
+   */
+  const rendezvous = (n: number, timeoutMs = 1500): (() => Promise<boolean>) => {
+    let arrived = 0
+    let release!: () => void
+    const all = new Promise<void>((r) => (release = r))
+    return () => {
+      if (++arrived === n) release()
+      return Promise.race([
+        all.then(() => true),
+        new Promise<boolean>((r) => setTimeout(() => r(false), timeoutMs))
+      ])
+    }
+  }
+  /** A read-kind tool (registered as an MCP def) whose body the test controls. */
+  const probeRead = (name: string, body: () => Promise<string>): ToolDef => ({
+    kind: 'read',
+    summarize: () => name,
+    schema: { name, description: name, parameters: { type: 'object', properties: {} } },
+    execute: body
+  })
+  const callTurn = (
+    ...calls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>
+  ): ProviderStreamEvent[] => [
+    ...calls.map((call) => ({ type: 'tool_call' as const, call })),
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const finalText = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn' }
+  ]
+  const eventIndex = (r: RunResult, type: AgentEvent['type'], callId: string): number =>
+    r.events.findIndex((e) => e.type === type && 'callId' in e && e.callId === callId)
+  const resultIds = (r: RunResult): string[] =>
+    r.events.filter((e) => e.type === 'tool_result').map((e) => (e as { callId: string }).callId)
+  const toolIds = (r: RunResult): Array<string | undefined> =>
+    r.messages.filter((m) => m.role === 'tool').map((m) => m.toolCallId)
+  const write = (id: string, path: string): { id: string; name: string; arguments: Record<string, unknown> } => ({
+    id,
+    name: 'write_file',
+    arguments: { path, content: 'WRITTEN' }
+  })
+
+  afterEach(() => {
+    h.settings.permissionRules = []
+  })
+
+  it('[write, read, read]: the reads run concurrently, once the write has landed', async () => {
+    const meet = rendezvous(2)
+    const met: Record<string, boolean> = {}
+    const sawWrite: Record<string, boolean> = {}
+    const reader = (name: string): ToolDef =>
+      probeRead(name, async () => {
+        sawWrite[name] = existsSync(join(ws, 'w.txt'))
+        met[name] = await meet()
+        return `RESULT_${name}`
+      })
+    h.mcpDefs = [reader('read_a'), reader('read_b')]
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        callTurn(write('w1', 'w.txt'), { id: 'ra', name: 'read_a', arguments: {} }, { id: 'rb', name: 'read_b', arguments: {} }),
+        finalText('done')
+      ]
+    })
+    // Both reads were in flight at once (sequential calls never meet), and each started
+    // only after the write had finished.
+    expect(met).toEqual({ read_a: true, read_b: true })
+    expect(sawWrite).toEqual({ read_a: true, read_b: true })
+    expect(eventIndex(r, 'tool_start', 'ra')).toBeGreaterThan(eventIndex(r, 'tool_result', 'w1'))
+    // Each call still gets its own tool_start and tool_result, the results in call order.
+    expect(eventIndex(r, 'tool_start', 'rb')).toBeLessThan(eventIndex(r, 'tool_result', 'ra'))
+    expect(resultIds(r)).toEqual(['w1', 'ra', 'rb'])
+    expect(toolIds(r)).toEqual(['w1', 'ra', 'rb'])
+    expect(r.messages.find((m) => m.toolCallId === 'rb')?.content).toBe('RESULT_read_b')
+  })
+
+  it('[read, write, read, read]: two batches around the write, flushed in call order', async () => {
+    const meet = rendezvous(2)
+    const finished: string[] = []
+    const met: Record<string, boolean> = {}
+    let firstSawWrite: boolean | undefined
+    h.mcpDefs = [
+      probeRead('read_a', async () => {
+        firstSawWrite = existsSync(join(ws, 'w.txt'))
+        return 'A'
+      }),
+      // The earlier call of the second batch finishes LAST: its result still comes first.
+      probeRead('read_b', async () => {
+        met.read_b = await meet()
+        await new Promise((r) => setTimeout(r, 40))
+        finished.push('rb')
+        return 'B'
+      }),
+      probeRead('read_c', async () => {
+        met.read_c = await meet()
+        finished.push('rc')
+        return 'C'
+      })
+    ]
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        callTurn(
+          { id: 'ra', name: 'read_a', arguments: {} },
+          write('w1', 'w.txt'),
+          { id: 'rb', name: 'read_b', arguments: {} },
+          { id: 'rc', name: 'read_c', arguments: {} }
+        ),
+        finalText('done')
+      ]
+    })
+    // The leading read ran (and finished) before the write; the two after it ran together.
+    expect(firstSawWrite).toBe(false)
+    expect(eventIndex(r, 'tool_start', 'w1')).toBeGreaterThan(eventIndex(r, 'tool_result', 'ra'))
+    expect(eventIndex(r, 'tool_start', 'rb')).toBeGreaterThan(eventIndex(r, 'tool_result', 'w1'))
+    expect(met).toEqual({ read_b: true, read_c: true })
+    expect(finished).toEqual(['rc', 'rb'])
+    expect(resultIds(r)).toEqual(['ra', 'w1', 'rb', 'rc'])
+    expect(toolIds(r)).toEqual(['ra', 'w1', 'rb', 'rc'])
+    expect(r.messages.filter((m) => m.role === 'tool').map((m) => m.content)).toEqual([
+      'A',
+      expect.stringContaining('w.txt'),
+      'B',
+      'C'
+    ])
+  })
+
+  it('[edit, dispatch_agent, dispatch_agent]: the two subagents run at the same time', async () => {
+    const meet = rendezvous(2)
+    const met: Record<string, boolean> = {}
+    // Each subagent reads one file; the probe stands in for read_file in both.
+    h.probeTools = [
+      {
+        kind: 'read',
+        summarize: () => 'read',
+        schema: { name: 'read_file', description: 'read', parameters: { type: 'object', properties: { path: { type: 'string' } } } },
+        execute: async (a) => {
+          met[String(a.path)] = await meet()
+          return `content of ${String(a.path)}`
+        }
+      }
+    ]
+    // Turns are routed by the conversation's first user message: the main agent's, or
+    // each subagent's prompt, since the two subagents ask the provider concurrently.
+    const scripts: Record<string, ProviderStreamEvent[][]> = {
+      'do it': [
+        callTurn(
+          write('w1', 'w.txt'),
+          { id: 'd1', name: 'dispatch_agent', arguments: { description: 'one', prompt: 'sub one' } },
+          { id: 'd2', name: 'dispatch_agent', arguments: { description: 'two', prompt: 'sub two' } }
+        ),
+        finalText('main done')
+      ],
+      'sub one': [callTurn({ id: 's1', name: 'read_file', arguments: { path: 'one.txt' } }), finalText('report one')],
+      'sub two': [callTurn({ id: 's2', name: 'read_file', arguments: { path: 'two.txt' } }), finalText('report two')]
+    }
+    const served: Record<string, number> = {}
+    const provider: Provider = {
+      async *streamChat(req) {
+        const first = String(req.messages?.find((m) => m.role === 'user')?.content ?? '')
+        const key = Object.keys(scripts).find((k) => k !== 'do it' && first.includes(k)) ?? 'do it'
+        const i = (served[key] = (served[key] ?? 0) + 1) - 1
+        for (const ev of scripts[key]?.[i] ?? finalText('')) yield ev
+      }
+    }
+    const r = await run({ policy: 'full-auto', provider })
+    expect(met).toEqual({ 'one.txt': true, 'two.txt': true })
+    expect(resultIds(r).filter((id) => ['w1', 'd1', 'd2'].includes(id))).toEqual(['w1', 'd1', 'd2'])
+    expect(String(r.messages.find((m) => m.toolCallId === 'd1')?.content)).toContain('report one')
+    expect(String(r.messages.find((m) => m.toolCallId === 'd2')?.content)).toContain('report two')
+  })
+
+  it('keeps a credential-file read and a denied read out of the batches, each gated in its place', async () => {
+    writeFileSync(join(ws, '.env'), 'APP_MODE=batched-dotenv-marker')
+    writeFileSync(join(ws, 'secret.txt'), 'deny-rule-marker')
+    h.settings.permissionRules = [{ action: 'deny', tool: 'read_file', match: 'secret.txt' }]
+    const ran: string[] = []
+    h.mcpDefs = [
+      probeRead('read_a', async () => {
+        ran.push('ra')
+        return 'A'
+      }),
+      probeRead('read_b', async () => {
+        ran.push('rb')
+        return 'B'
+      })
+    ]
+    const approvals: string[] = []
+    const r = await run({
+      policy: 'full-auto',
+      onApproval: (callId, decide) => {
+        approvals.push(callId)
+        decide('deny')
+      },
+      turns: [
+        callTurn(
+          write('w1', 'w.txt'),
+          { id: 'ra', name: 'read_a', arguments: {} },
+          { id: 'env', name: 'read_file', arguments: { path: '.env' } },
+          { id: 'sec', name: 'read_file', arguments: { path: 'secret.txt' } },
+          { id: 'rb', name: 'read_b', arguments: {} }
+        ),
+        finalText('done')
+      ]
+    })
+    // Only the credential file asked; the deny rule refused without a prompt.
+    expect(approvals).toEqual(['env'])
+    // The gated reads ran alone, in call order: read_a was done before the .env prompt,
+    // and read_b started only after the denied read had been answered.
+    expect(eventIndex(r, 'tool_approval', 'env')).toBeGreaterThan(eventIndex(r, 'tool_result', 'ra'))
+    expect(eventIndex(r, 'tool_result', 'sec')).toBeGreaterThan(eventIndex(r, 'tool_result', 'env'))
+    expect(eventIndex(r, 'tool_start', 'rb')).toBeGreaterThan(eventIndex(r, 'tool_result', 'sec'))
+    expect(ran).toEqual(['ra', 'rb'])
+    expect(JSON.stringify(r.messages)).not.toContain('batched-dotenv-marker')
+    expect(JSON.stringify(r.messages)).not.toContain('deny-rule-marker')
+    expect(toolIds(r)).toEqual(['w1', 'ra', 'env', 'sec', 'rb'])
+  })
+
+  it('still batches the reads after a write that plan mode blocks', async () => {
+    const meet = rendezvous(2)
+    const met: Record<string, boolean> = {}
+    h.mcpDefs = [
+      probeRead('read_a', async () => String((met.read_a = await meet()))),
+      probeRead('read_b', async () => String((met.read_b = await meet())))
+    ]
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        callTurn(write('w1', 'w.txt'), { id: 'ra', name: 'read_a', arguments: {} }, { id: 'rb', name: 'read_b', arguments: {} }),
+        finalText('done')
+      ]
+    })
+    expect(existsSync(join(ws, 'w.txt'))).toBe(false)
+    expect(String(r.messages.find((m) => m.toolCallId === 'w1')?.content)).toMatch(/Plan mode/)
+    expect(met).toEqual({ read_a: true, read_b: true })
+    expect(toolIds(r)).toEqual(['w1', 'ra', 'rb'])
+  })
+
+  it('asks about a host the egress proxy refused during a batch after that batch, on its first call', async () => {
+    // A background command reaching a host that isn't allowed is refused by the proxy
+    // while the reads run; the question comes after them, once, on the first result.
+    const meet = rendezvous(2)
+    h.mcpDefs = [
+      probeRead('read_a', async () => {
+        await meet()
+        checkEgressHost('blocked.example.com', h.settings, h.egressScope!)
+        return 'A'
+      }),
+      probeRead('read_b', async () => {
+        await meet()
+        return 'B'
+      })
+    ]
+    const r = await run({
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('deny'),
+      turns: [
+        callTurn(write('w1', 'w.txt'), { id: 'ra', name: 'read_a', arguments: {} }, { id: 'rb', name: 'read_b', arguments: {} }),
+        finalText('done')
+      ]
+    })
+    const asked = r.events.filter((e) => e.type === 'tool_approval') as Array<
+      Extract<AgentEvent, { type: 'tool_approval' }>
+    >
+    expect(asked.map((a) => [a.callId, a.egressHost])).toEqual([['ra', 'blocked.example.com']])
+    expect(eventIndex(r, 'tool_approval', 'ra')).toBeLessThan(eventIndex(r, 'tool_result', 'ra'))
+    expect(String(r.messages.find((m) => m.toolCallId === 'ra')?.content)).toContain(
+      egressHostDeclinedNote('blocked.example.com')
+    )
+    expect(r.messages.find((m) => m.toolCallId === 'rb')?.content).toBe('B')
+  })
+
+  describe('stopped mid-turn', () => {
+    const startRunWith = async (
+      runId: string,
+      turns: ProviderStreamEvent[][],
+      onEvent: (e: AgentEvent) => void = () => {}
+    ): Promise<{ events: AgentEvent[]; messages: ChatMessage[] }> => {
+      h.provider = scripted(turns)
+      const events: AgentEvent[] = []
+      let messages: ChatMessage[] = []
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          messages: [{ role: 'user', content: 'go' }]
+        },
+        (e) => {
+          events.push(e)
+          onEvent(e)
+        },
+        (m) => {
+          messages = m
+        }
+      )
+      return { events, messages }
+    }
+
+    it('keeps the results of a batch stopped partway and gives the calls after it the interrupted placeholder', async () => {
+      const runId = 'run-stop-mid-batch'
+      const meet = rendezvous(2)
+      h.mcpDefs = [
+        probeRead('read_a', async () => {
+          await meet()
+          // Stop while both reads are in flight.
+          cancelRun(runId)
+          return 'A_REAL'
+        }),
+        probeRead('read_b', async () => {
+          await meet()
+          return 'B_REAL'
+        })
+      ]
+      const { events, messages } = await startRunWith(runId, [
+        callTurn(
+          write('w1', 'one.txt'),
+          { id: 'ra', name: 'read_a', arguments: {} },
+          { id: 'rb', name: 'read_b', arguments: {} },
+          write('w2', 'two.txt')
+        )
+      ])
+      expect(missingToolResults(messages)).toEqual([])
+      expect(messages.find((m) => m.toolCallId === 'w1')?.content).toContain('one.txt')
+      expect(messages.find((m) => m.toolCallId === 'ra')?.content).toBe('A_REAL')
+      expect(messages.find((m) => m.toolCallId === 'rb')?.content).toBe('B_REAL')
+      expect(messages.find((m) => m.toolCallId === 'w2')?.content).toBe(INTERRUPTED_TOOL_RESULT)
+      expect(existsSync(join(ws, 'two.txt'))).toBe(false)
+      expect(events.filter((e) => e.type === 'done')).toMatchObject([{ type: 'done', stopReason: 'aborted' }])
+    })
+
+    it('does not start a batch once the run was stopped during the call before it', async () => {
+      const runId = 'run-stop-before-batch'
+      const ran: string[] = []
+      h.mcpDefs = [
+        probeRead('read_a', async () => {
+          ran.push('ra')
+          return 'A'
+        }),
+        probeRead('read_b', async () => {
+          ran.push('rb')
+          return 'B'
+        })
+      ]
+      const { events, messages } = await startRunWith(
+        runId,
+        [
+          callTurn(
+            write('w1', 'one.txt'),
+            { id: 'ra', name: 'read_a', arguments: {} },
+            { id: 'rb', name: 'read_b', arguments: {} }
+          )
+        ],
+        (e) => {
+          if (e.type === 'tool_result' && e.callId === 'w1') cancelRun(runId)
+        }
+      )
+      expect(ran).toEqual([])
+      expect(events.some((e) => e.type === 'tool_start' && e.callId === 'ra')).toBe(false)
+      expect(messages.find((m) => m.toolCallId === 'ra')?.content).toBe(INTERRUPTED_TOOL_RESULT)
+      expect(messages.find((m) => m.toolCallId === 'rb')?.content).toBe(INTERRUPTED_TOOL_RESULT)
+      expect(events.filter((e) => e.type === 'done')).toMatchObject([{ type: 'done', stopReason: 'aborted' }])
+    })
+  })
+
+  describe('in a subagent', () => {
+    /** Scripts turns and snapshots every request's messages, subagent transcripts included. */
+    const recording = (turns: ProviderStreamEvent[][], requests: ChatMessage[][]): Provider => {
+      let i = 0
+      return {
+        async *streamChat(req) {
+          requests.push(JSON.parse(JSON.stringify(req.messages ?? [])) as ChatMessage[])
+          for (const ev of turns[i++] ?? finalText('')) yield ev
+        }
+      }
+    }
+    const subToolIds = (requests: ChatMessage[][], ids: string[]): Array<string | undefined> =>
+      (requests.find((ms) => ms.some((m) => m.toolCallId === ids[0])) ?? [])
+        .filter((m) => m.role === 'tool')
+        .map((m) => m.toolCallId)
+    /** A stand-in for read_file that logs when each read starts. */
+    const probeReadFile = (onRead: (path: string) => Promise<string>): ToolDef => ({
+      kind: 'read',
+      summarize: (a) => `read ${String(a.path)}`,
+      schema: {
+        name: 'read_file',
+        description: 'read',
+        parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+      },
+      execute: async (a) => onRead(String(a.path))
+    })
+
+    it("runs a subagent's batched reads concurrently, recorded in call order", async () => {
+      const meet = rendezvous(3)
+      const met: Record<string, boolean> = {}
+      h.probeTools = [
+        probeReadFile(async (path) => {
+          met[path] = await meet()
+          // Finish in reverse order: the transcript still answers them in call order.
+          await new Promise((r) => setTimeout(r, path === 'a.txt' ? 30 : 0))
+          return `content of ${path}`
+        })
+      ]
+      const requests: ChatMessage[][] = []
+      const r = await run({
+        policy: 'full-auto',
+        provider: recording(
+          [
+            callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read them' } }),
+            callTurn(
+              { id: 's1', name: 'read_file', arguments: { path: 'a.txt' } },
+              { id: 's2', name: 'read_file', arguments: { path: 'b.txt' } },
+              { id: 's3', name: 'read_file', arguments: { path: 'c.txt' } }
+            ),
+            finalText('sub report'),
+            finalText('main done')
+          ],
+          requests
+        )
+      })
+      expect(met).toEqual({ 'a.txt': true, 'b.txt': true, 'c.txt': true })
+      expect(subToolIds(requests, ['s1'])).toEqual(['s1', 's2', 's3'])
+      expect(String(r.messages.find((m) => m.toolCallId === 'd1')?.content)).toContain('sub report')
+    })
+
+    it("holds a subagent's later reads until a credential-file read in the batch is answered", async () => {
+      writeFileSync(join(ws, '.env'), 'APP_MODE=sub-batch-dotenv-marker')
+      const log: string[] = []
+      h.probeTools = [
+        probeReadFile(async (path) => {
+          log.push(`read ${path}`)
+          return path === '.env' ? readFileSync(join(ws, '.env'), 'utf8') : `content of ${path}`
+        })
+      ]
+      const requests: ChatMessage[][] = []
+      const r = await run({
+        policy: 'full-auto',
+        provider: recording(
+          [
+            callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read them' } }),
+            callTurn(
+              { id: 's1', name: 'read_file', arguments: { path: 'a.txt' } },
+              { id: 's2', name: 'read_file', arguments: { path: '.env' } },
+              { id: 's3', name: 'read_file', arguments: { path: 'b.txt' } }
+            ),
+            finalText('sub report'),
+            finalText('main done')
+          ],
+          requests
+        ),
+        onApproval: (_id, decide) => {
+          log.push('answered')
+          decide('deny')
+        }
+      })
+      const approvals = r.events.filter((e) => e.type === 'tool_approval') as Array<
+        Extract<AgentEvent, { type: 'tool_approval' }>
+      >
+      expect(approvals).toHaveLength(1)
+      expect(approvals[0].sensitiveRead).toBe(true)
+      // The credential read never ran, and the read after it waited for the answer.
+      expect(log).toEqual(['read a.txt', 'answered', 'read b.txt'])
+      expect(JSON.stringify(requests)).not.toContain('sub-batch-dotenv-marker')
+      expect(subToolIds(requests, ['s1'])).toEqual(['s1', 's2', 's3'])
+    })
+
+    it("refuses a subagent's denied read in a batch without stopping the reads around it", async () => {
+      h.settings.permissionRules = [{ action: 'deny', tool: 'read_file', match: 'secret.txt' }]
+      const meet = rendezvous(2)
+      const met: Record<string, boolean> = {}
+      const read: string[] = []
+      h.probeTools = [
+        probeReadFile(async (path) => {
+          read.push(path)
+          met[path] = await meet()
+          return `content of ${path}`
+        })
+      ]
+      const requests: ChatMessage[][] = []
+      const r = await run({
+        policy: 'full-auto',
+        provider: recording(
+          [
+            callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read them' } }),
+            callTurn(
+              { id: 's1', name: 'read_file', arguments: { path: 'a.txt' } },
+              { id: 's2', name: 'read_file', arguments: { path: 'secret.txt' } },
+              { id: 's3', name: 'read_file', arguments: { path: 'b.txt' } }
+            ),
+            finalText('sub report'),
+            finalText('main done')
+          ],
+          requests
+        ),
+        onApproval: (_id, decide) => decide('allow')
+      })
+      expect(r.events.some((e) => e.type === 'tool_approval')).toBe(false)
+      expect(read.sort()).toEqual(['a.txt', 'b.txt'])
+      expect(met).toEqual({ 'a.txt': true, 'b.txt': true })
+      const sub = requests.find((ms) => ms.some((m) => m.toolCallId === 's2')) ?? []
+      expect(sub.find((m) => m.toolCallId === 's2')?.content).toBe('Denied by a permission rule.')
+      expect(subToolIds(requests, ['s1'])).toEqual(['s1', 's2', 's3'])
+    })
+  })
+})
+
 describe('permission gates: batched sensitive reads and subagent calls', () => {
   /** Scripts turns and snapshots every request's messages, subagent transcripts included. */
   function recording(turns: ProviderStreamEvent[][], requests: ChatMessage[][]): Provider {
@@ -5761,6 +6291,145 @@ describe('permission gates: batched sensitive reads and subagent calls', () => {
     expect(toolMessageFor(requests, 's1')).toContain('Denied by the user.')
     expect(existsSync(join(ws, 'keep.txt'))).toBe(true)
   })
+
+  // A prefix rule (`rm`) is not consent to every command it matches: a
+  // writable subagent's command that discards work still asks unless the rule names it.
+  it("prompts for a writable subagent's discarding command a prefix allow merely matches", async () => {
+    h.sandboxed = true
+    h.settings.permissionRules = [{ action: 'allow', tool: 'run_shell', match: 'rm' }]
+    writeFileSync(join(ws, 'keep.txt'), 'keep me\n')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'tidy', prompt: 'go' } }),
+          callTurn({ id: 's1', name: 'run_shell', arguments: { command: 'rm -rf src keep.txt' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(approvalsOf(r).map((a) => a.callId)).toEqual(['d1.shell.1'])
+    expect(toolMessageFor(requests, 's1')).toContain('Denied by the user.')
+    expect(existsSync(join(ws, 'keep.txt'))).toBe(true)
+  })
+
+  /** A stand-in under the run_shell name that records each command instead of running it. */
+  const probeShell = (ran: string[]): ToolDef => ({
+    kind: 'shell',
+    summarize: () => 'probe run_shell',
+    schema: {
+      name: 'run_shell',
+      description: 'probe run_shell',
+      parameters: {
+        type: 'object',
+        properties: { command: { type: 'string' } },
+        required: ['command'],
+        additionalProperties: false
+      }
+    },
+    execute: async (a) => {
+      ran.push(String((a as { command?: string }).command))
+      return 'ok'
+    }
+  })
+
+  it('"Always allow" on `git push origin x` saves a prefix that never covers a forced push, even in full auto', async () => {
+    const ran: string[] = []
+    h.probeTools = [probeShell(ran)]
+    h.sandboxed = true
+    const shell = (id: string, command: string): ProviderStreamEvent[] =>
+      callTurn({ id, name: 'run_shell', arguments: { command } })
+    // First, in ask mode, the user picks "Always allow" on an ordinary push.
+    await run({
+      policy: 'ask',
+      provider: recording([shell('a1', 'git push origin x'), shell('a2', 'git push origin y'), finalText('done')], []),
+      onApproval: (id, decide) => decide(id === 'a1' ? 'rule-allow' : 'deny')
+    })
+    expect(h.addedRules).toEqual([{ action: 'allow', tool: 'run_shell', match: 'git push' }])
+    expect(ran).toEqual(['git push origin x', 'git push origin y'])
+    // Then, in full auto with that rule saved, a forced push still asks. "Always allow"
+    // on it saves that exact command (the prefix doesn't make it redundant), which then
+    // runs unasked, while another forced push still asks.
+    h.settings.permissionRules = [...(h.addedRules as PermissionRule[])]
+    h.addedRules = []
+    ran.length = 0
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          shell('s1', 'git push --force origin x'),
+          shell('s2', 'git push --force origin x'),
+          shell('s3', 'git push --force origin other'),
+          shell('s4', 'git push origin z'),
+          shell('s5', 'git diff --no-index /dev/null ~/.ssh/id_rsa'),
+          finalText('done')
+        ],
+        []
+      ),
+      onApproval: (id, decide) => decide(id === 's1' ? 'rule-allow' : 'deny')
+    })
+    expect(approvalsOf(r).map((a) => a.callId)).toEqual(['s1', 's3', 's5'])
+    expect(h.addedRules).toEqual([{ action: 'allow', tool: 'run_shell', match: 'git push --force origin x', exact: true }])
+    expect(ran).toEqual(['git push --force origin x', 'git push --force origin x', 'git push origin z'])
+  })
+
+  it('a user deny still refuses a target after an "Always allow" rule for it is prepended', async () => {
+    writeFileSync(join(ws, 'notes.txt'), 'original\n')
+    // The prepended allow sits first, as addPermissionRule saves it; the older deny wins.
+    h.settings.permissionRules = [
+      { action: 'allow', tool: 'write_file', match: 'notes.txt', exact: true },
+      { action: 'deny', tool: 'write_file', match: 'notes*' }
+    ]
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'w1', name: 'write_file', arguments: { path: 'notes.txt', content: 'clobbered\n' } }),
+          // The deny names write_file; it covers the other file-editing tools too.
+          callTurn({
+            id: 'e1',
+            name: 'edit_file',
+            arguments: { path: 'notes.txt', old_string: 'original', new_string: 'clobbered' }
+          }),
+          finalText('done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(approvalsOf(r)).toEqual([])
+    expect(toolMessageFor(requests, 'w1')).toBe('Denied by a permission rule.')
+    expect(toolMessageFor(requests, 'e1')).toBe('Denied by a permission rule.')
+    expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('original\n')
+  })
+
+  // The shell session keeps its working directory between calls, so after a `cd` out of
+  // the workspace every later command reads and writes relative to the outside, and
+  // asks until one moves back in. Runs the real shell.
+  it('asks for every command while the shell session sits outside the workspace', async () => {
+    h.sandboxed = true
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 's1', name: 'run_shell', arguments: { command: 'cd' } }),
+          callTurn({ id: 's2', name: 'run_shell', arguments: { command: 'cat x' } }),
+          callTurn({ id: 's3', name: 'run_shell', arguments: { command: `cd '${ws}'` } }),
+          callTurn({ id: 's4', name: 'run_shell', arguments: { command: 'echo back-inside' } }),
+          finalText('done')
+        ],
+        []
+      ),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(approvalsOf(r).map((a) => a.callId)).toEqual(['s1', 's2', 's3'])
+    expect(resultFor(r, 's4')?.ok).toBe(true)
+  }, 30_000)
 
   // Consent to a writable dispatch is consent to edit the project, not to overwrite a
   // credential file only the user can restore: same prompt as the main loop's.
@@ -9344,6 +10013,36 @@ describe('scheduled runs (loop wiring)', () => {
     expect(result?.type === 'tool_result' && result.output).toContain('sch-test')
   })
 
+  it("targets the main checkout, not the creating chat's disposable Houston worktree", async () => {
+    gitRepoWithCommit(ws)
+    const root = ws
+    const wt = join(root, '.houston', 'worktrees', 'chat-1')
+    execFileSync('git', ['worktree', 'add', '-q', '-b', 'chat-1', wt], { cwd: root })
+    const created: ScheduledRunInput[] = []
+    setSchedulerBackend(fakeBackend(created))
+    const turns = (): ProviderStreamEvent[][] => [
+      [
+        {
+          type: 'tool_call',
+          call: { id: 'c1', name: 'schedule_run', arguments: { name: 'n', spec: 'daily at 09:00', prompt: 'p' } }
+        },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'done', stopReason: 'end_turn' }]
+    ]
+    try {
+      ws = wt
+      await run({ policy: 'full-auto', turns: turns() })
+    } finally {
+      ws = root
+    }
+    // From the main checkout itself, it stays put.
+    await run({ policy: 'full-auto', turns: turns() })
+    expect(created).toHaveLength(2)
+    expect(realpathSync(created[0].workspace)).toBe(realpathSync(root))
+    expect(realpathSync(created[1].workspace)).toBe(realpathSync(root))
+  }, 30_000)
+
   it("stores the creating chat's own reasoning effort on the schedule, and none without one", async () => {
     const created: ScheduledRunInput[] = []
     setSchedulerBackend(fakeBackend(created))
@@ -9866,6 +10565,66 @@ describe('session proposals, forked spawns, and finished-child reports', () => {
     expect(spawned).toHaveLength(1)
     expect(spawned[0].history).toEqual([{ role: 'user', content: 'split this up' }])
     expect(spawned[0].parentConversationId).toBe(conv.id)
+  })
+
+  // These set up real git repositories, which is slow on a loaded machine.
+  describe('worktree default', { timeout: 30_000 }, () => {
+    const spawnTurns = (args: Record<string, unknown>): ProviderStreamEvent[][] => [
+      [
+        { type: 'tool_call', call: { id: 's1', name: 'spawn_session', arguments: args } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'done', stopReason: 'end_turn' }]
+    ]
+
+    it('gives a session its own worktree in a git repository, branched from this checkout', async () => {
+      gitRepoWithCommit(ws)
+      execFileSync('git', ['checkout', '-q', '-b', 'feature/x'], { cwd: ws })
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'write the docs', title: 'Docs pass' }) })
+      expect(spawned).toHaveLength(1)
+      expect(spawned[0].worktree?.branch).toMatch(/^houston\/docs-pass-[0-9a-f]{6}$/)
+      expect(spawned[0].worktree?.base).toBe('feature/x')
+      expect(realpathSync(spawned[0].workspace)).toBe(realpathSync(ws))
+    })
+
+    it('names the branch from the prompt when there is no title', async () => {
+      gitRepoWithCommit(ws)
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'Fix flaky test\nmore detail' }) })
+      expect(spawned[0].worktree?.branch).toMatch(/^houston\/fix-flaky-test-[0-9a-f]{6}$/)
+    })
+
+    it('keeps an explicit worktree as given', async () => {
+      gitRepoWithCommit(ws)
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'p', worktree: { branch: 'mine', base: 'main' } }) })
+      expect(spawned[0].worktree).toEqual({ branch: 'mine', base: 'main' })
+    })
+
+    it('runs in this checkout with same_checkout: true', async () => {
+      gitRepoWithCommit(ws)
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'p', same_checkout: true }) })
+      expect(spawned).toHaveLength(1)
+      expect(spawned[0]).not.toHaveProperty('worktree')
+    })
+
+    it('refuses same_checkout together with a worktree', async () => {
+      gitRepoWithCommit(ws)
+      const r = await run({
+        policy: 'full-auto',
+        turns: spawnTurns({ prompt: 'p', same_checkout: true, worktree: { branch: 'b' } })
+      })
+      expect(spawned).toEqual([])
+      const result = r.events.find((e) => e.type === 'tool_result' && e.callId === 's1')
+      expect(result?.type === 'tool_result' && result.output).toMatch(/either worktree or same_checkout/)
+    })
+
+    it('makes no worktree outside a git repository, or in one with no commits yet', async () => {
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'p' }) })
+      execFileSync('git', ['init', '-q'], { cwd: ws })
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'p' }) })
+      expect(spawned).toHaveLength(2)
+      expect(spawned[0]).not.toHaveProperty('worktree')
+      expect(spawned[1]).not.toHaveProperty('worktree')
+    })
   })
 
   it("starts a spawned session on this chat's model, effort and current policy", async () => {
@@ -11550,5 +12309,271 @@ describe('background news delivery', () => {
       () => {}
     )
     expect(wakeBlocker('conv-bg-streak')).toBe('held')
+  })
+})
+
+describe('Ollama context check', () => {
+  const ollama = { id: 'ollama', kind: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', models: [] }
+  /** An Ollama that runs every model with `ctx` tokens of context. */
+  const serve = (ctx: number): ReturnType<typeof vi.fn> => {
+    const f = vi.fn(async (url: string) =>
+      url.endsWith('/api/ps')
+        ? new Response(JSON.stringify({ models: [{ name: 'qwen3:8b', context_length: ctx }] }))
+        : new Response(JSON.stringify({ parameters: '' }))
+    )
+    vi.stubGlobal('fetch', f)
+    return f
+  }
+  const reply = (): ProviderStreamEvent[][] => [[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+  const contextNotices = (r: RunResult): string[] =>
+    r.events.flatMap((e) => (e.type === 'notice' && /OLLAMA_CONTEXT_LENGTH/.test(e.message) ? [e.message] : []))
+
+  afterEach(() => {
+    delete h.extraConfigs.anthropic
+    vi.unstubAllGlobals()
+    resetOllamaContextCache()
+  })
+
+  it('warns, naming the fix, when the prompt is bigger than the context Ollama runs the model with', async () => {
+    h.extraConfigs.anthropic = ollama
+    serve(2048)
+    const r = await run({ turns: reply(), model: 'qwen3:8b' })
+    expect(contextNotices(r)).toHaveLength(1)
+    expect(contextNotices(r)[0]).toMatch(/2,048-token context/)
+  })
+
+  it('says nothing when the prompt fits, or on a provider that is not Ollama', async () => {
+    h.extraConfigs.anthropic = ollama
+    serve(262_144)
+    expect(contextNotices(await run({ turns: reply(), model: 'qwen3:8b' }))).toEqual([])
+    delete h.extraConfigs.anthropic
+    resetOllamaContextCache()
+    const f = serve(2048)
+    expect(contextNotices(await run({ turns: reply(), model: 'qwen3:8b' }))).toEqual([])
+    expect(f).not.toHaveBeenCalled()
+  })
+})
+
+// "Allow for run" is per grant key (see grantKey in approval.ts): one approved file
+// write must not cover the tools that start unattended work, and one MCP server's grant
+// must not cover another's. The taint rule follows a conversation's outside text into
+// the sessions it launches.
+describe('approval grants and taint at the loop gate', () => {
+  const approvalNames = (r: RunResult): string[] =>
+    r.events.flatMap((e) => (e.type === 'tool_approval' ? [e.name] : []))
+  const call = (id: string, name: string, args: Record<string, unknown>): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name, arguments: args } },
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const end: ProviderStreamEvent[] = [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+  const created: ScheduledRunInput[] = []
+  const spawned: SpawnSessionInput[] = []
+  beforeEach(() => {
+    created.length = 0
+    spawned.length = 0
+    setSchedulerBackend({
+      create: (input) => {
+        created.push(input)
+        return { ...input, id: 'sch-test', nextRunAt: 4102444800000, createdAt: 1 }
+      },
+      list: () => [],
+      cancel: () => true
+    })
+    setSpawnBackend({
+      spawn: async (input) => {
+        spawned.push(input)
+        return { conversationId: 'child', title: input.title ?? 'child', workspace: input.workspace }
+      }
+    })
+  })
+  afterEach(() => resetSpawnBackend())
+
+  const fetched: ChatMessage[] = [
+    { role: 'user', content: 'read the page' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'f1', name: 'web_fetch', arguments: { url: 'https://example.com' } }] },
+    { role: 'tool', content: 'page text', toolCallId: 'f1', toolName: 'web_fetch' },
+    { role: 'assistant', content: 'read it' },
+    { role: 'user', content: 'go on' }
+  ]
+
+  it('"Allow for run" on write_file does not cover schedule_run, spawn_session, or dispatch_writable_agent', async () => {
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        call('w1', 'write_file', { path: 'a.txt', content: 'a' }),
+        call('w2', 'write_file', { path: 'b.txt', content: 'b' }),
+        call('s1', 'schedule_run', { name: 'n', spec: 'daily at 09:00', prompt: 'p' }),
+        call('p1', 'spawn_session', { prompt: 'docs' }),
+        call('d1', 'dispatch_writable_agent', { description: 'x', prompt: 'do' }),
+        end
+      ],
+      onApproval: (id, decide) => decide(id === 'w1' ? 'always' : 'deny')
+    })
+    // w2 rode the write grant; the three launches each asked and were denied.
+    expect(approvalNames(r)).toEqual(['write_file', 'schedule_run', 'spawn_session', 'dispatch_writable_agent'])
+    expect(readFileSync(join(ws, 'b.txt'), 'utf8')).toBe('b')
+    expect(created).toEqual([])
+    expect(spawned).toEqual([])
+  })
+
+  it('"Allow for run" on schedule_run covers the next schedule_run, not a write', async () => {
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        call('s1', 'schedule_run', { name: 'a', spec: 'daily at 09:00', prompt: 'p' }),
+        call('s2', 'schedule_run', { name: 'b', spec: 'daily at 10:00', prompt: 'p' }),
+        call('w1', 'write_file', { path: 'a.txt', content: 'a' }),
+        end
+      ],
+      onApproval: (id, decide) => decide(id === 's1' ? 'always' : 'deny')
+    })
+    expect(approvalNames(r)).toEqual(['schedule_run', 'write_file'])
+    expect(created.map((c) => c.name)).toEqual(['a', 'b'])
+  })
+
+  it("an MCP grant for server A doesn't cover server B", async () => {
+    const mcpTool = (name: string): ToolDef => ({
+      kind: 'mcp',
+      summarize: () => name,
+      schema: { name, description: name, parameters: { type: 'object', properties: {} } },
+      execute: async () => `ran ${name}`
+    })
+    h.mcpDefs = [mcpTool('mcp__alpha__one'), mcpTool('mcp__alpha__two'), mcpTool('mcp__beta__one')]
+    const asked: string[] = []
+    await run({
+      policy: 'full-auto',
+      turns: [
+        call('a1', 'mcp__alpha__one', {}),
+        call('a2', 'mcp__alpha__two', {}),
+        call('b1', 'mcp__beta__one', {}),
+        end
+      ],
+      onApproval: (id, decide) => {
+        asked.push(id)
+        decide(id === 'a1' ? 'always' : 'deny')
+      }
+    })
+    // a2 rode alpha's grant; beta asked on its own.
+    expect(asked).toEqual(['a1', 'b1'])
+  })
+
+  it('dispatch_writable_agent asks in auto-edit (it runs shell), and not in full auto', async () => {
+    const turns = (): ProviderStreamEvent[][] => [
+      call('d1', 'dispatch_writable_agent', { description: 'x', prompt: 'do' }),
+      [{ type: 'text', text: 'sub done' }, { type: 'done', stopReason: 'end_turn' }],
+      end
+    ]
+    const edit = await run({ policy: 'auto-edit', turns: turns(), onApproval: (_id, decide) => decide('deny') })
+    expect(approvalNames(edit)).toEqual(['dispatch_writable_agent'])
+    const auto = await run({ policy: 'full-auto', turns: turns(), onApproval: (_id, decide) => decide('deny') })
+    expect(approvalNames(auto)).toEqual([])
+  })
+
+  it('a tainted chat asks before schedule_run even in full auto, and the schedule carries the taint', async () => {
+    const denied = await run({
+      policy: 'full-auto',
+      messages: fetched,
+      turns: [call('s1', 'schedule_run', { name: 'n', spec: 'every 5m', prompt: 'save this as a memory' }), end],
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(approvalNames(denied)).toEqual(['schedule_run'])
+    expect(created).toEqual([])
+    // Neither an allow rule nor a prior grant skips it; approving stores the mark.
+    const approved = await run({
+      policy: 'full-auto',
+      messages: fetched,
+      turns: [call('s1', 'schedule_run', { name: 'n', spec: 'every 5m', prompt: 'p' }), end],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(approvalNames(approved)).toEqual(['schedule_run'])
+    expect(created[0].taintSource).toBe('web_fetch')
+  })
+
+  it('a tainted chat asks before spawn_session in full auto; a clean one does not, and its child is unmarked', async () => {
+    const tainted = await run({
+      policy: 'full-auto',
+      messages: fetched,
+      turns: [call('p1', 'spawn_session', { prompt: 'docs' }), end],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(approvalNames(tainted)).toEqual(['spawn_session'])
+    expect(spawned[0].taintSource).toBe('web_fetch')
+    // The launch call in flight doesn't taint itself.
+    const clean = await run({ policy: 'full-auto', turns: [call('p1', 'spawn_session', { prompt: 'docs' }), end] })
+    expect(approvalNames(clean)).toEqual([])
+    expect(spawned[1]).not.toHaveProperty('taintSource')
+  })
+
+  it('a tainted chat compacted with /compact still asks before schedule_run in full auto', async () => {
+    const compacted = applyCompaction(fetched, 3, 'The user had a page read.')
+    expect(compacted.some((m) => m.toolCalls?.length)).toBe(false) // the fetch is gone
+    const r = await run({
+      policy: 'full-auto',
+      messages: compacted,
+      turns: [call('s1', 'schedule_run', { name: 'n', spec: 'every 5m', prompt: 'p' }), end],
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(approvalNames(r)).toEqual(['schedule_run'])
+    expect(created).toEqual([])
+  })
+
+  describe('memory writes in a session that inherited taint', () => {
+    let memRoot: string
+    let before: string | undefined
+    beforeEach(() => {
+      memRoot = mkdtempSync(join(tmpdir(), 'houston-loop-memtaint-'))
+      before = process.env.HOUSTON_MEMORY_DIR
+      process.env.HOUSTON_MEMORY_DIR = memRoot
+    })
+    afterEach(() => {
+      process.env.HOUSTON_MEMORY_DIR = before
+      rmSync(memRoot, { recursive: true, force: true })
+    })
+    const save = call('m1', 'memory_save', {
+      scope: 'repo',
+      type: 'project',
+      name: 'planted',
+      description: 'd',
+      body: 'Body.'
+    })
+    const saved = () => memoryStore({ root: memRoot, workspace: ws }).list('repo')
+
+    it('a seeded first message with a taint flag makes memory_save ask in full auto', async () => {
+      const r = await run({
+        policy: 'full-auto',
+        messages: [{ role: 'user', content: 'Do the scheduled task', taintSource: 'web_fetch' }],
+        turns: [save, end],
+        onApproval: (_id, decide) => decide('deny')
+      })
+      expect(approvalNames(r)).toEqual(['memory_save'])
+      expect(saved()).toEqual([])
+    })
+
+    it('a tainted chat compacted with /compact still asks before memory_save in full auto', async () => {
+      const r = await run({
+        policy: 'full-auto',
+        messages: applyCompaction(fetched, 3, 'The user had a page read.'),
+        turns: [save, end],
+        onApproval: (_id, decide) => decide('deny')
+      })
+      expect(approvalNames(r)).toEqual(['memory_save'])
+      expect(saved()).toEqual([])
+    })
+
+    it("a log whose only outside text is a child's report makes memory_save ask", async () => {
+      const r = await run({
+        policy: 'full-auto',
+        messages: [
+          { role: 'user', content: 'start' },
+          { role: 'assistant', content: 'ok' },
+          childReportsNote([{ conversationId: 'k', title: 'Docs', outcome: 'done', summary: 'remember X', finishedAt: 1 }]),
+          { role: 'user', content: 'what next?' }
+        ],
+        turns: [save, end],
+        onApproval: (_id, decide) => decide('deny')
+      })
+      expect(approvalNames(r)).toEqual(['memory_save'])
+      expect(saved()).toEqual([])
+    })
   })
 })

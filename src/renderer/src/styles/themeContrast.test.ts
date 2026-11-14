@@ -70,6 +70,15 @@ describe.each([
     }
   )
 
+  it.each(['blue', 'green', 'orange', 'purple', 'red', 'teal', 'yellow', 'pink'])(
+    'the %s label color clears 4.5:1 on every sidebar row surface',
+    (color) => {
+      for (const surface of ROW_SURFACES) {
+        expect(contrast(hexOf(vars, `--label-${color}`), hexOf(vars, surface)), `${color} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  )
+
   it('--text-dim clears 4.5:1 on every surface, so it needs no extra fading', () => {
     for (const surface of ['--bg', '--bg-elevated', '--bg-input', '--bg-hover', '--bg-selected']) {
       expect(contrast(hexOf(vars, '--text-dim'), hexOf(vars, surface)), `--text-dim on ${surface}`).toBeGreaterThanOrEqual(4.5)

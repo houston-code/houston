@@ -87,6 +87,52 @@ export const ACP_MODES: { id: ApprovalPolicy; name: string; description: string 
   { id: 'full-auto', name: 'Full auto', description: 'Run edits and sandboxed commands without asking' }
 ]
 
+/** Launch flags for `--acp`: defaults a client that never sets them still gets. */
+export interface AcpLaunchOptions {
+  /** `--approval <policy>` / `--full-auto`: the mode new sessions start in. */
+  defaultPolicy?: ApprovalPolicy
+  /** `--effort <level>`: the reasoning effort new sessions start with. */
+  defaultEffort?: ReasoningEffort
+  /** `--max-turns <n>`: a hard step cap on every prompt turn. */
+  maxIterations?: number
+}
+
+/**
+ * Read the `--acp` launch flags from argv. A client that launches Houston from a
+ * fixed command line and never switches the mode or effort (a benchmark runner,
+ * a CI job) configures the session this way. Other flags are ignored, as before.
+ * Returns an error message for a bad value.
+ */
+export function parseAcpArgs(argv: string[]): AcpLaunchOptions | { error: string } {
+  const out: AcpLaunchOptions = {}
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    const eq = arg.indexOf('=')
+    const name = eq > 0 ? arg.slice(0, eq) : arg
+    if (name === '--full-auto') {
+      out.defaultPolicy = 'full-auto'
+      continue
+    }
+    if (name !== '--approval' && name !== '--effort' && name !== '--max-turns') continue
+    const value = eq > 0 ? arg.slice(eq + 1) : argv[++i]
+    const shown = value === undefined ? 'nothing' : JSON.stringify(value)
+    if (name === '--approval') {
+      if (!isApprovalPolicy(value)) return { error: `--approval must be one of ${APPROVAL_POLICIES.join(', ')} (got ${shown})` }
+      out.defaultPolicy = value
+    } else if (name === '--effort') {
+      if (!isReasoningEffort(value)) return { error: `--effort must be one of ${REASONING_EFFORTS.join(', ')} (got ${shown})` }
+      out.defaultEffort = value
+    } else {
+      const n = Number(value)
+      if (!value || !Number.isSafeInteger(n) || n < 1) {
+        return { error: `--max-turns must be a whole number of at least 1 (got ${shown})` }
+      }
+      out.maxIterations = n
+    }
+  }
+  return out
+}
+
 // The mode list is the policy list; this fails to compile if they drift apart.
 const _modesCoverPolicies: (typeof APPROVAL_POLICIES)[number] extends (typeof ACP_MODES)[number]['id'] ? true : never =
   true
@@ -210,6 +256,10 @@ export interface AcpDeps {
   log?: (message: string) => void
   /** Default approval policy for new sessions; settings.approvalPolicy when absent. */
   defaultPolicy?: ApprovalPolicy
+  /** Default reasoning effort for new sessions; settings.reasoningEffort when absent. */
+  defaultEffort?: ReasoningEffort
+  /** Hard step cap for every prompt turn (`--max-turns`), over settings.maxIterations. */
+  maxIterations?: number
   version: string
   newId?: () => string
   /** Read a workspace file for an edit's before/after diff; injected so tests stay off disk. */
@@ -705,6 +755,39 @@ export interface AcpConfigOption {
   options: { value: string; name: string; description?: string }[]
 }
 
+/** Tokens one prompt turn billed, summed over its model rounds. */
+interface TurnTokens {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+/**
+ * `PromptResponse.usage`: the turn's token totals. `inputTokens` includes the
+ * cached portions, which are also broken out. Absent when the turn billed nothing
+ * (a slash command Houston answered itself, or a run cancelled before its first
+ * model round).
+ */
+export interface AcpPromptUsage {
+  totalTokens: number
+  inputTokens: number
+  outputTokens: number
+  cachedReadTokens?: number
+  cachedWriteTokens?: number
+}
+
+export function acpPromptUsage(t: TurnTokens): AcpPromptUsage | undefined {
+  if (t.input === 0 && t.output === 0) return undefined
+  return {
+    totalTokens: t.input + t.output,
+    inputTokens: t.input,
+    outputTokens: t.output,
+    ...(t.cacheRead ? { cachedReadTokens: t.cacheRead } : {}),
+    ...(t.cacheWrite ? { cachedWriteTokens: t.cacheWrite } : {})
+  }
+}
+
 /** A model's config value: provider and model id, which together name what runs. */
 export function modelConfigValue(providerId: string, model: string): string {
   return `${providerId}/${model}`
@@ -972,6 +1055,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       providerId,
       model,
       mode,
+      ...(deps.defaultEffort ? { effort: deps.defaultEffort } : {}),
       messages: [],
       saved: true,
       mcpServers,
@@ -1248,7 +1332,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         } catch (e) {
           log(`acp: could not list the workspace ${cmd.name}: ${String(e)}`)
         }
-        const where = cmd.name === 'skills' ? '.houston/skills' : '.houston/agents'
+        const where = cmd.name === 'skills' ? '.houston/skills or .agents/skills' : '.houston/agents'
         if (!items.length) return { kind: 'reply', text: `No ${cmd.name} in this workspace (${where}).` }
         return { kind: 'reply', text: items.map((i) => `- ${i.name}${i.description ? `: ${i.description}` : ''}`).join('\n') }
       }
@@ -1332,6 +1416,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       model: s.model,
       approvalPolicy: s.mode,
       ...(s.effort ? { reasoningEffort: s.effort } : {}),
+      ...(deps.maxIterations !== undefined ? { overrides: { maxIterations: deps.maxIterations } } : {}),
       messages,
       // Per-run servers, like the headless --mcp-config: merged as `run-<id>`, values
       // used as given, never saved to settings.
@@ -1356,11 +1441,18 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       touch(s)
     }
     refreshTitle(s)
-    if (s.cancelled || turn.state.stopReason === 'aborted') return { stopReason: 'cancelled' }
+    // The turn's token totals ride the response (`PromptResponse.usage`), so a client
+    // that scores or bills runs gets them without summing `usage_update`s itself.
+    const usage = acpPromptUsage(turn.state.tokens)
+    const done = (stopReason: string): { stopReason: string; usage?: AcpPromptUsage } => ({
+      stopReason,
+      ...(usage ? { usage } : {})
+    })
+    if (s.cancelled || turn.state.stopReason === 'aborted') return done('cancelled')
     if (turn.state.error) throw new AcpError(ACP_ERROR.internal, turn.state.error)
-    if (turn.state.limit === 'max-steps') return { stopReason: 'max_turn_requests' }
-    if (turn.state.limit === 'max-output' || turn.state.stopReason === 'max_tokens') return { stopReason: 'max_tokens' }
-    return { stopReason: 'end_turn' }
+    if (turn.state.limit === 'max-steps') return done('max_turn_requests')
+    if (turn.state.limit === 'max-output' || turn.state.stopReason === 'max_tokens') return done('max_tokens')
+    return done('end_turn')
   }
 
   // ---- One prompt turn: the AgentEvent → session/update mapping ----
@@ -1370,7 +1462,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       stopReason: string | null
       error: string | null
       limit: 'max-steps' | 'max-output' | 'stalled' | null
-    } = { stopReason: null, error: null, limit: null }
+      tokens: TurnTokens
+    } = { stopReason: null, error: null, limit: null, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
     // Tool calls already announced to the editor (a gated call is announced at its
     // approval prompt, before `tool_start`).
     const announced = new Set<string>()
@@ -1701,8 +1794,13 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           break
         case 'usage': {
           s.costUsd += e.cost
+          state.tokens.input += e.inputTokens + (e.delegatedInputTokens ?? 0)
+          state.tokens.output += e.outputTokens
+          state.tokens.cacheRead += e.cacheReadTokens ?? 0
+          state.tokens.cacheWrite += e.cacheWriteTokens ?? 0
           // One event per model round of the agent itself; a subagent's or a
-          // review's rounds arrive rolled up with inputTokens 0 and add only cost.
+          // review's rounds arrive rolled up with inputTokens 0 (their input is in
+          // delegatedInputTokens), so they count in the totals but not the context.
           if (e.inputTokens > 0) {
             const model = e.model ?? s.model
             const caps = deps

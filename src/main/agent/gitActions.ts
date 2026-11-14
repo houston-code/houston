@@ -29,7 +29,9 @@ import { collectWorkingTreeChanges } from './workingTree'
  * drivers, no fsmonitor) with argument arrays only, and a commit or push is refused
  * outright when the repository's own config names a command git would run for it
  * (a signing program, an ssh command, a credential helper, an include that could add
- * one): those are exactly what a planted `.git/config` would use.
+ * one): those are exactly what a planted `.git/config` would use. A push also goes
+ * only to a network remote, never to a repository on this machine, whose receiving
+ * git would run that repository's own hooks (see {@link pushTargetProblem}).
  */
 
 /** Config keys a commit or push can make git run a command from. Lowercase. */
@@ -42,7 +44,34 @@ const COMMIT_PUSH_EXEC_KEYS: RegExp[] = [
   /^includeif\..+\.path$/,
   /^remote\..+\.(uploadpack|receivepack)$/,
   /^trailer\..+\.(command|cmd)$/,
-  /^url\..+\.(insteadof|pushinsteadof)$/
+  /^url\..+\.(insteadof|pushinsteadof)$/,
+  // Run by a push to list the refs a local remote's alternates already have.
+  /^core\.alternaterefscommand$/,
+  // A remote helper by name (git-remote-<vcs>), whatever the URL says.
+  /^remote\..+\.vcs$/,
+  // Push every submodule too, each with its own config and remotes, none of which the
+  // checks here read. Also switched off on the command line (see WRITE_HARDENING).
+  /^push\.recursesubmodules$/,
+  /^submodule\.recurse$/
+]
+
+/**
+ * Extra `-c` overrides for a commit or push, on top of the read hardening. They win
+ * over the user's own config too: a push from the Changes panel pushes this one
+ * repository and nothing else, so no submodule is pushed with config Houston never
+ * checked, and no alternate-refs command runs. Local file transports are refused
+ * here as well, behind the push-URL check in {@link pushBranch}, so a remote that
+ * resolves to a folder on this computer fails even if that check were to miss it.
+ */
+const WRITE_HARDENING = [
+  '-c',
+  'push.recurseSubmodules=no',
+  '-c',
+  'submodule.recurse=false',
+  '-c',
+  'core.alternateRefsCommand=',
+  '-c',
+  'protocol.file.allow=never'
 ]
 
 const TRUSTED_SCOPES = new Set(['global', 'system', 'command'])
@@ -76,7 +105,7 @@ function runGitWrite(
       new Promise((resolve) => {
         execFile(
           'git',
-          [...hardening, '--no-pager', ...args],
+          [...hardening, ...WRITE_HARDENING, '--no-pager', ...args],
           { cwd, env, timeout: timeoutMs, maxBuffer: 4_000_000, windowsHide: true },
           (err, stdout, stderr) => resolve({ ok: !err, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
         )
@@ -180,8 +209,11 @@ export async function branchSync(root: string): Promise<BranchSync> {
   if (upstream) {
     const c = await runGitCapture(['rev-list', '--count', '@{upstream}..HEAD'], root)
     ahead = c.ok ? Number(c.stdout.trim()) || 0 : 0
-  } else if (branch) {
-    const c = await runGitCapture(['rev-list', '--count', 'HEAD'], root)
+  } else if (branch && remote) {
+    // Not published yet: what a first push would send, the commits that no branch on
+    // the remote already has. Counting all of HEAD would report the project's entire
+    // history for a branch cut from main a moment ago.
+    const c = await runGitCapture(['rev-list', '--count', 'HEAD', '--not', `--remotes=${remote}`], root)
     ahead = c.ok ? Number(c.stdout.trim()) || 0 : 0
   }
   return { branch, upstream, ahead, remote }
@@ -212,6 +244,78 @@ export async function pushEnv(root: string): Promise<NodeJS.ProcessEnv> {
   return { ...GIT_ENV, GIT_SSH_COMMAND: 'ssh -oBatchMode=yes' }
 }
 
+/** {@link pushTargetProblem}'s reason for a remote that is a folder on this computer. */
+const LOCAL_TARGET =
+  'its URL is a folder on this computer, and a push there runs git in that folder with its own config and hooks'
+
+/**
+ * Why Houston won't push to `url`, or null when it is a network remote it will push
+ * to. `url` is one line of `git remote get-url --push <remote>`: the URL git will
+ * really use, after the user's own `insteadOf` / `pushInsteadOf` rewrites (the
+ * repository's own are refused earlier). Pure.
+ *
+ * The push runs host git, outside the sandbox. To a network remote (https, ssh, git,
+ * or a remote helper the user installed) the receiving end runs on another machine.
+ * To a local repository, git itself starts `git-receive-pack` in that folder, on this
+ * machine: it reads that repository's config and runs its hooks (`pre-receive`,
+ * `update`, `post-receive`), and none of the hardening Houston gives its own git
+ * reaches that process. A sandboxed agent can create such a repository anywhere it
+ * may write, the workspace included, and point a remote at it, so one click on Push
+ * would run whatever hook it planted. The same goes for the `ext::` and `fd::`
+ * transports, which run a command or talk over an inherited descriptor, and for a
+ * remote helper handed a local path.
+ *
+ * Read the way git reads a URL: `<scheme>://` is a URL; `<helper>::<address>` names a
+ * remote helper; `host:path` with no `/` before the colon is scp-style ssh; anything
+ * else is a local path. A one-letter host is read as a Windows drive (`C:\repo`), as
+ * git on Windows reads it, on every platform: refusing is the safe reading.
+ */
+export function pushTargetProblem(url: string): string | null {
+  const u = url.trim()
+  if (!u) return 'it has no URL'
+  const helper = /^([A-Za-z][A-Za-z0-9+.-]*)::(.*)$/s.exec(u)
+  if (helper) {
+    const name = helper[1].toLowerCase()
+    if (name === 'ext' || name === 'fd') return `its URL uses git's ${name}:: transport, which talks to a program on this computer`
+    return isLocalGitAddress(helper[2]) ? LOCAL_TARGET : null
+  }
+  return isLocalGitAddress(u) ? LOCAL_TARGET : null
+}
+
+/** Whether git reads `u` as a local path or a file:// URL. */
+function isLocalGitAddress(u: string): boolean {
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(u)
+  if (scheme) return scheme[1].toLowerCase() === 'file'
+  const colon = u.indexOf(':')
+  if (colon <= 0) return true
+  const slash = u.indexOf('/')
+  if (slash !== -1 && slash < colon) return true
+  // `C:\repo`, `C:/repo`, and `C:repo` are a Windows drive, not a host named C.
+  return colon === 1 && /^[A-Za-z]$/.test(u[0])
+}
+
+/**
+ * Refuse a push whose remote resolves to anything but a network remote (see
+ * {@link pushTargetProblem}). Every push URL is checked: a remote can list several
+ * `pushurl`s, and git pushes to each. The URL itself is never echoed back, since an
+ * https one can carry a token.
+ */
+async function guardPushTarget(root: string, remote: string): Promise<GitActionResult | null> {
+  const r = await runGitCapture(['remote', 'get-url', '--push', remote], root)
+  const urls = r.ok ? r.stdout.split('\n').filter((l) => l.trim()) : []
+  if (urls.length === 0) return { ok: false, error: `Could not read where the remote ${remote} pushes to.` }
+  for (const url of urls) {
+    const problem = pushTargetProblem(url)
+    if (problem) {
+      return {
+        ok: false,
+        error: `Houston won't push to ${remote}: ${problem}. Use a terminal to push there.`
+      }
+    }
+  }
+  return null
+}
+
 /**
  * Push the current branch to the same-named branch on its remote: the branch's push
  * remote or upstream remote, else the repository's remote (`origin` when there is
@@ -239,6 +343,8 @@ export async function pushBranch(workspace: unknown, deps: GitActionDeps): Promi
     upstreamRemote ??
     (sync.remote && !sync.remote.startsWith('-') ? sync.remote : null)
   if (!remote) return { ok: false, error: 'This repository has no remote to push to.' }
+  const refused = await guardPushTarget(root, remote)
+  if (refused) return refused
   const target = `refs/heads/${branch}`
   // Set the upstream when there is none, or when it is another branch on the remote
   // pushed to; a separate push remote (a fork) leaves the upstream alone.

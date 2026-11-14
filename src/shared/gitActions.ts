@@ -11,7 +11,10 @@ export interface BranchSync {
   branch: string | null
   /** `origin/feature`, or null when the branch has no upstream yet. */
   upstream: string | null
-  /** Commits on the branch not on its upstream (all of them when there is no upstream). */
+  /**
+   * Commits on the branch not on its upstream. With no upstream yet, the commits no
+   * branch on `remote` has (what a first push would send); 0 with no remote.
+   */
   ahead: number
   /** The remote a first push would go to, or null when the repository has none. */
   remote: string | null
