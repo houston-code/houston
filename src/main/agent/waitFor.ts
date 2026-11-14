@@ -36,6 +36,15 @@ export interface WaitShellState {
 
 export interface WaitForDeps {
   signal: AbortSignal
+  /**
+   * A background agent of this run (dispatched with background: true): whether it is
+   * done, and once done, the text to return. Undefined when `id` names none.
+   */
+  agent?(id: string): { done: boolean; label: string; report?: string } | undefined
+  /** Subscribe to background agents finishing; returns an unsubscribe function. */
+  onAgentsChanged?(fn: () => void): () => void
+  /** The model now has the agent's report: don't also hand it over as a note. */
+  agentSeen?(id: string): void
   /** The shell's state, when `id` names a background shell of this chat; undefined otherwise. */
   shell(id: string): WaitShellState | undefined
   /** Subscribe to background-shell changes; returns an unsubscribe function. */
@@ -123,6 +132,24 @@ export async function waitForBackground(id: string, seconds: number, deps: WaitF
   const ms = seconds * 1000
   const stopped = 'Stopped waiting: the turn was stopped.'
 
+  const agent = deps.agent?.(id)
+  if (agent) {
+    const report = await until(
+      () => {
+        const a = deps.agent?.(id)
+        return a?.done ? (a.report ?? '') : undefined
+      },
+      deps.onAgentsChanged ?? (() => () => {}),
+      ms,
+      deps.signal,
+      setTimer
+    )
+    if (deps.signal.aborted) return stopped
+    if (report === undefined) return stillRunning(`Background agent ${id} ("${agent.label}")`, seconds)
+    deps.agentSeen?.(id)
+    return report
+  }
+
   const shell = deps.shell(id)
   if (shell) {
     const ended = await until(
@@ -154,5 +181,5 @@ export async function waitForBackground(id: string, seconds: number, deps: WaitF
     return stillRunning(`Session ${id}`, seconds)
   }
 
-  return `No background shell or spawned session with id ${id} in this chat. Pass a shell id from run_shell (background: true) or a session id from spawn_session.`
+  return `No background agent, shell, or spawned session with id ${id} in this chat. Pass an agent id from a background dispatch, a shell id from run_shell (background: true), or a session id from spawn_session.`
 }

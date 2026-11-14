@@ -71,13 +71,13 @@
   },
   {
     "name": "wait_for",
-    "description": "Wait until a background shell (run_shell with background: true) or a session you started with spawn_session finishes, then get its result: a shell's exit code and last lines, or a session's outcome and the start of its answer. Use it when you have nothing useful to do until that work is done, instead of polling read_shell_output or ending your turn. Waits at most timeout_seconds (default 300, max 600); if it is still running then, you are told so and can wait again. The user can stop the wait with Stop.",
+    "description": "Wait until a background agent (a dispatch with background: true), a background shell (run_shell with background: true), or a session you started with spawn_session finishes, then get its result: an agent's report, a shell's exit code and last lines, or a session's outcome and the start of its answer. Use it when you have nothing useful to do until that work is done, instead of polling read_shell_output or ending your turn. Waits at most timeout_seconds (default 300, max 600); if it is still running then, you are told so and can wait again. The user can stop the wait with Stop.",
     "parameters": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "The shell id run_shell returned, or the session id spawn_session returned."
+          "description": "The agent id a background dispatch returned, the shell id run_shell returned, or the session id spawn_session returned."
         },
         "timeout_seconds": {
           "type": "number",
@@ -628,6 +628,10 @@
         "resume": {
           "type": "string",
           "description": "Optional: the id of a writable subagent from an earlier dispatch in this chat (shown at the end of its report). Continues that agent, and `prompt` becomes your follow-up message to it. Ids last for the app session."
+        },
+        "background": {
+          "type": "boolean",
+          "description": "Optional: true returns an id at once; the report comes later."
         }
       },
       "required": [

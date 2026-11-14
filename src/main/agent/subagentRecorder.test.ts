@@ -52,6 +52,19 @@ describe('SubagentRecorder', () => {
     expect(rec.take('call1')).toBeUndefined()
   })
 
+  it('peeks at a working record without handing it over, and the copy does not change later', () => {
+    const { rec } = setup()
+    const h = rec.start('call1', start)
+    h.step({ index: 0, turn: 1, kind: 'tool', tool: 'read_file', summary: 'Read a', startedAt: 1 })
+    const snapshot = rec.peek('call1')!
+    expect(snapshot.map((r) => [r.status, r.steps.length])).toEqual([['running', 1]])
+    h.step({ index: 1, turn: 2, kind: 'tool', tool: 'read_file', summary: 'Read b', startedAt: 2 })
+    h.end({ status: 'done', report: 'r', budget: { used: 2, limit: 40, ceiling: 200 } })
+    expect(snapshot[0]!.steps).toHaveLength(1)
+    expect(rec.take('call1')!.map((r) => [r.status, r.steps.length])).toEqual([['done', 2]])
+    expect(rec.peek('call1')).toBeUndefined()
+  })
+
   it('prices each turn on its own, so one big turn is not billed at a summed rate', () => {
     const events: RecorderEvent[] = []
     // A tiered price: a request over 100 input tokens costs ten times as much per token.
