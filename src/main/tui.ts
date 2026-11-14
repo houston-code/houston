@@ -146,6 +146,7 @@ import {
 import {
   signalFor,
   idleTitle,
+  workingTitle,
   idleReminderSpec,
   resolveNotifyMode,
   describeNotifyMode,
@@ -654,6 +655,21 @@ function lineCount(text: string): string | null {
 }
 
 /**
+ * The typed-answer keys for an approval, for when it is answered by typing: under
+ * the prompt without a picker, or once the picker hands over to typing.
+ */
+export function renderApprovalKeys(ev: Extract<AgentEvent, { type: 'tool_approval' }>, paint: Painter): string {
+  if (ev.egressHost) {
+    return paint(`  [y] allow ${terminalText(ev.egressHost, { lines: false })} for this chat   [n] keep blocked`, 'dim')
+  }
+  if (ev.shellNetwork) return paint('  [y] allow network for this chat   [n] keep offline', 'dim')
+  return (
+    paint('  [y] allow once   [a] allow for this chat   [!] always allow (saves a rule)   [n] deny   [x] always deny', 'dim') +
+    paint('\n  …or type why not, and that goes back to the agent', 'dim')
+  )
+}
+
+/**
  * The approval prompt shown for a `tool_approval` event. The kind + an unconfined
  * shell warning matter for consent, so they're surfaced prominently.
  *
@@ -682,7 +698,7 @@ export function renderApprovalPrompt(
       '  It was blocked. Allowing it applies to shell commands in the rest of this chat, for this host only.',
       'dim'
     )
-    const keys = opts.picker ? '' : `\n${paint(`  [y] allow ${host} for this chat   [n] keep blocked`, 'dim')}`
+    const keys = opts.picker ? '' : `\n${renderApprovalKeys(ev, paint)}`
     return `\n${head}\n${text(ev.summary)}\n${note}${keys}`
   }
   if (ev.shellNetwork) {
@@ -691,7 +707,7 @@ export function renderApprovalPrompt(
       '  Shell commands in this chat run offline until you allow it. Allowing applies to the rest of this chat, not just this command.',
       'dim'
     )
-    const keys = opts.picker ? '' : `\n${paint('  [y] allow network for this chat   [n] keep offline', 'dim')}`
+    const keys = opts.picker ? '' : `\n${renderApprovalKeys(ev, paint)}`
     return `\n${head}\n${text(ev.summary)}\n${note}${keys}`
   }
   const warn =
@@ -725,10 +741,7 @@ export function renderApprovalPrompt(
   // Named as the call's tool line names it ("Run", "Write"), not by its wire name.
   const head = paint(`Approve ${terminalText(describeToolCall(ev.name, ev.args).verb, { lines: false })}`, 'bold')
   const kind = paint(`[${ev.kind}]${extent ? ` · ${extent}` : ''}`, 'dim')
-  const keys = opts.picker
-    ? ''
-    : `\n${paint('  [y] allow once   [a] allow for this chat   [!] always allow (saves a rule)   [n] deny   [x] always deny', 'dim')}` +
-      paint('\n  …or type why not, and that goes back to the agent', 'dim')
+  const keys = opts.picker ? '' : `\n${renderApprovalKeys(ev, paint)}`
   return `\n${head} ${kind}${background}\n${subject}${warn}${offline}${scope}${keys}`
 }
 
@@ -789,19 +802,27 @@ export function parseApprovalAnswer(answer: string): { decision: ToolApprovalDec
 /**
  * The decisions offered in the approval picker. `rule-allow` / `rule-deny` persist
  * a permission rule; the core has always supported them, but the terminal used to
- * type them away and offer only allow/deny/always.
+ * type them away and offer only allow/deny/always. `key` answers it in one press, the
+ * same keys {@link parseApprovalAnswer} reads from a typed answer; a reason has no key
+ * because typing one is how it starts.
  */
-export const APPROVAL_OPTIONS: { label: string; value: ToolApprovalDecision | 'deny-note'; description: string }[] = [
-  { label: 'Allow once', value: 'allow', description: 'run this call only' },
+export const APPROVAL_OPTIONS: {
+  label: string
+  value: ToolApprovalDecision | 'deny-note'
+  description: string
+  key?: string
+}[] = [
+  { label: 'Allow once', value: 'allow', description: 'run this call only', key: 'y' },
   {
     label: 'Allow for this chat',
     value: 'always',
-    description: 'stop asking for this kind of tool in this chat (a network call: this destination), until Houston quits'
+    description: 'stop asking for this kind of tool in this chat (a network call: this destination), until Houston quits',
+    key: 'a'
   },
-  { label: 'Always allow', value: 'rule-allow', description: 'save a permission rule, kept across restarts' },
-  { label: 'Deny', value: 'deny', description: 'refuse this once' },
+  { label: 'Always allow', value: 'rule-allow', description: 'save a permission rule, kept across restarts', key: '!' },
+  { label: 'Deny', value: 'deny', description: 'refuse this once', key: 'n' },
   { label: 'Deny with a reason…', value: 'deny-note', description: 'tell the agent what to do instead' },
-  { label: 'Always deny', value: 'rule-deny', description: 'save a permission rule, kept across restarts' }
+  { label: 'Always deny', value: 'rule-deny', description: 'save a permission rule, kept across restarts', key: 'x' }
 ]
 
 /**
@@ -1770,13 +1791,16 @@ function planToMarkdown(plan: PlanPayload): string {
   return parts.join('\n\n')
 }
 
-/** Turn a chosen action into a PlanDecision, collecting an editor edit / note as needed. */
+/**
+ * Turn a chosen action into a PlanDecision, collecting an editor edit / note as needed.
+ * Null means nothing was decided (the edit didn't happen), so the caller asks again.
+ */
 export async function planDecisionFor(
   action: PlanAction,
   plan: PlanPayload,
   deps: TuiDeps,
   paint: Painter
-): Promise<PlanDecision> {
+): Promise<PlanDecision | null> {
   const accept = (mode: PlanAcceptMode): PlanDecision => ({ kind: 'accept', mode })
   switch (action) {
     case 'accept':
@@ -1784,10 +1808,24 @@ export async function planDecisionFor(
     case 'accept-ask':
       return accept('ask')
     case 'edit': {
-      const edited = deps.editText ? await deps.editText(planToMarkdown(plan)) : null
+      // Only a real edit accepts. An editor that quit with an error (Vim's :cq), or none
+      // at all, used to accept the plan as presented, which is what the user chose
+      // "edit" to avoid; an emptied plan did too.
+      if (!deps.editText) {
+        deps.io.out(paint('· no editor available (set $VISUAL or $EDITOR); choose again\n', 'yellow'))
+        return null
+      }
+      const edited = await deps.editText(planToMarkdown(plan))
       if (edited && edited.trim()) return { kind: 'accept', mode: 'auto-edit', editedBody: edited }
-      deps.io.out(paint('· no editor available (set $EDITOR), accepting the plan as presented\n', 'dim'))
-      return accept('auto-edit')
+      deps.io.out(
+        paint(
+          edited === null
+            ? '· edit cancelled (the editor quit without saving, or $VISUAL / $EDITOR is not set); choose again\n'
+            : '· the edited plan is empty, so nothing was accepted; choose again\n',
+          'yellow'
+        )
+      )
+      return null
     }
     case 'suggest': {
       const note = (await deps.io.readLine('Suggest changes: ', { discardPending: true })) ?? ''
@@ -2261,11 +2299,13 @@ export const HELP_TEXT = [
   '',
   'While a turn runs: type and press Enter to steer it; Esc or Ctrl-C stops it.',
   '',
-  'Approvals:',
+  'Approvals (one key press answers):',
   '  y                     allow this call once',
   '  a                     allow this kind of tool for the rest of this chat, until Houston quits (a network call: that destination only)',
   '  !                     always allow: saves a permission rule, kept across restarts',
-  '  n, x                  deny this call, or always deny (saves a rule)'
+  '  n, x                  deny this call, or always deny (saves a rule)',
+  '  any other key         start a reason to deny with, sent to the agent',
+  '  Esc, Ctrl-C           deny; Ctrl-C also stops the turn'
 ].join('\n')
 
 /** Short tips for keys and prefixes a new user would not find on their own. */
@@ -3186,8 +3226,11 @@ export interface TuiIo {
    * driver sets it for security-sensitive reads (approvals, questions) so
    * type-ahead the user entered while output was streaming can't silently answer
    * a prompt they never saw.
+   *
+   * `initial` opens the line with that text already typed (the key that turned a
+   * picker into a typed answer).
    */
-  readLine: (prompt: string, opts?: { discardPending?: boolean }) => Promise<string | null>
+  readLine: (prompt: string, opts?: { discardPending?: boolean; initial?: string }) => Promise<string | null>
   /**
    * Read a whole composer message: the raw-mode line editor, which supports
    * bracketed paste (a multi-line paste lands as ONE editable block instead of
@@ -4080,6 +4123,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let returnedSteers: string[] = []
   let interruptedQueued: string[] | null = null
   let restoreDraft = ''
+  // A message handed back to the composer without the interrupted-turn notice: a `#`
+  // line the user stepped back from remembering.
+  let keptDraft = ''
   // Set while a /btw side chat answer is in flight: Ctrl-C / Esc stops it.
   let stopSideChat: (() => void) | null = null
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
@@ -4296,7 +4342,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (took && cleaned.removed) deps.io.out(paint(`\n· ${invisibleNote(cleaned.removed)}\n`, 'dim'))
     return took
   })
-  deps.io.onInterrupt?.(() => {
+  // Ctrl-C. Also called by a picker that took the key itself (an approval, a question,
+  // a plan), so it stops the run there as it does everywhere else while one works.
+  const interrupt = (): void => {
     if (compactAbort) {
       compactAbort.abort()
       return
@@ -4342,7 +4390,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
     lastComposerCtrlCAt = t
     deps.io.cancelRead?.() // settle the outstanding composer read so the loop reacts
-  })
+  }
+  deps.io.onInterrupt?.(interrupt)
 
   // Kick the update check off now, but never await it: the answer is printed at
   // the next composer draw (see updateNotice), where a write is safe.
@@ -4715,8 +4764,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       restoreDraft = ''
       const half = halfDraft
       halfDraft = ''
+      const kept = keptDraft
+      keptDraft = ''
       if (draft) deps.io.out(paint('· not sent (the turn was interrupted): back in the prompt to edit or send\n', 'dim'))
-      const text = await deps.io.readComposer(() => composerPrompt(policy, paint, screenReader), draft || half || undefined, {
+      const text = await deps.io.readComposer(
+        () => composerPrompt(policy, paint, screenReader),
+        draft || kept || half || undefined,
+        {
         // Read on each redraw: what the keyword would do on this chat's model right now.
         ultrathinkEffect: () =>
           ultrathinkEffect(
@@ -4809,48 +4863,63 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (!wakeTurn && !fromKey) deps.persistHistory?.(text)
 
     // `#note` — remember this for next time. Checked with the other prefixes, before
-    // the line is treated as something to say to the model.
+    // the line is treated as something to say to the model. A line can start with `#`
+    // without being a note ("#123 is failing", a pasted "# Spec"), so sending it as a
+    // message is one of the answers, as it is in the desktop app.
     const memory = parseMemoryCapture(text)
     if (memory !== null) {
       if (!deps.saveMemory) {
         deps.io.out(paint('· remembering instructions is unavailable here\n', 'dim'))
         continue
       }
-      let scope: MemoryScope | null = null
+      let choice: MemoryScope | 'send' | null = null
+      let typed = true
+      // An answer the numbered list (screen-reader mode) already took, so it isn't asked again.
       let typedScope: string | undefined
       if (deps.io.select) {
         const r = await deps.io.select({
           title: 'Remember this where?',
+          typeLabel: null,
           options: [
-            { label: 'This project', value: 'project', description: 'everyone working in this repo' },
-            { label: 'Everywhere', value: 'global', description: 'you, in every project' }
+            { label: 'This project', value: 'project', description: 'everyone working in this repo', key: 'p' },
+            { label: 'Everywhere', value: 'global', description: 'you, in every project', key: 'e' },
+            { label: 'Send as message', value: 'send', description: 'to the agent, not remembered', key: 's' }
           ]
         })
-        if (r.kind === 'commit') scope = r.value as MemoryScope
-        else if (r.kind === 'cancel') scope = null
-        else typedScope = r.text
+        if (r.kind === 'commit') choice = r.value as MemoryScope | 'send'
+        // Esc (or Ctrl-C) steps back: nothing saved, nothing sent.
+        typed = r.kind === 'type'
+        if (r.kind === 'type') typedScope = r.text
       }
-      if (scope === null) {
+      if (choice === null && typed) {
         const ans =
           typedScope ??
-          (await deps.io.readLine('Remember for [p]roject or [e]verywhere? ', {
+          (await deps.io.readLine('Remember for [p]roject or [e]verywhere, or [s]end as a message? ', {
             discardPending: true
           }))
         const a = (ans ?? '').trim().toLowerCase()
-        if (a === 'p' || a === 'project') scope = 'project'
-        else if (a === 'e' || a === 'everywhere' || a === 'g' || a === 'global') scope = 'global'
-        else {
-          deps.io.out(paint('· not remembered\n', 'dim'))
-          continue
+        if (a === 'p' || a === 'project') choice = 'project'
+        else if (a === 'e' || a === 'everywhere' || a === 'g' || a === 'global') choice = 'global'
+        else if (a === 's' || a === 'send') choice = 'send'
+      }
+      if (choice === null) {
+        // The line goes back to the composer rather than being dropped.
+        keptDraft = text
+        deps.io.out(
+          paint(deps.io.readComposer ? '· not remembered: back in the prompt to edit or send\n' : '· not remembered\n', 'dim')
+        )
+        continue
+      }
+      if (choice !== 'send') {
+        try {
+          const where = await deps.saveMemory(choice, memory)
+          deps.io.out(paint(`· remembered in ${where}\n`, 'dim'))
+        } catch (e) {
+          deps.io.out(paint(`· couldn't remember that: ${(e as Error).message}\n`, 'yellow'))
         }
+        continue
       }
-      try {
-        const where = await deps.saveMemory(scope, memory)
-        deps.io.out(paint(`· remembered in ${where}\n`, 'dim'))
-      } catch (e) {
-        deps.io.out(paint(`· couldn't remember that: ${(e as Error).message}\n`, 'yellow'))
-      }
-      continue
+      // 'send': on to the agent below, like any other message.
     }
 
     // `!cmd` — the user's own shell, checked before slash commands so a `!` line is
@@ -5540,7 +5609,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             keywords: c.description
           }))
         })
-        if (r.kind === 'cancel') deps.io.out(paint('· cancelled\n', 'dim'))
+        if (r.kind === 'cancel' || r.kind === 'interrupt') deps.io.out(paint('· cancelled\n', 'dim'))
         if (r.kind !== 'commit') continue
         const picked = choices[Number(r.value)]
         if (!picked) continue
@@ -5886,8 +5955,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Serialize interactive prompts (approvals/questions) so two readLine calls
     // never overlap on the single input stream.
     let prompts: Promise<void> = Promise.resolve()
+    // Once a prompt is answered the agent is working again, so the tab stops saying it
+    // needs you (the title is set back to idle when the run returns).
     const enqueue = (task: () => Promise<void>): void => {
-      prompts = prompts.then(task).catch(() => {})
+      prompts = prompts
+        .then(task)
+        .then(() => deps.io.signal?.({ title: workingTitle('working', workspaceName) }))
+        .catch(() => {})
     }
     // Args captured at tool_start, so a write approval can show the actual diff
     // (the approval event itself only carries a human summary).
@@ -5980,6 +6054,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
+    deps.io.signal?.({ title: workingTitle('working', workspaceName) })
     // Set once a text delta has relabelled the spinner, so the rest of the reply
     // doesn't relabel it on every delta; any other event clears it.
     let saysResponding = false
@@ -6225,34 +6300,56 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               // The shell-network consent is a yes/no question about egress, not a
               // permission rule about a command — offering "always allow"/"deny with a
               // reason" there would be nonsense, so keep that prompt to three options.
+              const network = !!(e.egressHost || e.shellNetwork)
               const r = await deps.io.select({
                 title: 'Choose:',
                 // Esc is a refusal here (the safe default), so the footer says so.
                 escLabel: e.egressHost ? 'keep blocked' : e.shellNetwork ? 'keep offline' : 'deny',
+                // Typed text is a reason to deny; the network questions take none.
+                typeLabel: network ? null : 'type a reason to deny',
                 options: e.egressHost
                   ? [
-                      { label: `Allow ${stripControlChars(e.egressHost)} for this chat`, value: 'always' },
-                      { label: 'Keep blocked', value: 'deny' }
+                      { label: `Allow ${stripControlChars(e.egressHost)} for this chat`, value: 'always', key: 'y' },
+                      { label: 'Keep blocked', value: 'deny', key: 'n' }
                     ]
                   : e.shellNetwork
                   ? [
-                      { label: 'Allow network for this chat', value: 'always' },
-                      { label: 'Keep offline', value: 'deny' }
+                      { label: 'Allow network for this chat', value: 'always', key: 'y' },
+                      { label: 'Keep offline', value: 'deny', key: 'n' }
                     ]
                   : APPROVAL_OPTIONS.map((o) => ({
                       label: o.label,
                       value: o.value,
-                      description: o.description
+                      description: o.description,
+                      ...(o.key ? { key: o.key } : {})
                     }))
               })
+              if (r.kind === 'interrupt') {
+                // Ctrl-C stops the run, as the typed prompt's does; stopping records the
+                // call as interrupted, and the deny only settles it if nothing else has.
+                interrupt()
+                deps.resolveApproval(e.runId, e.callId, 'deny')
+                return
+              }
+              if (r.kind === 'type' && r.seed !== undefined) {
+                // Every answer has its key, so a typed character starts a reason to
+                // deny: open that prompt with it rather than dropping it. The user is
+                // typing at a prompt they can see, so what follows is kept.
+                const reason = await deps.io.readLine('Why not? (what should it do instead) ', { initial: r.seed })
+                decision = 'deny'
+                note = reason?.trim() || undefined
+              } else if (r.kind === 'type' && r.text === undefined) {
+                // The picker handed over without an answer: the typed prompt says its keys.
+                deps.io.out(`${renderApprovalKeys(e, paint)}\n`)
+              }
               if (r.kind === 'commit') {
                 if (r.value === 'deny-note') {
                   // Collect the guidance in the same interaction as the refusal.
-                  const typed = await deps.io.readLine('Why not? (what should it do instead) ', {
+                  const reason = await deps.io.readLine('Why not? (what should it do instead) ', {
                     discardPending: true
                   })
                   decision = 'deny'
-                  note = typed?.trim() || undefined
+                  note = reason?.trim() || undefined
                 } else {
                   decision = r.value as ToolApprovalDecision
                 }
@@ -6290,6 +6387,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             )
             let answer: string | null = null
             let typedAnswer: string | undefined
+            let seed: string | undefined
             if (usePicker && deps.io.select) {
               const r = await deps.io.select({
                 title: '',
@@ -6301,13 +6399,23 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                   ...(o.description ? { description: terminalText(o.description, { lines: false }) } : {})
                 }))
               })
+              if (r.kind === 'interrupt') {
+                interrupt()
+                deps.resolveQuestion(e.runId, e.callId, '')
+                return
+              }
               if (r.kind === 'commit') answer = r.value
               else if (r.kind === 'type' && r.text !== undefined) typedAnswer = r.text
               // cancel/type → fall through so the user can still type a custom answer
               else deps.io.out(`${renderQuestionChoices(e.options, multi, paint)}\n`)
+              // The key that left the picker is the answer's first character.
+              if (r.kind === 'type' && r.seed !== undefined) seed = r.seed
             }
             if (answer === null) {
-              const ans = typedAnswer ?? (await deps.io.readLine('> ', { discardPending: true }))
+              // A seeded prompt is one the user is already typing at, so nothing is dropped.
+              const ans =
+                typedAnswer ??
+                (await deps.io.readLine('> ', seed === undefined ? { discardPending: true } : { initial: seed }))
               answer = resolveQuestionAnswer(ans ?? '', e.options, e.multiSelect ?? false)
             }
             deps.resolveQuestion(e.runId, e.callId, answer)
@@ -6447,24 +6555,35 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             deps.io.out(
               `${renderPlan(e.plan, paint, { actions: !deps.io.select, width: columns(), highlight })}\n`
             )
-            let action: PlanAction | null = null
-            let typedAction: string | undefined
             if (screenReader) deps.io.out('waiting for your decision on the plan\n')
-            if (deps.io.select) {
-              const r = await deps.io.select({
-                title: 'Your decision:',
-                options: PLAN_ACTIONS.map((a) => ({ label: a.label, value: a.action, description: a.description }))
-              })
-              if (r.kind === 'commit') action = r.value as PlanAction
-              else if (r.kind === 'type' && r.text !== undefined) typedAction = r.text
-              // cancel/type → fall through to the typed prompt, with its keys shown
-              else deps.io.out(`${renderPlanActions(paint)}\n`)
+            // Asked until something is decided: an edit that didn't happen asks again.
+            let decision: PlanDecision | null = null
+            for (let asked = 0; decision === null; asked++) {
+              let action: PlanAction | null = null
+              let typedAction: string | undefined
+              if (deps.io.select) {
+                const r = await deps.io.select({
+                  title: 'Your decision:',
+                  // Each action answers to its key; there is no typed answer to start.
+                  typeLabel: null,
+                  options: PLAN_ACTIONS.map((a) => ({ label: a.label, value: a.action, description: a.description, key: a.key }))
+                })
+                if (r.kind === 'interrupt') {
+                  interrupt()
+                  deps.resolvePlan(e.runId, e.callId, { kind: 'reject' })
+                  return
+                }
+                if (r.kind === 'commit') action = r.value as PlanAction
+                else if (r.kind === 'type' && r.text !== undefined) typedAction = r.text
+                // cancel/type → fall through to the typed prompt, with its keys shown
+                else deps.io.out(`${renderPlanActions(paint)}\n`)
+              } else if (asked > 0) deps.io.out(`${renderPlanActions(paint)}\n`)
+              if (action === null) {
+                const ans = typedAction ?? (await deps.io.readLine('> ', { discardPending: true }))
+                action = parsePlanAction(ans ?? '')
+              }
+              decision = await planDecisionFor(action, e.plan, deps, paint)
             }
-            if (action === null) {
-              const ans = typedAction ?? (await deps.io.readLine('> ', { discardPending: true }))
-              action = parsePlanAction(ans ?? '')
-            }
-            const decision = await planDecisionFor(action, e.plan, deps, paint)
             // Accepting flips the local policy so the composer + status line reflect
             // that Plan mode is off for the rest of the session (the loop flips the
             // run's own policy independently when the tool result is applied).
@@ -6535,6 +6654,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (screenReader && interruptedQueued === null) {
       deps.io.out(`done in ${formatElapsed(nowFn() - turnStartedAt)}\n`)
     }
+    // However the run ended (a Stop sends no "done" signal), the tab is idle again.
+    deps.io.signal?.({ title: idleTitle(workspaceName) })
     // Anything typed while that turn ran (steers it never read included) becomes the
     // next one, or after an interrupt, the next prompt's draft.
     const unsent = [...returnedSteers, ...(interruptedQueued ?? []), ...(deps.io.takeQueued?.() ?? [])]
@@ -6801,7 +6922,7 @@ async function runCopyCommand(
         // The first lines of what the highlighted row would copy.
         preview: (o) => copyPreviewLines(o.value === '0' ? reply : (blocks[Number(o.value) - 1]?.code ?? ''), paint)
       })
-      if (r.kind === 'cancel') return void deps.io.out(paint('· nothing copied\n', 'dim'))
+      if (r.kind === 'cancel' || r.kind === 'interrupt') return void deps.io.out(paint('· nothing copied\n', 'dim'))
       if (r.kind === 'commit') picked = r.value
     }
     if (picked === null) {

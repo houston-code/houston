@@ -22,6 +22,8 @@ export interface PickerOption {
   detail?: string
   /** Extra text the live filter matches besides the label (a folder, say). */
   keywords?: string
+  /** A key that picks this option at once (an approval's y / n / a / ! / x), shown beside it. */
+  key?: string
 }
 
 /**
@@ -97,6 +99,12 @@ export interface PickerSpec {
   empty?: string
   /** Replaces the default footer hint. */
   hint?: string
+  /**
+   * What typing does here, for the footer. Default "type for a custom answer"; at an
+   * approval, typed text is the reason for a denial. Null when there is no typed answer:
+   * a key that picks nothing is then ignored instead of leaving the picker.
+   */
+  typeLabel?: string | null
 }
 
 /** Semantic key events the picker understands (adapter maps real keys to these). */
@@ -106,8 +114,9 @@ export type PickerKey =
   | { type: 'enter' }
   | { type: 'space' }
   | { type: 'digit'; n: number }
-  | { type: 'char' } // any other printable key → the user wants to type a custom answer
-  | { type: 'cancel' } // Esc / Ctrl-C
+  | { type: 'char'; ch: string } // any other printable key: an option's key, or the start of a typed answer
+  | { type: 'cancel' } // Esc
+  | { type: 'interrupt' } // Ctrl-C: stop the run, as it does everywhere else while one works
   // Only from `richKeyToPickerKey` (a filtering or action picker):
   | { type: 'text'; ch: string } // a printable character, kept
   | { type: 'backspace' }
@@ -119,7 +128,7 @@ export function keyToPickerKey(key: {
   sequence?: string
   ctrl?: boolean
 }): PickerKey | null {
-  if (key.ctrl && key.name === 'c') return { type: 'cancel' }
+  if (key.ctrl && key.name === 'c') return { type: 'interrupt' }
   switch (key.name) {
     case 'up':
       return { type: 'up' }
@@ -135,7 +144,7 @@ export function keyToPickerKey(key: {
   }
   const ch = key.sequence ?? ''
   if (/^[0-9]$/.test(ch)) return { type: 'digit', n: Number(ch) }
-  if (ch.length === 1 && ch >= ' ') return { type: 'char' }
+  if (ch.length === 1 && ch >= ' ') return { type: 'char', ch }
   return null
 }
 
@@ -148,7 +157,7 @@ export function richKeyToPickerKey(key: { name?: string; sequence?: string; ctrl
   if (key.ctrl && key.name && key.name !== 'c' && /^[a-z]$/.test(key.name)) return { type: 'ctrl', name: key.name }
   if (key.name === 'backspace') return { type: 'backspace' }
   const base = keyToPickerKey(key)
-  if (base?.type === 'char') return { type: 'text', ch: key.sequence ?? '' }
+  if (base?.type === 'char') return { type: 'text', ch: base.ch }
   return base
 }
 
@@ -186,8 +195,12 @@ export type PickerOutcome =
   | { kind: 'commit'; value: string }
   // Fall back to a typed answer. `text` is the answer already typed, when the picker
   // took one (the numbered list a screen reader answers), so the caller asks no again.
-  | { kind: 'type'; text?: string }
+  // `seed` is the key that asked for it: the answer's first character, so the typed
+  // prompt opens with it instead of losing it.
+  | { kind: 'type'; text?: string; seed?: string }
   | { kind: 'cancel' }
+  // Ctrl-C: the caller stops the run (Esc stays a cancel).
+  | { kind: 'interrupt' }
   // An action ran in a picker without `onAction` (the caller performs it).
   | { kind: 'action'; id: string; value: string | null; text?: string }
 
@@ -341,7 +354,15 @@ function reduceRich(s: PickerState, key: PickerKey): PickerStep {
     case 'cancel':
       if (s.spec.filter && query) return setQuery('')
       return { state: s, outcome: { kind: 'cancel' } }
+    case 'interrupt':
+      return { state: s, outcome: { kind: 'interrupt' } }
   }
+}
+
+/** The option whose key `ch` is, matched without case ("Y" answers like "y"). */
+function optionForKey(options: PickerOption[], ch: string): PickerOption | undefined {
+  const k = ch.trim().toLowerCase()
+  return k ? options.find((o) => o.key !== undefined && o.key.toLowerCase() === k) : undefined
 }
 
 /**
@@ -350,6 +371,7 @@ function reduceRich(s: PickerState, key: PickerKey): PickerStep {
  * to the existing typed prompt (custom free-text answer).
  */
 export function reducePicker(s: PickerState, key: PickerKey): PickerStep {
+  if (key.type === 'interrupt') return { state: s, outcome: { kind: 'interrupt' } }
   if (isRichPicker(s.spec)) return reduceRich(s, key)
   const len = s.spec.options.length
   // Nothing to pick from (e.g. an ask_user with no options): there's nothing to
@@ -360,7 +382,8 @@ export function reducePicker(s: PickerState, key: PickerKey): PickerStep {
     if (key.type === 'up' || key.type === 'down' || key.type === 'digit' || key.type === 'space') {
       return { state: s }
     }
-    return { state: s, outcome: { kind: 'type' } } // enter / char → typed answer
+    if (key.type === 'char') return { state: s, outcome: { kind: 'type', seed: key.ch } }
+    return { state: s, outcome: { kind: 'type' } } // enter → typed answer
   }
   switch (key.type) {
     case 'up':
@@ -381,8 +404,14 @@ export function reducePicker(s: PickerState, key: PickerKey): PickerStep {
     }
     case 'enter':
       return { state: s, outcome: { kind: 'commit', value: commitValue(s) } }
-    case 'char':
-      return { state: s, outcome: { kind: 'type' } }
+    case 'char': {
+      // An option's key commits it; any other key starts the typed answer with that
+      // key, unless there is no typed answer here.
+      const picked = optionForKey(s.spec.options, key.ch)
+      if (picked) return { state: s, outcome: { kind: 'commit', value: picked.value } }
+      if (s.spec.typeLabel === null) return { state: s }
+      return { state: s, outcome: { kind: 'type', seed: key.ch } }
+    }
     case 'cancel':
       return { state: s, outcome: { kind: 'cancel' } }
     default:
@@ -396,13 +425,19 @@ export function reducePicker(s: PickerState, key: PickerKey): PickerStep {
  */
 export function renderNumberedPicker(spec: PickerSpec): string[] {
   const lines = spec.title ? [spec.title] : []
+  const keyed = spec.options.some((o) => o.key)
   spec.options.forEach((o, i) => {
-    lines.push(`${i + 1}. ${o.label}${o.description ? ` (${o.description})` : ''}`)
+    const key = o.key ? `, or ${o.key}` : ''
+    lines.push(`${i + 1}${key}. ${o.label}${o.description ? ` (${o.description})` : ''}`)
   })
   const how = spec.multiSelect
     ? 'Type the numbers you choose, separated by spaces or commas, then press Enter.'
-    : 'Type a number and press Enter.'
-  lines.push(`${how} Or type your own answer. Enter on its own: ${spec.escLabel ?? 'cancel'}.`)
+    : keyed
+      ? 'Type a number or the key after it and press Enter.'
+      : 'Type a number and press Enter.'
+  // Said as the picker's footer says it: a reason at an approval, nothing where there is no typed answer.
+  const own = spec.typeLabel === null ? '' : spec.typeLabel ? ` Or ${spec.typeLabel}.` : ' Or type your own answer.'
+  lines.push(`${how}${own} Enter on its own: ${spec.escLabel ?? 'cancel'}.`)
   return lines
 }
 
@@ -412,11 +447,21 @@ export type NumberedPickResult = PickerOutcome | { kind: 'invalid'; message: str
 export function parseNumberedPick(spec: PickerSpec, answer: string): NumberedPickResult {
   const a = answer.trim()
   if (!a) return { kind: 'cancel' }
+  // An option's key answers as it does in the picker.
+  const keyed = optionForKey(spec.options, a)
+  if (keyed) return { kind: 'commit', value: keyed.value }
   const tokens = a.split(/[\s,]+/).filter(Boolean)
   // Not all numbers: the user typed their own answer (a reason, `y`, free text).
   const n = spec.options.length
-  if (n === 0 || !tokens.every((t) => /^\d+$/.test(t))) return { kind: 'type', text: a }
   const range = n === 1 ? 'Type 1' : `Choose 1 to ${n}`
+  if (n === 0 || !tokens.every((t) => /^\d+$/.test(t))) {
+    // No typed answer here: say what is, rather than taking the text.
+    if (spec.typeLabel === null && n > 0) {
+      const keys = spec.options.flatMap((o) => (o.key ? [o.key] : []))
+      return { kind: 'invalid', message: `${range}${keys.length ? `, or type ${keys.join(', ')}` : ''}.` }
+    }
+    return { kind: 'type', text: a }
+  }
   const bad = tokens.find((t) => Number(t) < 1 || Number(t) > n)
   if (bad !== undefined) return { kind: 'invalid', message: `There is no option ${bad}. ${range}.` }
   if (!spec.multiSelect && tokens.length > 1) return { kind: 'invalid', message: `Choose one option. ${range}.` }
@@ -435,19 +480,28 @@ export function renderPicker(
 ): string[] {
   if (isRichPicker(s.spec)) return renderRichPicker(s, paint, size)
   const lines = s.spec.title ? [paint(s.spec.title, 'bold')] : []
-  const esc = `esc ${s.spec.escLabel ?? 'cancel'}`
+  // With keys, each option shows its own in a column ahead of the label.
+  const keyed = s.spec.options.some((o) => o.key)
+  const typing = s.spec.typeLabel === undefined ? 'type for a custom answer' : s.spec.typeLabel
   const hint = paint(
-    s.spec.multiSelect
-      ? `↑/↓ move · space toggle · enter confirm · type for a custom answer · ${esc}`
-      : `↑/↓ move · enter confirm · type for a custom answer · ${esc}`,
+    [
+      '↑/↓ move',
+      s.spec.multiSelect ? 'space toggle' : null,
+      keyed ? 'enter or its key confirms' : 'enter confirm',
+      typing,
+      `esc ${s.spec.escLabel ?? 'cancel'}`
+    ]
+      .filter(Boolean)
+      .join(' · '),
     'dim'
   )
   const row = (o: PickerOption, i: number): string => {
     const pointer = i === s.cursor ? paint('›', 'cyan') : ' '
     const box = s.spec.multiSelect ? (s.checked.has(i) ? '[x] ' : '[ ] ') : ''
+    const key = keyed ? (o.key ? `${paint(o.key, 'cyan')}  ` : '   ') : ''
     const label = i === s.cursor ? paint(o.label, 'cyan') : o.label
     const desc = o.description ? paint(`  (${o.description})`, 'dim') : ''
-    return `${pointer} ${box}${label}${desc}`
+    return `${pointer} ${key}${box}${label}${desc}`
   }
   const options = s.spec.options
   // With a height, a list taller than the screen shows the same window as a rich
