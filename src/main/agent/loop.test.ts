@@ -10268,7 +10268,7 @@ describe('a run that ends without a reply', () => {
     expect(runEndLines().some((l) => l.includes('class=refused'))).toBe(true)
     // No blank assistant message is saved, and the turn reads as unanswered.
     expect(r.messages).toHaveLength(1)
-    expect(r.messages[0].unanswered?.[0]).toMatchObject({ reason: 'error' })
+    expect(r.messages[0].runEnds?.[0]).toMatchObject({ reason: 'error' })
   })
 
   it('keeps the text of a reply a filter cut short, with a notice', async () => {
