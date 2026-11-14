@@ -70,7 +70,8 @@ describe('writeFileContained: ordinary paths', () => {
     const ino = statSync(p).ino
     writeFileContained([ws], p, 'new')
     expect(readFileSync(p, 'utf8')).toBe('new')
-    expect(statSync(p).mode & 0o777).toBe(0o755)
+    // Windows has no POSIX permission bits to keep (stat reports 0o666 there).
+    if (process.platform !== 'win32') expect(statSync(p).mode & 0o777).toBe(0o755)
     expect(statSync(p).ino).toBe(ino)
   })
 
