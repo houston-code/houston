@@ -681,6 +681,21 @@ the model.
 - `/delete` deletes the chat after asking, then starts a new one.
 - `/permissions` lists your saved permission rules, numbered; `/permissions remove <n>`
   deletes one. Rules in a project's `.houston/settings.json` are edited in that file.
+- `/resume [search]` (or `/sessions`) opens a picker of this folder's saved chats,
+  newest first, marked unread or failed as in the desktop sidebar. Under the list it
+  previews the highlighted chat: its title, when it was last updated, how many messages
+  it has, the first thing you asked, and the start of the last reply. In the picker:
+  - type to filter by title and content (Backspace edits, Esc clears the filter, then
+    cancels); a search given with the command starts the filter
+  - Enter opens the highlighted chat, and 1-9 open that row (so digits don't go into
+    the filter)
+  - Ctrl-R renames the chat (type the title, Enter saves)
+  - Ctrl-D, or `x` while the filter is empty, deletes it after a y/N question; deleting
+    the chat you're in says so first, and you carry on in a new chat
+  - Ctrl-A switches between this folder and all folders; all folders shows each chat's
+    folder
+  Off a terminal that can't show the picker, it prints a numbered list to answer by
+  number.
 - Resuming a chat (`/resume`, `--continue`, `--resume <id>`) replays its last three
   exchanges, so you can see where you left off, and says how its last turn ended when it
   didn't finish (an error, a Stop, or a limit it hit).
