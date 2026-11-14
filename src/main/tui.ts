@@ -115,6 +115,9 @@ import {
 } from './tui-sessions'
 import { htmlToAnsi } from './syntax'
 import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
+import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
+import { renderUsageReport } from './tui-usage'
+import type { UsageReport } from '@shared/usageReport'
 import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
 import { workspaceLabel } from '@shared/notify'
 import {
@@ -516,7 +519,7 @@ export function renderApprovalPrompt(
       : ev.sensitiveRead
         ? `\n${paint('⚠ reads a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
         : ev.sensitiveWrite && ev.protectedWrite
-          ? `\n${paint('⚠ changes a project control file that can run code outside the sandbox (asks every time; "Allow for run" does not cover it)', 'yellow', 'bold')}`
+          ? `\n${paint('⚠ changes a project control file that can run code outside the sandbox (asks every time; "Allow for this chat" does not cover it)', 'yellow', 'bold')}`
           : ev.sensitiveWrite
           ? `\n${paint('⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)', 'yellow', 'bold')}`
           : ''
@@ -527,14 +530,14 @@ export function renderApprovalPrompt(
     : ''
   // A network grant reaches one destination; say which before the user picks it.
   const scope = ev.networkScope
-    ? `\n${paint(`  "Allow for run" covers ${stripControlChars(ev.networkScope)} for the rest of this chat.`, 'dim')}`
+    ? `\n${paint(`  "Allow for this chat" covers ${stripControlChars(ev.networkScope)} only, for the rest of this chat.`, 'dim')}`
     : ''
   // Named as the call's tool line names it ("Run", "Write"), not by its wire name.
   const head = paint(`Approve ${describeToolCall(ev.name, ev.args).verb}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
   const keys = opts.picker
     ? ''
-    : `\n${paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim')}` +
+    : `\n${paint('  [y] allow once   [a] allow for this chat   [!] always allow (saves a rule)   [n] deny   [x] always deny', 'dim')}` +
       paint('\n  …or type why not, and that goes back to the agent', 'dim')
   return `\n${head} ${kind}\n  ${summary}${warn}${offline}${scope}${keys}`
 }
@@ -554,14 +557,15 @@ export function approvalOutcome(
       : `Allowed ${opts.egressHost} for this chat`
   }
   if (opts.shellNetwork) {
+    // Any allow answers the chat's question, so every one grants network for the rest of it.
     if (decision === 'deny') return 'Running offline'
-    return decision === 'always' ? 'Network allowed for this run' : 'Network allowed'
+    return 'Network allowed for this chat'
   }
   switch (decision) {
     case 'allow':
       return 'Allowed'
     case 'always':
-      return 'Allowed for this run'
+      return 'Allowed for this chat'
     case 'rule-allow':
       return 'Always allowed (rule saved)'
     case 'rule-deny':
@@ -598,12 +602,16 @@ export function parseApprovalAnswer(answer: string): { decision: ToolApprovalDec
  * type them away and offer only allow/deny/always.
  */
 export const APPROVAL_OPTIONS: { label: string; value: ToolApprovalDecision | 'deny-note'; description: string }[] = [
-  { label: 'Allow', value: 'allow', description: 'run this once' },
-  { label: 'Allow for run', value: 'always', description: 'stop asking for this kind this session' },
-  { label: 'Always allow', value: 'rule-allow', description: 'save a permission rule' },
+  { label: 'Allow once', value: 'allow', description: 'run this call only' },
+  {
+    label: 'Allow for this chat',
+    value: 'always',
+    description: 'stop asking for this kind of tool in this chat (a network call: this destination), until Houston quits'
+  },
+  { label: 'Always allow', value: 'rule-allow', description: 'save a permission rule, kept across restarts' },
   { label: 'Deny', value: 'deny', description: 'refuse this once' },
   { label: 'Deny with a reason…', value: 'deny-note', description: 'tell the agent what to do instead' },
-  { label: 'Always deny', value: 'rule-deny', description: 'save a permission rule' }
+  { label: 'Always deny', value: 'rule-deny', description: 'save a permission rule, kept across restarts' }
 ]
 
 /**
@@ -1638,7 +1646,8 @@ export type SlashResult =
   /** Run the last message again after its turn failed (/retry), as the desktop's Retry does. */
   | { kind: 'retry' }
   | { kind: 'set-model'; providerId: string; model: string; asDefault?: boolean }
-  | { kind: 'compact' }
+  /** Summarize older turns now (/compact [focus]), steering the summary toward `focus`. */
+  | { kind: 'compact'; focus?: string }
   /** The settings overview hub (/settings). */
   | { kind: 'settings' }
   /** Environment diagnostics (/doctor). */
@@ -1669,6 +1678,10 @@ export type SlashResult =
   | { kind: 'transcript' }
   /** Reprint a past tool result in full (/output [n]). */
   | { kind: 'output'; index: number }
+  /** Copy the n-th latest reply, or one of its code blocks, to the clipboard (/copy [n]). */
+  | { kind: 'copy'; index: number; bad?: boolean }
+  /** Spend and tokens per day and per project, from the saved chats (/usage). */
+  | { kind: 'usage' }
   /** List (and open) the background sessions the agent spawned (/spawned). */
   | { kind: 'spawned' }
   /** List or act on the sessions the agent proposed (/proposals [start|here|dismiss n]). */
@@ -1677,7 +1690,7 @@ export type SlashResult =
   | { kind: 'btw'; question: string }
   /** Edit lifecycle hooks (/hooks [add|remove <n>]). */
   | { kind: 'hooks'; action: SettingsAction }
-  /** Edit MCP servers (/mcp [add|remove <n>]) — stdio only in the terminal. */
+  /** List or edit MCP servers (/mcp [add|remove|enable|disable|reconnect|tools|login|logout …]). */
   | { kind: 'mcp'; action: SettingsAction }
   /** Show or change this folder's project-config trust (/trust, /trust forget). */
   | { kind: 'trust'; op: 'status' | 'forget' | 'usage' }
@@ -1830,6 +1843,15 @@ export function parseSlashCommand(
       const n = Number.parseInt(arg.trim(), 10)
       return { kind: 'output', index: Number.isInteger(n) && n >= 1 ? n : 1 }
     }
+    case 'usage':
+      return { kind: 'usage' }
+    case 'copy': {
+      // `/copy` is the last reply; a number counts back from there.
+      const a = arg.trim()
+      if (!a) return { kind: 'copy', index: 1 }
+      const n = Number(a)
+      return Number.isInteger(n) && n >= 1 ? { kind: 'copy', index: n } : { kind: 'copy', index: 1, bad: true }
+    }
     case 'hooks':
       return { kind: 'hooks', action: parseSettingsAction(arg) }
     case 'mcp':
@@ -1875,7 +1897,7 @@ export function parseSlashCommand(
       // Shortcut for the read-only research-and-propose policy (parity with the GUI's /plan).
       return { kind: 'set-approval', policy: 'plan' }
     case 'compact':
-      return { kind: 'compact' }
+      return arg.trim() ? { kind: 'compact', focus: arg.trim() } : { kind: 'compact' }
     case 'model': {
       const { rest, asDefault } = splitDefaultFlag(arg)
       // Bare /model: pick from a list (the desktop's model picker), or list them
@@ -1926,7 +1948,7 @@ export const HELP_TEXT = [
   '  /plan                 plan mode: read-only research & propose',
   '  /ask /auto /full      ask every time · auto-approve edits · full auto (sandboxed)',
   '  /clear, /new          start a fresh conversation',
-  '  /compact              summarize older turns to free up context now',
+  '  /compact [focus]      summarize older turns to free up context now (focus: what the summary keeps in detail)',
   '  /retry                run your last message again after a turn that failed',
   '  /review               adversarial review of your uncommitted changes',
   '  /init                 write or improve AGENTS.md, the instructions file for this project',
@@ -1941,6 +1963,7 @@ export const HELP_TEXT = [
   '  /delete               delete this chat (asks first)',
   '  /permissions [remove n]  list the saved permission rules, or remove one',
   '  /cost                 show session token + cost totals',
+  '  /usage                spend and tokens per day (last 7) and per project, from the chats on this computer',
   '  /context              what fills the context now, part by part',
   '  /skills /agents       list workspace skills / custom agents',
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
@@ -1957,9 +1980,12 @@ export const HELP_TEXT = [
   '  /thoughts [mode]      how reasoning shows as it streams: show | summary | hide (Alt-T)',
   '  /transcript           the whole session full screen, with reasoning and full tool output (Ctrl-O)',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
+  '  /copy [n]             copy a reply (n back; default the last) or one of its code blocks',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
-  '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
+  '  /mcp [verb n]         list MCP servers (status, last error); tools · enable · disable · remove · login · logout <n>',
+  '  /mcp add [--url u]    add a stdio server (guided), or a remote one: --url <url> [name] [--sse]',
+  "  /mcp reconnect <n>    restart a server's connection now (/mcp reconnect all: every one)",
   '  /mcp search <query>   search the MCP Registry; /mcp add-from-registry <name> reviews one to add',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
@@ -1991,7 +2017,12 @@ export const HELP_TEXT = [
   '  ultrathink            a word in the message: think harder for that turn',
   '',
   'While a turn runs: type and press Enter to steer it; Esc or Ctrl-C stops it.',
-  'Answer approvals with y / n / a.'
+  '',
+  'Approvals:',
+  '  y                     allow this call once',
+  '  a                     allow this kind of tool for the rest of this chat, until Houston quits (a network call: that destination only)',
+  '  !                     always allow: saves a permission rule, kept across restarts',
+  '  n, x                  deny this call, or always deny (saves a rule)'
 ].join('\n')
 
 /** Short tips for keys and prefixes a new user would not find on their own. */
@@ -2010,7 +2041,8 @@ export const STARTUP_TIPS = [
   'Shift-Enter or Ctrl-J starts a new line',
   '/resume filters saved chats as you type; Ctrl-A shows every folder',
   'Ctrl-O opens the whole session full screen, with reasoning and full tool output',
-  'Alt-T cycles how the model\'s reasoning shows: in full, one line, or hidden'
+  'Alt-T cycles how the model\'s reasoning shows: in full, one line, or hidden',
+  '/copy puts the last reply, or one of its code blocks, on your clipboard'
 ]
 
 /**
@@ -2110,10 +2142,10 @@ export function wrapHelp(text: string, width: number, column = HELP_DESC_COLUMN)
 
 // --- Settings editing (/settings, /hooks, /mcp) ------------------------------
 // A small, safe subset of settings editing for the terminal. The desktop app has
-// the full panel; here we cover lifecycle hooks and *local* (stdio) MCP servers.
-// We deliberately never touch auth: remote/URL MCP and header secrets are the
-// desktop app's job (the CLI can't persist header secrets — see store.ts), so the
-// terminal add flow builds header-free stdio configs only.
+// the full panel; here we cover lifecycle hooks and MCP servers (stdio, or a remote
+// URL with no headers). We deliberately never collect header secrets: those are the
+// desktop app's job (the CLI can't persist header secrets, see store.ts), so a remote
+// server added here authenticates with OAuth (`/mcp login`) or not at all.
 
 // Lifecycle events a hook can bind to: re-exported from @shared/types (the one
 // list validators and UIs share) so existing terminal imports keep working.
@@ -2122,8 +2154,18 @@ export { HOOK_EVENTS }
 /** What the user asked /hooks or /mcp to do. Indexed ops carry a 1-based index. */
 export type SettingsAction =
   | { op: 'list' }
-  | { op: 'add' }
+  /**
+   * Add an entry. On /mcp, `url` adds a remote server (`/mcp add --url <url> [name]`,
+   * streamable HTTP, or the legacy SSE transport with `--sse`); without it the
+   * guided stdio prompts run.
+   */
+  | { op: 'add'; url?: string; name?: string; sse?: boolean }
   | { op: 'remove'; index: number }
+  /** Switch a server on or off, kept in settings (/mcp enable|disable <n>). /mcp only. */
+  | { op: 'enable'; index: number }
+  | { op: 'disable'; index: number }
+  /** Restart a server's connection now, or every server's (/mcp reconnect <n|all>). /mcp only. */
+  | { op: 'reconnect'; index: number | 'all' }
   /** List a server's tools (/mcp tools <n>). /mcp only. */
   | { op: 'tools'; index: number }
   /** OAuth sign-in for a remote MCP server (/mcp login <n>). /mcp only. */
@@ -2140,15 +2182,33 @@ export type SettingsAction =
 export function parseSettingsAction(arg: string): SettingsAction {
   const [verb, ...rest] = arg.trim().split(/\s+/).filter(Boolean)
   if (!verb) return { op: 'list' }
-  if (verb === 'add') return { op: 'add' }
+  if (verb === 'add') {
+    if (!rest.length) return { op: 'add' }
+    // `--url <url> [name] [--sse]`, the flags in any order.
+    const sse = rest.includes('--sse')
+    const words = rest.filter((w) => w !== '--sse')
+    const at = words.indexOf('--url')
+    const url = at >= 0 ? words[at + 1] : undefined
+    if (!url || url.startsWith('--')) return { op: 'usage' }
+    const others = words.filter((_, i) => i !== at && i !== at + 1)
+    if (others.length > 1 || others.some((w) => w.startsWith('--'))) return { op: 'usage' }
+    return { op: 'add', url, ...(others[0] ? { name: others[0] } : {}), ...(sse ? { sse } : {}) }
+  }
   if (verb === 'search') return { op: 'search', query: rest.join(' ') }
   if (verb === 'add-from-registry') return rest.length === 1 ? { op: 'registry-add', name: rest[0] } : { op: 'usage' }
-  const indexed = (op: 'remove' | 'login' | 'logout' | 'tools'): SettingsAction => {
+  const indexed = (op: 'remove' | 'login' | 'logout' | 'tools' | 'enable' | 'disable'): SettingsAction => {
     const n = Number.parseInt(rest[0] ?? '', 10)
     if (Number.isInteger(n) && n >= 1) return { op, index: n }
     return { op: 'usage' }
   }
   if (verb === 'tools') return indexed('tools')
+  if (verb === 'enable' || verb === 'on') return indexed('enable')
+  if (verb === 'disable' || verb === 'off') return indexed('disable')
+  if (verb === 'reconnect' || verb === 'restart') {
+    if (rest[0]?.toLowerCase() === 'all') return { op: 'reconnect', index: 'all' }
+    const n = Number(rest[0] ?? '')
+    return /^\d+$/.test(rest[0] ?? '') && n >= 1 ? { op: 'reconnect', index: n } : { op: 'usage' }
+  }
   if (verb === 'remove' || verb === 'rm' || verb === 'delete') return indexed('remove')
   if (verb === 'login' || verb === 'signin') return indexed('login')
   if (verb === 'logout' || verb === 'signout') return indexed('logout')
@@ -2234,6 +2294,44 @@ export function buildStdioMcpServer(
   }
 }
 
+/**
+ * Validate `/mcp add --url <url> [name]` into a remote MCP server config, shaped as
+ * the desktop's Settings > MCP servers stores one (`transport` http or sse, an empty
+ * `command`, the `url`). No headers: a server that needs a static token is set up in
+ * the desktop app; one that uses OAuth signs in with `/mcp login <n>`. A name left
+ * out comes from the URL's host, made unique.
+ */
+export function buildRemoteMcpServer(
+  existingIds: string[],
+  url: string,
+  name = '',
+  sse = false
+): McpServerConfig | { error: string } {
+  let parsed: URL
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(url)) return { error: 'the URL has control characters in it' }
+  try {
+    parsed = new URL(url.trim())
+  } catch {
+    return { error: `"${stripControlChars(url)}" is not a URL (use https://host/path)` }
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return { error: 'the URL must start with http:// or https://' }
+  }
+  // settings.json is plain text: a password in the URL would sit there unencrypted.
+  if (parsed.username || parsed.password) {
+    return { error: 'leave credentials out of the URL; add a token header in the desktop app, or sign in with /mcp login' }
+  }
+  let id = name.trim()
+  if (id) {
+    if (!/^[\w-]+$/.test(id)) return { error: 'name must be letters, numbers, hyphens or underscores (no spaces)' }
+    if (existingIds.includes(id)) return { error: `an MCP server named "${id}" already exists` }
+  } else {
+    id = freeServerId(parsed.hostname, existingIds)
+  }
+  return { id, name: id, transport: sse ? 'sse' : 'http', command: '', url: url.trim(), enabled: true }
+}
+
 /** Numbered list of hooks, or a "none" note. */
 export function renderHookList(hooks: Hook[], paint: Painter): string {
   if (!hooks.length) return paint('No hooks configured.', 'dim')
@@ -2275,7 +2373,10 @@ export function renderMcpList(
           : st?.state === 'needs-auth'
             ? paint(`  ! needs sign-in (/mcp login ${i + 1})`, 'yellow')
             : st?.state === 'error'
-              ? paint(`  ✗ ${stripControlChars(st.error ?? 'failed to connect')}`, 'red')
+              ? paint(
+                  `  ✗ last error: ${truncate(stripControlChars(st.error ?? 'failed to connect').replace(/\s+/g, ' ').trim(), 160)} (/mcp reconnect ${i + 1})`,
+                  'red'
+                )
               : ''
       return `  ${paint(`${i + 1}.`, 'dim')} ${paint(s.name ?? s.id, 'cyan')}${off}${auth}  ${paint(`[${transport}]`, 'dim')}  ${detail}${badge}`
     })
@@ -3043,6 +3144,11 @@ export interface TuiDeps {
     get: (name: string) => Promise<RegistryGetResult>
   }
   /**
+   * Restart the named servers' connections now (`/mcp reconnect`), resolving to their
+   * new statuses. Absent ⇒ the verb says a changed server reconnects on the next message.
+   */
+  mcpReconnect?: (ids: string[]) => Promise<McpServerStatus[]>
+  /**
    * Whether this host persists secret VALUES (headers / stdio env) from settings
    * saves. False on the standalone CLI, whose store keeps only the keys — the
    * /mcp add flow then tells the user where the values actually go.
@@ -3068,6 +3174,17 @@ export interface TuiDeps {
    * were missing. Absent ⇒ the command says to use `/image <path>`.
    */
   clipboardImage?: () => { image: ImageAttachment } | { error: string }
+  /**
+   * Put text on the system clipboard through the platform's own helper, for
+   * `/copy`. True when it took the text. Absent (or false, as over SSH) leaves
+   * OSC 52, which the command always sends too.
+   */
+  copyText?: (text: string) => boolean
+  /**
+   * Spend and tokens per day and per project over the chats saved on this computer,
+   * for `/usage` (the desktop usage view's report). Absent ⇒ the command says so.
+   */
+  usageReport?: () => UsageReport
   /**
    * Open `initial` text in the user's `$VISUAL`/`$EDITOR` and return the edited
    * result (null if no editor is configured or the edit was aborted). Used by the
@@ -4655,6 +4772,22 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(`${renderRecoveredOutput(toolResultsFrom(messages), result.index, paint)}\n`)
         continue
       }
+      if (result.kind === 'copy') {
+        await runCopyCommand(result, messages, deps, paint)
+        continue
+      }
+      if (result.kind === 'usage') {
+        if (!deps.usageReport) {
+          deps.io.out(paint('· usage totals are unavailable here\n', 'dim'))
+          continue
+        }
+        try {
+          deps.io.out(`${renderUsageReport(deps.usageReport(), paint)}\n`)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't read usage: ${(e as Error).message}\n`, 'yellow'))
+        }
+        continue
+      }
       if (result.kind === 'reasoning') {
         if (!result.effort) {
           deps.io.out(`${renderReasoningStatus(effort, activeModelReasons(deps, providerId, model), paint)}\n`)
@@ -4966,6 +5099,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         try {
           res = await deps.compact(conversationId, providerId, model, {
             signal: ctl.signal,
+            ...(result.focus ? { focus: result.focus } : {}),
             onRetry: ({ attempt, max }) =>
               deps.io.setSpinnerLabel?.(`Compacting (retrying, attempt ${attempt}${max ? ` of ${max}` : ''})`)
           })
@@ -6022,6 +6156,104 @@ function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
   deps.io.out(`${lines.join('\n')}\n`)
 }
 
+/** How many lines of the highlighted row's text the /copy picker previews. */
+const COPY_PREVIEW_LINES = 6
+
+/** The /copy picker's preview: the first lines of the text, dimmed and control-stripped. */
+export function copyPreviewLines(text: string, paint: Painter): string[] {
+  const lines = stripControlCharsKeepLines(text).replace(/\n+$/, '').split('\n')
+  const shown = lines.slice(0, COPY_PREVIEW_LINES).map((l) => paint(`  ${l}`, 'dim'))
+  const rest = lines.length - COPY_PREVIEW_LINES
+  if (rest > 0) shown.push(paint(`  … ${rest} more line${rest === 1 ? '' : 's'}`, 'dim'))
+  return shown
+}
+
+/**
+ * /copy [n]: copy the n-th latest reply to the clipboard. A reply with fenced code
+ * blocks offers the whole reply or one block. OSC 52 goes out every time (it works
+ * over SSH, where the terminal allows it); the platform's own clipboard helper is
+ * used too when this is a local session.
+ */
+async function runCopyCommand(
+  cmd: { index: number; bad?: boolean },
+  messages: readonly ChatMessage[],
+  deps: TuiDeps,
+  paint: Painter
+): Promise<void> {
+  if (cmd.bad) {
+    deps.io.out(paint('· usage: /copy, or /copy <n> for the n-th latest reply\n', 'yellow'))
+    return
+  }
+  const total = copyableReplies(messages).length
+  const reply = nthLatestReply(messages, cmd.index)
+  if (reply === null) {
+    deps.io.out(
+      paint(
+        total === 0
+          ? '· no reply to copy yet\n'
+          : `· no reply ${cmd.index} back (there ${total === 1 ? 'is 1' : `are ${total}`})\n`,
+        'yellow'
+      )
+    )
+    return
+  }
+  const which = cmd.index === 1 ? 'the last reply' : `reply ${cmd.index} back`
+  const blocks = extractCodeBlocks(reply)
+  let text = reply
+  let what = which
+  if (blocks.length) {
+    const options = [
+      { label: 'Whole reply', value: '0', description: describeCopied(reply) },
+      ...blocks.map((b, i) => ({
+        label: stripControlChars(codeBlockLabel(b)),
+        value: String(i + 1),
+        description: `${b.lang ? `${stripControlChars(b.lang)}, ` : ''}${describeCopied(b.code)}`
+      }))
+    ]
+    let picked: string | null = null
+    if (deps.io.select) {
+      const r = await deps.io.select({
+        title: `Copy from ${which}:`,
+        options,
+        maxRows: 9,
+        // The first lines of what the highlighted row would copy.
+        preview: (o) => copyPreviewLines(o.value === '0' ? reply : (blocks[Number(o.value) - 1]?.code ?? ''), paint)
+      })
+      if (r.kind === 'cancel') return void deps.io.out(paint('· nothing copied\n', 'dim'))
+      if (r.kind === 'commit') picked = r.value
+    }
+    if (picked === null) {
+      const list = options.map((o) => `  ${paint(`${o.value})`, 'dim')} ${o.label}  ${paint(o.description, 'dim')}`)
+      deps.io.out(`Copy from ${which}:\n${list.join('\n')}\n`)
+      const ans = await deps.io.readLine(`copy which? [0-${blocks.length}, Enter for the whole reply] `, {
+        discardPending: true
+      })
+      if (ans === null) return void deps.io.out(paint('· nothing copied\n', 'dim'))
+      const a = ans.trim() || '0'
+      if (!options.some((o) => o.value === a)) return void deps.io.out(paint('· nothing copied\n', 'dim'))
+      picked = a
+    }
+    const n = Number(picked)
+    if (n >= 1) {
+      text = blocks[n - 1].code
+      what = `code block ${n}${blocks.length > 1 ? ` of ${blocks.length}` : ''} from ${which}`
+    }
+  }
+  // The reply goes on the clipboard as the model wrote it: OSC 52 carries it base64'd,
+  // so nothing in it reaches the terminal as an escape sequence.
+  deps.io.out(osc52Copy(text))
+  const native = deps.copyText?.(text) === true
+  const size = describeCopied(text)
+  deps.io.out(
+    paint(
+      native
+        ? `✓ copied ${what} (${size})\n`
+        : `✓ copied ${what} (${size}), if your terminal allows clipboard access\n`,
+      'green'
+    )
+  )
+}
+
 /** /hooks: list, add (guided), or remove a lifecycle hook. Persists via deps.updateSettings. */
 async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Painter): Promise<void> {
   const hooks = deps.getSettings().hooks ?? []
@@ -6033,9 +6265,13 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
     action.op === 'logout' ||
     action.op === 'tools' ||
     action.op === 'search' ||
-    action.op === 'registry-add'
+    action.op === 'registry-add' ||
+    action.op === 'enable' ||
+    action.op === 'disable' ||
+    action.op === 'reconnect' ||
+    (action.op === 'add' && action.url !== undefined)
   ) {
-    // login/logout/tools are /mcp verbs; on /hooks they just fall to usage.
+    // These are /mcp verbs; on /hooks they just fall to usage.
     deps.io.out(paint('usage: /hooks   ·   /hooks add   ·   /hooks remove <n>\n', 'yellow'))
     return
   }
@@ -6167,19 +6403,27 @@ async function addFromRegistry(name: string, servers: McpServerConfig[], deps: T
 }
 
 /**
- * /mcp: list (with live connection status), add (guided, stdio only), remove, or
- * OAuth sign-in/out for a remote server. Persists via deps.updateSettings. The
- * add flow never collects a URL or auth headers; remote servers are added in the
- * desktop app and authenticated here with `/mcp login <n>`.
+ * /mcp: list (with live connection status and each server's last error), add
+ * (guided stdio, or `--url` for a remote server), enable/disable, reconnect,
+ * remove, or OAuth sign-in/out for a remote server. Persists via
+ * deps.updateSettings. It never collects auth headers: a server that needs a token
+ * header is set up in the desktop app, one that uses OAuth signs in with `/mcp login`.
  */
 async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Painter): Promise<void> {
   const servers = deps.getSettings().mcpServers ?? []
   const path = deps.settingsPath?.() ?? '(unknown)'
 
+  const noServer = (n: number): void =>
+    deps.io.out(
+      paint(`· no MCP server #${n} (there ${servers.length === 1 ? 'is 1' : `are ${servers.length}`})\n`, 'yellow')
+    )
+
   if (action.op === 'usage') {
     deps.io.out(
       paint(
-        'usage: /mcp   ·   /mcp add   ·   /mcp tools <n>   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>   ·   /mcp search <query>   ·   /mcp add-from-registry <name>\n',
+        'usage: /mcp   ·   /mcp add   ·   /mcp add --url <url> [name] [--sse]   ·   /mcp tools <n>   ·   /mcp enable|disable <n>\n' +
+          '       /mcp reconnect <n|all>   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>\n' +
+          '       /mcp search <query>   ·   /mcp add-from-registry <name>\n',
         'yellow'
       )
     )
@@ -6188,7 +6432,10 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
   if (action.op === 'list') {
     deps.io.out(`${renderMcpList(servers, paint, deps.mcpStatuses?.() ?? [])}\n${renderSettingsFooter(path, paint)}\n`)
     deps.io.out(
-      paint('Remote (URL) servers: add them in the desktop app, then sign in with /mcp login <n> if needed.\n', 'dim')
+      paint(
+        'Remote servers: /mcp add --url <url>, then /mcp login <n> if it asks you to sign in. One that needs a token header is set up in the desktop app.\n',
+        'dim'
+      )
     )
     return
   }
@@ -6198,6 +6445,47 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
     const res = await deps.mcpRegistry.search(action.query)
     if (!res.ok) return void deps.io.out(paint(`· ${res.error}\n`, 'yellow'))
     deps.io.out(`${renderRegistryResults(res.page.servers, action.query.trim(), paint)}\n`)
+    return
+  }
+
+  if (action.op === 'reconnect') {
+    if (action.index !== 'all' && !servers[action.index - 1]) return noServer(action.index)
+    if (!deps.mcpReconnect) {
+      deps.io.out(paint('· reconnecting is unavailable here; the next message reconnects a changed server\n', 'dim'))
+      return
+    }
+    const targets = action.index === 'all' ? servers.filter((s) => s.enabled) : [servers[action.index - 1]]
+    if (!targets.length) {
+      deps.io.out(paint('· no enabled MCP servers to reconnect\n', 'dim'))
+      return
+    }
+    const off = targets.find((s) => !s.enabled)
+    if (off) {
+      deps.io.out(paint(`· "${off.name ?? off.id}" is disabled; /mcp enable ${action.index} first\n`, 'yellow'))
+      return
+    }
+    deps.io.startSpinner?.('Reconnecting')
+    let statuses: McpServerStatus[]
+    try {
+      statuses = await deps.mcpReconnect(targets.map((s) => s.id))
+    } catch (e) {
+      deps.io.out(paint(`· reconnect failed: ${stripControlChars((e as Error).message)}\n`, 'yellow'))
+      return
+    } finally {
+      deps.io.stopSpinner?.()
+    }
+    for (const s of targets) {
+      const st = statuses.find((x) => x.id === s.id)
+      const label = s.name ?? s.id
+      if (st?.state === 'connected') {
+        deps.io.out(paint(`· "${label}" reconnected, ${st.tools ?? 0} tool${st.tools === 1 ? '' : 's'}\n`, 'green'))
+      } else if (st?.state === 'needs-auth') {
+        deps.io.out(paint(`· "${label}" needs sign-in (/mcp login ${servers.indexOf(s) + 1})\n`, 'yellow'))
+      } else {
+        const why = truncate(stripControlChars(st?.error ?? 'did not connect').replace(/\s+/g, ' ').trim(), 160)
+        deps.io.out(paint(`· "${label}" failed to connect: ${why}\n`, 'red'))
+      }
+    }
     return
   }
 
@@ -6264,11 +6552,49 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
     deps.io.out(paint(`· removed MCP server ${action.index} (${removed.name ?? removed.id}). Applies on your next message.\n`, 'dim'))
     return
   }
+  if (action.op === 'enable' || action.op === 'disable') {
+    const target = servers[action.index - 1]
+    if (!target) return noServer(action.index)
+    const on = action.op === 'enable'
+    const label = target.name ?? target.id
+    if (target.enabled === on) {
+      deps.io.out(paint(`· "${label}" is already ${on ? 'enabled' : 'disabled'}\n`, 'dim'))
+      return
+    }
+    // The same `enabled` switch as the desktop's Settings > MCP servers checkbox; the
+    // run start connects only enabled servers and closes a disabled one's connection.
+    deps.updateSettings({ mcpServers: servers.map((s, i) => (i === action.index - 1 ? { ...s, enabled: on } : s)) })
+    deps.io.out(
+      paint(
+        on
+          ? `· enabled "${label}". It connects on your next message.\n`
+          : `· disabled "${label}". Its tools are off from your next message.\n`,
+        'dim'
+      )
+    )
+    return
+  }
 
   if (action.op === 'registry-add') return addFromRegistry(action.name, servers, deps, paint)
 
+  if (action.url !== undefined) {
+    const built = buildRemoteMcpServer(servers.map((s) => s.id), action.url, action.name, action.sse)
+    if ('error' in built) return void deps.io.out(paint(`· ${built.error}\n`, 'yellow'))
+    deps.io.out(`\n${paint('server:', 'dim')} ${built.name}  [${built.transport}]  ${built.url}\n`)
+    const ok = await deps.io.readLine('Add this server? [y/N] ', { discardPending: true })
+    if (parseApprovalAnswer(ok ?? '').decision !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
+    deps.updateSettings({ mcpServers: [...servers, built] })
+    deps.io.out(
+      paint(
+        `· MCP server added as #${servers.length + 1}. It connects on your next message; if it asks you to sign in, run /mcp login ${servers.length + 1}.\n`,
+        'dim'
+      )
+    )
+    return
+  }
+
   // op === 'add' — local stdio servers only.
-  deps.io.out(paint('Add a local (stdio) MCP server. For remote servers, use the desktop app (then /mcp login here if needed).\n', 'dim'))
+  deps.io.out(paint('Add a local (stdio) MCP server. For a remote one, use /mcp add --url <url> [name].\n', 'dim'))
   const nameAns = await deps.io.readLine('name (letters, numbers, - or _): ')
   if (nameAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
   const cmdAns = await deps.io.readLine('command to spawn (e.g. npx): ')

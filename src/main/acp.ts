@@ -263,8 +263,8 @@ export interface AcpDeps {
   /** The workspace's skills and agents, for `/skills` and `/agents`. */
   skills?: (cwd: string) => Promise<{ name: string; description: string }[]>
   agents?: (cwd: string) => Promise<{ name: string; description: string }[]>
-  /** Summarize a stored chat's older turns now (`/compact`). */
-  compact?: (conversationId: string, providerId: string, model: string) => Promise<AcpCompactResult>
+  /** Summarize a stored chat's older turns now (`/compact [focus]`). */
+  compact?: (conversationId: string, providerId: string, model: string, focus?: string) => Promise<AcpCompactResult>
   /** One protocol frame (a JSON line, newline included). The only thing written to stdout. */
   write: (frame: string) => void
   /** Diagnostics for the operator (stderr / log file), never the protocol stream. */
@@ -1486,7 +1486,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           text: commands.map((c) => `- /${c.name}${c.args ? ` ${c.args}` : ''}: ${c.description}`).join('\n')
         }
       case 'compact':
-        return { kind: 'reply', text: await compactNow(s) }
+        return { kind: 'reply', text: await compactNow(s, arg.trim() || undefined) }
       case 'agent': {
         const turn = agentTurn(arg, line)
         return turn ? { kind: 'turn', turn } : { kind: 'reply', text: 'Use /agent <name> <task>. /agents lists them.' }
@@ -1505,12 +1505,12 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     }
   }
 
-  /** `/compact`: summarize the stored chat's older turns, then reload it. */
   /** Whether the editor takes `compaction_update`s (it must say so). */
   const compactionUpdates = (): boolean =>
     Boolean(clientCaps.session && typeof clientCaps.session === 'object' && clientCaps.session.compaction)
 
-  const compactNow = async (s: Session): Promise<string> => {
+  /** `/compact [focus]`: summarize the stored chat's older turns, then reload it. */
+  const compactNow = async (s: Session, focus?: string): Promise<string> => {
     if (!deps.compact) return 'Compacting is not available here.'
     const compactionId = newId()
     // The editor's view of this compaction, for an editor that takes compaction updates.
@@ -1530,7 +1530,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     s.compacting = true
     status('in_progress')
     try {
-      const r = await deps.compact(s.id, s.providerId, s.model)
+      const r = focus ? await deps.compact(s.id, s.providerId, s.model, focus) : await deps.compact(s.id, s.providerId, s.model)
       if (!r.ok) {
         status('failed', r.error)
         return `Nothing was compacted${r.error ? `: ${r.error}` : '.'}`
@@ -1733,7 +1733,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         warnings.push('Reads a credential or secret file (asked even in full auto).')
       } else if (e.sensitiveWrite && e.protectedWrite) {
         warnings.push(
-          'Changes a project control file (such as .houston, .vscode, .envrc, or a CI workflow) that can run code outside the sandbox later (asked every time; "Allow for run" does not cover it).'
+          'Changes a project control file (such as .houston, .vscode, .envrc, or a CI workflow) that can run code outside the sandbox later (asked every time, even in full auto, unless an allow rule covers this path).'
         )
       } else if (e.sensitiveWrite) {
         warnings.push('Changes a credential or secret file (asked even in full auto).')
@@ -1748,16 +1748,16 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       // command, so it gets no "always" choices.
       const options = e.egressHost
         ? [
-            { optionId: 'allow', name: `Allow ${e.egressHost}`, kind: 'allow_once' },
+            { optionId: 'allow', name: `Allow ${e.egressHost} for this chat`, kind: 'allow_once' },
             { optionId: 'deny', name: 'Keep blocked', kind: 'reject_once' }
           ]
         : e.shellNetwork
         ? [
-            { optionId: 'allow', name: 'Allow network', kind: 'allow_once' },
+            { optionId: 'allow', name: 'Allow network for this chat', kind: 'allow_once' },
             { optionId: 'deny', name: 'No network', kind: 'reject_once' }
           ]
         : [
-            { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+            { optionId: 'allow', name: 'Allow once', kind: 'allow_once' },
             { optionId: 'rule-allow', name: 'Always allow', kind: 'allow_always' },
             { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
             { optionId: 'rule-deny', name: 'Always deny', kind: 'reject_always' }

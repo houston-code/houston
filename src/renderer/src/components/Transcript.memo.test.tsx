@@ -63,7 +63,7 @@ describe('Transcript row memoization', () => {
     const pending: DisplayItem = { ...tool, status: 'awaiting-approval', output: undefined } as DisplayItem
     const { rerender } = render(view([user, pending], a))
     rerender(view([user, pending], b))
-    screen.getByRole('button', { name: /^Allow$/ }).click()
+    screen.getByRole('button', { name: /^Allow once$/ }).click()
     expect(a).not.toHaveBeenCalled()
     expect(b).toHaveBeenCalledTimes(1)
   })

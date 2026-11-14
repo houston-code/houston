@@ -55,7 +55,7 @@ test('an agent turn runs search, ast-grep and an approved shell command', async 
     await composer.press('Enter')
 
     // The two read-only tools run unprompted; the shell command stops for approval.
-    const allow = page.getByRole('button', { name: 'Allow', exact: true })
+    const allow = page.getByRole('button', { name: 'Allow once', exact: true })
     await expect(allow).toBeVisible({ timeout: 30_000 })
     expect(mock.toolResults, 'only the two reads ran before approval').toHaveLength(2)
     await allow.click()

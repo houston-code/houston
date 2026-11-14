@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { AppSettings, Hook, McpServerConfig, ProviderConfig } from '@shared/types'
+import type { AppSettings, Hook, McpServerConfig, McpServerStatus, ProviderConfig } from '@shared/types'
 import { catalogForPlatform } from '@shared/provider-catalog'
 import type {
   AgentEvent,
@@ -40,6 +40,7 @@ import {
   parseApprovalAnswer,
   renderQuestion,
   HELP_TEXT,
+  APPROVAL_OPTIONS,
   wrapHelp,
   resolveQuestionAnswer,
   parseSlashCommand,
@@ -104,6 +105,7 @@ import {
   renderContextUsage,
   pickTips,
   STARTUP_TIPS,
+  copyPreviewLines,
   spinnerFrame,
   renderCapabilityList,
   mediaTypeForImagePath,
@@ -117,6 +119,7 @@ import {
   resolveHookEventInput,
   buildHook,
   buildStdioMcpServer,
+  buildRemoteMcpServer,
   renderHookList,
   renderMcpList,
   type TuiDeps,
@@ -317,13 +320,28 @@ describe('approval prompt', () => {
     expect(renderApprovalPrompt(ev({ shellNetwork: true }), makePainter(false), { picker: true })).not.toContain('[y]')
   })
 
+  it('states how long each approval answer lasts', () => {
+    const p = renderApprovalPrompt(ev(), makePainter(false))
+    expect(p).toContain('[y] allow once')
+    expect(p).toContain('[a] allow for this chat')
+    expect(p).toContain('[!] always allow (saves a rule)')
+    expect(p).not.toContain('for run')
+    const labels = APPROVAL_OPTIONS.map((o) => o.label)
+    expect(labels).toEqual(['Allow once', 'Allow for this chat', 'Always allow', 'Deny', 'Deny with a reason…', 'Always deny'])
+    expect(APPROVAL_OPTIONS[1].description).toContain('until Houston quits')
+    expect(HELP_TEXT).toContain('allow this kind of tool for the rest of this chat, until Houston quits')
+  })
+
   it('words each approval outcome', () => {
     expect(approvalOutcome('allow')).toBe('Allowed')
     expect(approvalOutcome('rule-allow')).toBe('Always allowed (rule saved)')
     expect(approvalOutcome('rule-deny')).toBe('Always denied (rule saved)')
     expect(approvalOutcome('deny', { note: 'use pnpm' })).toBe('Denied: use pnpm')
     expect(approvalOutcome('deny', { shellNetwork: true })).toBe('Running offline')
-    expect(approvalOutcome('always', { shellNetwork: true })).toBe('Network allowed for this run')
+    // Either allow answers the chat-wide question, so both say so.
+    expect(approvalOutcome('always', { shellNetwork: true })).toBe('Network allowed for this chat')
+    expect(approvalOutcome('allow', { shellNetwork: true })).toBe('Network allowed for this chat')
+    expect(approvalOutcome('always')).toBe('Allowed for this chat')
     expect(approvalOutcome('always', { egressHost: 'registry.example.com' })).toBe(
       'Allowed registry.example.com for this chat'
     )
@@ -369,9 +387,9 @@ describe('approval prompt', () => {
     expect(renderApprovalPrompt(ev(), makePainter(false))).not.toContain('Runs without network')
   })
 
-  it('names what "Allow for run" covers on a network prompt', () => {
+  it('names what "Allow for this chat" covers on a network prompt', () => {
     const p = renderApprovalPrompt(ev({ networkScope: 'GitHub reads on acme/app' }), makePainter(false))
-    expect(p).toContain('"Allow for run" covers GitHub reads on acme/app for the rest of this chat.')
+    expect(p).toContain('"Allow for this chat" covers GitHub reads on acme/app only, for the rest of this chat.')
     expect(renderApprovalPrompt(ev(), makePainter(false))).not.toContain('covers')
   })
 
@@ -510,6 +528,53 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/mcp remove 1', s)).toEqual({ kind: 'mcp', action: { op: 'remove', index: 1 } })
   })
 
+  it('parses the /mcp enable, disable, reconnect and add --url verbs', () => {
+    const mcp = (line: string): unknown => (parseSlashCommand(line, s) as { action: unknown }).action
+    expect(mcp('/mcp enable 2')).toEqual({ op: 'enable', index: 2 })
+    expect(mcp('/mcp disable 1')).toEqual({ op: 'disable', index: 1 })
+    expect(mcp('/mcp disable')).toEqual({ op: 'usage' })
+    expect(mcp('/mcp reconnect 3')).toEqual({ op: 'reconnect', index: 3 })
+    expect(mcp('/mcp reconnect all')).toEqual({ op: 'reconnect', index: 'all' })
+    expect(mcp('/mcp reconnect')).toEqual({ op: 'usage' })
+    expect(mcp('/mcp reconnect x')).toEqual({ op: 'usage' })
+    expect(mcp('/mcp add --url https://h/mcp')).toEqual({ op: 'add', url: 'https://h/mcp' })
+    expect(mcp('/mcp add --url https://h/mcp linear')).toEqual({ op: 'add', url: 'https://h/mcp', name: 'linear' })
+    expect(mcp('/mcp add linear --sse --url https://h/sse')).toEqual({
+      op: 'add',
+      url: 'https://h/sse',
+      name: 'linear',
+      sse: true
+    })
+    expect(mcp('/mcp add --url')).toEqual({ op: 'usage' })
+    expect(mcp('/mcp add --url https://h a b')).toEqual({ op: 'usage' })
+    expect(mcp('/mcp add files')).toEqual({ op: 'usage' })
+    // The /mcp-only verbs are not hook verbs.
+    expect((parseSlashCommand('/hooks enable 1', s) as { kind: string }).kind).toBe('hooks')
+  })
+
+  it('buildRemoteMcpServer shapes a remote server as Settings stores one, and validates the URL', () => {
+    expect(buildRemoteMcpServer([], 'https://mcp.example.com/mcp', 'ex')).toEqual({
+      id: 'ex',
+      name: 'ex',
+      transport: 'http',
+      command: '',
+      url: 'https://mcp.example.com/mcp',
+      enabled: true
+    })
+    expect(buildRemoteMcpServer([], 'http://localhost:3000/sse', '', true)).toMatchObject({
+      id: 'localhost',
+      transport: 'sse'
+    })
+    // A name left out comes from the host, made unique.
+    expect(buildRemoteMcpServer(['mcp-example-com'], 'https://mcp.example.com/x')).toMatchObject({ id: 'mcp-example-com-2' })
+    expect(buildRemoteMcpServer(['ex'], 'https://h/mcp', 'ex')).toEqual({ error: 'an MCP server named "ex" already exists' })
+    expect(buildRemoteMcpServer([], 'https://h/mcp', 'bad name!')).toHaveProperty('error')
+    expect(buildRemoteMcpServer([], 'ftp://h/mcp')).toEqual({ error: 'the URL must start with http:// or https://' })
+    expect(buildRemoteMcpServer([], 'not a url')).toHaveProperty('error')
+    expect(buildRemoteMcpServer([], 'https://user:pw@h/mcp')).toHaveProperty('error')
+    expect(buildRemoteMcpServer([], 'https://h/\x1b]52;c;x\x07')).toEqual({ error: 'the URL has control characters in it' })
+  })
+
   it('sets a valid theme, else stays informational', () => {
     // `bright` resolves to its new name rather than erroring.
     expect(parseSlashCommand('/theme bright', s)).toEqual({ kind: 'set-theme', theme: 'dark' })
@@ -602,6 +667,7 @@ describe('parseSlashCommand', () => {
   it('maps /plan to plan mode and /compact to compact', () => {
     expect(parseSlashCommand('/plan', s)).toEqual({ kind: 'set-approval', policy: 'plan' })
     expect(parseSlashCommand('/compact', s)).toEqual({ kind: 'compact' })
+    expect(parseSlashCommand('/compact  keep the   schema talk ', s)).toEqual({ kind: 'compact', focus: 'keep the schema talk' })
   })
 
   it('resolves first-party template commands (/review) to a prompt turn', () => {
@@ -1617,7 +1683,7 @@ describe('runTui', () => {
     await runTui(opts, d)
     expect(rec.approvals).toEqual([['run-1', 'c1', 'always']])
     expect(t.text()).not.toContain('[y] allow')
-    expect(t.text()).toContain('↳ Allowed for this run')
+    expect(t.text()).toContain('↳ Allowed for this chat')
   })
 
   it('says Esc at the approval picker denied the call', async () => {
@@ -2943,6 +3009,122 @@ describe('runTui', () => {
     expect(rec.runs[0].messages[0].invokedAs).toMatchObject({ label: '/audit', typed: '/audit deps' })
   })
 
+  describe('/copy', () => {
+    const b64 = (t: string): string => `\x1b]52;c;${Buffer.from(t, 'utf8').toString('base64')}\x07`
+    const replying = (reply: string) => (req: { messages: ChatMessage[] }) => [
+      ...req.messages,
+      { role: 'assistant' as const, content: reply }
+    ]
+    const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+    it('parses an optional count', () => {
+      const s = settings()
+      expect(parseSlashCommand('/copy', s)).toEqual({ kind: 'copy', index: 1 })
+      expect(parseSlashCommand('/copy 3', s)).toEqual({ kind: 'copy', index: 3 })
+      expect(parseSlashCommand('/copy x', s)).toEqual({ kind: 'copy', index: 1, bad: true })
+      expect(parseSlashCommand('/copy 0', s)).toEqual({ kind: 'copy', index: 1, bad: true })
+    })
+
+    it('copies the last reply over OSC 52 and the local clipboard, and says how much', async () => {
+      const { d } = deps(done, {}, replying('line one\nline two'))
+      const copied: string[] = []
+      d.copyText = (text) => {
+        copied.push(text)
+        return true
+      }
+      const t = fakeIo(['hi', '/copy', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain(b64('line one\nline two'))
+      expect(copied).toEqual(['line one\nline two'])
+      expect(t.text()).toContain('copied the last reply (17 chars, 2 lines)')
+      expect(t.text()).not.toContain('if your terminal allows')
+    })
+
+    it('hedges when only OSC 52 went out, and says when there is nothing to copy', async () => {
+      const { d } = deps(done, {}, replying('ok'))
+      const t = fakeIo(['/copy', 'hi', '/copy 2', '/copy', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain('no reply to copy yet')
+      expect(t.text()).toContain('no reply 2 back (there is 1)')
+      expect(t.text()).toContain('copied the last reply (2 chars, 1 line), if your terminal allows clipboard access')
+    })
+
+    it('offers the whole reply or a code block in the picker', async () => {
+      const reply = 'Try:\n```bash\nnpm test\n```\nor\n```js\nconsole.log(1)\n```'
+      const { d } = deps(done, {}, replying(reply))
+      const t = fakeIo(['hi', '/copy', '/copy', null])
+      let spec: PickerSpec | undefined
+      const answers: PickerOutcome[] = [{ kind: 'commit', value: '2' }, { kind: 'cancel' }]
+      t.io.select = async (s) => {
+        spec = s
+        return answers.shift() as PickerOutcome
+      }
+      d.io = t.io
+      await runTui(opts, d)
+      expect(spec?.options.map((o) => o.label)).toEqual(['Whole reply', 'npm test', 'console.log(1)'])
+      expect(spec?.options[1].description).toBe('bash, 8 chars, 1 line')
+      expect(spec?.maxRows).toBe(9)
+      // The highlighted row previews what it would copy.
+      expect(spec?.preview?.(spec.options[2], 80)).toEqual(['  console.log(1)'])
+      expect(spec?.preview?.(spec.options[0], 80)[0]).toBe('  Try:')
+      expect(t.text()).toContain(b64('console.log(1)'))
+      expect(t.text()).toContain('copied code block 2 of 2 from the last reply (14 chars, 1 line)')
+      expect(t.text()).toContain('nothing copied')
+    })
+
+    it('previews at most a few lines, control-stripped, and counts the rest', () => {
+      const text = ['\x1b]0;pwned\x07a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', ''].join('\n')
+      const lines = copyPreviewLines(text, (t) => t)
+      // The escape and bell bytes are gone, so nothing reaches the terminal as a sequence.
+      expect(lines).toEqual(['  ]0;pwneda', '  b', '  c', '  d', '  e', '  f', '  … 2 more lines'])
+      expect(copyPreviewLines('one\n', (t) => t)).toEqual(['  one'])
+    })
+
+    it('asks by number when there is no picker', async () => {
+      const reply = 'x\n```\nabc\n```'
+      const { d } = deps(done, {}, replying(reply))
+      const t = fakeIo(['hi', '/copy', '1', '/copy', '', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain(b64('abc'))
+      expect(t.text()).toContain(b64(reply))
+    })
+
+    it('strips control characters from the labels it prints', async () => {
+      const reply = '```\n\x1b]0;pwned\x07evil\n```'
+      const { d } = deps(done, {}, replying(reply))
+      const t = fakeIo(['hi', '/copy', '', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).not.toContain('\x1b]0;pwned')
+      expect(t.text()).toContain(b64(reply))
+    })
+  })
+
+  it('/usage prints the usage report, or says it is unavailable', async () => {
+    const { d } = deps([])
+    expect(parseSlashCommand('/usage', settings())).toEqual({ kind: 'usage' })
+    const t1 = fakeIo(['/usage', null])
+    d.io = t1.io
+    await runTui(opts, d)
+    expect(t1.text()).toContain('usage totals are unavailable here')
+    const empty = {
+      days: [],
+      projects: [],
+      recent: { cost: 0, inputTokens: 0, outputTokens: 0 },
+      allTime: { cost: 0, inputTokens: 0, outputTokens: 0, chats: 0 },
+      undated: { cost: 0, outputTokens: 0 }
+    }
+    d.usageReport = () => empty
+    const t2 = fakeIo(['/usage', null])
+    d.io = t2.io
+    await runTui(opts, d)
+    expect(t2.text()).toContain('No spend recorded yet.')
+    expect(t2.text()).not.toContain('Unknown command')
+  })
+
   it('/share copies the invite over OSC 52 and prints it', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const t = fakeIo(['/share', null])
@@ -3055,6 +3237,20 @@ describe('runTui', () => {
     expect(between).toContain('anthropic/claude')
     expect(between).not.toMatch(/90[,.k]/)
     expect(t.text().split('next step')[0]).toMatch(/90[,.k]/) // it was shown before
+  })
+
+  it('/compact <focus> hands the focus to the summarizer', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.persist = fakePersist().persist
+    const focuses: Array<string | undefined> = []
+    d.compact = async (_id, _p, _m, o) => {
+      focuses.push(o?.focus)
+      return { ok: true, summarized: 0, reason: 'empty' }
+    }
+    const t = fakeIo(['first', '/compact the migration plan', '/compact', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(focuses).toEqual(['the migration plan', undefined])
   })
 
   it('/compact before any turn reports there is nothing to compact yet', async () => {
@@ -3331,6 +3527,88 @@ describe('runTui', () => {
     await runTui(opts, d)
     expect(outs).toEqual(['linear'])
     expect(t.text()).toContain('signed out of "linear"')
+  })
+
+  describe('/mcp enable, disable, reconnect, add --url', () => {
+    const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+    const two: McpServerConfig[] = [
+      { id: 'files', name: 'files', transport: 'stdio', command: 'npx', enabled: true },
+      { id: 'remote', name: 'remote', transport: 'http', command: '', url: 'https://r/mcp', enabled: false }
+    ]
+
+    it('switches the enabled flag in settings, leaving the other servers alone', async () => {
+      const { d } = deps(done, { mcpServers: two })
+      const saved: Array<Partial<AppSettings>> = []
+      d.updateSettings = (p) => saved.push(p)
+      const t = fakeIo(['/mcp disable 1', '/mcp enable 2', '/mcp enable 1', '/mcp disable 9', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(saved).toHaveLength(2)
+      expect(saved[0].mcpServers!.map((s) => s.enabled)).toEqual([false, false])
+      expect(saved[1].mcpServers!.map((s) => s.enabled)).toEqual([true, true])
+      expect(saved[1].mcpServers![1]).toEqual({ ...two[1], enabled: true })
+      expect(t.text()).toContain('disabled "files". Its tools are off from your next message.')
+      expect(t.text()).toContain('enabled "remote". It connects on your next message.')
+      // getSettings is fixed in this harness, so the third is "already enabled".
+      expect(t.text()).toContain('"files" is already enabled')
+      expect(t.text()).toContain('no MCP server #9 (there are 2)')
+    })
+
+    it('reconnects one server or all enabled ones, and reports how each came back', async () => {
+      const { d } = deps(done, {
+        mcpServers: [two[0], { ...two[1], enabled: true }, { id: 'off', command: 'x', enabled: false }]
+      })
+      const asked: string[][] = []
+      d.mcpReconnect = async (ids) => {
+        asked.push(ids)
+        return [
+          { id: 'files', state: 'connected', tools: 3 },
+          { id: 'remote', state: 'error', error: 'connect ECONNREFUSED\n\x1b[31mred' }
+        ].filter((s) => ids.includes(s.id)) as McpServerStatus[]
+      }
+      const t = fakeIo(['/mcp reconnect 1', '/mcp reconnect all', '/mcp reconnect 3', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(asked).toEqual([['files'], ['files', 'remote']])
+      expect(t.text()).toContain('"files" reconnected, 3 tools')
+      expect(t.text()).toContain('"remote" failed to connect: connect ECONNREFUSED')
+      expect(t.text()).not.toContain('\x1b[31mred')
+      expect(t.text()).toContain('"off" is disabled; /mcp enable 3 first')
+      expect(t.spinner).toContain('start:Reconnecting')
+    })
+
+    it('says reconnecting is unavailable without the host capability', async () => {
+      const { d } = deps(done, { mcpServers: two })
+      const t = fakeIo(['/mcp reconnect 1', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain('reconnecting is unavailable here')
+    })
+
+    it('adds a remote server from --url after confirming, with no headers', async () => {
+      const { d } = deps(done, { mcpServers: [two[0]] })
+      const saved: Array<Partial<AppSettings>> = []
+      d.updateSettings = (p) => saved.push(p)
+      const t = fakeIo(['/mcp add --url https://mcp.linear.app/mcp linear', 'y', '/mcp add --url ftp://x', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(saved).toHaveLength(1)
+      expect(saved[0].mcpServers).toEqual([
+        two[0],
+        { id: 'linear', name: 'linear', transport: 'http', command: '', url: 'https://mcp.linear.app/mcp', enabled: true }
+      ])
+      expect(t.text()).toContain('linear  [http]  https://mcp.linear.app/mcp')
+      expect(t.text()).toContain('run /mcp login 2')
+      expect(t.text()).toContain('the URL must start with http:// or https://')
+    })
+
+    it('shows the last connection error in the list, on one line, with the retry verb', () => {
+      const out = renderMcpList(two, makePainter(false), [
+        { id: 'files', state: 'error', error: 'spawn npx ENOENT\n  at line 2' }
+      ])
+      expect(out).toContain('✗ last error: spawn npx ENOENT at line 2 (/mcp reconnect 1)')
+      expect(out).toContain('remote (disabled)')
+    })
   })
 
   it('/mcp list shows live connection status and sign-in badges', async () => {

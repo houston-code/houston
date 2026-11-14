@@ -2606,7 +2606,7 @@ export default function App(): JSX.Element {
     })
   }, [])
 
-  const onCompact = useCallback(async () => {
+  const onCompact = useCallback(async (focus?: string) => {
     if (!currentId || !settings?.selected) return
     if (compacting) {
       chat.notify('A compaction is already in progress.')
@@ -2617,7 +2617,12 @@ export default function App(): JSX.Element {
     setCompacting({ id })
     let res: Awaited<ReturnType<typeof window.api.compactConversation>>
     try {
-      res = await window.api.compactConversation(id, settings.selected.providerId, settings.selected.model)
+      res = await window.api.compactConversation(
+        id,
+        settings.selected.providerId,
+        settings.selected.model,
+        focus?.trim() || undefined
+      )
     } catch (e) {
       res = { ok: false, summarized: 0, error: (e as Error)?.message }
     } finally {
@@ -2812,7 +2817,7 @@ export default function App(): JSX.Element {
       // Only built-in action commands reach here; custom (template) commands are
       // expanded into the composer by the Composer itself.
       if (cmd.name === 'new' || cmd.name === 'clear') void onNewChat()
-      else if (cmd.name === 'compact') void onCompact()
+      else if (cmd.name === 'compact') void onCompact(args)
       else if (cmd.name === 'skills') void onListCapability('skills')
       else if (cmd.name === 'agents') void onListCapability('agents')
       else if (cmd.name === 'agent') {

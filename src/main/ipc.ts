@@ -153,6 +153,7 @@ import {
   windowShowing
 } from './windows'
 import { cancelCompaction, compactConversationNow } from './agent/compact'
+import { normalizeCompactFocus } from './agent/compaction'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands, loadSlashCommands } from './agent/commands'
@@ -1401,8 +1402,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // of a failed summary request are pushed back so the UI can say it's retrying.
   handle(
     IPC.conversationCompact,
-    (event, id: string, providerId: string, model: string) =>
+    (event, id: string, providerId: string, model: string, focus?: unknown) =>
       compactConversationNow(id, providerId, model, {
+        // The composer's `/compact <focus>` text, normalized (trimmed, capped) here at the boundary.
+        ...(normalizeCompactFocus(focus) ? { focus: normalizeCompactFocus(focus) } : {}),
         onRetry: (info) => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC.conversationCompactProgress, { id, ...info })
         }

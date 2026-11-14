@@ -17,6 +17,8 @@ import {
   buildAnchorMessages,
   buildSummaryMessages,
   buildSummaryRequestMessages,
+  normalizeCompactFocus,
+  COMPACT_FOCUS_MAX_CHARS,
   compactionAnchor,
   compactionCandidates,
   elideStaleToolArguments,
@@ -648,6 +650,26 @@ describe('buildSummaryRequestMessages', () => {
     expect(req[0].content).toContain('older summary')
     expect(req[req.length - 1].role).toBe('user')
     expect(req.length).toBe(prior.length + head.length + 1)
+  })
+
+  it('adds a /compact focus to the closing instruction, and leaves it as it was without one', () => {
+    const head = conversation(2)
+    const plain = buildSummaryRequestMessages([], head).at(-1)!.content
+    expect(plain).toBe('Produce the summary now, following your instructions. Output only the summary text.')
+    expect(buildSummaryRequestMessages([], head, '   ').at(-1)!.content).toBe(plain)
+    const focused = buildSummaryRequestMessages([], head, 'the failing migration').at(-1)!.content
+    expect(focused.startsWith(plain)).toBe(true)
+    expect(focused).toContain('<focus>\nthe failing migration\n</focus>')
+    expect(focused).toContain('still keep the goal, the current state and the next steps')
+  })
+
+  it('normalizeCompactFocus trims, caps, and drops what is not text', () => {
+    expect(normalizeCompactFocus('  x  ')).toBe('x')
+    expect(normalizeCompactFocus('')).toBeUndefined()
+    expect(normalizeCompactFocus('   ')).toBeUndefined()
+    expect(normalizeCompactFocus(42)).toBeUndefined()
+    expect(normalizeCompactFocus(undefined)).toBeUndefined()
+    expect([...normalizeCompactFocus('é'.repeat(COMPACT_FOCUS_MAX_CHARS + 50))!]).toHaveLength(COMPACT_FOCUS_MAX_CHARS)
   })
 
   it('works with no prior summary (first compaction)', () => {

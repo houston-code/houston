@@ -30,7 +30,7 @@ import { killAllShells } from './agent/shells'
 import { lspManager } from './agent/lsp/manager'
 import { flushRuleUsage } from './ruleUsage'
 import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type SignalProcess } from './signalCleanup'
-import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
+import { disconnectAllMcp, getMcpStatuses, reconnectMcpServers } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
 import type { AgentEvent, ConversationMeta } from '@shared/agent'
@@ -96,6 +96,7 @@ import { currentInstallMethod, upgradeHint } from './install-method'
 /** The interactive update check runs alongside the session, so it can wait longer than -p's. */
 const INTERACTIVE_UPDATE_TIMEOUT_MS = 10_000
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
+import { writeClipboardText } from './clipboard-text'
 import {
   HEADLESS_SIGNAL_EXIT,
   HEADLESS_SIGNALS,
@@ -133,7 +134,8 @@ import {
   setGeneratedTitle,
   reportChildToParent,
   takeChildReports,
-  saveSideChat
+  saveSideChat,
+  computeUsageReport
 } from './conversations'
 
 /** Resume-picker rows, each marked with the desktop app's unread state for it. */
@@ -841,6 +843,11 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       steerRun,
       editText: (initial) => editInEditor(initial),
       persistHistory,
+      // /copy: the platform's clipboard helper when this is a local session (never
+      // over SSH, where OSC 52 is the way to the user's own clipboard).
+      copyText: (text) => writeClipboardText(text),
+      // /usage: the desktop usage view's report, summed locally from the saved chats.
+      usageReport: () => computeUsageReport(),
       clipboardImage: () => {
         const img = readClipboardImage()
         if (!img) return { error: `no image on the clipboard (${noClipboardHint(process.platform)})` }
@@ -887,6 +894,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       mcpStatuses: () => getMcpStatuses(),
       // Read-only MCP Registry browsing for /mcp search and /mcp add-from-registry.
       mcpRegistry: { search: searchMcpRegistry, get: getMcpRegistryServer },
+      // /mcp reconnect: the user's own servers from settings (the manager reads their
+      // header and env values from the secret store itself).
+      mcpReconnect: (ids) => reconnectMcpServers(getSettings().mcpServers ?? [], ids),
       ...(canStoreMcpOAuth()
         ? {
             mcpOAuth: {
@@ -1195,7 +1205,8 @@ export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOpti
         commands: (cwd) => loadSlashCommands(cwd),
         skills: async (cwd) => (await loadSkills(cwd)).map((k) => ({ name: k.name, description: k.description })),
         agents: async (cwd) => (await loadAgents(cwd)).map((a) => ({ name: a.name, description: a.description })),
-        compact: (id, providerId, model) => compactConversationNow(id, providerId, model)
+        compact: (id, providerId, model, focus) =>
+          compactConversationNow(id, providerId, model, focus ? { focus } : {})
       },
       { shutdown: shutdown.signal, outputClosed: outputClosed.signal }
     )

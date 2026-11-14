@@ -159,6 +159,25 @@ describe('compactConversationNow', () => {
     expect(res.messages![0].taintSource).toBe('web_fetch')
   })
 
+  it('passes a /compact focus to every summary request, and none without one', async () => {
+    const seen: string[] = []
+    h.provider = {
+      async *streamChat(req) {
+        seen.push(req.messages.at(-1)!.content)
+        yield { type: 'text', text: 'SUMMARY' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    h.conv = { id: 'cf', workspace: '/w', messages: bigConversation(3, 80_000) }
+    await compactConversationNow('cf', 'anthropic', 'claude-test', { focus: '  the auth refactor  ' })
+    expect(seen.length).toBeGreaterThan(1)
+    for (const last of seen) expect(last).toContain('<focus>\nthe auth refactor\n</focus>')
+    seen.length = 0
+    h.conv = { id: 'cg', workspace: '/w', messages: bigConversation(3, 80_000) }
+    await compactConversationNow('cg', 'anthropic', 'claude-test')
+    for (const last of seen) expect(last).not.toContain('<focus>')
+  })
+
   it('does nothing when the whole conversation already fits the kept-tail budget', async () => {
     h.conv = { id: 'c2', workspace: '/w', messages: msgs }
     h.provider = {

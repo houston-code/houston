@@ -1329,6 +1329,17 @@ describe('/compact IPC', () => {
     expect(h.cancelCompaction).toHaveBeenCalledTimes(1)
   })
 
+  it('passes the composer focus through, trimmed, and ignores one that is not text', async () => {
+    h.compactConversationNow.mockResolvedValue({ ok: true, summarized: 0, reason: 'empty' })
+    const compact = h.handlers.get(IPC.conversationCompact)!
+    const sender = { isDestroyed: () => false, send: () => {} }
+    await compact({ sender }, 'chat-1', 'anthropic', 'm', '  the auth bug ')
+    await compact({ sender }, 'chat-1', 'anthropic', 'm', { evil: true })
+    await compact({ sender }, 'chat-1', 'anthropic', 'm')
+    const opts = h.compactConversationNow.mock.calls.map((c) => (c as unknown[])[3] as { focus?: string })
+    expect(opts.map((o) => o.focus)).toEqual(['the auth bug', undefined, undefined])
+  })
+
   it('pushes retry notices to the window that started the compaction', async () => {
     const sent: unknown[][] = []
     const sender = { isDestroyed: () => false, send: (...a: unknown[]) => sent.push(a) }
