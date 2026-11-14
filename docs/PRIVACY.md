@@ -70,6 +70,10 @@ only to the destination you configured:
 - **GitHub.** If you have the GitHub CLI (`gh`) installed and signed in, the GitHub
   tools send their requests (for example, opening a pull request or reading an
   issue) to GitHub through your own `gh`, under your GitHub account.
+- **OpenTelemetry, if you turn it on.** Houston exports no telemetry by default. If you
+  set an OpenTelemetry endpoint, it sends traces and metrics about runs (model names,
+  token counts, tool names, durations, errors) to that endpoint only; prompts and tool
+  content are included only if you also turn that on.
 - **Application updates.** Packaged builds contact the update service to check for
   and download new versions, and the terminal client checks once a day whether a
   newer release exists, for interactive sessions and one-shot (`-p`) runs alike (set

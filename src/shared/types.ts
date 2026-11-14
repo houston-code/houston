@@ -608,6 +608,18 @@ export interface MenuState {
   open?: Partial<Record<MenuPanel, boolean>>
 }
 
+/**
+ * OpenTelemetry export (off by default). Set `otlpEndpoint` (an OTLP/HTTP base URL; the
+ * standard OTEL_EXPORTER_OTLP_* environment variables work too) to export spans and
+ * metrics. `includeContent` adds prompt text and tool arguments and results to spans,
+ * redacted; it is off by default. Headers such as an auth token come from
+ * OTEL_EXPORTER_OTLP_HEADERS, never from settings.
+ */
+export interface TelemetrySettings {
+  otlpEndpoint?: string
+  includeContent?: boolean
+}
+
 export interface AppSettings {
   schemaVersion: number
   providers: ProviderConfig[]
@@ -793,6 +805,8 @@ export interface AppSettings {
    * can read them (docs/memory-design.md). On unless set to false.
    */
   memoryEnabled?: boolean
+  /** OpenTelemetry export; see {@link TelemetrySettings}. Absent = off. */
+  telemetry?: TelemetrySettings
   /** Stall detection: same (tool,args) repeated this many times → stall (min 2). */
   stallRepeatCallLimit?: number
   /** Stall detection: same error signature this many times → stall (min 2). */

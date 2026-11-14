@@ -11533,3 +11533,66 @@ describe('background news delivery', () => {
     expect(wakeBlocker('conv-bg-streak')).toBe('held')
   })
 })
+
+describe('OpenTelemetry export from a run', () => {
+  afterEach(async () => {
+    delete h.settings.telemetry
+    const { shutdownTelemetry } = await import('../telemetry')
+    await shutdownTelemetry()
+  })
+
+  it('exports nothing unless an endpoint is set', async () => {
+    const { createServer } = await import('node:http')
+    let hits = 0
+    const server = createServer((_req, res) => {
+      hits++
+      res.end('{}')
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+    try {
+      await run({ turns: [[{ type: 'text', text: 'hi' }, { type: 'done', stopReason: 'end_turn' }]] })
+      expect(hits).toBe(0)
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()))
+    }
+  })
+
+  it('exports the run, its model request and its tool call when an endpoint is set, without content', async () => {
+    const { createServer } = await import('node:http')
+    const bodies: string[] = []
+    const server = createServer((req, res) => {
+      let b = ''
+      req.on('data', (c) => (b += c))
+      req.on('end', () => {
+        if (req.url === '/v1/traces') bodies.push(b)
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('{}')
+      })
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+    try {
+      const port = (server.address() as { port: number }).port
+      h.settings.telemetry = { otlpEndpoint: `http://127.0.0.1:${port}` }
+      writeFileSync(join(ws, 'notes.txt'), 'private notes')
+      await run({
+        userText: 'read my private notes',
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'notes.txt' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        policy: 'full-auto'
+      })
+      const traces = bodies.join('\n')
+      expect(traces).toContain('invoke_agent houston')
+      expect(traces).toContain('execute_tool read_file')
+      expect(traces).toMatch(/chat [\w.-]+/)
+      expect(traces).not.toContain('private notes')
+      expect(traces).not.toContain('read my private notes')
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()))
+    }
+  }, 20_000)
+})
