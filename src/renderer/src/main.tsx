@@ -3,7 +3,13 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { installRendererErrorReporting } from './lib/rendererErrors'
+import { applyTheme, rememberedTheme } from './lib/theme'
 import './styles/global.css'
+
+// Paint the first frame in the theme the user last saved. Settings arrive over IPC
+// after the first render, so waiting for them showed light-theme users a dark flash
+// on every launch and new window; App re-applies (and re-caches) once they load.
+applyTheme(rememberedTheme())
 
 // Defense-in-depth against drop-to-navigate: a file dropped anywhere outside an
 // explicit drop zone would otherwise make the frame navigate to that `file://`,

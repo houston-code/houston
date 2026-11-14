@@ -2482,6 +2482,11 @@ remote **HTTP** (streamable) or **SSE** endpoint.
 
 - **Naming.** Their tools are offered to the agent as `mcp__<id>__<tool>`.
 - **Approval.** MCP tools always require approval.
+- **Results.** Text in a tool's result reaches the agent fenced as untrusted content.
+  Images are attached for the agent to see (up to 8 per result, 5 MB each) when the
+  current model accepts images; otherwise the result says an image was left out and
+  why. An embedded resource's text is included (up to 20,000 characters), and a
+  resource link shows as its name, address and type.
 - **Many tools, loaded lazily.** With more than 15 MCP tools connected, Houston loads
   their schemas on demand: they join the `find_tools` catalog (see "Tools loaded on
   demand" under "Context, worktrees, and history"), and the agent pulls in only the

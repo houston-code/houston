@@ -27,6 +27,7 @@ import { ItemBoundary } from './ItemBoundary'
 import { countsAsReply } from '@shared/chatStatus'
 import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
+import { scrollBehavior } from '../lib/motion'
 import { useTransientFlag } from '../hooks/useTransientFlag'
 import { useStableCallback } from '../hooks/useStableCallback'
 import { ToolGroup } from './ToolGroup'
@@ -722,14 +723,14 @@ export function Transcript({
     const el = containerRef.current
     const divider = newRef.current
     if (!el || !divider) return
-    el.scrollTo({ top: Math.max(0, divider.offsetTop - 12), behavior: 'smooth' })
+    el.scrollTo({ top: Math.max(0, divider.offsetTop - 12), behavior: scrollBehavior() })
     setNewAbove(false)
   }
 
   function jumpToBottom(): void {
     const el = containerRef.current
     if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    el.scrollTo({ top: el.scrollHeight, behavior: scrollBehavior() })
     pinnedRef.current = true
     setShowJump(false)
   }

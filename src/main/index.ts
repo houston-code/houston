@@ -1,8 +1,9 @@
-import { app, crashReporter, screen, BrowserWindow, systemPreferences } from 'electron'
+import { app, crashReporter, screen, BrowserWindow, nativeTheme, systemPreferences } from 'electron'
 import type { Event as ElectronEvent } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { APP_NAME } from '@shared/constants'
+import type { AppSettings } from '@shared/types'
 import { openExternalSafely } from './safeExternal'
 import { isAllowedNavigation } from './navigation'
 import { cascadeBounds, loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
@@ -19,7 +20,7 @@ import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates, setInstallGuard } from './updater'
 import { log } from './logger'
 import { startLocalCrashReporter, watchRendererCrashes } from './crashRecovery'
-import { getSettings, pruneRecentWorkspaces } from './store'
+import { getSettings, onSettingsSaved, pruneRecentWorkspaces } from './store'
 import { setUserDataDir } from './userData'
 import { wireAgentHost } from './wireAgentHost'
 import { flushSecrets, hasPendingSecretWrites, initSecrets } from './secrets'
@@ -40,6 +41,7 @@ import { activeBackendId } from './sandbox'
 import { trustSystemCertificates } from './system-ca'
 import { configureOutboundProxy } from './outbound-proxy'
 import { flushRuleUsage } from './ruleUsage'
+import { windowBackground } from './windowBackground'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
 // don't force-exit: in a GUI app a stray async error shouldn't kill the window.
@@ -105,6 +107,30 @@ wireMockupCapture()
 wireImageDownscale()
 
 /**
+ * The saved theme, for the windows' native background. Unknown until the credential
+ * store is ready (nothing reads settings before then, see whenReady below), so the first
+ * window follows the OS appearance; followThemeInWindowBackgrounds then keeps every
+ * window on the saved theme as it and the OS appearance change.
+ */
+let savedTheme: AppSettings['theme']
+const currentWindowBackground = (): string => windowBackground(savedTheme, nativeTheme.shouldUseDarkColors)
+
+function followThemeInWindowBackgrounds(): void {
+  const apply = (): void => {
+    const color = currentWindowBackground()
+    for (const win of chatWindows()) if (!win.isDestroyed()) win.setBackgroundColor(color)
+  }
+  savedTheme = getSettings().theme
+  apply()
+  onSettingsSaved((s) => {
+    if (s.theme === savedTheme) return
+    savedTheme = s.theme
+    apply()
+  })
+  nativeTheme.on('updated', apply)
+}
+
+/**
  * Open a chat window. The first one fills the primary display's work area on a fresh
  * install, or restores the user's saved bounds once they've resized or moved it (see
  * window-state.ts). Only the primary window (the oldest one open) saves its bounds, so
@@ -130,7 +156,9 @@ function createWindow(): BrowserWindow {
     show: false,
     title: APP_NAME,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0e0f12',
+    // The page's own background for the theme it will paint, so a light-theme window
+    // doesn't show a dark frame at launch or a dark band during a live resize.
+    backgroundColor: currentWindowBackground(),
     webPreferences: mainWindowWebPreferences(join(__dirname, '../preload/index.js'))
   })
   registerAppWindow(win)
@@ -312,6 +340,7 @@ if (acp) {
       // cleartext header values into the credential store, which must be ready to
       // take them. So nothing loads settings before this point.
       buildAppMenu()
+      followThemeInWindowBackgrounds()
     })
     registerIpc(started)
     setWindowOpener(createWindow)
