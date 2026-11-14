@@ -698,7 +698,7 @@ describe('ToolGroup', () => {
     expect(screen.queryByText('2 files')).not.toBeInTheDocument()
     expect(container.querySelector('[data-approval-keys]')).not.toBeNull()
     expect(screen.getByText(/This reads a credential or secret file/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
     expect(onApprove).toHaveBeenCalledWith('r2', 'allow')
   })
 
