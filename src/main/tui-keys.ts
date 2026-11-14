@@ -62,6 +62,11 @@ export type EditorKey =
   | { type: 'focus'; on: boolean }
   /** Shift-Tab: step to the next approval mode. */
   | { type: 'cycle-mode' }
+  /** Ctrl-O: open the transcript viewer. */
+  | { type: 'transcript' }
+  /** Page Up / Page Down: the composer ignores them; the transcript viewer pages. */
+  | { type: 'page-up' }
+  | { type: 'page-down' }
 
 // ESC (0x1b), built from a char code so no control character appears inside a
 // regex literal (which trips eslint's no-control-regex), matching tui-wrap.ts.
@@ -272,8 +277,12 @@ function csiKey(params: string, final: string): EditorKey | null {
         case '4':
         case '8':
           return { type: 'end' }
+        case '5':
+          return { type: 'page-up' }
+        case '6':
+          return { type: 'page-down' }
         default:
-          return null // page up/down, function keys: ignored by the composer
+          return null // function keys: ignored
       }
     default:
       return null
@@ -312,6 +321,8 @@ function controlKey(ch: string, pasted: boolean): EditorKey | null {
       return { type: 'clear-screen' }
     case '\x0e':
       return { type: 'down' }
+    case '\x0f':
+      return { type: 'transcript' } // Ctrl-O
     case '\x10':
       return { type: 'up' }
     case '\x12':

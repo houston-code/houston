@@ -128,6 +128,7 @@ import {
   type UndoRewindResult
 } from '@shared/rewind'
 import { ComposerBuffer } from './tui-composer'
+import { renderTranscript, transcriptPlain, type PagerSource } from './tui-pager'
 import { parseMemoryAction, runMemoryCommand, type MemoryAction, type MemoryCommandState } from './tui-memory'
 import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
@@ -1654,6 +1655,8 @@ export type SlashResult =
   | { kind: 'changes'; last?: number }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
+  /** Open the transcript viewer (/transcript, Ctrl-O). */
+  | { kind: 'transcript' }
   /** Reprint a past tool result in full (/output [n]). */
   | { kind: 'output'; index: number }
   /** List (and open) the background sessions the agent spawned (/spawned). */
@@ -1795,6 +1798,8 @@ export function parseSlashCommand(
       if (a === 'off') return { kind: 'verbose', on: false }
       return { kind: 'verbose' } // bare /verbose toggles
     }
+    case 'transcript':
+      return { kind: 'transcript' }
     case 'output': {
       // `/output` means "what just happened"; a number counts back from there.
       const n = Number.parseInt(arg.trim(), 10)
@@ -1948,6 +1953,7 @@ export const HELP_TEXT = [
   '  /changes              what is different in the working tree (also /diff)',
   "  /diff last [n]        show the diff of this session's last edit (n edits back)",
   '  /verbose [on|off]     show each tool\'s full output as it runs',
+  '  /transcript           the whole session full screen, with reasoning and full tool output (Ctrl-O)',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
@@ -1972,6 +1978,7 @@ export const HELP_TEXT = [
   '  Ctrl-R                search earlier messages',
   '  Ctrl-X Ctrl-E         edit the message in $VISUAL or $EDITOR',
   '  Ctrl-L                clear the screen',
+  '  Ctrl-O                the whole session full screen: j/k, / search, { } your messages, v editor, q',
   '  Ctrl-C                clear the message (twice to exit); Ctrl-D exits',
   '  ultrathink            a word in the message: think harder for that turn',
   '',
@@ -1989,7 +1996,8 @@ export const STARTUP_TIPS = [
   'Ctrl-X Ctrl-E edits your message in $VISUAL or $EDITOR',
   'type while the agent works and press Enter to steer it',
   'Shift-Enter or Ctrl-J starts a new line',
-  '/resume filters saved chats as you type; Ctrl-A shows every folder'
+  '/resume filters saved chats as you type; Ctrl-A shows every folder',
+  'Ctrl-O opens the whole session full screen, with reasoning and full tool output'
 ]
 
 /**
@@ -2846,6 +2854,18 @@ export interface TuiIo {
    * Optional — when absent (off-TTY / tests) the driver uses the typed prompt.
    */
   select?: (spec: PickerSpec) => Promise<PickerOutcome>
+  /**
+   * The transcript viewer: `source` full screen on the alternate screen until the
+   * user closes it. Resolves false when it could not open (no terminal). Output
+   * written meanwhile is held and printed, in order, when it closes. Absent off-TTY
+   * and in tests.
+   */
+  pager?: (source: PagerSource) => Promise<boolean>
+  /**
+   * Register the handler for Ctrl-O: at the composer (which is restored as it was
+   * once the handler settles) or mid-run, as `during` says.
+   */
+  onTranscript?: (handler: (during: 'composer' | 'run') => Promise<void>) => void
 }
 
 export interface TuiDeps {
@@ -3666,6 +3686,33 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
   }
 
+  // Ctrl-O and /transcript: the whole session full screen. Not while a turn runs:
+  // the viewer would have to hold back the run's output and its approval prompts,
+  // so it says when it can open instead.
+  const openTranscript = async (): Promise<void> => {
+    if (!deps.io.pager) {
+      deps.io.out(paint('· the transcript viewer needs an interactive terminal; /export writes the chat to a file\n', 'dim'))
+      return
+    }
+    const title = currentTitle() ?? 'Houston chat'
+    const shown = [...messages]
+    const opened = await deps.io.pager({
+      title,
+      render: (width) => renderTranscript(shown, paint, { width }),
+      plain: () => transcriptPlain(shown, title)
+    })
+    if (!opened) {
+      deps.io.out(paint('· the transcript viewer could not open here; /export writes the chat to a file\n', 'dim'))
+    }
+  }
+  deps.io.onTranscript?.(async (during) => {
+    if (during === 'run') {
+      deps.io.out(paint('\n· the transcript opens at the prompt once this turn ends (Ctrl-O or /transcript)\n', 'dim'))
+      return
+    }
+    await openTranscript()
+  })
+
   // Shift-Tab, at the composer or mid-run. Mid-run it also retargets the live run,
   // so you can loosen the mode to get past an approval without killing the turn.
   deps.io.setMode?.(policy)
@@ -4302,6 +4349,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             'dim'
           )
         )
+        continue
+      }
+      if (result.kind === 'transcript') {
+        await openTranscript()
         continue
       }
       if (result.kind === 'verbose') {

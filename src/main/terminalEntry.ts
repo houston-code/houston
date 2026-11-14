@@ -285,7 +285,8 @@ async function editInEditor(initial: string, filename = 'PLAN.md'): Promise<stri
   const dir = mkdtempSync(join(tmpdir(), 'houston-edit-'))
   const file = join(dir, filename)
   try {
-    writeFileSync(file, initial, 'utf8')
+    // Owner-only: a draft or a transcript can hold anything pasted into the chat.
+    writeFileSync(file, initial, { encoding: 'utf8', mode: 0o600 })
     const [cmd, ...args] = editor.split(/\s+/)
     const res = spawnSync(cmd, [...args, file], { stdio: 'inherit' })
     if (res.error || res.status !== 0) return null
@@ -642,7 +643,14 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     // Read live, like the menu: the workspace's commands load after startup.
     completer: makeCompleter((q) => findFiles(tui.cwd, q), () => menuCommands),
     // Read live, so /vim applies at the next prompt rather than the next launch.
-    editorMode: () => (getSettings().tuiEditor === 'vim' ? 'vim' : 'emacs')
+    editorMode: () => (getSettings().tuiEditor === 'vim' ? 'vim' : 'emacs'),
+    rows: () => process.stdout.rows || 24,
+    // The transcript viewer's `v`: the same hand-off, read-only (the edit is dropped).
+    viewText: async (text) => {
+      if (!(process.env.VISUAL || process.env.EDITOR)) return false
+      await editInEditor(text, 'TRANSCRIPT.md')
+      return true
+    }
   })
 
   // spawn_session + scheduled runs work in the TUI too: background sessions run

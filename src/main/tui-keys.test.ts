@@ -165,9 +165,20 @@ describe('decodeInput — navigation and editing keys', () => {
   })
 
   it('swallows unbound sequences instead of inserting their bytes', () => {
-    // Page-up and an unbound Alt-combo must not leak "[5~" / "z" into the buffer.
-    expect(feed('\x1b[5~')).toEqual([])
+    // A function key and an unbound Alt-combo must not leak "[15~" / "z" into the buffer.
+    expect(feed('\x1b[15~')).toEqual([])
     expect(feed('\x1bz')).toEqual([])
+  })
+
+  it('decodes the transcript viewer keys', () => {
+    expect(feed('\x0f')).toEqual([{ type: 'transcript' }])
+    expect(feed('\x1b[5~')).toEqual([{ type: 'page-up' }])
+    expect(feed('\x1b[6~')).toEqual([{ type: 'page-down' }])
+  })
+
+  it('drops Ctrl-O riding in on a paste, like any other action key', () => {
+    const { keys } = decodeInput('\x1b[200~text\x1b[201~\x0f', initialDecoderState())
+    expect(sanitizePastedKeys(keys, -Infinity, 1000).keys.map((k) => k.type)).toEqual(['paste'])
   })
 })
 

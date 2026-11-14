@@ -68,6 +68,8 @@ export type EditorOutcome =
   | { kind: 'clear-screen' }
   /** Shift-Tab: the adapter cycles the approval mode and redraws the prompt. */
   | { kind: 'cycle-mode' }
+  /** Ctrl-O: the adapter opens the transcript viewer, then restores the composer as it was. */
+  | { kind: 'transcript' }
 
 /** A paste at least this many lines (or this many characters) collapses to a token. */
 export const PASTE_COLLAPSE_LINES = 5
@@ -415,6 +417,14 @@ export function reduceEditor(s: EditorState, key: EditorKey): { state: EditorSta
       // The draft survives: changing how much runs without asking has nothing to do
       // with what you were typing.
       return { state: s, outcome: { kind: 'cycle-mode' } }
+
+    case 'transcript':
+      // The draft survives the viewer: it is a look back, not an edit.
+      return { state: s, outcome: { kind: 'transcript' } }
+
+    case 'page-up':
+    case 'page-down':
+      return { state: s }
   }
 }
 

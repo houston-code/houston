@@ -14,6 +14,7 @@ import type {
   PlanDecision
 } from '@shared/agent'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import type { PagerSource } from './tui-pager'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
 import type { RegistryServer } from '@shared/mcpRegistry'
@@ -7406,5 +7407,87 @@ describe('/resume arrow-key picker', () => {
     await runTui(opts, d)
     expect(t.text()).toContain('Enter a number to resume')
     expect(t.text()).toContain('resumed: 1 message')
+  })
+})
+
+describe('the transcript viewer (Ctrl-O, /transcript)', () => {
+  const done: AgentEvent = { runId: 'x', type: 'done', stopReason: 'end_turn' }
+  const history = (req: { messages: ChatMessage[] }): ChatMessage[] => [
+    ...req.messages,
+    {
+      role: 'assistant',
+      content: 'Looking.',
+      reasoning: [{ text: 'The whole chain of thought.' }],
+      toolCalls: [{ id: 'c1', name: 'run_shell', arguments: { command: 'ls -la' } }]
+    },
+    {
+      role: 'tool',
+      content: Array.from({ length: 60 }, (_, i) => `row ${i}`).join('\n'),
+      toolName: 'run_shell',
+      toolCallId: 'c1'
+    },
+    { role: 'assistant', content: 'Done.' }
+  ]
+
+  it('/transcript opens the whole session: prompts, reasoning, full args and output', async () => {
+    const { d } = deps([done], {}, history)
+    const t = fakeIo(['go', '/transcript', null])
+    const shown: PagerSource[] = []
+    d.io = {
+      ...t.io,
+      pager: async (src) => {
+        shown.push(src)
+        return true
+      }
+    }
+    await runTui(opts, d)
+    expect(shown).toHaveLength(1)
+    const doc = shown[0].render(80)
+    const text = doc.lines.join('\n')
+    expect(text).toContain('go')
+    expect(text).toContain('The whole chain of thought.')
+    expect(text).toContain('"command": "ls -la"')
+    expect(text).toContain('row 59')
+    expect(doc.prompts).toHaveLength(1)
+    expect(shown[0].plain()).toContain('row 59')
+  })
+
+  it('Ctrl-O at the composer opens it; mid-run it says when it can open instead', async () => {
+    const r = deps([], {}, history)
+    let ctrlO: ((during: 'composer' | 'run') => Promise<void>) | null = null
+    const t = fakeIo(['go', null])
+    let opened = 0
+    r.d.io = {
+      ...t.io,
+      pager: async () => {
+        opened++
+        return true
+      },
+      onTranscript: (h) => (ctrlO = h)
+    }
+    r.d.startRun = async (req, send, onMessages) => {
+      await ctrlO!('run')
+      send({ ...done, runId: req.runId } as AgentEvent)
+      onMessages?.(history(req))
+    }
+    await runTui(opts, r.d)
+    expect(opened).toBe(0)
+    expect(t.text()).toContain('the transcript opens at the prompt once this turn ends')
+    await ctrlO!('composer')
+    expect(opened).toBe(1)
+  })
+
+  it('says where to look when there is no terminal to open it on', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/transcript', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('the transcript viewer needs an interactive terminal')
+  })
+
+  it('is in /help and the startup tips', () => {
+    expect(HELP_TEXT).toContain('/transcript')
+    expect(HELP_TEXT).toContain('Ctrl-O')
+    expect(STARTUP_TIPS.some((tip) => tip.startsWith('Ctrl-O'))).toBe(true)
   })
 })
