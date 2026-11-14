@@ -259,3 +259,10 @@ describe('parseConversationHtml: exports from before the data block', () => {
     })
   })
 })
+
+describe('decodeHtmlEntities with prototype-member names', () => {
+  it('leaves &valueOf; and friends as written', () => {
+    expect(decodeHtmlEntities('a &valueOf; b &toString; c')).toBe('a &valueOf; b &toString; c')
+    expect(decodeHtmlEntities('&amp;&lt;')).toBe('&<')
+  })
+})

@@ -125,3 +125,12 @@ describe('FilePreview at a line', () => {
     expect(container.querySelector('.file-preview__line-mark')).toBeNull()
   })
 })
+
+describe('FilePreview with a hostile file name', () => {
+  it.each(['constructor', 'x.__proto__', 'hasOwnProperty'])('shows %s as plain text', async (path) => {
+    installApi({ kind: 'text', text: 'const x = 1', truncated: false, bytes: 11 })
+    const { container } = render(<FilePreview workspace="/repo" path={path} onOpen={vi.fn()} />)
+    expect(await screen.findByText('const x = 1')).toBeInTheDocument()
+    expect(container.querySelector('.hljs-keyword')).toBeNull()
+  })
+})

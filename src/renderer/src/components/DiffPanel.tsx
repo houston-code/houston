@@ -23,6 +23,7 @@ import {
 } from '../lib/diffComments'
 import { CONTEXT_STEP, contextRoom, expandHunk, fileLines, hunkMatches } from '../lib/diffContext'
 import { DiffView, lineKey, type DiffLayout, type DiffLineTarget } from './DiffView'
+import { ItemBoundary } from './ItemBoundary'
 import { Icon } from './Icon'
 import { CommitForm } from './CommitForm'
 
@@ -380,15 +381,20 @@ function FileSection({
                 </div>
                 {confirm === i && confirmBar(i)}
                 {room && contextButton(i, 'above', room.above)}
-                <DiffView
-                  diff={h.lines}
-                  path={file.path}
-                  start={hunkStart(h)}
-                  layout={layout}
-                  onLineClick={onLineClick}
-                  renderBelow={renderBelow}
-                  reveal={reveal}
-                />
+                {/* A hunk that fails to render (a hostile file name or content) shows a
+                    notice in place instead of taking the whole window down; the panel's
+                    open state is remembered, so that would recur on every launch. */}
+                <ItemBoundary resetKey={h.lines}>
+                  <DiffView
+                    diff={h.lines}
+                    path={file.path}
+                    start={hunkStart(h)}
+                    layout={layout}
+                    onLineClick={onLineClick}
+                    renderBelow={renderBelow}
+                    reveal={reveal}
+                  />
+                </ItemBoundary>
                 {room && contextButton(i, 'below', room.below)}
               </div>
               )

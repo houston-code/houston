@@ -136,7 +136,8 @@ export function resolveCommand(commands: Command[], name: string): Command | und
   const n = name.toLowerCase()
   const direct = commands.find((c) => c.name.toLowerCase() === n)
   if (direct) return direct
-  const target = COMMAND_ALIASES[n]
+  // Own-property only: a typed `/constructor` must not resolve to Object's members.
+  const target = Object.hasOwn(COMMAND_ALIASES, n) ? COMMAND_ALIASES[n] : undefined
   return target ? commands.find((c) => c.name === target) : undefined
 }
 
@@ -410,10 +411,10 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
  */
 export function terminalOnlyNote(name: string): string | null {
   const n = name.toLowerCase()
-  const canonical = COMMAND_ALIASES[n] ?? n
+  const canonical = (Object.hasOwn(COMMAND_ALIASES, n) ? COMMAND_ALIASES[n] : undefined) ?? n
   const entry = BUILTIN_COMMAND_CATALOG.find((c) => c.name === canonical)
   if (!entry || entry.clients.includes('gui')) return null
-  const where = DESKTOP_EQUIVALENT[canonical]
+  const where = Object.hasOwn(DESKTOP_EQUIVALENT, canonical) ? DESKTOP_EQUIVALENT[canonical] : undefined
   return `/${n} is a terminal command${where ? `: ${where}` : ''}.`
 }
 

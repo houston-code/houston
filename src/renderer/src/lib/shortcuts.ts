@@ -367,7 +367,7 @@ export function formatChord(c: KeyChord, mac: boolean): string {
   if (c.ctrl) parts.push(mac ? '⌃' : 'Ctrl')
   if (c.alt) parts.push(mac ? '⌥' : 'Alt')
   if (c.shift) parts.push(mac ? '⇧' : 'Shift')
-  const k = KEY_GLYPH[c.key] ?? (c.key.length === 1 ? c.key.toUpperCase() : c.key)
+  const k = (Object.hasOwn(KEY_GLYPH, c.key) ? KEY_GLYPH[c.key] : undefined) ?? (c.key.length === 1 ? c.key.toUpperCase() : c.key)
   parts.push(k)
   return mac ? parts.join('') : parts.join('+')
 }

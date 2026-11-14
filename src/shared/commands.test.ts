@@ -298,3 +298,13 @@ describe('/init', () => {
     expect(init.template).not.toContain('\u2014')
   })
 })
+
+describe('command names matching Object.prototype members', () => {
+  it('resolve to nothing and carry no terminal note', () => {
+    const cmds = builtinCommands('tui')
+    for (const name of ['constructor', '__proto__', 'valueOf', 'hasOwnProperty']) {
+      expect(resolveCommand(cmds, name)).toBeUndefined()
+      expect(terminalOnlyNote(name)).toBeNull()
+    }
+  })
+})
