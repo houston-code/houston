@@ -1347,11 +1347,15 @@ The Changes view also has a commit form, for when you'd rather not spend an agen
   repository's remote. A branch made from another one (`git switch -c feat
   origin/main`) is pushed as `feat`, never onto `main`, and its upstream becomes
   `origin/feat`. If ssh would need to ask something (an unknown host key, a key
-  passphrase), the push fails instead of waiting.
+  passphrase), the push fails instead of waiting. It pushes to network remotes only
+  (https, ssh, git): a remote whose push URL is a folder on this computer, a
+  `file://` URL, or an `ext::` / `fd::` transport is refused, since that push would
+  run git in that folder with its hooks. Submodules are never pushed along with it.
 
 Houston refuses to commit or push when the repository's own git config names a program
-git would run for it (a signing program, an ssh command, a credential helper, or an
-include): use a terminal there. Your global git config (identity, signing, credentials)
+git would run for it (a signing program, an ssh command, a credential helper, an
+include, a remote helper, or an alternate-refs command) or pushes submodules too: use
+a terminal there. Your global git config (identity, signing, credentials)
 applies as usual. **Create PR** stays a hand-off to the agent.
 
 **Pull request chip.** When the chat's branch has a pull request on GitHub, a chip at
