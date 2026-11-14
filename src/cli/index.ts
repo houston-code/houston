@@ -66,6 +66,8 @@ Usage:
 
 Options:
   -C, --cwd <dir>       project folder (default: the current directory)
+  --add-dir <dir>       another folder the agent may read and edit this session
+                        (repeatable; like Settings' additional directories, not saved)
   --provider <id>       provider id from your settings (default: your selection)
   --model <id>          model id (default: your selection)
   --approval <policy>   plan | ask | auto-edit | full-auto
@@ -155,7 +157,8 @@ const VALUE_FLAGS = new Set([
   '--append-system-prompt',
   '--output-schema',
   '--mcp-config',
-  '--input-format'
+  '--input-format',
+  '--add-dir'
 ])
 /** Flags that stand alone. */
 const SWITCH_FLAGS = new Set([
@@ -293,7 +296,13 @@ function isDirectRun(): boolean {
   return typeof require !== 'undefined' && require.main === module
 }
 
-if (isDirectRun()) {
+/**
+ * Start the CLI as a program: install the fatal handlers, run the invocation in
+ * `process.argv`, flush, and exit. The bundle calls this itself when run directly; the
+ * npm package's launcher (packaging/npm/houston.cjs) requires the bundle and calls it
+ * once Node's compile cache is on.
+ */
+export function startCli(): void {
   // Mirror the desktop headless path's fatal handling: log, one-line stderr, exit.
   process.on('uncaughtException', (err) => {
     logFatal('uncaughtException', err)
@@ -317,3 +326,5 @@ if (isDirectRun()) {
     exit(1)
   })
 }
+
+if (isDirectRun()) startCli()

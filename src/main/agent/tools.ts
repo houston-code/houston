@@ -92,6 +92,7 @@ import {
 } from './untrusted'
 import type { FetchedDocument } from './webfetch'
 import { fetchUrlAsDocument, truncationNote } from './webfetch'
+import { OutputTee, SPILL_MAX_BYTES, spillNote, type SpillResult } from './shellSpill'
 import { stripAnsi } from './loopback'
 import { assertNoRedactedValues, findSecret } from './redact'
 import {
@@ -302,6 +303,12 @@ export interface ToolContext {
   /** Max bytes of a single shell command's output kept in a tool result (context guard). */
   shellOutputMaxBytes?: number
   /**
+   * Save a foreground run_shell command's whole output when its result had to be
+   * clamped, redacted, and say where (see shellSpill.ts). Null when the run's spill
+   * budget is spent or the write failed. Unset: clamped output is not kept.
+   */
+  spillShellOutput?: (output: string, truncatedNote?: string) => Promise<SpillResult | null>
+  /**
    * The run's watch over exec-capable git state (hooks, fsmonitor, filter drivers, …)
    * that a shell command could plant for git to run outside the sandbox later (injected
    * by the loop, shared with writable subagents; see gitGuard.ts). run_shell and the
@@ -428,6 +435,8 @@ export interface ToolDef {
 }
 
 const MAX_GLOB_RESULTS = 200
+/** The marker CappedOutput leaves where a stream's middle was dropped while running. */
+const STREAM_TRUNCATION_MARKER = /\n\[\.\.\. \d+ bytes truncated \.\.\.\]\n/
 /** Largest notebook read_file parses and renders; JSON has to be held whole to parse. */
 const MAX_NOTEBOOK_BYTES = 64 * 1024 * 1024
 
@@ -1805,8 +1814,8 @@ const NETWORK_ERROR_RE =
 /** The hint appended to a network-looking failure that ran without network access. */
 export const NETWORK_BLOCKED_HINT =
   '[note: this command ran in the sandbox WITHOUT network access. If it failed because it needs the network ' +
-  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user grants network for the rest ' +
-  'of the run by choosing "Allow for run" on a shell command\'s approval prompt. Then retry.]'
+  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user is asked whether shell ' +
+  'commands may reach the network for this chat. Retry only once they have allowed it.]'
 
 /**
  * {@link NETWORK_BLOCKED_HINT} for a headless run, which has no approval prompt to
@@ -1820,7 +1829,7 @@ export const HEADLESS_NETWORK_BLOCKED_HINT =
   'the network.]'
 
 /**
- * Replaces the network hint on a full-auto command that failed offline once the user
+ * Replaces the network hint on a command that failed offline once the user
  * has answered the shell-network question it raised (see offerShellNetwork in loop.ts).
  */
 export const SHELL_NETWORK_GRANTED_NOTE =
@@ -2229,6 +2238,17 @@ const runShell: ToolDef = {
     // Route through the persistent session only when the backend's shell can run the
     // bash prelude (`cd`/env threading). On a cmd.exe fallback it can't, so run directly.
     const session = ctx.shellSession && backendSupportsSession() ? ctx.shellSession : undefined
+    // Every chunk also goes to a capped copy, so a result clamped below can point at
+    // the whole output on disk (see shellSpill.ts).
+    const tee = ctx.spillShellOutput ? new OutputTee() : null
+    const watch = ctx.onShellOutput
+    const onOutput =
+      tee || watch
+        ? (chunk: string): void => {
+            tee?.push(chunk)
+            watch?.(chunk)
+          }
+        : undefined
     const result = session
       ? await runInSession({
           command,
@@ -2239,7 +2259,7 @@ const runShell: ToolDef = {
           egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal,
-          ...(ctx.onShellOutput ? { onOutput: ctx.onShellOutput } : {}),
+          ...(onOutput ? { onOutput } : {}),
           run: runSandboxed
         })
       : await runSandboxed({
@@ -2251,7 +2271,7 @@ const runShell: ToolDef = {
           egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal,
-          ...(ctx.onShellOutput ? { onOutput: ctx.onShellOutput } : {})
+          ...(onOutput ? { onOutput } : {})
         })
     const segments: string[] = []
     if (result.stdout) segments.push(result.stdout.trimEnd())
@@ -2262,8 +2282,18 @@ const runShell: ToolDef = {
     const parts: string[] = []
     // Clamp first; the network-error scan then runs over the bounded text (errors
     // surface in stderr, which the both-ends clamp keeps), not a multi-MB blob.
-    const body = clampToolResult(segments.join('\n'), ctx.shellOutputMaxBytes)
+    const joined = segments.join('\n')
+    const body = clampToolResult(joined, ctx.shellOutputMaxBytes)
     if (body) parts.push(body)
+    // Clamped here, or already cut while streaming (the per-stream memory cap): the
+    // middle is gone from the result, so say where the whole output is.
+    if (tee && ctx.spillShellOutput && (body !== joined || STREAM_TRUNCATION_MARKER.test(joined))) {
+      const spilled = await ctx.spillShellOutput(
+        tee.text(),
+        tee.overflowed ? `[output cut at ${SPILL_MAX_BYTES} bytes]` : undefined
+      )
+      if (spilled) parts.push(spillNote(spilled))
+    }
     if (result.timedOut) parts.push(shellTimeoutHint(timeoutMs ?? DEFAULT_TIMEOUT_MS))
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
     // A `cd` carries over to later commands, but file tools keep resolving from the

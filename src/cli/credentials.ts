@@ -88,7 +88,7 @@ function keyFromFile(id: string, dataDir: string, warn: (m: string) => void): st
       if ((mode & 0o077) !== 0) {
         warnedLoosePerms = true
         warn(
-          `Warning: ${path} is readable by other users — run: chmod 600 "${path}"\n`
+          `Warning: ${path} is readable by other users. Run: chmod 600 "${path}"\n`
         )
       }
     }
@@ -105,7 +105,7 @@ function keyFromFile(id: string, dataDir: string, warn: (m: string) => void): st
     // hold keys, so a silent "no key set" later would be baffling — say why.
     if (!warnedMalformedCreds) {
       warnedMalformedCreds = true
-      warn(`Warning: ${path} is not valid JSON — ignoring it. Expected {"<provider-id>": "<key>"}.\n`)
+      warn(`Warning: ${path} is not valid JSON, so it is ignored. Expected {"<provider-id>": "<key>"}.\n`)
     }
     return null
   }
@@ -143,7 +143,7 @@ export function cliGetHeaders(scope: string, deps: CredentialDeps = {}): Record<
       const mode = statSync(path).mode
       if ((mode & 0o077) !== 0) {
         warnedLooseHeaderPerms = true
-        warn(`Warning: ${path} is readable by other users — run: chmod 600 "${path}"\n`)
+        warn(`Warning: ${path} is readable by other users. Run: chmod 600 "${path}"\n`)
       }
     }
     raw = readFileSync(path, 'utf8')
@@ -163,7 +163,7 @@ export function cliGetHeaders(scope: string, deps: CredentialDeps = {}): Record<
     // Malformed JSON: don't crash the run, but say why the headers were ignored.
     if (!warnedMalformedHeaders) {
       warnedMalformedHeaders = true
-      warn(`Warning: ${path} is not valid JSON — ignoring it.\n`)
+      warn(`Warning: ${path} is not valid JSON, so it is ignored.\n`)
     }
     return {}
   }

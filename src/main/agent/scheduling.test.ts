@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { ToolCall } from '@shared/agent'
-import { isParallelizableRead, partitionCalls } from './scheduling'
+import { callSegments, isParallelizableRead, type CallSegment } from './scheduling'
 
 const call = (id: string, name: string): ToolCall => ({ id, name, arguments: {} })
 
@@ -32,43 +32,48 @@ describe('isParallelizableRead', () => {
   })
 })
 
-describe('partitionCalls', () => {
+describe('callSegments', () => {
   // Treat calls named 'read*' as parallelizable for these pure tests.
   const isParallel = (c: ToolCall): boolean => c.name.startsWith('read')
+  // A batch as the array of its call ids, a barrier as its lone id.
+  const shape = (segments: Iterable<CallSegment>): Array<string | string[]> =>
+    [...segments].map((s) => (s.parallel ? s.calls.map((c) => c.call.id) : s.call.call.id))
 
-  it('parallelizes only the contiguous LEADING run of reads', () => {
+  it('batches each maximal run of reads between barriers', () => {
     const calls = [
       call('c0', 'read_file'),
       call('c1', 'write_file'),
       call('c2', 'read_file'),
       call('c3', 'run_shell')
     ]
-    const { parallel, sequential } = partitionCalls(calls, isParallel)
-    // Only c0 leads; c2 follows the write so it stays sequential (intra-turn
-    // causality — the read after a write must observe the write).
-    expect(parallel.map((p) => p.call.id)).toEqual(['c0'])
-    expect(sequential.map((s) => s.call.id)).toEqual(['c1', 'c2', 'c3'])
+    // c2 follows the write, so it gets a batch of its own AFTER the write (intra-turn
+    // causality: the read after a write must observe the write), and the shell call
+    // waits for that batch.
+    expect(shape(callSegments(calls, isParallel))).toEqual([['c0'], 'c1', ['c2'], 'c3'])
   })
 
-  it('sends a read that follows a write to the sequential group (read-after-write)', () => {
+  it('puts a read that follows a write in a batch after the write (read-after-write)', () => {
     const calls = [call('w0', 'write_file'), call('r0', 'read_file')]
-    const { parallel, sequential } = partitionCalls(calls, isParallel)
-    // No leading reads → empty parallel group; the read runs after the write.
-    expect(parallel).toHaveLength(0)
-    expect(sequential.map((s) => s.call.id)).toEqual(['w0', 'r0'])
+    // No leading reads: the write runs alone first, then the read.
+    expect(shape(callSegments(calls, isParallel))).toEqual(['w0', ['r0']])
   })
 
   it('tags each call with its original index', () => {
-    const calls = [call('c0', 'read_file'), call('c1', 'read_file'), call('c2', 'write_file')]
-    const { parallel, sequential } = partitionCalls(calls, isParallel)
-    expect(parallel).toEqual([
-      { call: calls[0], index: 0 },
-      { call: calls[1], index: 1 }
+    const calls = [call('c0', 'read_file'), call('c1', 'read_file'), call('c2', 'write_file'), call('c3', 'read_file')]
+    expect([...callSegments(calls, isParallel)]).toEqual([
+      {
+        parallel: true,
+        calls: [
+          { call: calls[0], index: 0 },
+          { call: calls[1], index: 1 }
+        ]
+      },
+      { parallel: false, call: { call: calls[2], index: 2 } },
+      { parallel: true, calls: [{ call: calls[3], index: 3 }] }
     ])
-    expect(sequential).toEqual([{ call: calls[2], index: 2 }])
   })
 
-  it('keeps the parallel group contiguous from the start and sequential in order', () => {
+  it('keeps every call exactly once and in its original order', () => {
     const calls = [
       call('r0', 'read_file'),
       call('r1', 'read_file'),
@@ -76,30 +81,64 @@ describe('partitionCalls', () => {
       call('r2', 'read_file'),
       call('s0', 'run_shell')
     ]
-    const { parallel, sequential } = partitionCalls(calls, isParallel)
-    expect(parallel.map((p) => p.call.id)).toEqual(['r0', 'r1'])
-    // Everything from the first write on, including the later read, stays in order.
-    expect(sequential.map((s) => s.call.id)).toEqual(['w0', 'r2', 's0'])
+    expect(shape(callSegments(calls, isParallel))).toEqual([['r0', 'r1'], 'w0', ['r2'], 's0'])
+    const flat = [...callSegments(calls, isParallel)].flatMap((s) => (s.parallel ? s.calls : [s.call]))
+    expect(flat.map((c) => c.index)).toEqual([0, 1, 2, 3, 4])
   })
 
-  it('handles an all-reads turn (sequential empty)', () => {
+  it('gives two concurrent batches around a write: [read, write, read, read]', () => {
+    const calls = [call('r0', 'read_file'), call('w0', 'write_file'), call('r1', 'read_file'), call('r2', 'read_file')]
+    expect(shape(callSegments(calls, isParallel))).toEqual([['r0'], 'w0', ['r1', 'r2']])
+  })
+
+  it('handles an all-reads turn (one batch)', () => {
     const calls = [call('r0', 'read_file'), call('r1', 'read_file')]
-    const { parallel, sequential } = partitionCalls(calls, isParallel)
-    expect(parallel).toHaveLength(2)
-    expect(sequential).toHaveLength(0)
+    expect(shape(callSegments(calls, isParallel))).toEqual([['r0', 'r1']])
   })
 
-  it('handles an all-encumbered turn (parallel empty)', () => {
+  it('handles an all-encumbered turn (each call alone, no batch)', () => {
     const calls = [call('w0', 'write_file'), call('s0', 'run_shell')]
-    const { parallel, sequential } = partitionCalls(calls, isParallel)
-    expect(parallel).toHaveLength(0)
-    expect(sequential).toHaveLength(2)
+    expect(shape(callSegments(calls, isParallel))).toEqual(['w0', 's0'])
   })
 
-  it('sends a leading encumbered call and following reads all to sequential', () => {
+  it('runs a leading encumbered call alone, then the reads after it as one batch', () => {
     const calls = [call('w0', 'write_file'), call('r0', 'read_file'), call('r1', 'read_file')]
-    const { parallel, sequential } = partitionCalls(calls, isParallel)
-    expect(parallel).toHaveLength(0)
-    expect(sequential.map((s) => s.call.id)).toEqual(['w0', 'r0', 'r1'])
+    expect(shape(callSegments(calls, isParallel))).toEqual(['w0', ['r0', 'r1']])
+  })
+
+  it('handles an empty turn', () => {
+    expect(shape(callSegments([], isParallel))).toEqual([])
+  })
+
+  it('classifies lazily: the reads after a barrier are judged only once that segment is requested', () => {
+    const calls = [call('r0', 'read_file'), call('w0', 'write_file'), call('r1', 'read_file'), call('r2', 'read_file')]
+    const asked: string[] = []
+    const segments = callSegments(calls, (c) => {
+      asked.push(c.id)
+      return isParallel(c)
+    })
+    // The first batch needs only its own reads and the call that ends it.
+    expect(shape([segments.next().value as CallSegment])).toEqual([['r0']])
+    expect(asked).toEqual(['r0', 'w0'])
+    expect(shape([segments.next().value as CallSegment])).toEqual(['w0'])
+    // Nothing after the write is judged before the write has been handed out (run).
+    expect(asked).toEqual(['r0', 'w0', 'w0'])
+    expect(shape([segments.next().value as CallSegment])).toEqual([['r1', 'r2']])
+    expect(asked).toEqual(['r0', 'w0', 'w0', 'r1', 'r2'])
+    expect(segments.next().done).toBe(true)
+  })
+
+  it('sees a verdict that changed while a barrier ran (a rule its approval added)', () => {
+    // Stands in for "Always deny" on the write's prompt adding a deny rule that covers
+    // the read after it: by the time that read is classified, it is no longer
+    // parallel-safe, so it runs alone through the full gate instead of in a batch.
+    const calls = [call('w0', 'write_file'), call('r0', 'read_file'), call('r1', 'read_file')]
+    const denied = new Set<string>()
+    const seen: Array<string | string[]> = []
+    for (const segment of callSegments(calls, (c) => isParallel(c) && !denied.has(c.id))) {
+      seen.push(...shape([segment]))
+      if (!segment.parallel && segment.call.call.id === 'w0') denied.add('r0')
+    }
+    expect(seen).toEqual(['w0', 'r0', ['r1']])
   })
 })

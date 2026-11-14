@@ -28,7 +28,7 @@ import type { PlanReadiness } from '@shared/planReadiness'
 import type { ChatStatusMap, PendingPrompt } from '@shared/chatStatus'
 import type { Todo } from '@shared/todos'
 import { compactionLimitFrom } from '@shared/compactionThreshold'
-import type { TurnReceipt } from '@shared/evidence'
+import type { TestEdit, TurnReceipt } from '@shared/evidence'
 import {
   systemNoteMessage,
   SYSTEM_NOTE_PREFIX,
@@ -73,6 +73,7 @@ import {
   setModelUnavailable
 } from '../agentHost'
 import { createSecretRedactor } from './redact'
+import { runShellSpill } from './shellSpill'
 import { log } from '../logger'
 import { runQuarantineExtraction } from './untrusted'
 import { smallModelFor, withSmallModel } from '@shared/smallModel'
@@ -138,7 +139,7 @@ import {
   mcpCatalogEntries
 } from './lazy-mcp'
 import { isDeferredBuiltin } from './deferred-tools'
-import { isParallelizableRead, partitionCalls } from './scheduling'
+import { callSegments, isParallelizableRead, type IndexedCall } from './scheduling'
 import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
 import {
   abortableSleep,
@@ -195,6 +196,7 @@ import {
 } from './checkpoints'
 import { EvidenceLedger, type EvidenceDraft } from './evidence'
 import { detectTestEdits, isTestRelevantPath, testEditsNote } from './testTampering'
+import { doneEvidenceNote, type DoneEvidence } from './doneEvidence'
 import { listShells, peekShell } from './shells'
 import {
   backgroundEventsNote,
@@ -269,7 +271,7 @@ import { memoryStore, type MemoryStore } from './memoryStore'
 import { buildMemoryIndex } from './memoryIndex'
 import { MEMORY_SAVE_NAME, MEMORY_WRITE_TOOL_NAMES, memoryTaintSource } from './memoryTools'
 import { gitWritableRoots } from './gitDirs'
-import { GitGuard } from './gitGuard'
+import { GitGuard, reviewGitChanges } from './gitGuard'
 import { ghRepoKey, githubContext, resolveGh, runGh } from './github'
 import {
   COMPACTION_TAIL_FRACTION,
@@ -357,6 +359,8 @@ import {
   runVerification,
   verifyFailureMessage,
   inferredVerifyNotice,
+  inferredVerifySkippedNotice,
+  inferredVerifyBlockedUnconfined,
   resolveVerifyMaxPasses
 } from './verify-gate'
 
@@ -567,9 +571,10 @@ interface RunState {
   /**
    * Whether shell commands may reach the network this run. Drives the sandbox's network
    * switch — network egress is all-or-nothing at the OS layer, so this is one boolean,
-   * not a per-host set. Set by the one-time full-auto shell-network consent, by
-   * "Allow for run" on a shell command (auto-edit/ask), or up front by a headless
-   * `--allow-shell-network`. When false, shell runs offline.
+   * not a per-host set. Set only by the one-time shell-network consent (asked the first
+   * time a sandboxed command fails without network, in any mode) or up front by a
+   * headless `--allow-shell-network`. Approving shell commands never sets it. When
+   * false, shell runs offline.
    */
   shellNetworkGranted: boolean
   /**
@@ -1677,10 +1682,14 @@ export async function startRun(
     // a user-tier one — only the latter can be skipped by a hook's `approve`.
     const guardrailRules = [...managedPolicy.permissionRules, ...projectConfig.permissionRules]
     const guardrailRuleCount = guardrailRules.length
+    // A custom command's `allowed-tools` for this run come last of all: they fill
+    // only what no saved rule decides, and only with `allow`.
+    const turnAllowRules = (req.turnAllowRules ?? []).filter((r) => r.action === 'allow')
     const permissionRules = [
       ...guardrailRules,
       ...(settings.permissionRules ?? []),
-      ...(projectTrusted ? projectConfig.elevated.allowRules : [])
+      ...(projectTrusted ? projectConfig.elevated.allowRules : []),
+      ...turnAllowRules
     ]
     // Hooks likewise: a trusted folder's project hooks run after the user's own.
     const hooks = projectTrusted
@@ -2040,6 +2049,8 @@ export async function startRun(
     const knownSecrets = collectSecrets()
     const redact = createSecretRedactor(knownSecrets)
     scrubError = redact
+    // Whole output of a clamped run_shell command, kept for this run (see shellSpill.ts).
+    const shellSpill = runShellSpill(req.runId, redact)
     // What tools report for the turn's receipt. Model-written text it keeps (a command,
     // a page URL, a step's description) is masked like any other text the run keeps; a
     // command's output is only scanned for a test summary and never stored.
@@ -2140,11 +2151,12 @@ export async function startRun(
       }
     }
 
-    // Allowed roots: the workspace plus any configured additional directories, and
-    // the ones this run's client passed for its session, that still resolve (deduped).
-    // This is the file-tool + sandbox boundary.
+    // Allowed roots: the workspace plus any configured additional directories
+    // that still resolve (deduped), and the session's own (`--add-dir`, `/add-dir`, or
+    // the folders an ACP client passed for its session), which are the same thing scoped
+    // to the session. This is the file-tool + sandbox boundary.
     const roots = [workspace]
-    for (const dir of [...(settings.additionalRoots ?? []), ...(req.additionalRoots ?? [])]) {
+    for (const dir of [...(settings.additionalRoots ?? []), ...(req.addDirs ?? []), ...(req.additionalRoots ?? [])]) {
       try {
         const real = realpathSync(dir)
         if (!roots.includes(real)) roots.push(real)
@@ -2293,12 +2305,9 @@ export async function startRun(
           // "Allow for run" on an unconfined-shell prompt is the conscious consent
           // to keep running unsandboxed; a generic override never sets this.
           if (unsandboxedShell) run.shellUnsandboxedOverride = true
-          // Granting shell for the run also lets shell reach the network — the
-          // pre-existing auto-edit/ask semantics; the sandbox reads this flag.
-          if (kind === 'shell') {
-            run.shellNetworkGranted = true
-            grantConversationShellNetwork(conversationId, true)
-          }
+          // Shell network is NOT part of this grant: approving commands for the chat
+          // says nothing about letting them reach the network. That is its own question
+          // (offerShellNetwork), asked the first time a command fails without network.
           grantConversationOverride(conversationId, key, unsandboxedShell)
         }
       } else if (decision === 'rule-allow' || decision === 'rule-deny') {
@@ -2433,7 +2442,7 @@ export async function startRun(
     // Settings. Bookkeeping only: it runs after the gate has its answer, never changes
     // it, and skips calls a guardrail tier decided. The user's rules sit between the
     // guardrails and a trusted project's allow rules (see the tier order above).
-    const projectAllowCount = projectTrusted ? projectConfig.elevated.allowRules.length : 0
+    const projectAllowCount = (projectTrusted ? projectConfig.elevated.allowRules.length : 0) + turnAllowRules.length
     const noteUserRuleUse = (name: string, subject: string, action: PermissionRule['action']): void => {
       queueMicrotask(() => {
         try {
@@ -2981,10 +2990,13 @@ export async function startRun(
       output: string
     ): Promise<string> => {
       // A stopped run asks nothing: nobody is left to answer the card.
-      if (abort.signal.aborted || run.policy !== 'full-auto' || !isSandboxed() || shellNetworkOn() || egressUnavailable) {
+      if (abort.signal.aborted || !isSandboxed() || shellNetworkOn() || egressUnavailable) {
         return output
       }
       const unattended = req.unattended === true
+      // Outside full auto a run with nobody to answer keeps its contract: network only
+      // via --allow-shell-network, never from an automatic answer to this question.
+      if (unattended && run.policy !== 'full-auto') return output
       // Asked once per chat; a decline is remembered, so later failures just say so.
       if (run.shellNetworkDecided) {
         return unattended ? output : withShellNetworkDecision(output, SHELL_NETWORK_DECLINED_NOTE)
@@ -3092,6 +3104,7 @@ export async function startRun(
       ...(req.unattended === true ? { unattended: true } : {}),
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
+      ...(shellSpill ? { spillShellOutput: (out: string, note?: string) => shellSpill.spill(out, note) } : {}),
       gitGuard,
       // Nobody can answer a headless run, so the guard undoes a change instead of asking.
       ...(req.unattended === true ? {} : { askGitGuard: (q: AgentQuestion) => askRunUser(callId, q) }),
@@ -3673,8 +3686,9 @@ export async function startRun(
     // The command the gate runs: the user's own, or, when the gate is on with none set,
     // the one the project's files suggest (package.json scripts, Cargo, Go, pytest).
     // An inferred command runs only in Full auto, where shell commands already run
-    // without asking, and gets network only where the agent's own shell commands
-    // would; it is announced once, the first time it runs.
+    // without asking, only where the OS sandbox confines it (or the run holds the
+    // unconfined-shell consent), and gets network only on the agent's own shell-network
+    // grant; it is announced once, the first time it runs (or is skipped).
     const userVerifyCommand = (settings.verifyCommand ?? '').trim()
     const inferredVerify =
       settings.verifyOnStop === true && userVerifyCommand === '' ? inferVerifyCommand(workspace) : null
@@ -3684,6 +3698,7 @@ export async function startRun(
       return null
     }
     let inferredVerifyAnnounced = false
+    let inferredVerifySkipNoted = false
     const verifyGateConfigured =
       settings.verifyOnStop === true && (userVerifyCommand !== '' || inferredVerify !== null)
     const treeAtStart = verifyGateConfigured ? await workingTreeFingerprint(workspace) : null
@@ -3700,6 +3715,27 @@ export async function startRun(
     let verifyPassesRun = 0
     // Whether the model has been told this turn that its edits loosened a test (once).
     let testEditsNoted = false
+    // Whether the evidence-of-done note went out this turn (once).
+    let doneEvidenceNoted = false
+    // What the ledger says about the turn at a natural stop, for that note. The todo
+    // list counts only if this turn wrote it: one left from an earlier turn isn't
+    // this turn's plan.
+    const doneEvidenceOf = (testEdits: TestEdit[]): DoneEvidence => {
+      let wroteTodos = false
+      for (let i = messages.length - 1; i >= runStart && !wroteTodos; i--) {
+        wroteTodos = messages[i].toolCalls?.some((c) => c.name === 'todo_write') ?? false
+      }
+      const todos = latestTodos(messages)
+      return {
+        filesChanged: run.evidence.changedFiles(),
+        passedAfterLastWrite: run.evidence.passed('any', { afterLastWrite: true }),
+        passedBeforeLastWrite: run.evidence.passed('any'),
+        lastTest: run.evidence.lastTest(),
+        ...(wroteTodos ? { todos } : {}),
+        todoGaps: todoEvidenceGaps(startTodos, todos, run.evidence),
+        testEdits
+      }
+    }
     const verifyMaxPasses = resolveVerifyMaxPasses(settings.verifyMaxPasses)
 
     // The request re-sent verbatim ahead of the tail while `cut` sits inside its turn,
@@ -4588,7 +4624,7 @@ export async function startRun(
           if (treeNow !== null && treeNow !== treeAtStart) filesModified = true
         }
         const verify = verifyCommandFor()
-        if (
+        const verifyDue =
           stopReason === 'end_turn' &&
           verify !== null &&
           shouldVerify({
@@ -4601,32 +4637,67 @@ export async function startRun(
             // Plan suppresses the verify shell command even after a prior edit.
             policy: run.policy
           })
-        ) {
+        // The verify command runs straight through the sandbox runner, outside the
+        // approval gate, so the unconfined-shell consent run_shell needs on a host with no
+        // OS sandbox is checked here: an inferred command (the project's own test script)
+        // never runs unconfined without it. Read live, so "Allow for run" on an
+        // unconfined prompt earlier in the run lets it through.
+        const verifyRefused =
+          verifyDue &&
+          inferredVerifyBlockedUnconfined({
+            inferred: verify.inferred,
+            sandboxed: isSandboxed(),
+            unconfinedConsent: run.shellUnsandboxedOverride
+          })
+        if (verifyRefused && !inferredVerifySkipNoted && inferredVerify) {
+          inferredVerifySkipNoted = true
+          emit({ type: 'notice', message: inferredVerifySkippedNotice(verify.command, inferredVerify.source) })
+        }
+        if (verifyDue && !verifyRefused) {
           verifyPassesRun += 1
           if (verify.inferred && !inferredVerifyAnnounced && inferredVerify) {
             inferredVerifyAnnounced = true
             emit({ type: 'notice', message: inferredVerifyNotice(verify.command, inferredVerify.source) })
           }
+          // Snapshot the git guard's baseline first (a no-op once a shell command has):
+          // a verify command is as able as run_shell to plant a hook or a
+          // command-valued .git/config key for the user's own git to run later.
+          try {
+            await gitGuard.ensureBaseline()
+          } catch {
+            // A failed snapshot only means this command goes unchecked.
+          }
           const result = await runVerification({
             command: verify.command,
             workspace,
             roots,
-            // A user-set verify command is USER-authored (a settings field the agent
-            // can't change), not agent-authored, so it isn't part of the
-            // shell-exfiltration vector the shell-network consent guards. Keep its prior
-            // network behavior (full-auto, or an explicit shell-network grant) so a
-            // verify command that hits the network isn't silently starved in full-auto.
-            // An inferred one runs scripts the project (and so the agent) can edit, so
-            // it gets network only on the agent's own shell-network grant.
-            allowNetwork:
-              (verify.inferred ? run.shellNetworkGranted : run.policy === 'full-auto' || run.shellNetworkGranted) &&
-              !egressUnavailable,
-            // The user-authored verify command still egresses through the same
-            // per-domain allowlist — the policy is about destinations, not authorship.
+            // Even a user-set command runs the project's scripts (`npm test` runs
+            // whatever package.json says), and the agent can edit those, so it is part
+            // of the shell-exfiltration vector the shell-network consent guards: it gets
+            // network exactly when the agent's own shell commands would (shellNetworkOn:
+            // the conscious grant, or Full auto behind the egress allowlist unless the
+            // user declined). An inferred one stays on the explicit grant alone.
+            allowNetwork: verify.inferred ? run.shellNetworkGranted && !egressUnavailable : shellNetworkOn(),
+            // Egress goes through the same per-domain allowlist as run_shell.
             egressProxy,
             signal: abort.signal,
             maxBytes: resolveShellOutputBudget(settings)
           })
+          // The same post-command check run_shell gets: ask about exec-capable git
+          // changes, or undo them when nobody can answer (headless, or a stopped run).
+          let verifyGitNote = ''
+          try {
+            verifyGitNote = await reviewGitChanges(gitGuard, {
+              workspace,
+              ...(req.unattended === true
+                ? {}
+                : // Unique across the chat's turns: question cards are keyed by this id.
+                  { ask: (q: AgentQuestion) => askRunUser(`${runId}:verify-git-${verifyPassesRun}`, q) })
+            })
+          } catch {
+            // Unchecked, as for run_shell.
+          }
+          if (verifyGitNote) emit({ type: 'notice', message: `Verification command: ${verifyGitNote}` })
           if (result.aborted || abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })
             return
@@ -4636,7 +4707,11 @@ export async function startRun(
           if (!result.passed) {
             // Push the failure feedback as a system note so the model sees it next
             // turn and the transcript shows it as Houston's, not the user's; then loop.
-            messages.push(systemNoteMessage(verifyFailureMessage(verify.command, result.output)))
+            messages.push(
+              systemNoteMessage(
+                verifyFailureMessage(verify.command, result.output) + (verifyGitNote ? `\n\n${verifyGitNote}` : '')
+              )
+            )
             persist(messages)
             continue
           }
@@ -4652,6 +4727,19 @@ export async function startRun(
             detail: redact(e.detail)
           }))
           run.evidence.setTestEdits(edits)
+          // The evidence-of-done note (doneEvidence.ts): once per turn, only when the
+          // ledger shows a real gap. It carries the test edits too, so they aren't
+          // raised twice.
+          if (settings.doneEvidenceNote !== false && !doneEvidenceNoted) {
+            const note = doneEvidenceNote(doneEvidenceOf(edits))
+            if (note) {
+              doneEvidenceNoted = true
+              if (edits.length) testEditsNoted = true
+              messages.push(systemNoteMessage(note))
+              persist(messages)
+              continue
+            }
+          }
           if (edits.length && !testEditsNoted) {
             testEditsNoted = true
             messages.push(systemNoteMessage(testEditsNote(edits)))
@@ -4722,16 +4810,15 @@ export async function startRun(
 
       // ---------------------------------------------------------------------
       // Tool dispatch. A turn can mix parallelizable reads with encumbered calls
-      // (writes/shell/network/MCP/gated/hooked/ask_user). We run the CONTIGUOUS
-      // LEADING run of unencumbered reads CONCURRENTLY, then the rest — the first
-      // encumbered call and everything after it (including any later reads) —
-      // SEQUENTIALLY in its original relative order. Because the parallel group is
-      // entirely before the sequential group in original order, results are flushed
-      // (tool_result + appended to the log) INLINE as each call finalizes, still in
-      // ORIGINAL call order, so the transcript and the model's window match a
-      // fully-sequential run — and a read that follows a write in the same turn sees
-      // the write. The all-reads case is the partition where `sequential` is empty;
-      // a turn led by an encumbered call has `parallel` empty (fully sequential).
+      // (writes/shell/network/MCP/gated/hooked/ask_user). Each MAXIMAL run of
+      // unencumbered reads runs CONCURRENTLY as one batch, and each encumbered call
+      // runs on its own, all in original call order: a batch starts only after the
+      // encumbered call before it has finished, and the call after it waits for the
+      // whole batch, so a read that follows a write in the same turn sees the write.
+      // Results are flushed (tool_result + appended to the log) as each segment
+      // finalizes, still in ORIGINAL call order, so the transcript and the model's
+      // window match a fully-sequential run. An all-reads turn is a single batch; a
+      // turn of encumbered calls only is fully sequential.
       // ---------------------------------------------------------------------
 
       // Per-call outcome, ready to emit + append.
@@ -4746,9 +4833,9 @@ export async function startRun(
       // Flush one finalized call: emit tool_result, fire the onToolResult plugin
       // event, and append the tool message — so each tool_use is answered exactly
       // once and the persisted log stays provider-valid (role alternation, matched
-      // toolCallId pairing). Called INLINE the moment a call finalizes (parallel
-      // group in original order right after Promise.all; sequential group one at a
-      // time) so a mid-turn abort never discards an already-completed real result:
+      // toolCallId pairing). Called INLINE the moment a call finalizes (a batch in
+      // original order right after its Promise.all; an encumbered call on its own)
+      // so a mid-turn abort never discards an already-completed real result:
       // whatever has been appended persists, and only not-yet-run calls get the
       // interrupted placeholder from the finally block's repair pass.
       const flushResult = async (r: CallResult): Promise<void> => {
@@ -4788,8 +4875,8 @@ export async function startRun(
           if (limited !== messages) for (let i = 0; i < limited.length; i++) messages[i] = limited[i]
         }
         // Feed the stall/verify accumulators as each call finalizes — inline flush
-        // runs in ORIGINAL call order (parallel group in order, then each
-        // sequential call), so this is the same call-order collection the detector
+        // runs in ORIGINAL call order (each batch in order, each encumbered call in
+        // its place), so this is the same call-order collection the detector
         // expects. Record failures (raw output — errorSignature normalization
         // happens inside the detector) for repeated-error tracking, and note any
         // successful workspace-mutating (write/shell) call so a run that's actually
@@ -4846,7 +4933,7 @@ export async function startRun(
       // result (ok:false) instead of executing — the model self-corrects next
       // turn. Returns the repair CallResult, or null when the args are acceptable
       // (or the tool is unknown, which the caller reports separately). Applied in
-      // both the parallel and the sequential path.
+      // both the batch and the sequential path.
       const validationFailure = (call: ToolCall): CallResult | null => {
         // A call whose arguments didn't arrive whole (see ToolCall.incomplete) has only a
         // placeholder to validate. Answer it without running anything.
@@ -4887,91 +4974,109 @@ export async function startRun(
       const cutOffCalls = stopReason === 'max_tokens' ? toolCalls.filter((c) => c.incomplete) : []
       if (cutOffCalls.length) emit({ type: 'notice', message: incompleteCallsNotice(cutOffCalls) })
 
-      // Partition this turn's calls into the CONTIGUOUS LEADING run of unencumbered
-      // reads and the sequential rest (the first encumbered call and everything
-      // after it, including later reads). Because the parallel group is entirely
-      // before the sequential group in original order, we can flush each group's
-      // results as soon as they finalize and still keep the model-visible order.
-      const { parallel, sequential } = partitionCalls(toolCalls, isParallelCall)
-
-      // --- Parallel group: leading unencumbered reads, all dispatched at once. --
+      // --- A batch: a run of unencumbered reads, all dispatched at once. ---------
       // These need no approval, plan check, hooks, or checkpoint, so there's no
       // ordering constraint between them. Validate each ONCE up front (reused for
       // both the tool_start decision and the execute map), emit tool_start for the
       // ones that actually run, then dispatch via Promise.all and flush the results
       // in original call order.
-      const parallelValidation = parallel.map(({ call }) => validationFailure(call))
-      for (let p = 0; p < parallel.length; p++) {
-        if (parallelValidation[p]) continue // tool_start intentionally not emitted for a refused call
-        const { call } = parallel[p]
-        emit({
-          type: 'tool_start',
-          callId: call.id,
-          name: call.name,
-          args: call.arguments,
-          kind: lookupTool(call.name)?.kind
-        })
-        await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
-      }
-      const parallelResults = await Promise.all(
-        parallel.map(async ({ call }, p): Promise<CallResult> => {
-          const invalid = parallelValidation[p]
-          if (invalid) return invalid
-          // Serve an identical repeat from the run cache. A parallel call is always
-          // hook-free (isParallelCall excludes hooked tools), but not every read is
-          // cacheable — only the pure, on-disk-deterministic ones (isCacheableRead).
-          // A stateful read like read_shell_output runs here too and must NOT cache.
-          const cacheable = isCacheableRead(call.name, lookupTool(call.name)!.kind)
-          const cached = cacheable ? await readCache.get(call.name, call.arguments) : undefined
-          if (cached) {
-            return {
-              call,
-              output: cached.output,
-              ok: cached.ok,
-              images: cached.images,
-              documents: cached.documents
+      const runReadBatch = async (batch: IndexedCall[]): Promise<void> => {
+        const batchValidation = batch.map(({ call }) => validationFailure(call))
+        for (let p = 0; p < batch.length; p++) {
+          if (batchValidation[p]) continue // tool_start intentionally not emitted for a refused call
+          const { call } = batch[p]
+          emit({
+            type: 'tool_start',
+            callId: call.id,
+            name: call.name,
+            args: call.arguments,
+            kind: lookupTool(call.name)?.kind
+          })
+          await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
+        }
+        const batchResults = await Promise.all(
+          batch.map(async ({ call }, p): Promise<CallResult> => {
+            const invalid = batchValidation[p]
+            if (invalid) return invalid
+            // Serve an identical repeat from the run cache. A batched call is always
+            // hook-free (isParallelCall excludes hooked tools), but not every read is
+            // cacheable — only the pure, on-disk-deterministic ones (isCacheableRead).
+            // A stateful read like read_shell_output runs here too and must NOT cache.
+            const cacheable = isCacheableRead(call.name, lookupTool(call.name)!.kind)
+            const cached = cacheable ? await readCache.get(call.name, call.arguments) : undefined
+            if (cached) {
+              return {
+                call,
+                output: cached.output,
+                ok: cached.ok,
+                images: cached.images,
+                documents: cached.documents
+              }
             }
-          }
-          const images: ImageAttachment[] = []
-          const documents: DocumentAttachment[] = []
-          let output: string
-          let ok = true
-          try {
-            output = await lookupTool(call.name)!.execute(
-              call.arguments,
-              makeToolContext(
-                call.id,
-                (i) => images.push(i),
-                (d) => documents.push(d)
+            const images: ImageAttachment[] = []
+            const documents: DocumentAttachment[] = []
+            let output: string
+            let ok = true
+            try {
+              output = await lookupTool(call.name)!.execute(
+                call.arguments,
+                makeToolContext(
+                  call.id,
+                  (i) => images.push(i),
+                  (d) => documents.push(d)
+                )
               )
-            )
-          } catch (e) {
-            output = `Error: ${(e as Error).message}`
-            ok = false
+            } catch (e) {
+              output = `Error: ${(e as Error).message}`
+              ok = false
+            }
+            if (cacheable) {
+              await readCache.set(
+                call.name,
+                call.arguments,
+                { output, ok, images, documents },
+                readDeps(call.name, call.arguments, resolvePath)
+              )
+            }
+            return { call, output, ok, images, documents }
+          })
+        )
+        for (let p = 0; p < batch.length; p++) {
+          const result = batchResults[p]
+          // As after a call run on its own: ask about any host the egress proxy refused
+          // since the last call (a background command's), one call at a time and in
+          // call order. Outside the cache, since the note belongs to this moment.
+          if (!batchValidation[p] && run.egressRefused.size > 0) {
+            const tool = lookupTool(result.call.name)!
+            result.output = await offerEgressHosts(result.call, result.call.arguments, tool, result.output)
           }
-          if (cacheable) {
-            await readCache.set(
-              call.name,
-              call.arguments,
-              { output, ok, images, documents },
-              readDeps(call.name, call.arguments, resolvePath)
-            )
-          }
-          return { call, output, ok, images, documents }
-        })
-      )
-      for (const result of parallelResults) await flushResult(result)
+          await flushResult(result)
+        }
+      }
 
-      // --- Sequential group: the first encumbered call and everything after it,
-      // one call at a time. -----------------------------------------------------
-      // Preserves the original relative order and every existing semantic:
-      // unknown-tool, deny rule, plan block, approval prompts, "Allow for run"/rule
-      // persistence, Pre/PostToolUse hooks, write checkpoints, format/diagnostics-
-      // on-save, and per-call abort checks. Each outcome is flushed INLINE the
-      // moment it finalizes, so an abort partway through this loop leaves the
-      // already-completed real results in the log (only the not-yet-run calls get
-      // the interrupted placeholder from the finally block).
-      for (const { call: modelCall } of sequential) {
+      // Run the turn's segments in call order (see callSegments): each batch of
+      // unencumbered reads through runReadBatch, each other call through the
+      // sequential gate below. Segments are classified lazily, so the reads after an
+      // encumbered call are judged only once it has run (and any rule its approval
+      // added is in force).
+      for (const segment of callSegments(toolCalls, isParallelCall)) {
+        if (segment.parallel) {
+          if (abort.signal.aborted) {
+            emit({ type: 'done', stopReason: 'aborted' })
+            return
+          }
+          await runReadBatch(segment.calls)
+          continue
+        }
+
+        // --- An encumbered call, on its own. ---------------------------------
+        // Preserves every existing semantic: unknown-tool, deny rule, plan block,
+        // approval prompts, "Allow for run"/rule persistence, Pre/PostToolUse hooks,
+        // write checkpoints, format/diagnostics-on-save, and per-call abort checks.
+        // Each outcome is flushed INLINE the moment it finalizes, so an abort partway
+        // through the turn leaves the already-completed real results in the log (only
+        // the not-yet-run calls get the interrupted placeholder from the finally block).
+        const { call: modelCall } = segment.call
         if (abort.signal.aborted) {
           emit({ type: 'done', stopReason: 'aborted' })
           return
@@ -5233,11 +5338,10 @@ export async function startRun(
             const networkScope = netDest !== null ? describeNetworkDestination(netDest) : undefined
 
             // A shell command on a confining host with no shell-network grant yet runs
-            // offline. Flag its prompt so the card can say only "Allow for run" also grants
-            // network. Not when the egress proxy failed to start: then no grant brings
-            // network back, so pointing at one would mislead. (Full auto never prompts up
-            // front for network: see offerShellNetwork, which asks after a command fails
-            // for lack of it.)
+            // offline. Flag its prompt so the card can say so before the user answers,
+            // and that network is asked about separately (offerShellNetwork, after a
+            // command fails for lack of it). Not when the egress proxy failed to start:
+            // then no answer brings network back, so promising a question would mislead.
             const shellOffline =
               tool.kind === 'shell' &&
               isSandboxed() &&

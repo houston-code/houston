@@ -247,4 +247,35 @@ describe('loadProjectConfig', () => {
     writeFileSync(join(ws, PROJECT_CONFIG), '{ not json')
     expect(await loadProjectConfig(ws)).toEqual({ permissionRules: [], elevated: empty, elevatedHash: '' })
   })
+
+  const command = (name: string, body: string): void => {
+    mkdirSync(join(ws, '.houston/commands'), { recursive: true })
+    writeFileSync(join(ws, '.houston/commands', name), body)
+  }
+
+  it("counts a command's allowed-tools as elevating config, with no settings file at all", async () => {
+    command('plain.md', 'Just a prompt')
+    command('ship.md', '---\nallowed-tools: run_shell(npm test*)\n---\nShip it')
+    const cfg = await loadProjectConfig(ws)
+    expect(cfg.elevated.commands).toEqual([{ name: 'ship', allowedTools: 'run_shell(npm test*)' }])
+    expect(cfg.elevatedHash).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('moves the fingerprint when a pull widens a command, so trust asks again', async () => {
+    command('ship.md', '---\nallowed-tools: read_file\n---\nShip it')
+    const before = (await loadProjectConfig(ws)).elevatedHash
+    command('ship.md', '---\nallowed-tools: read_file, run_shell\n---\nShip it')
+    expect((await loadProjectConfig(ws)).elevatedHash).not.toBe(before)
+  })
+
+  it('leaves the fingerprint of a folder with no such commands as it was', async () => {
+    mkdirSync(join(ws, '.houston'), { recursive: true })
+    writeFileSync(join(ws, PROJECT_CONFIG), JSON.stringify({ hooks: [{ event: 'Stop', command: 'echo done' }] }))
+    const before = await loadProjectConfig(ws)
+    command('plain.md', '---\nmodel: haiku\n---\nJust a prompt')
+    const after = await loadProjectConfig(ws)
+    expect(after.elevated.commands).toBeUndefined()
+    expect(after.elevatedHash).toBe(before.elevatedHash)
+    expect(after.elevatedHash).toBe(elevatedConfigHash({ ...before.elevated }))
+  })
 })

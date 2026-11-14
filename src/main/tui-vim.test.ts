@@ -381,4 +381,15 @@ describe('a batched keystroke run', () => {
   it('applies a whole command spread across one chunk', () => {
     expect(keys(at('foo bar', 0, 0), { type: 'char', value: 'dw' }).text).toBe('bar')
   })
+
+  // Once a command in the chunk enters insert mode, the rest is what the user typed
+  // next: "Ahello" used to run "hello" as commands (h, e, l, l, o opened a new line).
+  it('types the rest of the chunk once a command enters insert mode', () => {
+    const r = keys(at('abc', 0, 0), { type: 'char', value: 'Ahello' })
+    expect(r.vim.mode).toBe('insert')
+    expect(r.state.lines).toEqual(['abchello'])
+    expect(keys(at('abc', 0, 0), { type: 'char', value: 'ox y' }).state.lines).toEqual(['abc', 'x y'])
+    // A burst that ends on the command itself just enters insert mode.
+    expect(keys(at('abc', 0, 0), { type: 'char', value: 'A' }).state.lines).toEqual(['abc'])
+  })
 })

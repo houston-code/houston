@@ -405,7 +405,7 @@ export interface Provider {
 
 // ---- Agent run protocol (main <-> renderer) ----
 
-import type { ApprovalPolicy, McpServerConfig } from './types'
+import type { ApprovalPolicy, McpServerConfig, PermissionRule } from './types'
 import type { ImageAttachment } from './images'
 import type { StoredQueue } from './queue'
 
@@ -934,6 +934,13 @@ export interface AgentRunRequest {
    * the headless client sets it; the GUI's IPC builds its requests field by field.
    */
   allowShellNetwork?: boolean
+  /**
+   * Session-scoped extra directories (`--add-dir`, the TUI's `/add-dir`): allowed roots
+   * for this run exactly as Settings' additional directories are, merged with them and
+   * never saved. Only the terminal clients set it; the GUI's IPC builds its requests
+   * field by field.
+   */
+  addDirs?: string[]
   /** Per-run setting overrides (headless flags). Applied to this run only, never persisted. */
   overrides?: RunSettingsOverrides
   /**
@@ -982,6 +989,13 @@ export interface AgentRunRequest {
   extraMcpServers?: McpServerConfig[]
   /** Emit a `run_info` event once the run's toolset is assembled (headless `--json`). */
   announceTools?: boolean
+  /**
+   * Allow rules for this run only: a custom command's `allowed-tools`, resolved in
+   * the main process (never taken from the renderer). They sit below every saved
+   * rule, so a deny or ask the user, an admin or the project set still wins, and the
+   * guardrails that ask in every mode (sensitive files, discarding work) still ask.
+   */
+  turnAllowRules?: PermissionRule[]
 }
 
 /** One `--allowed-tools` / `--disallowed-tools` entry: a tool name (or `*` glob) and a rule pattern. */
@@ -1029,6 +1043,8 @@ export interface AgentSendRequest {
   model: string
   approvalPolicy: ApprovalPolicy
   reasoningEffort?: ReasoningEffort
+  /** A custom command's per-turn options, by the token `commandPrepare` returned (see `InvokedTurn.grant`). */
+  commandGrant?: string
 }
 
 /**

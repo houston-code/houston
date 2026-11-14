@@ -48,9 +48,10 @@ Open source under the [Apache License 2.0](LICENSE).
   `multi_edit`, `apply_patch`, `notebook_edit`, `list_dir`, `glob`, `search_files`,
   `ast_grep`, `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`,
   `gh_pr_*` (pull requests), `todo_write`, `pr_sweep`, and `ask_user` to actually
-  do the work, not just describe it. When a turn is all
-  reads (e.g. open five files at once), they run **concurrently**; anything that
-  writes, runs a command, or needs approval stays sequential. Edits are matched
+  do the work, not just describe it. Reads the agent asks for together (e.g. open
+  five files at once) run **concurrently**, in a subagent too, even after an edit
+  in the same step (they wait for it to land first); anything that writes, runs a
+  command, or needs approval runs on its own, in order. Edits are matched
   **resiliently**: if the model's snippet drifts from the file by indentation or
   whitespace, Houston still locates and applies it instead of failing, and shows the
   model the lines it actually changed. Reads come back **line-numbered**, and the
@@ -1399,9 +1400,9 @@ the agent loop and UI never depend on a specific provider.
 - **Tool execution is sandboxed where the OS allows it.** `run_shell` runs under
   Seatbelt (`sandbox-exec`) on macOS and bubblewrap on Linux: filesystem reads
   allowed, writes restricted to the project + temp dirs, network denied until you
-  grant it (in *full auto*, a once-per-chat card after a command first fails for lack
-  of network; "Allow for run" on a shell approval; or `--allow-shell-network` on a
-  headless run). Granted network is confined to a
+  grant it (a once-per-chat question after a command first fails for lack of network,
+  in every mode; approving a shell command never grants network; or
+  `--allow-shell-network` on a headless run). Granted network is confined to a
   per-domain egress allowlist: direct sockets stay blocked and traffic flows through
   a local proxy that permits package registries, VCS hosts, and domains you add in
   Settings. Windows has no equivalent, so shell commands there run unconfined and

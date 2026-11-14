@@ -3,6 +3,7 @@ import {
   ANTHROPIC_WEB_SEARCH_TOOL,
   anthropicWebSearch,
   isFirstPartyAnthropic,
+  MAX_SEARCH_RESUMES,
   parseAnthropicSearch,
   parseResponsesSearch,
   responsesWebSearch
@@ -99,6 +100,30 @@ describe('anthropicWebSearch', () => {
     expect(ANTHROPIC_WEB_SEARCH_TOOL).toEqual({ type: 'web_search_20250305', name: 'web_search', max_uses: 1 })
     expect(body.messages).toEqual([{ role: 'user', content: 'Search the web for: widgets 2' }])
     expect(opts.signal).toBe(signal)
+  })
+
+  it('resumes a paused search turn with its content, a bounded number of times', async () => {
+    const paused = { type: 'server_tool_use', id: 's1', name: 'web_search', input: { query: 'q' } }
+    const replies = [
+      { content: [paused], stop_reason: 'pause_turn', usage: { input_tokens: 10, output_tokens: 1 } },
+      { content: anthropicReply, stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 2 } }
+    ]
+    const create = vi.fn(async () => replies.shift()!)
+    const onUsage = vi.fn()
+    const r = await anthropicWebSearch({ messages: { create } }, { model: 'm', query: 'q', maxResults: 3, onUsage })
+    expect(create).toHaveBeenCalledTimes(2)
+    const second = (create.mock.calls[1] as unknown as [Record<string, unknown>])[0]
+    expect(second.messages).toEqual([
+      { role: 'user', content: 'Search the web for: q' },
+      { role: 'assistant', content: [paused] }
+    ])
+    // Both requests billed, and the results come from the resumed reply.
+    expect(onUsage).toHaveBeenCalledTimes(2)
+    expect(r.hits[0].url).toBe('https://example.test/notes')
+
+    const always = vi.fn(async () => ({ content: [], stop_reason: 'pause_turn' }))
+    await anthropicWebSearch({ messages: { create: always } }, { model: 'm', query: 'q', maxResults: 3 })
+    expect(always).toHaveBeenCalledTimes(1 + MAX_SEARCH_RESUMES)
   })
 
   it('reports what the request billed, cache tokens folded into the input total', async () => {

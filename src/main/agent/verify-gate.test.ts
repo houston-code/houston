@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SandboxRunResult } from '../sandbox'
 import {
   DEFAULT_VERIFY_MAX_PASSES,
+  inferredVerifyBlockedUnconfined,
   inferredVerifyNotice,
+  inferredVerifySkippedNotice,
   resolveVerifyMaxPasses,
   runVerification,
   shouldVerify,
@@ -137,5 +139,28 @@ describe('inferredVerifyNotice', () => {
     expect(inferredVerifyNotice('cargo test', 'Cargo.toml')).toBe(
       'Verifying with `cargo test` (from Cargo.toml). Set a verification command in Settings to use a different one.'
     )
+  })
+})
+
+describe('inferredVerifyBlockedUnconfined', () => {
+  it('blocks an inferred command on an unsandboxed host without the unconfined-shell consent', () => {
+    expect(inferredVerifyBlockedUnconfined({ inferred: true, sandboxed: false, unconfinedConsent: false })).toBe(true)
+  })
+  it('lets it run where the sandbox confines it, or after the consent', () => {
+    expect(inferredVerifyBlockedUnconfined({ inferred: true, sandboxed: true, unconfinedConsent: false })).toBe(false)
+    expect(inferredVerifyBlockedUnconfined({ inferred: true, sandboxed: false, unconfinedConsent: true })).toBe(false)
+  })
+  it('never blocks a command the user set', () => {
+    expect(inferredVerifyBlockedUnconfined({ inferred: false, sandboxed: false, unconfinedConsent: false })).toBe(false)
+  })
+})
+
+describe('inferredVerifySkippedNotice', () => {
+  it('names the command, where it came from, why it was skipped, and how to run one anyway', () => {
+    const msg = inferredVerifySkippedNotice('npm test', 'package.json')
+    expect(msg).toMatch(/^Skipped verifying with `npm test` \(from package\.json\): /)
+    expect(msg).toMatch(/aren't sandboxed/)
+    expect(msg).toMatch(/Set a verification command in Settings/)
+    expect(msg).not.toMatch(/—/)
   })
 })

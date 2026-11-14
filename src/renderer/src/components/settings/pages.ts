@@ -127,7 +127,7 @@ export const PAGES: SettingsPage[] = [
       },
       {
         id: 'loop-control',
-        keys: ['maxIterations', 'autoExtendTurns', 'maxIterationsCeiling', 'costCeilingUsd', 'stallDetection', 'verifyOnStop', 'verifyCommand', 'subagentHistoryMb'],
+        keys: ['maxIterations', 'autoExtendTurns', 'maxIterationsCeiling', 'costCeilingUsd', 'stallDetection', 'doneEvidenceNote', 'verifyOnStop', 'verifyCommand', 'subagentHistoryMb'],
         Component: LoopControlSection,
         keywords: ['steps', 'iterations', 'max turns', 'budget', 'cost limit', 'stall', 'loop detection', 'verify', 'tests'],
         values: (s) => [s.verifyCommand]

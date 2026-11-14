@@ -105,6 +105,7 @@ export const IPC = {
   /** Keep an interactive HTML visual for its sandboxed frame to load; returns its id. */
   visualRegisterHtml: 'visual:registerHtml',
   commandsList: 'commands:list',
+  commandPrepare: 'commands:prepare',
   /** A verification command inferred from the project's files (Settings > Agent Behavior). */
   verifyInfer: 'verify:infer',
   /** List the workspace's skills (.houston/skills) as {name, description}, for /skills. */
@@ -172,10 +173,14 @@ export const IPC = {
   settingsTestKey: 'settings:testKey',
   /** Whether a local (Ollama) model supports tool calling — true / false / null (unknown). */
   ollamaSupportsTools: 'ollama:supportsTools',
+  /** The rate-limit quota each provider reported on its latest response, by provider id. */
+  providerQuotas: 'providers:quotas',
   // MCP: remote-server OAuth sign-in/out + live connection status (Settings UI).
   mcpOAuthLogin: 'mcp:oauthLogin',
   mcpOAuthLogout: 'mcp:oauthLogout',
   mcpStatus: 'mcp:status',
+  /** Read-only search of the official MCP Registry (Settings > MCP Servers, Browse registry). */
+  mcpRegistrySearch: 'mcp:registrySearch',
   // Optional integrations status (gh CLI, formatters) — for the Settings UI hint.
   integrationsGet: 'integrations:get',
   /** Settings > Scheduled runs over the scheduler service. */

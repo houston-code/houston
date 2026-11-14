@@ -130,6 +130,8 @@ export type TestEditKind =
   | 'focus'
   /** A test file has fewer assertions than it started with. */
   | 'asserts'
+  /** A test file has fewer test cases than it started with (`it(`, `test(`, `def test_`). */
+  | 'cases'
   /** A package.json test script now passes whatever happens (`|| true`, `--passWithNoTests`). */
   | 'script'
   /** A test runner's config changed which tests run (include/exclude, testMatch, addopts). */
@@ -420,6 +422,7 @@ const TEST_EDIT_TEXT: Record<TestEditKind, string> = {
   skip: 'test skipped',
   focus: 'test focused',
   asserts: 'assertions removed',
+  cases: 'tests removed',
   script: 'test script loosened',
   config: 'test config changed'
 }
