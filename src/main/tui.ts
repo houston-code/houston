@@ -177,6 +177,7 @@ import {
   parseSessionFlag,
   resolveAddDir,
   scopeEntryText,
+  sessionFlagConflict,
   sessionFlagFields,
   type SessionFlags,
   type SessionInputs
@@ -338,6 +339,8 @@ export function parseTuiArgs(
   }
 
   if (!interactive && !defaultInteractive) return null
+  const conflict = sessionFlagConflict(session, { continueSession, resumeId })
+  if (conflict) bad(conflict)
   return {
     cwd,
     providerId,

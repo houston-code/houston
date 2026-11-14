@@ -9265,3 +9265,21 @@ describe('session flags in the interactive session', () => {
     expect(renames).toEqual([['c1', 'New name']])
   })
 })
+
+describe('-w / --worktree', () => {
+  it('takes an optional branch name, never a following flag', () => {
+    expect(parseTuiArgs(['-i', '-w'], '/d')?.worktree).toEqual({})
+    expect(parseTuiArgs(['-i', '-w', 'feature/login'], '/d')?.worktree).toEqual({ name: 'feature/login' })
+    expect(parseTuiArgs(['-i', '--worktree=fix-it'], '/d')?.worktree).toEqual({ name: 'fix-it' })
+    const o = parseTuiArgs(['-w', '--model', 'm'], '/d', true)
+    expect(o).toMatchObject({ worktree: {}, model: 'm' })
+    expect(parseTuiArgs(['-i'], '/d')?.worktree).toBeUndefined()
+  })
+
+  it('refuses an unusable name and a resume, as usage errors', () => {
+    expect(parseTuiArgs(['-i', '--worktree=bad name'], '/d')?.usageError).toMatch(/not a usable branch name/)
+    expect(parseTuiArgs(['-i', '--worktree='], '/d')?.usageError).toMatch(/needs a branch name/)
+    expect(parseTuiArgs(['-i', '-w', '--continue'], '/d')?.usageError).toMatch(/cannot be combined with --continue or --resume/)
+    expect(parseTuiArgs(['-i', '-w', 'x', '--resume', 'abc'], '/d')?.usageError).toMatch(/cannot be combined/)
+  })
+})

@@ -189,6 +189,29 @@ with code 2 before anything runs.
 An interactive session prints which of these are in effect when it starts. The
 sessions the agent spawns in the background don't inherit them.
 
+#### Starting in a worktree (`-w`)
+
+`houston -w [name]` (or `--worktree`) starts the session in a fresh git worktree on
+a new branch from the folder's current HEAD, so its edits stay off your checkout.
+
+- It is the same kind of worktree the desktop app's worktree chats use: it lives in
+  `<repo>/.houston/worktrees/<name>`, and the branch is the name you give or a
+  generated one like `swift-otter-78dj6e`. The chat records it, so the desktop app
+  shows its branch and offers to clean it up as it does for its own.
+- The session runs in the worktree: the status line shows its folder and branch.
+- Outside a git repository, with a branch name that already exists, or in a
+  repository with no commits yet, it stops with a message and exit code 2. It can't
+  be combined with `--continue` or `--resume`.
+- **Leaving an interactive session.** A worktree with no changes and no commits of
+  its own is removed with its branch. One with work in it is kept unless you answer
+  `r` to "Keep it or remove it?". Removing uncommitted changes needs a second,
+  typed `remove`; commits stay on their branch. A kept worktree prints the command
+  that comes back to it: `houston --resume <id> -C <path>`.
+- **One-shot (`-p`).** The worktree is always kept. Its path goes to stderr, and the
+  `--json` init line carries it as `worktree`.
+- `--resume <id>` of a chat that ran in a worktree opens it in that worktree.
+- A signal (Ctrl-C from outside, a closed terminal, `kill`) never removes it.
+
 ### Headless
 
 `houston -p "<prompt>"` runs one prompt, writes the result to stdout, and exits.
@@ -267,7 +290,7 @@ Lines arrive in this order:
 
 1. **Init:** `{"type":"system","subtype":"init", "schemaVersion", "houstonVersion",
    "cwd", "providerId", "model", "approvalPolicy", "onApproval", "inputFormat",
-   "tools"?, ...}`
+   "tools"?, "worktree"?, ...}`
 2. **Session:** a `session` line, when the run is saved.
 3. **Events:** one JSON line per agent event.
 4. **Result:** a summary (one per turn with stream-json input):

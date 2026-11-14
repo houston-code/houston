@@ -195,6 +195,23 @@
         },
         "outputSchema": {
           "type": "boolean"
+        },
+        "worktree": {
+          "description": "The git worktree -w created for this run; it is kept, and cwd is its path.",
+          "type": "object",
+          "required": [
+            "path",
+            "branch"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
         }
       }
     },

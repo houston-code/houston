@@ -540,7 +540,15 @@ describe('the checked-in --json schema', () => {
       },
       readFile: async () => '{"type":"object"}'
     })
-    await runHeadless({ ...baseOpts, outputSchema: '/s.json', allowedTools: [{ tool: 'read_file', match: '*' }] }, d)
+    await runHeadless(
+      {
+        ...baseOpts,
+        outputSchema: '/s.json',
+        allowedTools: [{ tool: 'read_file', match: '*' }],
+        createdWorktree: { path: '/r/.houston/worktrees/w', branch: 'w' }
+      },
+      d
+    )
     const printed = lines(out)
     expect(printed.map((l) => l.type)).toEqual(
       expect.arrayContaining(['system', 'session', 'result', ...all.filter((e) => e.type !== 'run_info').map((e) => e.type)])
@@ -633,5 +641,36 @@ describe('session flags: --name and --add-dir', () => {
       ['new', 'Fresh'],
       ['old', 'Again']
     ])
+  })
+})
+
+describe('-w / --worktree in a one-shot run', () => {
+  const parse = (...args: string[]) => parseHeadlessArgs(['houston', ...args], CWD)
+
+  it('parses the optional name and never takes -w as the prompt', () => {
+    expect(parse('-p', 'go', '-w')?.worktree).toEqual({})
+    expect(parse('-p', 'go', '-w', 'audit/nightly')?.worktree).toEqual({ name: 'audit/nightly' })
+    expect(parse('-w', '-p', 'go')).toMatchObject({ prompt: 'go', worktree: {} })
+    expect(parseHeadlessArgs(['houston', '-p', '-w'], CWD, { stdinPiped: true })).toMatchObject({
+      promptFromStdin: true,
+      worktree: {}
+    })
+    expect(parse('-p', 'go', '-w', '--resume', 'x')?.usageError).toMatch(/cannot be combined/)
+  })
+
+  it('puts the kept worktree on the --json init line', async () => {
+    const { d, out } = deps([answer('ok')])
+    await runHeadless(
+      { ...baseOpts, cwd: '/r/.houston/worktrees/w1', createdWorktree: { path: '/r/.houston/worktrees/w1', branch: 'w1' } },
+      d
+    )
+    expect(lines(out)[0]).toMatchObject({
+      subtype: 'init',
+      cwd: '/r/.houston/worktrees/w1',
+      worktree: { path: '/r/.houston/worktrees/w1', branch: 'w1' }
+    })
+    const { d: plain, out: plainOut } = deps([answer('ok')])
+    await runHeadless(baseOpts, plain)
+    expect(lines(plainOut)[0]).not.toHaveProperty('worktree')
   })
 })

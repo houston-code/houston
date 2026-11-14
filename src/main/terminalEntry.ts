@@ -42,6 +42,14 @@ import { createSchedulerService, fireViaSpawn, schedulesFilePath, type Scheduler
 import { appSchedulerRunning, daemonPidPath, holdPidFile } from './scheduleDaemon'
 import { createWorktree, removeWorktree } from './agent/worktree'
 import { readFlagFile, resolveSessionInputs } from './sessionFlags'
+import {
+  conversationWorktree,
+  createSessionWorktree,
+  finishSessionWorktree,
+  comeBackCommand,
+  resumeWorktreeFolder,
+  type SessionWorktree
+} from './sessionWorktree'
 import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
 import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
 import { findFiles } from './agent/mentions'
@@ -123,7 +131,7 @@ import { mergeCommands } from '@shared/commands'
 import { runOutcome, runOutcomePhrase } from '@shared/runEnd'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
 import { highlightToHtml, type HljsLike } from './syntax'
-import { filterTerminalOutput } from './tui-wrap'
+import { filterTerminalOutput, stripControlChars } from './tui-wrap'
 import {
   createConversation,
   setMessages,
@@ -137,6 +145,7 @@ import {
   forkConversation,
   organizeConversation,
   conversationExists,
+  detachConversationWorktree,
   setGeneratedTitle,
   reportChildToParent,
   takeChildReports,
@@ -590,6 +599,14 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     }
     tui.sessionInputs = inputs
   }
+  // -w: the session runs in a fresh worktree, created before anything reads the
+  // folder (history, commands, trust). --resume of a worktree chat opens its worktree.
+  let sessionWt: SessionWorktree | null = null
+  if (!tui.usageError) {
+    const wt = await startInWorktree(tui)
+    if (typeof wt === 'number') return wt
+    sessionWt = wt
+  }
   // Colorize only when the environment says so (TTY, NO_COLOR, TERM, FORCE_COLOR).
   tui.color = resolveColor(process.env, Boolean(process.stdout.isTTY))
   // Screen-reader mode (--screen-reader, HOUSTON_SCREEN_READER, the saved setting) and
@@ -706,11 +723,20 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     startScheduler: true
   })
 
+  // The session's latest chat, for the worktree's come-back command.
+  let lastConversationId: string | null = null
   // Ctrl-C is the TUI's own key (clear the composer, stop a turn), read from the
   // raw terminal, which never turns it into a SIGINT. So a SIGINT, like a SIGHUP or
   // SIGTERM, comes from outside (`kill -INT`, a supervisor): stop the runs, restore
   // the terminal and exit rather than die with the terminal modes still on.
-  const exitGuard = guardTerminalExit(['SIGHUP', 'SIGTERM', 'SIGINT'], host)
+  // A signal never removes the worktree (it may hold work, and there is no one to
+  // ask): it says where the worktree is, then exits.
+  const exitGuard = guardTerminalExit(['SIGHUP', 'SIGTERM', 'SIGINT'], {
+    flush: async () => {
+      await host.flush?.()
+      if (sessionWt) process.stderr.write(keptWorktreeNote(sessionWt, lastConversationId))
+    }
+  })
   // Exiting would kill background sessions mid-run; finish them first (their
   // conversations are what a later /resume opens). Ctrl-C still force-quits.
   const waitForBackground = async (): Promise<void> => {
@@ -919,8 +945,20 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       io,
       highlightHtml: (lang, codeStr) => (hljs ? highlightToHtml(hljs, lang, codeStr) : null),
       persist: {
-        create: (input) => createConversation(input),
-        setMessages,
+        // A chat started in the session's worktree records it, as the desktop app's
+        // worktree chats do, so the app shows its branch and cleans it up the same way.
+        create: (input) => {
+          const conv = createConversation({
+            ...input,
+            ...(sessionWt && input.workspace === sessionWt.path ? { worktree: conversationWorktree(sessionWt) } : {})
+          })
+          lastConversationId = conv.id
+          return conv
+        },
+        setMessages: (id, messages) => {
+          lastConversationId = id
+          setMessages(id, messages)
+        },
         // Keep the chat's stored settings current after a `/model`, `/reasoning` or
         // `/approval` change (the GUI's per-send updateConversationMeta counterpart).
         setSettings: (id, patch) => updateConversationMeta(id, patch),
@@ -968,10 +1006,75 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
   } finally {
+    // Runs, shells and servers stop first: a dev server left running in the worktree
+    // must not hold it while it is removed.
     await exitGuard.run()
+    if (sessionWt) {
+      const wt = sessionWt
+      try {
+        await finishSessionWorktree(wt, {
+          out: (s) => io.out(s),
+          ask: (prompt) => io.readLine(prompt, { discardPending: true }),
+          dim: (s) => paint(s, 'dim'),
+          conversationId: lastConversationId,
+          detach: (w) => detachWorktreeChats(w)
+        })
+      } catch (e) {
+        log.warn(`worktree exit step failed: ${String(e)}`)
+        process.stderr.write(keptWorktreeNote(wt, lastConversationId))
+      }
+    }
     exitGuard.dispose()
   }
   return code
+}
+
+/** The stderr lines that say a session's worktree was kept and how to come back. */
+function keptWorktreeNote(wt: SessionWorktree, conversationId: string | null): string {
+  const path = stripControlChars(wt.path)
+  return `· kept the worktree at ${path} (branch ${wt.branch})\n  come back with: ${stripControlChars(
+    comeBackCommand(wt.path, conversationId)
+  )}\n`
+}
+
+/** Point every chat that ran in a removed worktree back at its repository. */
+function detachWorktreeChats(wt: { path: string; repoRoot: string }): void {
+  for (const c of listConversations()) {
+    if (c.worktree?.path === wt.path) detachConversationWorktree(c.id, wt.repoRoot)
+  }
+}
+
+/**
+ * Settle the folder a terminal session runs in, for `-w` and `--resume`: create the
+ * session's worktree (and move the session into it), or open a resumed worktree
+ * chat in its worktree. Returns the created worktree (null when none), or the exit
+ * code when it couldn't be created. Says what it did on stderr.
+ */
+async function startInWorktree(opts: {
+  cwd: string
+  worktree?: { name?: string }
+  resumeId?: string
+}): Promise<SessionWorktree | null | number> {
+  if (opts.worktree) {
+    const setup = await createSessionWorktree(opts.cwd, opts.worktree.name)
+    if (!setup.ok) {
+      process.stderr.write(`${stripControlChars(setup.error)}\n`)
+      return setup.code
+    }
+    opts.cwd = setup.worktree.path
+    process.stderr.write(
+      `· working in a new worktree: ${stripControlChars(setup.worktree.path)} (branch ${setup.worktree.branch})\n`
+    )
+    return setup.worktree
+  }
+  if (opts.resumeId) {
+    const folder = resumeWorktreeFolder(getConversation(opts.resumeId), opts.cwd)
+    if (folder) {
+      opts.cwd = folder
+      process.stderr.write(`· opening the chat in its worktree: ${stripControlChars(folder)}\n`)
+    }
+  }
+  return null
 }
 
 /**
@@ -1108,6 +1211,15 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
         /* a failed update check is a non-event */
       })
   }
+  // -w: a one-shot run in a fresh worktree keeps it (the run's result is in it). A
+  // bad flag value is runHeadless's to report, before any worktree is made.
+  let runWt: SessionWorktree | null = null
+  if (!headless.usageError) {
+    const wt = await startInWorktree(headless)
+    if (typeof wt === 'number') return wt
+    runWt = wt
+    if (runWt) headless.createdWorktree = { path: runWt.path, branch: runWt.branch }
+  }
   let code = 1
   let interrupted = false
   try {
@@ -1154,7 +1266,11 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
               }
             : null
         },
-        create: (input) => createConversation(input),
+        create: (input) =>
+          createConversation({
+            ...input,
+            ...(runWt && input.workspace === runWt.path ? { worktree: conversationWorktree(runWt) } : {})
+          }),
         setMessages,
         // Keep a resumed conversation's stored model and effort in step with what this
         // run actually used, so usage attribution and a GUI re-open don't diverge.

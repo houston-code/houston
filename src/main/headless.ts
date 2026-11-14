@@ -13,6 +13,7 @@ import { loadProjectConfig } from './agent/projectConfig'
 import {
   parseSessionFlag,
   readFlagFile,
+  sessionFlagConflict,
   readSessionFile,
   resolveSessionInputs,
   scopeEntryText,
@@ -139,6 +140,8 @@ export interface HeadlessInit {
   mcpServers?: string[]
   /** Whether the final answer must match an `--output-schema`. */
   outputSchema: boolean
+  /** The worktree `-w` created for this run (it is kept: `cwd` is its path). */
+  worktree?: { path: string; branch: string }
 }
 
 /**
@@ -273,6 +276,11 @@ export interface HeadlessOptions extends SessionFlags {
    * a budget or check the caller didn't ask for.
    */
   usageError?: string
+  /**
+   * The worktree the entry created for `-w` (and moved `cwd` into), reported on
+   * the `--json` init line. A one-shot run always keeps it.
+   */
+  createdWorktree?: { path: string; branch: string }
 }
 
 /** Facts about the process's stdin that decide whether a prompt can come from it. */
@@ -318,7 +326,9 @@ export const HEADLESS_FLAGS = new Set([
   '--mcp-config',
   '-n',
   '--name',
-  '--add-dir'
+  '--add-dir',
+  '-w',
+  '--worktree'
 ])
 
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
@@ -464,6 +474,9 @@ export function parseHeadlessArgs(
       else noMemory = true
     }
   }
+
+  const conflict = sessionFlagConflict(session, { continueSession, resumeId })
+  if (conflict) bad(conflict)
 
   // stream-json reads every prompt from stdin, one line per turn, so it is a
   // headless run on its own (no -p needed) and takes no -p prompt.
@@ -936,7 +949,8 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       ...(opts.allowedTools ? { allowedTools: opts.allowedTools.map(scopeEntryText) } : {}),
       ...(opts.disallowedTools ? { disallowedTools: opts.disallowedTools.map(scopeEntryText) } : {}),
       ...(inputs.mcpServers ? { mcpServers: inputs.mcpServers.map((s) => `run-${s.id}`) } : {}),
-      outputSchema: inputs.outputSchema !== undefined
+      outputSchema: inputs.outputSchema !== undefined,
+      ...(opts.createdWorktree ? { worktree: opts.createdWorktree } : {})
     }
     deps.out(`${JSON.stringify(init)}\n`)
     // Surface the conversation id so a script can capture it and later `--resume`

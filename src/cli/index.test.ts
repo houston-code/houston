@@ -172,6 +172,17 @@ describe('cliArgvError', () => {
     expect(cliArgvError(['-i', '-n', 'Title', '--add-dir', '/x', '--add-dir=/y', '--effort', 'high'])).toBeNull()
     expect(cliArgvError(['-i', '--name'])).toBe('--name needs a value')
   })
+
+  it('takes -w with or without a branch name', () => {
+    expect(cliArgvError(['-w'])).toBeNull()
+    expect(cliArgvError(['-w', 'feature/x'])).toBeNull()
+    expect(cliArgvError(['--worktree=fix', '-p', 'go'])).toBeNull()
+    expect(cliArgvError(['-w', '-p', 'go'])).toBeNull()
+    expect(cliArgvError(['-p', '-w', '--json'])).toBeNull()
+    // One name only: a second word is still a stray one.
+    expect(cliArgvError(['-w', 'a', 'b'])).toContain('unexpected argument: "b"')
+    expect(USAGE).toMatch(/^ {2}-w, --worktree \[name\]/m)
+  })
 })
 
 describe('shortUsage', () => {

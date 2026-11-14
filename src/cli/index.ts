@@ -99,6 +99,9 @@ Options:
                         (--json puts it in the result line's structured_output)
   --mcp-config <file>   extra MCP servers for this session only
   -n, --name <title>    title the session's chat
+  -w, --worktree [name] start in a new git worktree on a new branch from the
+                        current HEAD (default name: generated); interactive
+                        exit removes it if unused, -p keeps it
   --input-format stream-json
                         (with --json) read one {"type":"user","content":"..."}
                         line per turn from stdin until end of input
@@ -193,6 +196,8 @@ const SWITCH_FLAGS = new Set([
 ])
 /** `-p` takes the prompt, or nothing (then the prompt comes from piped stdin). */
 const PROMPT_FLAGS = new Set(['-p', '--prompt'])
+/** `-w` takes a branch name, or nothing (then one is generated). A name never starts with `-`. */
+const OPTIONAL_VALUE_FLAGS = new Set(['-w', '--worktree'])
 
 function flagName(arg: string): string {
   const eq = arg.indexOf('=')
@@ -209,7 +214,7 @@ function flagName(arg: string): string {
 export function cliArgvError(args: string[]): string | null {
   const isKnown = (a: string): boolean => {
     const n = flagName(a)
-    return VALUE_FLAGS.has(n) || SWITCH_FLAGS.has(n) || PROMPT_FLAGS.has(n)
+    return VALUE_FLAGS.has(n) || SWITCH_FLAGS.has(n) || PROMPT_FLAGS.has(n) || OPTIONAL_VALUE_FLAGS.has(n)
   }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -219,6 +224,10 @@ export function cliArgvError(args: string[]): string | null {
       // Its value is the next word unless that is another flag (`-p --json` with
       // the prompt piped in).
       if (!inline && args[i + 1] !== undefined && !isKnown(args[i + 1])) i++
+      continue
+    }
+    if (OPTIONAL_VALUE_FLAGS.has(name)) {
+      if (!inline && args[i + 1] !== undefined && !args[i + 1].startsWith('-')) i++
       continue
     }
     if (VALUE_FLAGS.has(name)) {

@@ -7,6 +7,7 @@ import {
   type ToolScope,
   type ToolScopeEntry
 } from '@shared/agent'
+import { isSafeGitRef } from '@shared/git'
 import type { McpServerConfig } from '@shared/types'
 import { parseProjectMcpServers } from './agent/projectConfig'
 import { parseToolList } from './agent/toolScope'
@@ -38,6 +39,8 @@ export interface SessionFlags {
    * runs may work in, sent as the run request's `addDirs`.
    */
   addDirs?: string[]
+  /** `-w` / `--worktree [name]`: start in a fresh git worktree (branch name optional). */
+  worktree?: { name?: string }
 }
 
 /** Flags {@link parseSessionFlag} reads that take a value. */
@@ -51,6 +54,9 @@ export const SESSION_VALUE_FLAGS = [
   '--name',
   '--add-dir'
 ] as const
+
+/** Flags whose value is optional: `-w` alone, or `-w <name>`. */
+export const SESSION_OPTIONAL_VALUE_FLAGS = ['-w', '--worktree'] as const
 
 /** Longest `--name` title accepted. */
 export const MAX_SESSION_TITLE = 200
@@ -153,9 +159,39 @@ export function parseSessionFlag(
       else if (!flags.addDirs?.includes(added.dir)) flags.addDirs = [...(flags.addDirs ?? []), added.dir]
       return next
     }
+    case '-w':
+    case '--worktree': {
+      // The name is optional: the next word is it unless that is another flag (a
+      // branch name never starts with a dash, so `-w -p "x"` reads `-w` alone).
+      const inline = argv[i].includes('=')
+      let value: string | undefined
+      let next = i
+      if (inline) value = argv[i].slice(argv[i].indexOf('=') + 1)
+      else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) {
+        value = argv[i + 1]
+        next = i + 1
+      }
+      const branch = value?.trim()
+      if (inline && !branch) bad(`${name}= needs a branch name, or pass ${name} alone for a generated one`)
+      else if (branch !== undefined && !isSafeGitRef(branch)) {
+        bad(`${name}: ${quoted(branch)} is not a usable branch name (letters, numbers, and . _ / -, no leading dash)`)
+      } else flags.worktree = branch ? { name: branch } : {}
+      return next
+    }
     default:
       return null
   }
+}
+
+/** A usage problem between the session flags and the session-picking ones, or null. */
+export function sessionFlagConflict(
+  flags: SessionFlags,
+  session: { continueSession?: boolean; resumeId?: string }
+): string | null {
+  if (flags.worktree && (session.continueSession || session.resumeId !== undefined)) {
+    return '--worktree starts a new session in a new worktree; it cannot be combined with --continue or --resume'
+  }
+  return null
 }
 
 /** The session flags, as set in `flags`, for spreading into a parser's result. */
@@ -167,7 +203,8 @@ export function sessionFlagFields(flags: SessionFlags): SessionFlags {
     ...(flags.appendSystemPrompt?.length ? { appendSystemPrompt: flags.appendSystemPrompt } : {}),
     ...(flags.mcpConfig?.length ? { mcpConfig: flags.mcpConfig } : {}),
     ...(flags.title !== undefined ? { title: flags.title } : {}),
-    ...(flags.addDirs?.length ? { addDirs: flags.addDirs } : {})
+    ...(flags.addDirs?.length ? { addDirs: flags.addDirs } : {}),
+    ...(flags.worktree ? { worktree: flags.worktree } : {})
   }
 }
 

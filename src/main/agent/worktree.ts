@@ -37,8 +37,8 @@ const EXCLUDE_LINE = '/.houston/worktrees/'
 /** Result of a git invocation: stdout plus stderr (for surfacing failures). */
 export type GitRun = (args: string[], cwd: string) => Promise<string>
 
-/** Default runner: rejects with an Error whose message carries git's stderr. */
-async function runGit(args: string[], cwd: string): Promise<string> {
+/** Default runner (hardened, no shell): rejects with an Error whose message carries git's stderr. */
+export async function runGit(args: string[], cwd: string): Promise<string> {
   const hardening = await hardenedGitArgs(cwd)
   return new Promise((resolve, reject) => {
     execFile(
@@ -380,13 +380,19 @@ async function mergedInto(wt: ConversationWorktree, base: string, exec: GitRun):
  * is only removed when it has no uncommitted changes, and the branch only when
  * it's fully merged — so work is never silently destroyed. With `force`, both are
  * removed unconditionally. Best-effort and never throws; reports what it did.
+ *
+ * `branch` overrides how the branch goes, apart from the checkout: `'safe'` deletes
+ * it only when merged even with `force` (the worktree's uncommitted work is given
+ * up, its commits are not), `'force'` deletes it regardless (for a branch the caller
+ * has checked holds no commits of its own).
  */
 export async function removeWorktree(
   wt: ConversationWorktree,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; branch?: 'safe' | 'force' } = {},
   exec: GitRun = runGit
 ): Promise<WorktreeRemoval> {
   const force = opts.force === true
+  const forceBranch = opts.branch ? opts.branch === 'force' : force
   try {
     const args = ['worktree', 'remove', wt.path]
     if (force) args.push('--force')
@@ -399,13 +405,13 @@ export async function removeWorktree(
   await lspManager.stopForRoot(wt.path).catch(() => {})
   let branchDeleted = false
   try {
-    await exec(['branch', force ? '-D' : '-d', wt.branch], wt.repoRoot)
+    await exec(['branch', forceBranch ? '-D' : '-d', wt.branch], wt.repoRoot)
     branchDeleted = true
   } catch {
     // `-d` refuses a branch the main checkout's HEAD lacks. When origin's default
     // branch already has every commit (merged upstream, main checkout not pulled),
     // deleting it loses nothing; otherwise leave it so commits aren't lost.
-    if (!force && isSafeGitRef(wt.branch) && (await mergedInto(wt, ORIGIN_DEFAULT, exec))) {
+    if (!forceBranch && isSafeGitRef(wt.branch) && (await mergedInto(wt, ORIGIN_DEFAULT, exec))) {
       try {
         await exec(['branch', '-D', wt.branch], wt.repoRoot)
         branchDeleted = true
