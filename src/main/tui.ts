@@ -3127,8 +3127,12 @@ export interface TuiDeps {
    * not answer. Absent ⇒ hosts are listed without a probe.
    */
   listModels?: (provider: ProviderConfig) => Promise<ModelOption[]>
-  /** The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch shown. */
-  gitBranch?: () => Promise<string | null>
+  /**
+   * The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch
+   * shown. Read before every status line and never waited for: a value shows at once, a
+   * promise shows on the status line after it settles.
+   */
+  gitBranch?: () => string | null | Promise<string | null>
   /**
    * Write an export (`/export`) to `path`, relative to the working folder, without
    * replacing an existing file. Returns the full path written; throws on failure.
@@ -3622,12 +3626,27 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // This session's landed edits (newest last), for `/diff last [n]`.
   let recentEdits: FileDiffPreview[][] = []
   // The checked-out branch, re-read before each status line (a turn or `!git`
-  // may switch it).
+  // may switch it). Never waited for: the prompt, and a queued turn's request behind
+  // it, must not sit behind a git process. A slow answer shows on the next status line.
   let branch: string | null = null
-  const refreshBranch = async (): Promise<void> => {
+  let branchReads = 0
+  const refreshBranch = (): void => {
     if (!deps.gitBranch) return
+    const read = ++branchReads
     try {
-      branch = await deps.gitBranch()
+      const got = deps.gitBranch()
+      if (got === null || typeof got === 'string') {
+        branch = got
+        return
+      }
+      got.then(
+        (b) => {
+          if (read === branchReads) branch = b
+        },
+        () => {
+          if (read === branchReads) branch = null
+        }
+      )
     } catch {
       branch = null
     }
@@ -4038,7 +4057,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // A persistent status line above the composer: model, policy, cwd, cost, and
     // context-window fill — so live session state is always visible. Before a
     // provider is set up it shows a "no model" prompt pointing at /login instead.
-    await refreshBranch()
+    refreshBranch()
     deps.io.out(
       `${
         providerId && model
@@ -5239,6 +5258,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
+    // Set once a text delta has relabelled the spinner, so the rest of the reply
+    // doesn't relabel it on every delta; any other event clears it.
+    let saysResponding = false
 
     const send = (e: AgentEvent): void => {
       // Attention signals ride the event stream itself, so anything that blocks the
@@ -5256,11 +5278,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (e.type === 'text') {
         retryStreak = 0 // the request got through
+        // The reply is streaming: whatever the spinner said before (a tool that has
+        // finished, Thinking) is over. Same word the desktop app's status bar uses.
+        if (!saysResponding) {
+          deps.io.setSpinnerLabel?.('Responding')
+          saysResponding = true
+        }
         const s = md.push(e.delta)
         if (s) roundShown = true
         deps.io.out(s)
         return
       }
+      saysResponding = false
       // A discarded round's unfinished block is dropped unrendered, never flushed:
       // its redo will print the whole reply again.
       if (e.type === 'turn_discarded') md.discard()

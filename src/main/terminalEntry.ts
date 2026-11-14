@@ -56,6 +56,7 @@ import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
 import { listModels } from './providers'
 import { runGitCapture } from './agent/gitRead'
+import { readHeadBranch } from './headBranch'
 import { writeExportFile } from './tui-sessions'
 import {
   canPersistHeaderSecrets,
@@ -74,6 +75,7 @@ import {
   mediaTypeForImagePath,
   type BackgroundSession,
   type ResumeEntry,
+  type TuiIo,
   type TuiOptions
 } from './tui'
 import { detectTerminalBackground } from './tui-background'
@@ -114,7 +116,7 @@ import {
 import { mergeCommands } from '@shared/commands'
 import { runOutcome, runOutcomePhrase } from '@shared/runEnd'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
-import { highlightToHtml } from './syntax'
+import { highlightToHtml, type HljsLike } from './syntax'
 import {
   createConversation,
   setMessages,
@@ -179,6 +181,34 @@ export interface TerminalHost {
    * own exit step; a normal exit leaves it to the host.
    */
   flush?: () => Promise<unknown>
+  /**
+   * Start-up work the host put off so it doesn't delay the interactive client's first
+   * paint (the CLI's read of the system certificate store). Run once, right after the
+   * first prompt is drawn.
+   */
+  afterFirstPrompt?: () => void
+}
+
+/**
+ * `io` that runs `afterFirstPrompt` once, on the turn of the event loop after its first
+ * composer read starts. That read draws the prompt before it returns, so work moved here
+ * lands just after the first paint instead of ahead of it.
+ */
+export function onFirstPrompt<T extends Pick<TuiIo, 'readComposer'>>(io: T, afterFirstPrompt: () => void): T {
+  const read = io.readComposer
+  if (!read) return io
+  let fired = false
+  return {
+    ...io,
+    readComposer: (...args: Parameters<NonNullable<TuiIo['readComposer']>>) => {
+      const reading = read(...args)
+      if (!fired) {
+        fired = true
+        setImmediate(afterFirstPrompt)
+      }
+      return reading
+    }
+  }
 }
 
 /** Longest an exit waits for cancelled runs to unwind (recording why they stopped). */
@@ -575,7 +605,18 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // that index.test.ts loads — only the real interactive path pulls it in.
   // `./syntax` itself carries no heavy deps (highlight.js is injected below), so
   // it's imported statically at the top; the dynamic wrapper bought no chunk split.
-  const { default: hljs } = await import('highlight.js/lib/common')
+  // Loaded once the first prompt is drawn, not before it: nothing is highlighted
+  // until a reply, plan or write preview arrives, and a bundled import finishes in the
+  // same turn of the event loop it starts in, ahead of any keystroke or reply.
+  let hljs: HljsLike | null = null
+  const loadHighlighter = (): void => {
+    import('highlight.js/lib/common').then(
+      (m) => {
+        hljs = m.default
+      },
+      (e) => log.warn(`syntax highlighting unavailable: ${String(e)}`)
+    )
+  }
 
   // Per-workspace composer history (Up/Down recall across restarts). Keyed by a
   // hash of the cwd so each project keeps its own history under userData.
@@ -629,7 +670,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // Typing `@` lists matching files under the composer, as `/` lists commands.
   const mentionMenu = makeMentionMenu((q) => findFiles(tui.cwd, q), paint as never)
 
-  const io = createTerminalIo({
+  const terminalIo = createTerminalIo({
     menuFor: (line, redraw) => {
       const matches = commandMenu(line, menuCommands)
       if (matches) return renderCommandMenu(matches, paint as never)
@@ -653,6 +694,10 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       await editInEditor(text, 'TRANSCRIPT.md')
       return true
     }
+  })
+  const io = onFirstPrompt(terminalIo, () => {
+    host.afterFirstPrompt?.()
+    loadHighlighter()
   })
 
   // spawn_session + scheduled runs work in the TUI too: background sessions run
@@ -707,11 +752,16 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // doesn't answer quickly is reported as not running rather than holding up
       // the menu (the SDK's own retries can take far longer).
       listModels: (provider) => withTimeout(listModels(provider), HOST_PROBE_MS),
-      // symbolic-ref names the branch (even an unborn one) and fails on a detached
-      // HEAD or outside a repository, where the status line shows no branch.
-      gitBranch: async () => {
-        const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], tui.cwd)
-        return head.ok ? head.stdout.trim() || null : null
+      // Read from the repository's HEAD file, so drawing the status line runs no git.
+      // Only a HEAD the file can't answer for asks git: symbolic-ref names the branch
+      // (even an unborn one) and fails on a detached HEAD or outside a repository,
+      // where the status line shows no branch.
+      gitBranch: () => {
+        const fromFile = readHeadBranch(tui.cwd)
+        if (fromFile !== undefined) return fromFile
+        return runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], tui.cwd).then((head) =>
+          head.ok ? head.stdout.trim() || null : null
+        )
       },
       writeExport: (path, content) => writeExportFile(tui.cwd, path, content),
       workingTree: async () => {
@@ -850,7 +900,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       isMac: process.platform === 'darwin',
       settingsPath: () => join(getUserDataDir(), 'settings.json'),
       io,
-      highlightHtml: (lang, codeStr) => highlightToHtml(hljs, lang, codeStr),
+      highlightHtml: (lang, codeStr) => (hljs ? highlightToHtml(hljs, lang, codeStr) : null),
       persist: {
         create: (input) => createConversation(input),
         setMessages,

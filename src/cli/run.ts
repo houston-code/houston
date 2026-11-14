@@ -35,7 +35,7 @@ import {
   cliSetMcpOAuth
 } from './credentials'
 import { runProvidersCommand, type ProvidersDeps } from './providers'
-import { trustSystemCertificates } from '../main/system-ca'
+import { deferTrustSystemCertificates } from '../main/system-ca'
 import { configureOutboundProxy } from '../main/outbound-proxy'
 import { noteRuleUsed } from '../main/ruleUsage'
 
@@ -49,13 +49,19 @@ export { flushRuleUsage } from '../main/ruleUsage'
  * answers without evaluating the agent core, the store, or the TUI.
  */
 
-/** Wire the Node-side host capabilities. Must run before any settings read. */
-export function wireCliHost(): void {
+/**
+ * Wire the Node-side host capabilities. Must run before any settings read. Returns the
+ * deferred read of the system certificate store, for the interactive client to run once
+ * its prompt is drawn.
+ */
+export function wireCliHost(): { trustCertificatesNow: () => void } {
   setUserDataDir(resolveUserDataDir())
   // Record background shells in the profile and stop any a crashed session left running.
   void startShellLedger(resolveUserDataDir())
   // Before any provider call: a TLS-inspecting network's root CA lives in the OS store.
-  trustSystemCertificates()
+  // Reading it takes tens of milliseconds, so it waits: the TUI reads it once its prompt
+  // is on screen, and until then the first TLS connection reads it before connecting.
+  const trustCertificatesNow = deferTrustSystemCertificates()
   // Provider, MCP and search traffic honours the proxy setting or HTTPS_PROXY.
   configureOutboundProxy(() => getSettings().proxyUrl)
   configureHasKey((id) => cliHasKey(id))
@@ -93,6 +99,7 @@ export function wireCliHost(): void {
     // desktop app), so Settings shows rules used from the terminal as used.
     noteRuleUsed
   })
+  return { trustCertificatesNow }
 }
 
 export interface RunCliOptions {
@@ -107,7 +114,7 @@ export interface RunCliOptions {
  * Run a real CLI invocation (anything but `-h`/`-v`/`open`) and return its exit code.
  */
 export async function runCli(argv: string[], { version, usage, argvProblem }: RunCliOptions): Promise<number> {
-  wireCliHost()
+  const { trustCertificatesNow } = wireCliHost()
 
   // `houston providers …` — manage providers/keys before the run-mode parsers,
   // which only match `-i`/`-p`. Matched as the first positional so flags before it
@@ -131,7 +138,7 @@ export async function runCli(argv: string[], { version, usage, argvProblem }: Ru
     }
     return runAcpEntry({ version }, launch)
   }
-  if (mode.kind === 'tui') return runTuiEntry(mode.options, { version })
+  if (mode.kind === 'tui') return runTuiEntry(mode.options, { version, afterFirstPrompt: trustCertificatesNow })
   if (mode.kind === 'headless') return runHeadlessEntry(mode.options, { version })
 
   process.stderr.write(usage)

@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent, ElicitationResult, PlanDecision } from '@shared/agent'
 import { spawn } from 'node:child_process'
-import { guardTerminalExit, resolveBackgroundEvent, watchTerminationSignals, wireTerminalSessionBackends } from './terminalEntry'
+import {
+  guardTerminalExit,
+  onFirstPrompt,
+  resolveBackgroundEvent,
+  watchTerminationSignals,
+  wireTerminalSessionBackends
+} from './terminalEntry'
 import { readShellOutput, registerShell } from './agent/shells'
 import type { SignalProcess } from './signalCleanup'
 import { setUserDataDir, resetUserDataDir } from './userData'
@@ -200,6 +206,37 @@ describe('wireTerminalSessionBackends', () => {
     })
     expect(info.id).toMatch(/^sch-/)
     expect(scheduleList()).toHaveLength(1)
+  })
+})
+
+describe('onFirstPrompt', () => {
+  const nextTurn = (): Promise<void> => new Promise((r) => setImmediate(r))
+
+  it('runs the deferred work once, just after the first composer read has drawn its prompt', async () => {
+    const events: string[] = []
+    const io = onFirstPrompt(
+      {
+        readComposer: async (prompt: string | (() => string)) => {
+          events.push(`draw:${typeof prompt === 'string' ? prompt : prompt()}`)
+          return 'typed'
+        }
+      },
+      () => events.push('deferred')
+    )
+    const first = io.readComposer!('› ')
+    // Not inside the read: the prompt reaches the screen first.
+    expect(events).toEqual(['draw:› '])
+    await expect(first).resolves.toBe('typed')
+    await nextTurn()
+    expect(events).toEqual(['draw:› ', 'deferred'])
+    await io.readComposer!(() => '» ')
+    await nextTurn()
+    expect(events).toEqual(['draw:› ', 'deferred', 'draw:» '])
+  })
+
+  it('leaves an io without a composer as it is', () => {
+    const io = {}
+    expect(onFirstPrompt(io, () => {})).toBe(io)
   })
 })
 
