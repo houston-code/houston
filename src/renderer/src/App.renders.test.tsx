@@ -92,6 +92,7 @@ function installApi(chats: number) {
     listCommands: async () => [],
     listPreviewServers: async () => [],
     getBackgroundShells: async () => [],
+    getRateLimits: async () => [],
     getWorkingTreeChanges: async () => ({ isRepo: true, branch: 'main', files: diffFiles(3), added: 3, removed: 3 }),
     getWorkingTreeStats: async () => ({ isRepo: true, branch: 'main', fileCount: 3, added: 3, removed: 3 })
   }
