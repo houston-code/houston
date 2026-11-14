@@ -124,6 +124,53 @@ describe('subagent rows', () => {
     expect(screen.getByText(/max_turns: 12 in its agent file/)).toBeInTheDocument()
   })
 
+  it('warns instead of a check when an agent stopped at its max_turns', () => {
+    const capped = row({ records: [record({ status: 'step-limit', outcome: 'limit', budget: { used: 12, limit: 12, ceiling: 12, hardCap: 12 } })] })
+    const { container } = render(<ToolGroup items={[capped]} onApprove={vi.fn()} />)
+    const glyph = container.querySelector('.tool-row__head .tool-row__glyph') as HTMLElement
+    expect(glyph).toHaveClass('tool-row__glyph--warn')
+    expect(glyph).toHaveTextContent('!')
+    expect(glyph).toHaveAccessibleName('Subagent stopped at its 12-step limit')
+  })
+
+  it('warns, and says why, when the output limit cut the report off', () => {
+    const cut = row({ records: [record({ outcome: 'limit', report: 'Half a report\n\n[subagent report cut off at the model\'s output limit]' })] })
+    const { container } = render(<ToolGroup items={[cut]} onApprove={vi.fn()} />)
+    const glyph = container.querySelector('.tool-row__head .tool-row__glyph') as HTMLElement
+    expect(glyph).toHaveClass('tool-row__glyph--warn')
+    expect(glyph).not.toHaveTextContent('✓')
+    expect(within(container.querySelector('.sa-chips') as HTMLElement).getByText("cut off at the model's output limit")).toBeInTheDocument()
+    fireEvent.click(head(container))
+    expect(screen.getByText(/cut off at the model's output limit, so it may be incomplete/)).toBeInTheDocument()
+  })
+
+  it('warns when an agent came back without a report', () => {
+    const empty = row({ output: '[subagent returned no answer]', records: [record({ outcome: 'empty', report: '[subagent returned no answer]' })] })
+    const { container } = render(<ToolGroup items={[empty]} onApprove={vi.fn()} />)
+    expect(container.querySelector('.tool-row__head .tool-row__glyph')).toHaveClass('tool-row__glyph--warn')
+    expect(within(container.querySelector('.sa-chips') as HTMLElement).getByText('finished without a report')).toBeInTheDocument()
+    fireEvent.click(head(container))
+    expect(screen.getByText('The agent ended without writing a report.')).toBeInTheDocument()
+  })
+
+  it('keeps the check for a whole report, and marks a nested agent cut short', () => {
+    const tree = row({
+      records: [
+        record({ steps: [step(0, { tool: 'dispatch_agent', summary: 'Subagent: Find callers', childId: 'sa2' })] }),
+        record({ id: 'sa2', parentId: 'sa1', label: 'Find callers', status: 'step-limit', outcome: 'limit', resumeId: undefined })
+      ]
+    })
+    const { container } = render(<ToolGroup items={[tree]} onApprove={vi.fn()} />)
+    const glyph = container.querySelector('.tool-row__head .tool-row__glyph') as HTMLElement
+    expect(glyph).toHaveClass('tool-row__glyph--done')
+    expect(glyph).toHaveTextContent('✓')
+    fireEvent.click(head(container))
+    fireEvent.click(screen.getByRole('tab', { name: /Steps/ }))
+    const nested = container.querySelector('.sa-nested .sa-step__g') as HTMLElement
+    expect(nested).toHaveClass('sa-step__g--note')
+    expect(nested).toHaveTextContent('!')
+  })
+
   it('renders an old chat’s report as markdown without the note, even with no record', () => {
     const { container } = render(<ToolGroup items={[row({ records: undefined })]} onApprove={vi.fn()} />)
     fireEvent.click(head(container))

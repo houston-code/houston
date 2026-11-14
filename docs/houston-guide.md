@@ -1901,7 +1901,9 @@ each shell command a writable subagent runs would run unconfined, so each asks f
 own approval too.
 
 **Cost.** Tokens a subagent spends roll into the conversation's usage meter, priced
-at the model it actually ran on.
+at the model it actually ran on, one request at a time like the main agent's. They
+count toward the run's cost ceiling (`--max-cost`) as they're spent, so a subagent
+working when the run reaches it is told to wrap up too.
 
 ### Seeing what a subagent did
 
@@ -1911,7 +1913,11 @@ command's exit code, an edit's line counts) and shows its model, step count, tim
 and tokens. A nested agent gets its own indented block.
 
 **When it finishes,** the row collapses to a summary: model, steps, time, cost, and
-its id (like `ag1`). Expand it for three tabs:
+its id (like `ag1`). A check means it finished with a whole report. A warning (`!`)
+means its report is partial or missing: it stopped at its step limit or `max_turns`,
+stopped after repeating itself, was cut off at the model's output limit, or ended
+without writing a report. The main agent is told the same in the result it gets back.
+Expand it for three tabs:
 
 - **Report:** the agent's report, rendered.
 - **Steps:** each step expands to its result, or an edit's real diff.
@@ -1926,8 +1932,10 @@ Loop control sets how much a chat keeps (4 MB by default). Past that, the oldest
 subagents keep their task, steps, and report but drop step results and diffs.
 
 **In the terminal,** a line is printed per step under the dispatch (a review's
-reviewers only with `/verbose`), then the report. `--json` emits `subagent_start`,
-`subagent_step`, and `subagent_end`.
+reviewers only with `/verbose`), then an end line marked the same way (a check, or `!`
+for a partial or missing report), then the report. `--json` emits `subagent_start`,
+`subagent_step`, and `subagent_end` (whose `outcome` is `done`, `limit`, `empty`, or
+`error`).
 
 ### Step budget
 

@@ -1288,13 +1288,13 @@ export type AgentEvent =
       step: SubagentStep
     }
   | {
-      // A subagent finished: its status, usage, budget, and report.
+      // A subagent finished: its status and outcome, usage, budget, and report.
       runId: string
       type: 'subagent_end'
       parentCallId: string
       recordId: string
       update: Pick<SubagentRecord, 'status' | 'endedAt'> &
-        Partial<Pick<SubagentRecord, 'usage' | 'budget' | 'report' | 'resumeId' | 'stepsOmitted'>>
+        Partial<Pick<SubagentRecord, 'outcome' | 'usage' | 'budget' | 'report' | 'resumeId' | 'stepsOmitted'>>
     }
   | {
       // One review finding, surfaced under its review_changes row the moment a

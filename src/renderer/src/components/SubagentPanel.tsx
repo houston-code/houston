@@ -2,8 +2,10 @@ import { useMemo, useRef, useState } from 'react'
 import { diffStat } from '@shared/diff'
 import { formatTokens, formatUsd } from '@shared/usage'
 import {
+  endedShort,
   formatDuration,
   modelSourceLabel,
+  recordOutcome,
   recordDiffStat,
   recordToMarkdown,
   splitSubagentReport,
@@ -57,6 +59,16 @@ function usageText(r: SubagentRecord): string | null {
   return `${formatTokens(r.usage.input + r.usage.output)} tokens`
 }
 
+/** Why an agent's report is not a whole answer, for the note under it. */
+export function shortfallText(r: SubagentRecord): string {
+  if (recordOutcome(r) === 'empty') return 'The agent ended without writing a report.'
+  if (r.status === 'stalled') return 'Stopped after repeating the same step. The report above is what it had.'
+  if (r.status === 'done') return "The report was cut off at the model's output limit, so it may be incomplete."
+  return r.budget?.hardCap
+    ? `Stopped at this agent's step limit (max_turns: ${r.budget.hardCap} in its agent file). It used its last step to report what it found so far.`
+    : 'Stopped at its step limit. It used its last step to report what it found so far.'
+}
+
 /** The root agent of a dispatch row (the one the main agent dispatched). */
 export function rootRecord(records: readonly SubagentRecord[] | undefined): SubagentRecord | undefined {
   return records?.find((r) => !r.parentId)
@@ -71,7 +83,9 @@ export function SubagentChips({ records }: { records: SubagentRecord[] }): JSX.E
   const steps = toolStepCount(root)
   const stat = recordDiffStat(root)
   const cost = usageText(root)
-  const stopped = root.status === 'step-limit' || root.status === 'stalled'
+  // Cut short (a step, loop or output limit) or empty: flagged, never shown as a plain step count.
+  const stopped = endedShort(root)
+  const stepsUsed = (root.status === 'step-limit' || root.status === 'stalled') && root.budget
   return (
     <span className="sa-chips">
       <span className="sa-chip sa-chip--model" title={`Model: ${root.model}`}>
@@ -79,7 +93,7 @@ export function SubagentChips({ records }: { records: SubagentRecord[] }): JSX.E
       </span>
       {stopped ? (
         <span className="sa-chip sa-chip--warn" title={statusLabel(root)}>
-          {root.budget ? `${root.budget.used} of ${root.budget.limit} steps` : statusLabel(root)}
+          {stepsUsed ? `${stepsUsed.used} of ${stepsUsed.limit} steps` : statusLabel(root)}
         </span>
       ) : (
         <span className="sa-chip">{running ? `step ${Math.max(1, steps)}` : plural(steps, 'step')}</span>
@@ -194,15 +208,7 @@ export function SubagentBody({
         {tab === 'steps' && <StepList node={root} onOpen={setTranscript} />}
         {tab === 'setup' && <SetupView record={root.record} />}
       </div>
-      {(root.record.status === 'step-limit' || root.record.status === 'stalled') && (
-        <div className="sa-callout">
-          {root.record.status === 'stalled'
-            ? 'Stopped after repeating the same step. The report above is what it had.'
-            : root.record.budget?.hardCap
-              ? `Stopped at this agent's step limit (max_turns: ${root.record.budget.hardCap} in its agent file). It used its last step to report what it found so far.`
-              : 'Stopped at its step limit. It used its last step to report what it found so far.'}
-        </div>
-      )}
+      {endedShort(root.record) && <div className="sa-callout">{shortfallText(root.record)}</div>}
       {footer}
       {transcript && <SubagentTranscript records={records ?? []} selectedId={transcript} onClose={() => setTranscript(null)} />}
     </div>
@@ -386,11 +392,13 @@ function NestedAgent({
   const r = node.record
   const running = r.status === 'running'
   const now = useTick(running)
+  const outcome = recordOutcome(r)
+  const mod = running ? ' sa-step__g--run' : outcome === 'done' ? '' : outcome === 'error' ? ' sa-step__g--fail' : ' sa-step__g--note'
   return (
     <div className="sa-nested">
       <div className="sa-nested__head">
-        <span className={`sa-step__g${running ? ' sa-step__g--run' : r.status === 'done' ? '' : ' sa-step__g--fail'}`} aria-hidden="true">
-          {running ? '◌' : r.status === 'done' ? '✓' : '✗'}
+        <span className={`sa-step__g${mod}`} title={statusLabel(r)} aria-label={statusLabel(r)}>
+          {running ? '◌' : outcome === 'done' ? '✓' : outcome === 'error' ? '✗' : '!'}
         </span>
         <b>{r.label}</b>
         <span className="sa-chip sa-chip--model">{r.model}</span>
