@@ -11,10 +11,16 @@ import {
   setItemEnabled,
   type CustomizeDeps
 } from './customize'
+import { isKnownWorkspace } from './knownWorkspace'
 
-/** The open project as a real directory, or null (an empty or missing one is no project). */
-function workspaceArg(workspace: unknown): string | null {
-  if (typeof workspace !== 'string' || !workspace) return null
+/**
+ * The open project as a real directory, or null (an empty, missing or unknown one is
+ * no project). Only a project the app already knows (a recent project or a chat's
+ * folder, see isKnownWorkspace) counts, so a renderer bug can't create, rewrite,
+ * trash or open items in an arbitrary folder.
+ */
+export function workspaceArg(workspace: unknown, known: (ws: string) => boolean = isKnownWorkspace): string | null {
+  if (typeof workspace !== 'string' || !workspace || !known(workspace)) return null
   try {
     return realpathSync(workspace)
   } catch {
@@ -22,16 +28,17 @@ function workspaceArg(workspace: unknown): string | null {
   }
 }
 
-function deps(workspace: unknown): CustomizeDeps {
-  return {
-    workspace: workspaceArg(workspace),
+/** Settings > Customize: skills, commands, agents and the loaded instruction files. */
+export function registerCustomizeIpc(
+  handle: typeof ipcMain.handle,
+  known: (ws: string) => boolean = isKnownWorkspace
+): void {
+  // Every open is a regular `.md` file by its real path (customize.ts openMarkdown).
+  const deps = (workspace: unknown): CustomizeDeps => ({
+    workspace: workspaceArg(workspace, known),
     trash: (path) => shell.trashItem(path),
     open: (path) => shell.openPath(path)
-  }
-}
-
-/** Settings > Customize: skills, commands, agents and the loaded instruction files. */
-export function registerCustomizeIpc(handle: typeof ipcMain.handle): void {
+  })
   handle(IPC.customizeList, (_e, workspace: unknown): Promise<CustomizeOverview> => customizeOverview(deps(workspace)))
   handle(
     IPC.customizeCreate,

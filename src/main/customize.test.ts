@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -23,8 +23,9 @@ let ws: string
 let trash: ReturnType<typeof vi.fn<(path: string) => Promise<void>>>
 let open: ReturnType<typeof vi.fn<(path: string) => Promise<string>>>
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), 'houston-cushome-'))
-  ws = mkdtempSync(join(tmpdir(), 'houston-cusws-'))
+  // Real paths: opens go to a file's real path, and macOS's tmpdir is behind /var -> /private/var.
+  home = realpathSync(mkdtempSync(join(tmpdir(), 'houston-cushome-')))
+  ws = realpathSync(mkdtempSync(join(tmpdir(), 'houston-cusws-')))
   trash = vi.fn(async (p: string) => {
     rmSync(p, { recursive: true, force: true })
   })
@@ -185,6 +186,55 @@ describe('openItem and deleteItem', () => {
     } finally {
       rmSync(elsewhere, { recursive: true, force: true })
     }
+  })
+})
+
+/**
+ * macOS picks the app for a symlink by its target's type, so a committed Markdown name
+ * that links to a `.command` script would launch Terminal and run it on Open. Every
+ * Customize open must refuse it without ever calling the opener.
+ */
+describe('opening a link to a launchable file', () => {
+  const posixOnly = process.platform === 'win32' ? it.skip : it
+
+  posixOnly('refuses a skill, command or agent file that links to a .command', async () => {
+    put(ws, 'run.command', '#!/bin/sh\necho pwned\n')
+    mkdirSync(join(ws, '.houston/skills/x'), { recursive: true })
+    mkdirSync(join(ws, '.houston/commands'), { recursive: true })
+    mkdirSync(join(ws, '.houston/agents'), { recursive: true })
+    symlinkSync(join(ws, 'run.command'), join(ws, '.houston/skills/x/SKILL.md'))
+    symlinkSync(join(ws, 'run.command'), join(ws, '.houston/commands/x.md'))
+    symlinkSync(join(ws, 'run.command'), join(ws, '.houston/agents/x.md'))
+    for (const id of ['skill:project:x', 'command:project:x', 'agent:project:x']) {
+      expect(await openItem(id, deps())).toEqual({ ok: false, error: expect.stringMatching(/different kind/) })
+    }
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  posixOnly('refuses the same link in the user folder', async () => {
+    put(home, 'run.command', '#!/bin/sh\n')
+    mkdirSync(join(home, '.houston/commands'), { recursive: true })
+    symlinkSync(join(home, 'run.command'), join(home, '.houston/commands/x.md'))
+    expect((await openItem('command:user:x', deps())).ok).toBe(false)
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  posixOnly('opens a same-type link by its real path', async () => {
+    const real = put(ws, 'docs/deploy.md', 'Steps')
+    mkdirSync(join(ws, '.houston/commands'), { recursive: true })
+    symlinkSync(real, join(ws, '.houston/commands/deploy.md'))
+    expect(await openItem('command:project:deploy', deps())).toEqual({ ok: true })
+    expect(open).toHaveBeenCalledWith(real)
+  })
+
+  posixOnly('refuses an instruction file that links to a .command, or one marked executable', async () => {
+    put(ws, 'run.command', '#!/bin/sh\n')
+    symlinkSync(join(ws, 'run.command'), join(ws, 'AGENTS.md'))
+    put(ws, 'pkg/AGENTS.md', 'Nested')
+    chmodSync(join(ws, 'pkg/AGENTS.md'), 0o755)
+    expect(await openInstructionFile('AGENTS.md', deps())).toEqual({ ok: false, error: expect.stringMatching(/different kind/) })
+    expect(await openInstructionFile(join('pkg', 'AGENTS.md'), deps())).toEqual({ ok: false, error: expect.stringMatching(/program/) })
+    expect(open).not.toHaveBeenCalled()
   })
 })
 
