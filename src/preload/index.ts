@@ -376,7 +376,14 @@ const api = {
     ipcRenderer.invoke(IPC.conversationImport),
   organizeConversation: (
     id: string,
-    patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
+    patch: {
+      title?: string
+      pinned?: boolean
+      archived?: boolean
+      groupId?: string | null
+      /** The chat's full new label list (label ids); empty clears it. */
+      labels?: string[]
+    }
   ): Promise<void> => ipcRenderer.invoke(IPC.conversationOrganize, id, patch),
   /** Persist a drag-to-reorder: `orderedIds` is the section's chats top-to-bottom;
    *  `move` carries the dragged chat's new group when the drag crossed sections. */

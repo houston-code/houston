@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type RefObject } from 'react'
 import type { ConversationMeta } from '@shared/agent'
-import type { ChatGroup, SidebarGroupBy } from '@shared/types'
+import type { ChatGroup, ChatLabel, LabelColor, SidebarGroupBy } from '@shared/types'
+import { MAX_LABEL_NAME, cleanLabelName, cycleLabelColor } from '@shared/chatLabels'
 import type { EditorId, EditorStatus } from '@shared/editors'
 import {
   signalLabel,
@@ -109,17 +110,312 @@ export interface SidebarProps {
   onToggleParentCollapsed?: (id: string) => void
   /** Toggle a built-in section's collapsed state (not a custom group). */
   onToggleSectionCollapsed: (sectionId: string) => void
+  /** The user's chat labels, in display order. */
+  labels?: ChatLabel[]
+  /** Each section's label filter (label ids), by section id. */
+  labelFilters?: Record<string, string[]>
+  /** Set a section's label filter; an empty list clears it. */
+  onSetSectionLabelFilter?: (sectionId: string, labelIds: string[]) => void
+  /** Replace a chat's labels with `labelIds`. */
+  onSetChatLabels?: (id: string, labelIds: string[]) => void
+  /** Create a label named `name`; resolves to its id. */
+  onCreateLabel?: (name: string) => Promise<string>
+  onUpdateLabel?: (id: string, patch: { name?: string; color?: LabelColor }) => void
+  /** Delete a label, taking it off every chat. */
+  onDeleteLabel?: (id: string) => void
+}
+
+const NO_LABELS: ChatLabel[] = []
+
+/** The known labels among `ids`, in the order the user arranged their labels. */
+function labelsIn(ids: readonly string[], labels: readonly ChatLabel[]): ChatLabel[] {
+  const want = new Set(ids)
+  return labels.filter((l) => want.has(l.id))
+}
+
+/** A label's color swatch. */
+function LabelDot({ color }: { color: LabelColor }): JSX.Element {
+  return <span className="label-dot" data-color={color} aria-hidden="true" />
+}
+
+/** How many label chips a row shows before folding the rest into "+N". */
+const MAX_ROW_CHIPS = 2
+
+/** A chat's label chips: the first few by name, then a "+N" for the rest. */
+function LabelChips({ carried }: { carried: ChatLabel[] }): JSX.Element | null {
+  if (carried.length === 0) return null
+  const shown = carried.slice(0, MAX_ROW_CHIPS)
+  const rest = carried.slice(MAX_ROW_CHIPS)
+  return (
+    <span className="conv__labels">
+      {shown.map((l) => (
+        <span key={l.id} className="label-chip" data-color={l.color} title={l.name}>
+          {l.name}
+        </span>
+      ))}
+      {rest.length > 0 && (
+        <span className="label-chip label-chip--more" title={rest.map((l) => l.name).join(', ')}>
+          +{rest.length}
+        </span>
+      )}
+    </span>
+  )
+}
+
+/** The "Labels" submenu in a chat's ⋯ menu: tick labels on and off, or make a new one. */
+function LabelsMenu({
+  conv,
+  props,
+  onDone
+}: {
+  conv: ConversationMeta
+  props: SidebarProps
+  onDone: () => void
+}): JSX.Element {
+  const labels = props.labels ?? NO_LABELS
+  const [naming, setNaming] = useState(false)
+  const carried = conv.labels ?? []
+  const toggle = (id: string): void =>
+    props.onSetChatLabels?.(conv.id, carried.includes(id) ? carried.filter((x) => x !== id) : [...carried, id])
+  return (
+    <>
+      {labels.map((l) => {
+        const on = carried.includes(l.id)
+        return (
+          // Stays open on click, so several labels can be ticked in one go.
+          <button
+            key={l.id}
+            role="menuitemcheckbox"
+            aria-checked={on}
+            className="menu__item"
+            onClick={() => toggle(l.id)}
+          >
+            {on ? <Icon name="check" /> : <span className="menu__icon-slot" />} <LabelDot color={l.color} /> {l.name}
+          </button>
+        )
+      })}
+      {labels.length === 0 && <div className="menu__note">No labels yet</div>}
+      {naming ? (
+        <div className="menu__inline-edit">
+          <InlineEdit
+            value=""
+            placeholder="Label name"
+            ariaLabel="New label name"
+            maxLength={MAX_LABEL_NAME}
+            onCommit={(name) => {
+              const clean = cleanLabelName(name)
+              setNaming(false)
+              if (!clean || !props.onCreateLabel) return
+              void props.onCreateLabel(clean).then((id) => props.onSetChatLabels?.(conv.id, [...carried, id]))
+              onDone()
+            }}
+            onCancel={() => setNaming(false)}
+          />
+        </div>
+      ) : (
+        props.onCreateLabel && (
+          <button role="menuitem" className="menu__item" onClick={() => setNaming(true)}>
+            <Icon name="plus" /> New label
+          </button>
+        )
+      )}
+    </>
+  )
+}
+
+/** One label in the label manager: its color (click for the next one), name, and delete. */
+function LabelEditorRow({
+  label,
+  autoFocus,
+  onUpdate,
+  onDelete
+}: {
+  label: ChatLabel
+  autoFocus: boolean
+  onUpdate: (id: string, patch: { name?: string; color?: LabelColor }) => void
+  onDelete: (id: string) => void
+}): JSX.Element {
+  const [name, setName] = useState(label.name)
+  useEffect(() => setName(label.name), [label.name])
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (!autoFocus) return
+    ref.current?.focus()
+    ref.current?.select()
+  }, [autoFocus])
+  const commit = (): void => {
+    const clean = cleanLabelName(name)
+    if (!clean) {
+      setName(label.name)
+      return
+    }
+    if (clean !== label.name) onUpdate(label.id, { name: clean })
+  }
+  return (
+    <div className="label-edit">
+      <button
+        type="button"
+        className="label-edit__color"
+        title="Change color"
+        aria-label={`Color of ${label.name}: ${label.color}. Change color`}
+        onClick={() => onUpdate(label.id, { color: cycleLabelColor(label.color) })}
+      >
+        <LabelDot color={label.color} />
+      </button>
+      <input
+        ref={ref}
+        className="label-edit__name"
+        value={name}
+        maxLength={MAX_LABEL_NAME}
+        aria-label={`Name of label ${label.name}`}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commit()
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="label-edit__delete"
+        title="Delete label"
+        aria-label={`Delete label ${label.name}`}
+        onClick={() => onDelete(label.id)}
+      >
+        <Icon name="trash" />
+      </button>
+    </div>
+  )
+}
+
+/** Rename, recolor, delete, and add labels. Opened from the filter menu. */
+function LabelManager({
+  anchorRef,
+  onClose,
+  labels,
+  onCreate,
+  onUpdate,
+  onDelete
+}: {
+  anchorRef: RefObject<HTMLElement | null>
+  onClose: () => void
+  labels: ChatLabel[]
+  onCreate: (name: string) => Promise<string>
+  onUpdate: (id: string, patch: { name?: string; color?: LabelColor }) => void
+  onDelete: (id: string) => void
+}): JSX.Element {
+  // The label just made, so its name field takes focus to be typed over.
+  const [fresh, setFresh] = useState<string | null>(null)
+  return (
+    <Popover
+      anchorRef={anchorRef}
+      onClose={onClose}
+      role="dialog"
+      ariaLabel="Manage labels"
+      // Wider than the filter button's left side of the sidebar, so it opens rightward
+      // (over the main pane) instead of running off the window's left edge.
+      align="left"
+      className="menu label-manager"
+      roving={false}
+    >
+      <div className="menu__label">Labels</div>
+      {labels.length === 0 && (
+        <div className="menu__note">No labels yet. Add one here or from a chat's ⋯ menu.</div>
+      )}
+      {labels.map((l) => (
+        <LabelEditorRow key={l.id} label={l} autoFocus={fresh === l.id} onUpdate={onUpdate} onDelete={onDelete} />
+      ))}
+      <button className="menu__item" onClick={() => void onCreate('New label').then(setFresh)}>
+        <Icon name="plus" /> New label
+      </button>
+    </Popover>
+  )
+}
+
+/** The tag button on a section header: filter the section to chats with any of the ticked labels. */
+function SectionLabelFilter({ section, props }: { section: SidebarSection; props: SidebarProps }): JSX.Element | null {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const labels = props.labels ?? NO_LABELS
+  // Offer the labels the section's chats carry, plus any the filter still names.
+  const offered = labelsIn([...section.labelIds, ...section.labelFilter], labels)
+  if (!props.onSetSectionLabelFilter || props.search || offered.length === 0) return null
+  const active = section.labelFilter
+  const set = (ids: string[]): void => props.onSetSectionLabelFilter?.(section.id, ids)
+  return (
+    <div className="conv__menu-wrap">
+      <button
+        ref={btnRef}
+        className={`section-head__labels${active.length ? ' section-head__labels--on' : ''}`}
+        title="Filter by label"
+        aria-label={`Filter ${section.name} by label${active.length ? `, ${active.length} selected` : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Icon name="tag" size={12} />
+        {active.length > 0 && <span className="section-head__labels-count">{active.length}</span>}
+      </button>
+      {open && (
+        <Popover
+          anchorRef={btnRef}
+          onClose={() => setOpen(false)}
+          role="menu"
+          ariaLabel={`Filter ${section.name} by label`}
+        >
+          <div className="menu__label">Show chats labeled</div>
+          {offered.map((l) => {
+            const on = active.includes(l.id)
+            return (
+              <button
+                key={l.id}
+                role="menuitemcheckbox"
+                aria-checked={on}
+                className="menu__item"
+                onClick={() => set(on ? active.filter((x) => x !== l.id) : [...active, l.id])}
+              >
+                {on ? <Icon name="check" /> : <span className="menu__icon-slot" />} <LabelDot color={l.color} /> {l.name}
+              </button>
+            )
+          })}
+          {active.length > 0 && (
+            <>
+              <div className="menu__sep" />
+              <button
+                role="menuitem"
+                className="menu__item"
+                onClick={() => {
+                  set([])
+                  setOpen(false)
+                }}
+              >
+                <Icon name="close" /> Clear filter
+              </button>
+            </>
+          )}
+        </Popover>
+      )}
+    </div>
+  )
 }
 
 /** A single-line input used for renaming a chat or a group in place. */
 function InlineEdit({
   value,
   onCommit,
-  onCancel
+  onCancel,
+  placeholder,
+  ariaLabel,
+  maxLength
 }: {
   value: string
   onCommit: (next: string) => void
   onCancel: () => void
+  placeholder?: string
+  ariaLabel?: string
+  maxLength?: number
 }): JSX.Element {
   const [text, setText] = useState(value)
   const ref = useRef<HTMLInputElement>(null)
@@ -137,6 +433,9 @@ function InlineEdit({
       ref={ref}
       className="inline-edit"
       value={text}
+      placeholder={placeholder}
+      aria-label={ariaLabel}
+      maxLength={maxLength}
       onChange={(e) => setText(e.target.value)}
       onClick={(e) => e.stopPropagation()}
       onBlur={commit}
@@ -270,6 +569,7 @@ function ConvRow({
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const carried = labelsIn(conv.labels ?? [], props.labels ?? NO_LABELS)
   // The open chat shows no unread dot (it's being looked at), so its toggle offers
   // Mark as unread, matching what the row shows.
   const isUnread = props.chatStatus[conv.id]?.unread !== undefined && !active
@@ -315,7 +615,13 @@ function ConvRow({
       aria-current={active ? 'true' : undefined}
       // The row's name carries its state, so a screen reader hears "needs approval"
       // without having to find the dot.
-      aria-label={[conv.title, reason ?? signalLabel(signal)].filter(Boolean).join(', ')}
+      aria-label={[
+        conv.title,
+        carried.length ? `labels: ${carried.map((l) => l.name).join(', ')}` : '',
+        reason ?? signalLabel(signal)
+      ]
+        .filter(Boolean)
+        .join(', ')}
       // Renaming swaps in a text input; dragging would hijack its selection.
       draggable={!renaming && depth === 0}
       onDragStart={(e) => {
@@ -397,8 +703,11 @@ function ConvRow({
             onCancel={onStopRename}
           />
         ) : (
-          <div className="conv__title" title={conv.title} onDoubleClick={onStartRename}>
-            {conv.title}
+          <div className="conv__title-row">
+            <div className="conv__title" title={conv.title} onDoubleClick={onStartRename}>
+              {conv.title}
+            </div>
+            <LabelChips carried={carried} />
           </div>
         )}
         <div className="conv__meta">
@@ -586,6 +895,11 @@ function ConvRow({
                 </button>
               )}
             </MenuExpander>
+            {props.onSetChatLabels && (
+              <MenuExpander label="Labels" icon="tag">
+                <LabelsMenu conv={conv} props={props} onDone={close} />
+              </MenuExpander>
+            )}
             <div className="menu__sep" />
             <button
               role="menuitem"
@@ -665,7 +979,11 @@ function GroupHeader({
             {section.name}
           </span>
         )}
-        <span className="section-head__count">{section.conversations.length || ''}</span>
+        <span className="section-head__count">
+          {section.labelFilter.length > 0
+            ? `${section.conversations.length} of ${section.total}`
+            : section.total || ''}
+        </span>
         {attention && (
           <span
             className="section-head__attention"
@@ -678,6 +996,8 @@ function GroupHeader({
           </span>
         )}
       </button>
+
+      {!renaming && <SectionLabelFilter section={section} props={props} />}
 
       {isGroup && !renaming && (
         <div className="conv__menu-wrap">
@@ -744,7 +1064,8 @@ function FilterButton({
   unreadFirst,
   onToggleUnreadFirst,
   groupBy,
-  onSetGroupBy
+  onSetGroupBy,
+  labelManager
 }: {
   filter: ConversationStatusFilter
   counts: { active: number; archived: number }
@@ -756,8 +1077,16 @@ function FilterButton({
   onToggleUnreadFirst?: () => void
   groupBy?: SidebarGroupBy
   onSetGroupBy?: (by: SidebarGroupBy | undefined) => void
+  /** Present when labels can be managed: the labels and their edit handlers. */
+  labelManager?: {
+    labels: ChatLabel[]
+    onCreate: (name: string) => Promise<string>
+    onUpdate: (id: string, patch: { name?: string; color?: LabelColor }) => void
+    onDelete: (id: string) => void
+  }
 }): JSX.Element {
   const [open, setOpen] = useState(false)
+  const [managing, setManaging] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
   // "active" is the default view; anything else counts as a filter being applied.
   const filtered = filter !== 'active'
@@ -854,7 +1183,32 @@ function FilterButton({
               ))}
             </>
           )}
+          {labelManager && (
+            <>
+              <div className="menu__sep" />
+              <button
+                role="menuitem"
+                className="menu__item"
+                onClick={() => {
+                  setOpen(false)
+                  setManaging(true)
+                }}
+              >
+                <Icon name="tag" /> Manage labels
+              </button>
+            </>
+          )}
         </Popover>
+      )}
+      {managing && labelManager && (
+        <LabelManager
+          anchorRef={btnRef}
+          onClose={() => setManaging(false)}
+          labels={labelManager.labels}
+          onCreate={labelManager.onCreate}
+          onUpdate={labelManager.onUpdate}
+          onDelete={labelManager.onDelete}
+        />
       )}
     </div>
   )
@@ -909,6 +1263,9 @@ function SidebarSectionView({
   const [dropAt, setDropAt] = useState<number | null>(null)
 
   const droppable = section.kind === 'group' || section.kind === 'ungrouped' || section.kind === 'auto'
+  // A filtered section hides some of its chats, so a drop there can't be placed among
+  // them: it only moves the chat in, and no insertion line is drawn.
+  const filtered = section.labelFilter.length > 0
   // Group sections move the chat into the group; Ungrouped clears its group.
   const targetGroupId = section.kind === 'group' ? section.id : null
   const rowCount = section.conversations.length
@@ -917,7 +1274,7 @@ function SidebarSectionView({
     if (!e.dataTransfer.types.includes(CONV_DRAG_MIME)) return // not one of our chat drags
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-    setDropAt(dropIndexFromEvent(e.currentTarget, e.clientY))
+    if (!filtered) setDropAt(dropIndexFromEvent(e.currentTarget, e.clientY))
   }
   const onDragLeave = (e: DragEvent): void => {
     // dragleave also fires when crossing into child rows; only clear the
@@ -931,6 +1288,11 @@ function SidebarSectionView({
     const draggedId =
       e.dataTransfer.getData(CONV_DRAG_MIME) || e.dataTransfer.getData('text/plain')
     if (!draggedId) return
+    if (filtered) {
+      const from = props.conversations.find((c) => c.id === draggedId)?.groupId ?? null
+      if (from !== targetGroupId) props.onMove(draggedId, targetGroupId)
+      return
+    }
 
     const index = dropIndexFromEvent(e.currentTarget, e.clientY)
     const currentIds = section.conversations.map((c) => c.id)
@@ -1043,8 +1405,20 @@ function SidebarSectionView({
       {!section.collapsed && rowCount > 0 && dropAt === rowCount && (
         <div className="conv-drop-line" aria-hidden="true" />
       )}
-      {section.kind === 'group' && !section.collapsed && rowCount === 0 && (
+      {section.kind === 'group' && !section.collapsed && section.total === 0 && (
         <div className="section__empty">Drop a chat here, or use the ⋯ menu</div>
+      )}
+      {filtered && !section.collapsed && rowCount === 0 && section.total > 0 && (
+        <div className="section__empty section__empty--filtered">
+          No chats match this filter.{' '}
+          <button
+            type="button"
+            className="section__clear-filter"
+            onClick={() => props.onSetSectionLabelFilter?.(section.id, [])}
+          >
+            Clear filter
+          </button>
+        </div>
       )}
     </div>
   )
@@ -1109,7 +1483,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     groups,
     props.collapsedSections,
     props.unreadFirst ? wantsAttention : undefined,
-    props.groupBy ? { by: props.groupBy, now: props.now ?? Date.now() } : undefined
+    props.groupBy ? { by: props.groupBy, now: props.now ?? Date.now() } : undefined,
+    props.search ? {} : props.labelFilters
   )
   const unreadCount = Object.values(props.chatStatus).filter((st) => st.unread !== undefined).length
   const needInput = Object.values(props.chatStatus).filter((st) => st.pending.length > 0).length
@@ -1206,6 +1581,16 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           {...(props.onToggleUnreadFirst ? { onToggleUnreadFirst: props.onToggleUnreadFirst } : {})}
           groupBy={props.groupBy}
           {...(props.onSetGroupBy ? { onSetGroupBy: props.onSetGroupBy } : {})}
+          {...(props.onCreateLabel && props.onUpdateLabel && props.onDeleteLabel
+            ? {
+                labelManager: {
+                  labels: props.labels ?? NO_LABELS,
+                  onCreate: props.onCreateLabel,
+                  onUpdate: props.onUpdateLabel,
+                  onDelete: props.onDeleteLabel
+                }
+              }
+            : {})}
         />
       </div>
 

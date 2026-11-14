@@ -517,6 +517,11 @@ export interface ConversationMeta {
   /** Id of the custom group (see AppSettings.chatGroups) this chat belongs to. */
   groupId?: string
   /**
+   * Ids of the labels (see AppSettings.chatLabels) this chat carries, in the order
+   * they were added. Ids of deleted labels are ignored wherever they show up.
+   */
+  labels?: string[]
+  /**
    * Manual sort position within its sidebar section (group / ungrouped), set by
    * drag-to-reorder. Lower sorts higher. Absent until the user reorders that
    * section, in which case the chat falls back to recency ordering. The value is

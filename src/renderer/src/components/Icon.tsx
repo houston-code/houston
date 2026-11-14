@@ -49,6 +49,7 @@ export type IconName =
   | 'pencil'
   | 'trash'
   | 'external'
+  | 'tag'
 
 const PATHS: Record<IconName, ReactNode> = {
   // Counter-clockwise arrow: going back to an earlier point.
@@ -312,6 +313,13 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M12.5 9v3.5h-9v-9H7" />
       <path d="M9.5 2.5h4v4" />
       <path d="M13.5 2.5 8 8" />
+    </>
+  ),
+  // A luggage tag with its eyelet — a chat label.
+  tag: (
+    <>
+      <path d="M2.5 2.5h5l6 6-5 5-6-6z" />
+      <circle cx="5.3" cy="5.3" r="0.9" />
     </>
   )
 }

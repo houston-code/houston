@@ -34,6 +34,7 @@ import type {
 } from '@shared/agent'
 import { forkConversationData, type ForkPoint, type ImportedConversation } from '@shared/conversation-io'
 import { replyMessageIndexes } from '@shared/chatStatus'
+import { sanitizeLabelIds } from '@shared/chatLabels'
 import { rewindableTurnIndices, turnText } from '@shared/rewind'
 import { repairDanglingToolResults } from './agent/repair'
 import { accumulateModelUsage } from '@shared/usage'
@@ -661,7 +662,12 @@ function toMeta(conv: Conversation): ConversationMeta {
     forkedFrom: _forkedFrom,
     ...rest
   } = conv
-  return { ...rest, errored: !!lastError }
+  const meta: ConversationMeta = { ...rest, errored: !!lastError }
+  // Conversation files are user-editable: hand the sidebar a clean list of label ids.
+  const labels = sanitizeLabelIds(conv.labels)
+  if (labels.length > 0) meta.labels = labels
+  else delete meta.labels
+  return meta
 }
 
 /**
@@ -1273,13 +1279,19 @@ export function detachConversationWorktree(id: string, repoRoot: string): void {
 }
 
 /**
- * Apply a user-driven organization change (rename, pin, move to/clear group). Unlike
+ * Apply a user-driven organization change (rename, pin, move to/clear group, set labels). Unlike
  * {@link updateConversationMeta} this does NOT bump `updatedAt`, so pinning or filing a
  * chat doesn't reorder it to the top of the recency list. `groupId: null` clears it.
  */
 export function organizeConversation(
   id: string,
-  patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
+  patch: {
+    title?: string
+    pinned?: boolean
+    archived?: boolean
+    groupId?: string | null
+    labels?: string[]
+  }
 ): void {
   const conv = read(id)
   if (!conv) return
@@ -1305,6 +1317,12 @@ export function organizeConversation(
   if (patch.groupId !== undefined) {
     if (patch.groupId === null) delete conv.groupId
     else conv.groupId = patch.groupId
+  }
+  // Labels don't change the chat's section, so its manual order stays.
+  if (patch.labels !== undefined) {
+    const labels = sanitizeLabelIds(patch.labels)
+    if (labels.length > 0) conv.labels = labels
+    else delete conv.labels
   }
   write(conv)
 }

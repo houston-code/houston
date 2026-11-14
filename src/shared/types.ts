@@ -557,6 +557,20 @@ export interface ChatGroup {
   collapsed?: boolean
 }
 
+/** The colors a chat label can take (see `LABEL_COLORS` in shared/chatLabels). */
+export type LabelColor = 'blue' | 'green' | 'orange' | 'purple' | 'red' | 'teal' | 'yellow' | 'pink'
+
+/**
+ * A user-defined chat label. Unlike a group, a chat can carry any number of labels.
+ * Definitions are app-level and persisted in settings; which labels a chat carries is
+ * stored on the conversation itself (ConversationMeta.labels).
+ */
+export interface ChatLabel {
+  id: string
+  name: string
+  color: LabelColor
+}
+
 /**
  * A command from the native File menu, run by the renderer with the same handlers
  * the command palette and sidebar use. `new-chat-in-workspace` (File → Open Recent)
@@ -884,6 +898,14 @@ export interface AppSettings {
   tuiVerbose?: boolean
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
+  /** User-defined chat labels, in display order. */
+  chatLabels?: ChatLabel[]
+  /**
+   * Each sidebar section's label filter, keyed by section id (a group's id, or
+   * 'pinned', 'ungrouped', or an automatic section's id): the section shows only the
+   * chats carrying any of these labels. Absent or empty = the section is unfiltered.
+   */
+  sectionLabelFilters?: Record<string, string[]>
   /**
    * Collapsed state for the sidebar's built-in sections, keyed by section id
    * ('pinned', 'ungrouped'). Custom groups keep their own collapsed flag on the
