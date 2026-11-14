@@ -3254,7 +3254,7 @@ export default function App(): JSX.Element {
         />
       )}
 
-      <div className="main">
+      <main className="main">
         <Titlebar
           title={currentConv?.title ?? 'Houston'}
           tasks={backgroundTasks}
@@ -3373,6 +3373,7 @@ export default function App(): JSX.Element {
             {...(currentId ? { onForkFrom: (n: number) => void forkFrom({ kind: 'reply', n }) } : {})}
             toolsExpanded={settings?.toolOutputExpanded === true}
             showReasoning={settings?.showReasoning === true}
+            announceReplies={settings?.announceReplies === true}
             {...(currentId && lastTurn && !chat.running ? { onRetryLast: () => void onRetryLast() } : {})}
             {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
               ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
@@ -3603,7 +3604,7 @@ export default function App(): JSX.Element {
           />
           {settings.selected && <span className="statusbar__model">{settings.selected.model}</span>}
         </footer>
-      </div>
+      </main>
 
       {previewOpen && (
         <Suspense fallback={null}>

@@ -131,3 +131,40 @@ describe('titlebar count badge', () => {
     }
   })
 })
+
+// Inputs, buttons, and the composer draw their edge in --border-strong. WCAG 1.4.11
+// wants a control's boundary at 3:1 against what it sits on, in both themes.
+describe.each([
+  ['dark', ':root', {}],
+  ['light', ":root[data-theme='light']", themeVars(':root')]
+])('%s control borders', (_theme, selector, base) => {
+  const vars = { ...base, ...themeVars(selector) }
+
+  it('--border-strong clears 3:1 on every surface a control sits on', () => {
+    expect(vars['--border-strong']).toBeDefined()
+    for (const surface of ['--bg', '--bg-elevated', '--bg-input', '--bg-hover']) {
+      expect(contrast(vars['--border-strong'], vars[surface]), `--border-strong on ${surface}`).toBeGreaterThanOrEqual(3)
+    }
+  })
+})
+
+describe('control borders and forced colors', () => {
+  /** The declarations of the first rule whose selector list starts with `selector`. */
+  const rule = (selector: string): string => {
+    const start = css.indexOf(`\n${selector} {`)
+    if (start < 0) throw new Error(`no ${selector} rule`)
+    return css.slice(start, css.indexOf('}', start))
+  }
+
+  it.each(['.btn', '.sidebar__search', '.composer__card', '.provider textarea'])('%s uses the strong border', (sel) => {
+    expect(rule(sel)).toContain('border: 1px solid var(--border-strong)')
+  })
+
+  it('gives high-contrast mode real borders and focus outlines', () => {
+    const start = css.indexOf('@media (forced-colors: active)')
+    expect(start).toBeGreaterThan(-1)
+    const block = css.slice(start)
+    expect(block).toContain('border-color: ButtonText')
+    expect(block).toMatch(/:focus-visible \{\s*outline: 2px solid Highlight/)
+  })
+})

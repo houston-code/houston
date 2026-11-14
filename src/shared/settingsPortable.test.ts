@@ -141,6 +141,7 @@ describe('import checks per preference', () => {
     ['previewAutoOpen', false, 'no'],
     ['toolOutputExpanded', true, 'open'],
     ['showReasoning', false, 1],
+    ['announceReplies', true, 'aloud'],
     ['memoryEnabled', false, 'yes'],
     ['keybindings', { 'open-settings': 'Mod+,', 'toggle-sidebar': null }, { 'open-settings': 5 }],
     ['sandboxEgress', { mode: 'allowlist', allow: ['corp.example'], deny: [] }, { mode: 'open' }]

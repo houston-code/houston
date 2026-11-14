@@ -748,6 +748,10 @@ In the desktop app:
   output or diff in view. Off by default.
 - **Always show reasoning** (same place) keeps the model's reasoning open above each
   reply instead of folding it away once the reply starts. Off by default.
+- **Read replies to screen readers** (same place) has a screen reader read each
+  finished reply's text, and name a tool that failed, instead of only saying the
+  response is ready. Off by default. Each message is its own region with a heading
+  ("You", or "Houston" and the time), so a screen reader can move message to message.
 
 In the desktop app, file paths in the transcript open the file in the Files panel's
 preview: the file a tool row names (a read opens at the line it started from), a diff's

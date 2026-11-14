@@ -17,6 +17,9 @@
   --bg-code: #08090b;
   --stripe: rgba(255, 255, 255, 0.022);
   --border: #272930;
+  /* The edge of a control someone types into or focuses (inputs, buttons, the
+     composer): 3:1 on every surface it sits on, where --border is a hairline. */
+  --border-strong: #6b6f7a;
   --text: #e8e9ec;
   --text-dim: #8b8e96;
   --accent: #4f8cff;
@@ -71,6 +74,7 @@
   --bg-code: #f2f0e8;
   --stripe: rgba(0, 0, 0, 0.03);
   --border: #e6e2d8;
+  --border-strong: #827c70;
   --text: #2c2a26;
   --text-dim: #6a655b;
   --accent: #4f46e5;
@@ -361,7 +365,7 @@ body {
 /* ---- Buttons ---- */
 .btn {
   appearance: none;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: var(--bg-input);
   color: var(--text);
   padding: 7px 13px;
@@ -591,7 +595,7 @@ body.is-resizing {
   flex: 1;
   min-width: 0;
   background: var(--bg-input);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   color: var(--text);
   border-radius: 8px;
   padding: 7px 10px;
@@ -6729,7 +6733,7 @@ body:has(.coachmark) .get-started {
   flex-direction: column;
   gap: 8px;
   background: var(--bg-input);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 12px;
   padding: 8px 10px;
 }
@@ -7963,7 +7967,7 @@ body:has(.coachmark) .get-started {
 .provider textarea {
   width: 100%;
   background: var(--bg-input);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   color: var(--text);
   border-radius: 8px;
   padding: 8px 10px;
@@ -10590,4 +10594,44 @@ body.is-resizing .plan-panel__resizer::after {
 }
 .memory-status--error {
   color: var(--danger);
+}
+
+/* ---- Windows high contrast (forced colors) ----
+   The system palette replaces every color, so anything drawn only with a background
+   or a box-shadow (the selected row, the accent rails, the focus glow) would vanish.
+   Give those states a real border or outline in system colors, and keep the status
+   dots, whose color is their meaning, in their own colors. */
+@media (forced-colors: active) {
+  .btn,
+  .sidebar__search,
+  .composer__card,
+  .field input,
+  .field textarea,
+  .field select {
+    border-color: ButtonText;
+  }
+  :focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: 1px;
+  }
+  .composer__card:focus-within {
+    border-color: Highlight;
+  }
+  .conv--active,
+  .files-row__btn--selected,
+  .menu__item:hover,
+  .menu__item:focus-visible {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+  .statusbar__dot,
+  .conv__status,
+  .diff__line--add,
+  .diff__line--del {
+    forced-color-adjust: none;
+  }
+  .diff__word {
+    outline: 1px solid CanvasText;
+  }
 }

@@ -7,6 +7,7 @@
  * `collectMatchRanges` is the pure, testable core; the highlight registry and
  * scrolling are feature-detected so they're a harmless no-op under jsdom.
  */
+import { scrollBehavior } from './motion'
 
 const ALL = 'houston-find'
 const ACTIVE = 'houston-find-active'
@@ -137,5 +138,5 @@ export function clearFindHighlights(): void {
 
 /** Scroll the element containing a match into view (centred). No-op under jsdom. */
 export function scrollRangeIntoView(range: Range | undefined): void {
-  range?.startContainer.parentElement?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+  range?.startContainer.parentElement?.scrollIntoView?.({ block: 'center', behavior: scrollBehavior() })
 }

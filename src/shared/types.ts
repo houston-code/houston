@@ -752,6 +752,12 @@ export interface AppSettings {
    */
   showReasoning?: boolean
   /**
+   * Screen readers hear each finished reply's text (and the name of a tool that failed)
+   * through the transcript's polite live region, instead of only "Response ready".
+   * Off by default.
+   */
+  announceReplies?: boolean
+  /**
    * Cross-session memory: the agent sees the memories saved in earlier sessions and
    * can read them (docs/memory-design.md). On unless set to false.
    */
