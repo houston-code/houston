@@ -256,7 +256,7 @@ if (acp) {
   app.whenReady().then(async () => {
     trustSystemCertificates()
     await initSecrets()
-    const code = await runTuiEntry(tui, { version: app.getVersion() })
+    const code = await runTuiEntry(tui, { version: app.getVersion(), flush: flushSecrets })
     app.exit(await flushBeforeExit(code))
   })
 } else if (headless) {

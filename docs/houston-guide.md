@@ -261,6 +261,15 @@ repository.
 | 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
 | 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `error`); a second signal exits at once |
 
+**Stopping Houston stops what the agent started.** When `-p`, `-i`, or `--acp` ends,
+normally or because the terminal closed or it was sent a signal, it stops the
+background commands the agent started, its MCP connections, and its language servers
+before exiting. Background commands get SIGTERM first, so a dev server or `docker
+compose up` can shut down cleanly (and stop its containers), and anything still
+running a moment later is killed. Stopping one background command, from the agent or
+the Background tasks list, works the same way, with a few seconds' grace. On Windows
+the stop is immediate.
+
 ### Standalone CLI
 
 The same `-p`, `-i`, and `--acp` clients as one self-contained Node script, with no
