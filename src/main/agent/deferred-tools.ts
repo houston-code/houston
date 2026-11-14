@@ -33,6 +33,9 @@ export const DEFERRED_TOOL_CATALOG: Readonly<Record<string, string>> = {
   // Expensive, once-per-change verification.
   review_changes:
     'Independent multi-agent review of the uncommitted changes (correctness, security, quality); run once after a large or security-sensitive change.',
+  // Only once the agent has started background work and has nothing to do until it ends.
+  wait_for:
+    'Wait for a background shell or spawned session to finish, instead of polling.',
   // Delegation beyond read-only research, and parallel sessions: used deliberately, not every turn.
   dispatch_writable_agent:
     'Delegate a self-contained implementation task to a subagent that can edit files and run sandboxed commands, and get its report back.',
