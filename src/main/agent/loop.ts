@@ -69,6 +69,7 @@ import {
 import { createSecretRedactor } from './redact'
 import { log } from '../logger'
 import { runQuarantineExtraction } from './untrusted'
+import { smallModelFor, withSmallModel } from '@shared/smallModel'
 import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
 import { buildSystemPrompt, promptId } from './prompt'
@@ -268,6 +269,7 @@ import {
   isValidCompactionState,
   resolveCompactionThreshold,
   summarizationSystemPrompt,
+  summaryFits,
   summaryMaxTokens
 } from './compaction'
 import {
@@ -406,7 +408,8 @@ async function summarize(
   maxTokens: number,
   signal: AbortSignal,
   onRetry?: (attempt: number, err: unknown, max: number | undefined) => void,
-  reachable?: () => boolean
+  reachable?: () => boolean,
+  onUsage?: (usage: TokenUsage) => void
 ): Promise<string> {
   return withProviderRetry(
     async () => {
@@ -420,7 +423,11 @@ async function summarize(
         signal
       })) {
         if (ev.type === 'text') text += ev.text
-        else if (ev.type === 'done') truncated = ev.stopReason === 'max_tokens'
+        else if (ev.type === 'done') {
+          truncated = ev.stopReason === 'max_tokens'
+          // Billed whether or not the summary is kept, so counted either way.
+          if (ev.usage) onUsage?.(ev.usage)
+        }
         else if (ev.type === 'error') throw providerStreamError(ev)
       }
       if (truncated) throw new Error(SUMMARY_TRUNCATED_MESSAGE)
@@ -1986,6 +1993,14 @@ export async function startRun(
       })
     }
 
+    // The model side requests (compaction summaries, the isolated reader) try first:
+    // the provider's small model, only while the run is on its primary provider (a
+    // fallback hop moves to another host, whose small model the user never set up).
+    const sideSmallModel = (): string | null =>
+      route.providerId === req.providerId ? smallModelFor(providerConfig, route.model) : null
+    const sideModelCaps = (model: string): ModelCaps | undefined =>
+      model === route.model ? route.caps : getProvider(route.providerId)?.models.find((m) => m.id === model)?.caps
+
     // Surface a hook's `systemMessage` directive as a user-facing transcript notice.
     // Emit-only by design: it never lands in `messages`, so the model never sees it
     // (the documented contract of the directive).
@@ -2912,17 +2927,25 @@ export async function startRun(
       // history — so the page has nothing to act through and nothing to override.
       // Follows the fallback route (provider and model move together here, like the
       // summarizer): extracting through a model we've just seen fail would be futile.
+      // On the primary route the provider's small model reads it, with the run's own
+      // model as the fallback when that fails; the isolation is the same either way.
       quarantineExtract: ({ content, source, query }) =>
-        runQuarantineExtraction({
-          provider: route.provider,
-          model: route.model,
-          content,
-          source,
-          query,
-          signal: abort.signal,
-          // The reader runs a request on the run's model; count it in the run's cost.
-          onUsage: (u) => recordSideRequestUsage(u, route.model, route.caps)
-        }),
+        withSmallModel(
+          sideSmallModel(),
+          route.model,
+          (model) =>
+            runQuarantineExtraction({
+              provider: route.provider,
+              model,
+              content,
+              source,
+              query,
+              signal: abort.signal,
+              // The reader runs a side request; count it in the run's cost, on its model.
+              onUsage: (u) => recordSideRequestUsage(u, model, sideModelCaps(model))
+            }),
+          abort.signal
+        ),
       askUser: (q) => askRunUser(callId, q),
       // Route an MCP server's mid-call elicitation to this run's user and block
       // until they answer. Keyed by a fresh elicitId (one call can elicit
@@ -3526,25 +3549,37 @@ export async function startRun(
         // Follows the fallback route: provider and model move together here, so
         // summarizing through a model we've just seen fail would be pointless. The
         // prior summary goes in with the request it was anchored to, if any: together
-        // they are what stands in for messages[0..cut) today.
-        const text = await summarize(
-          route.provider,
-          route.model,
-          buildSummaryRequestMessages([...summaryMsgs, ...anchorMsgs()], material),
-          summaryMaxTokens(resolveContextWindow(route.model, route.caps)),
-          abort.signal,
-          // Report a retry in here the same way the turn loop does. Compaction can be
-          // forced mid-turn, so without this a summary riding out a blip is just a run
-          // sitting silent for the length of the backoff.
-          (attempt, err, max) =>
-            emit({
-              type: 'retry',
-              attempt,
-              ...(max !== undefined ? { max } : {}),
-              message: redact(describeProviderError(err))
-            }),
-          () => providerReached
-        )
+        // they are what stands in for messages[0..cut) today. On the primary route the
+        // provider's small model writes it when the request fits its window, and the
+        // run's own model takes over if that fails.
+        const request = buildSummaryRequestMessages([...summaryMsgs, ...anchorMsgs()], material)
+        const summarizeOn = (model: string): Promise<string> => {
+          const caps = sideModelCaps(model)
+          return summarize(
+            route.provider,
+            model,
+            request,
+            summaryMaxTokens(resolveContextWindow(model, caps)),
+            abort.signal,
+            // Report a retry in here the same way the turn loop does. Compaction can be
+            // forced mid-turn, so without this a summary riding out a blip is just a run
+            // sitting silent for the length of the backoff.
+            (attempt, err, max) =>
+              emit({
+                type: 'retry',
+                attempt,
+                ...(max !== undefined ? { max } : {}),
+                message: redact(describeProviderError(err))
+              }),
+            () => providerReached,
+            (u) => recordSideRequestUsage(u, model, caps)
+          )
+        }
+        const small = sideSmallModel()
+        const smallFits =
+          small !== null &&
+          summaryFits(estimateTokens(summarizationSystemPrompt, request), resolveContextWindow(small, sideModelCaps(small)))
+        const text = await withSmallModel(smallFits ? small : null, route.model, summarizeOn, abort.signal)
         if (!text) return 'failed'
         // Messages folded into the summary *this round* (a count, which is what the
         // renderer shows) — not the absolute tail-start index.

@@ -360,6 +360,29 @@ const GEMINI_VISION: Rows<boolean> = [
   [/gemini/, false]
 ]
 
+// ── Small models ──────────────────────────────────────────────────────────────────
+
+/**
+ * Each provider kind's cheap sibling for side requests (chat titles, compaction
+ * summaries, next-message suggestions, the isolated reader for flagged web content),
+ * as that host spells the id. Kinds whose ids are the user's own (Azure deployment
+ * names, OpenAI-compatible hosts) have none. Used only when the provider's model list
+ * has the id and it is cheaper than the chat's model (see `smallModelFor`).
+ */
+export const SMALL_MODELS = {
+  anthropic: 'claude-haiku-5-5',
+  vertex: 'claude-haiku-5-5',
+  foundry: 'claude-haiku-5-5',
+  bedrock: 'anthropic.claude-haiku-5-5',
+  openai: 'gpt-6-luna',
+  gemini: 'gemini-3.5-flash-lite'
+} as const satisfies Record<string, string>
+
+/** The curated small model for a provider kind, or null when it has none. */
+export function curatedSmallModel(kind: string): string | null {
+  return (SMALL_MODELS as Record<string, string>)[kind] ?? null
+}
+
 // ── Resolution ────────────────────────────────────────────────────────────────────
 
 /** Display-order family rules per provider kind. Hosted-Claude kinds rank by the Claude

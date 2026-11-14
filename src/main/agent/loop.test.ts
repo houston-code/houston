@@ -11097,6 +11097,144 @@ describe('isolated-reader (quarantine) cost', () => {
   })
 })
 
+describe('side requests on the provider\'s small model', () => {
+  const readerTool = (): ToolDef => ({
+    kind: 'read',
+    summarize: () => 'probe read_file',
+    schema: {
+      name: 'read_file',
+      description: 'Read a file.',
+      parameters: { type: 'object', properties: { path: { type: 'string' } }, additionalProperties: false }
+    },
+    execute: async (_args, ctx) => ctx.quarantineExtract!({ content: 'page', source: 'https://x.test/' })
+  })
+
+  /** Reads one flagged page, then answers. `readerFails` names models whose reader call errors. */
+  function readOnce(readerModels: string[], readerFails: string[] = []): Provider {
+    let main = 0
+    return {
+      async *streamChat(req) {
+        if (req.system === QUARANTINE_SYSTEM_PROMPT) {
+          readerModels.push(req.model)
+          if (readerFails.includes(req.model)) {
+            yield { type: 'error', message: 'model not found', status: 404 }
+            return
+          }
+          yield { type: 'text', text: 'The page says hello.' }
+          yield { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 3000, outputTokens: 70 } }
+          return
+        }
+        if (main++ === 0) {
+          yield { type: 'tool_call', call: { id: 'q1', name: 'read_file', arguments: { path: 'a' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+        } else {
+          yield { type: 'text', text: 'done' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+    }
+  }
+
+  it('reads a flagged page on the small model and bills it there', async () => {
+    h.probeTools = [readerTool()]
+    h.providerModels = [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    const readerModels: string[] = []
+    const r = await run({ provider: readOnce(readerModels), policy: 'full-auto', model: 'claude-opus-5-5' })
+    expect(readerModels).toEqual(['claude-haiku-5-5'])
+    const reader = (r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]).find(
+      (u) => u.outputTokens === 70
+    )
+    expect(reader!.model).toBe('claude-haiku-5-5')
+    expect(reader!.cost).toBeCloseTo(turnCostUsd('claude-haiku-5-5', 3000, 70), 10)
+  })
+
+  it('falls back to the run\'s model when the small model fails', async () => {
+    h.probeTools = [readerTool()]
+    h.providerModels = [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    const readerModels: string[] = []
+    const r = await run({
+      provider: readOnce(readerModels, ['claude-haiku-5-5']),
+      policy: 'full-auto',
+      model: 'claude-opus-5-5'
+    })
+    expect(readerModels[0]).toBe('claude-haiku-5-5')
+    expect(readerModels.at(-1)).toBe('claude-opus-5-5')
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'read_file') as { output: string }
+    expect(result.output).toContain('The page says hello.')
+  })
+
+  it('keeps every side request on the run\'s model when set to', async () => {
+    h.probeTools = [readerTool()]
+    h.providerModels = [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    h.extraConfigs = {
+      anthropic: {
+        id: 'anthropic',
+        kind: 'anthropic',
+        label: 'A',
+        models: h.providerModels,
+        smallModel: '',
+        requiresKey: false,
+        hasKey: true,
+        builtIn: true
+      }
+    }
+    try {
+      const readerModels: string[] = []
+      await run({ provider: readOnce(readerModels), policy: 'full-auto', model: 'claude-opus-5-5' })
+      expect(readerModels).toEqual(['claude-opus-5-5'])
+    } finally {
+      h.extraConfigs = {}
+    }
+  })
+
+  it('writes the compaction summary on the small model, then the run\'s model if that fails', async () => {
+    const history: ChatMessage[] = []
+    for (let i = 0; i < 5; i++) {
+      history.push({ role: 'user', content: `question ${i} ${'x'.repeat(1200)}` }, { role: 'assistant', content: `answer ${i}` })
+    }
+    history.push({ role: 'user', content: 'current question' })
+    h.providerModels = [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    const original = h.settings
+    for (const failSmall of [false, true]) {
+      h.settings = { ...original, compactionThreshold: 500 }
+      const summaryModels: string[] = []
+      const provider: Provider = {
+        async *streamChat(req) {
+          if (req.maxTokens != null) {
+            summaryModels.push(req.model)
+            if (failSmall && req.model === 'claude-haiku-5-5') {
+              yield { type: 'error', message: 'model not found', status: 404 }
+              return
+            }
+            yield { type: 'text', text: 'SUMMARY' }
+            yield { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 2000, outputTokens: 40 } }
+            return
+          }
+          yield { type: 'text', text: 'ok' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      try {
+        const r = await run({ provider, messages: history, model: 'claude-opus-5-5' })
+        expect(types(r)).toContain('compaction')
+        expect(summaryModels[0]).toBe('claude-haiku-5-5')
+        const billed = (r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]).find(
+          (u) => u.outputTokens === 40
+        )
+        if (failSmall) {
+          expect(summaryModels.at(-1)).toBe('claude-opus-5-5')
+          expect(billed!.model).toBe('claude-opus-5-5')
+        } else {
+          expect(summaryModels).toEqual(['claude-haiku-5-5'])
+          expect(billed!.model).toBe('claude-haiku-5-5')
+        }
+      } finally {
+        h.settings = original
+      }
+    }
+  })
+})
+
 describe('MCP servers in a run (real manager, fake server)', () => {
   type Spawn = ConstructorParameters<typeof McpClient>[0]
 
