@@ -99,6 +99,7 @@ import {
   staleWriteRefusal,
   SHELL_NETWORK_DECLINED_NOTE,
   SHELL_NETWORK_GRANTED_NOTE,
+  BROWSER_SESSION_NAME,
   egressHostAllowedNote,
   egressHostDeclinedNote,
   egressHostUnattendedNote,
@@ -157,6 +158,7 @@ import {
   fullAutoNetworkRead,
   matchRule,
   networkDestination,
+  browserSessionDestination,
   permissionSubject,
   persistedRules,
   isSensitiveWrite,
@@ -221,6 +223,7 @@ import {
 } from './subagentSessions'
 import { reviewWorkspaceChanges, type ReviewHistory } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
+import { BrowserSession, browserBackendOrNull, isBrowserBackendConfigured } from './browserSession'
 import { isMockupBackendConfigured, mockupBackend } from './mockupRender'
 import { withModelImages } from './modelImages'
 import { listenersOnPort } from './portOwner'
@@ -1395,6 +1398,8 @@ export async function startRun(
   // Drops the run's egress token (see registerEgressRun) when the run ends, however
   // it ends, so the proxy stops honoring this chat's host grants for a dead run.
   let releaseEgressRun: (() => void) | undefined
+  // The run's browser_session page (desktop only), closed with the run.
+  let browserSession: BrowserSession | undefined
   // The class (and log detail) of the error `emit` is about to send; set by `fail`.
   let failing: { cls: RunEndClass; detail?: string } | undefined
   // The model serving the run, for the log line; moves with a fallback hop.
@@ -1721,6 +1726,7 @@ export async function startRun(
     // can't call.
     const builtinDefs = builtinToolset({
       localhostCapture: localhostCaptureAvailable,
+      browserSession: isBrowserBackendConfigured(),
       // Only the desktop app draws image results as a gallery; in a terminal client
       // show_images and render_mockup would be a list of file names.
       imageGallery: req.imageGallery === true,
@@ -2127,6 +2133,10 @@ export async function startRun(
     // Persistent shell state for this run: `cd` and exported env carry between
     // foreground run_shell calls so the agent gets "same terminal" behavior.
     const shellSession = createShellSession(workspace)
+    // The same for browser_session: one page per run, opened on its first `open`
+    // (nothing launches until then) and closed in the run's `finally`.
+    const browserBackend = browserBackendOrNull()
+    if (browserBackend) browserSession = new BrowserSession(browserBackend)
     // Watches the roots' exec-capable git state across this run's shell commands,
     // its writable subagents' included (see gitGuard.ts).
     const gitGuard = new GitGuard(gitGuardRoots)
@@ -3216,6 +3226,7 @@ export async function startRun(
       // Undefined on the CLI (no backend wired) so the view_localhost guard reads
       // cleanly; the tool is already filtered out of the schema set above.
       captureLocalhost: localhostCaptureAvailable ? captureLocalhost : undefined,
+      ...(browserSession ? { browserSession } : {}),
       renderMockup: mockupBackend() ?? undefined,
       portListeners: (port) => listenersOnPort(port),
       // The recall tool reads the full, un-compacted log. Return a shallow copy so a
@@ -3666,13 +3677,16 @@ export async function startRun(
             // Report a retry in here the same way the turn loop does. Compaction can be
             // forced mid-turn, so without this a summary riding out a blip is just a run
             // sitting silent for the length of the backoff.
-            (attempt, err, max) =>
+            (attempt, err, max) => {
+              const message = redact(describeProviderError(err))
+              log.info(`run ${runId}: summary request retry ${attempt}${max !== undefined ? `/${max}` : ''} on ${serving.providerId}/${model}: ${message}`)
               emit({
                 type: 'retry',
                 attempt,
                 ...(max !== undefined ? { max } : {}),
-                message: redact(describeProviderError(err))
-              }),
+                message
+              })
+            },
             () => providerReached,
             (u) => recordSideRequestUsage(u, model, caps)
           )
@@ -4231,6 +4245,10 @@ export async function startRun(
           const max = retries.reportedMax
           const waitMs = retryDelayMs(e, attempt + 1)
           const throttle = throttleInfo(e, waitMs)
+          log.info(
+            `run ${runId}: provider retry ${attempt + 1}${max !== undefined ? `/${max}` : ''} on ` +
+              `${serving.providerId}/${serving.model} in ${waitMs}ms: ${redact(reason)}`
+          )
           emit({
             type: 'retry',
             attempt: attempt + 1,
@@ -5014,7 +5032,14 @@ export async function startRun(
             // call so a remote changed mid-chat gets a key (and a prompt) of its own.
             const ghRepoCall = tool.kind === 'network' && call.name.startsWith('gh_')
             const ghRepo = ghRepoCall ? await ghRepoKey(workspace) : null
-            const netDest = tool.kind === 'network' ? networkDestination(call.name, execArgs, ghRepo) : null
+            // A browser_session call reaches the page the session is on, which only the
+            // run knows, so it is keyed from that (an open, from its own URL).
+            const netDest =
+              tool.kind !== 'network'
+                ? null
+                : call.name === BROWSER_SESSION_NAME
+                  ? browserSessionDestination(execArgs, browserSession?.currentUrl() ?? null)
+                  : networkDestination(call.name, execArgs, ghRepo)
             const kindOverride =
               netDest !== null ? run.networkHosts.has(netDest) : run.override.has(tool.kind)
             const { mustApprove, unsandboxedShell } = decideApproval({
@@ -5408,6 +5433,8 @@ export async function startRun(
   } finally {
     // This run's MCP servers no longer count as in use (see liveRuns in mcp/manager).
     releaseMcpRun(runId)
+    // The browser_session page lives exactly as long as the run.
+    browserSession?.close()
     // A turn stopped mid-tool — the user hit Stop, or an exception unwound after
     // the assistant `tool_use` was persisted but before its result — would leave a
     // dangling tool call that makes the conversation un-continuable. Pair any

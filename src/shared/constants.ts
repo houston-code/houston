@@ -26,6 +26,8 @@ export const IPC = {
   /** Gather the /doctor health facts (sandbox, provider keys, MCP, binaries). */
   doctorFacts: 'app:doctorFacts',
   logsReveal: 'app:logsReveal',
+  /** A renderer error (uncaught, unhandled rejection, or an error boundary's catch) for the main log. */
+  rendererError: 'app:rendererError',
   issueReportPreview: 'app:issueReportPreview',
   issueReportOpen: 'app:issueReportOpen',
   /** Whether an OS sandbox confines shell commands on this host. */

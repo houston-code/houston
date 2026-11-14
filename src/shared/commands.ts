@@ -79,22 +79,26 @@ function isSubsequence(needle: string, hay: string): boolean {
 
 /**
  * How well a command answers what was typed after the slash; lower is better, null
- * is no match. A name that starts with it comes first, then an alias that does,
- * then a name containing it, then a word of the description starting with it (so
- * `/perm` finds `/approval`), then the letters appearing in order in the name.
+ * is no match. The command the text names exactly comes first (its name, then an
+ * alias, as {@link resolveCommand} reads it), so `/agent` is never taken for
+ * `/agents`. Then a name that starts with it, then an alias that does, then a name
+ * containing it, then a word of the description starting with it (so `/perm` finds
+ * `/approval`), then the letters appearing in order in the name.
  */
 function commandRank(cmd: Command, q: string): number | null {
   const name = cmd.name.toLowerCase()
-  if (name.startsWith(q)) return 0
+  if (name === q) return 0
+  if (COMMAND_ALIASES[q] === cmd.name) return 1
+  if (name.startsWith(q)) return 2
   for (const [alias, target] of Object.entries(COMMAND_ALIASES)) {
-    if (target === cmd.name && alias.startsWith(q)) return 1
+    if (target === cmd.name && alias.startsWith(q)) return 3
   }
-  if (name.includes(q)) return 2
+  if (name.includes(q)) return 4
   if (q.length >= 3) {
     const words = cmd.description.toLowerCase().split(/[^a-z0-9]+/)
-    if (words.some((w) => w.startsWith(q))) return 3
+    if (words.some((w) => w.startsWith(q))) return 5
   }
-  if (q.length >= 2 && isSubsequence(q, name)) return 4
+  if (q.length >= 2 && isSubsequence(q, name)) return 6
   return null
 }
 

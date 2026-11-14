@@ -128,6 +128,13 @@ export function describeToolCall(
     }
     case 'view_localhost':
       return { verb: 'View', target: str(a.url) ?? '', mono: true }
+    case 'browser_session': {
+      const action = str(a.action) ?? ''
+      if (action === 'open') return { verb: 'Browser open', target: str(a.url) ?? '', mono: true }
+      const n = Array.isArray(a.steps) ? a.steps.length : 0
+      if (action === 'act') return { verb: 'Browser act', target: `${n} step${n === 1 ? '' : 's'}`, mono: false }
+      return { verb: 'Browser', target: action, mono: false }
+    }
     case 'web_search':
       return { verb: 'Search web', target: str(a.query) ?? '', mono: false }
     case 'dispatch_agent':
