@@ -186,7 +186,7 @@ Each model round's text is written once that round has finished.
   available, makes the call itself, and states its assumptions in the final answer.
 - **Shell network.** Under `--full-auto`, shell commands reach the network through the
   egress allowlist from the start. Under ask or auto-edit, approving a shell command
-  with `--on-approval allow` is a plain "Allow", so the command runs without network.
+  with `--on-approval allow` is an "Allow once", so the command runs without network.
   Pass `--allow-shell-network` to let shell commands reach the network for the run
   under any policy (see "Shell sandbox and network").
 
@@ -1376,7 +1376,7 @@ says which command it is using the first time it runs one in a turn. That comman
 gets network access only if you allowed the agent's own shell commands to use the
 network. It also runs only where shell commands are sandboxed: on a computer without
 the OS sandbox (Windows, or Linux without bubblewrap) Houston skips it and says so,
-unless you chose **Allow for run** on an unsandboxed command earlier in the run. In the
+unless you chose **Allow for this chat** on an unsandboxed command earlier in the chat. In the
 other modes an empty field still means nothing runs.
 
 A command you set yourself runs the project's scripts, which the agent can edit, so it
@@ -1812,7 +1812,7 @@ accept the plan, request changes, or reject it.
 - **Checks it can run.** The plan lists the checks it will run, and under them Houston
   shows whether they can run on this machine: whether the runtimes and dependencies
   are installed, and whether shell commands can reach the network to install them
-  (for example, "choose Allow for run on the install command").
+  (Houston asks once per chat, the first time a command fails without network).
 - Houston works this out from the machine without running anything, and tells the
   agent about any problem when you accept, so it can say a check couldn't run instead
   of claiming it did.
@@ -1841,7 +1841,7 @@ The sandbox can read your whole filesystem, so a few controls hold even in full 
   `allow` rule skips this only when it names the outside path itself, or is exact for
   the command.
 - **Reading a credential file** (a `.env`, a private key, `.aws/credentials`, and the
-  like) asks, even though reads otherwise never do. "Allow for run" on that prompt
+  like) asks, even though reads otherwise never do. "Allow for this chat" on that prompt
   stops it asking about credential reads for the rest of the conversation, and an
   `allow` permission rule opts a path in permanently.
 - **Changing a credential file** asks too: a file edit that writes one, or a shell
@@ -1894,7 +1894,7 @@ command is checked when its output is read or it is stopped.
 GitHub reads run without asking: `gh_pr_list`, `gh_pr_view`, `gh_pr_checks`,
 `gh_issue_list`, `gh_issue_view`, `gh_run_list`, `gh_run_view`.
 
-Everything else asks once per destination, and "Allow for run" covers only that
+Everything else asks once per destination, and "Allow for this chat" covers only that
 destination (the prompt says which):
 
 - **`web_fetch`** asks once per site, and **`web_search`** once per chat. Settings →
@@ -1934,7 +1934,7 @@ commands.
   down infrastructure (`terraform destroy`, `kubectl delete namespace`)
 
 Quoting a word, splitting it across lines, or running it through `bash -c` doesn't
-hide one. "Allow for run" doesn't stop these asking. An `allow` permission rule does
+hide one. "Allow for this chat" doesn't stop these asking. An `allow` permission rule does
 only when it is exact for the command, or its pattern names the destructive part
 (`git push --force*`): a prefix like `git push` doesn't. The "Always allow" choice on
 the prompt saves an exact rule for that command.
@@ -1956,19 +1956,26 @@ otherwise.
 
 On any single tool call you can:
 
-- **approve once**
-- **deny**
-- **allow for the run:** auto-approve that kind of tool for the rest of the
-  conversation (for a network call, just that one destination, which the prompt
-  names). A few calls get a grant of their own, because each starts work that keeps
-  going without you: `schedule_run`, `spawn_session`, and `dispatch_writable_agent`
-  are each covered only by "Allow for run" on that same tool, never by one on a file
-  edit (or on each other). An MCP grant covers that one server's tools, not every
-  server's.
+- **allow once:** run this one call
+- **deny:** refuse this one call
+- **allow for this chat:** auto-approve that kind of tool for the rest of this chat,
+  in this turn and later ones (for a network call, just that one destination, which
+  the prompt names). A few calls get a grant of their own, because each starts work
+  that keeps going without you: `schedule_run`, `spawn_session`, and
+  `dispatch_writable_agent` are each covered only by "Allow for this chat" on that
+  same tool, never by one on a file edit (or on each other). An MCP grant covers that
+  one server's tools, not every server's. The grant is kept in memory only: quitting
+  Houston (the app, or that terminal session) ends it, and deleting the chat forgets
+  it. On a shell command it also lets shell commands reach the network for the rest
+  of the chat. A few prompts keep asking anyway: a command that reaches outside the
+  project or can throw away work, a memory save after the chat took in outside text,
+  and anything a permission `ask` rule covers.
 - **always allow / always deny:** save a permission rule so the choice persists
+  across chats and restarts
 
-**Keys in the desktop app.** A waiting approval answers to `Y` (allow), `A` (allow for
-the run) and `N` (deny, with any reason typed in the box below), shown on the buttons.
+**Keys in the desktop app.** A waiting approval answers to `Y` (allow once), `A` (allow
+for this chat) and `N` (deny, with any reason typed in the box below), shown on the
+buttons.
 The keys work whenever you are not typing in a text box. When the prompt appears and
 the message box is empty and idle, the prompt takes the keyboard, and gives it back
 once answered. With several prompts waiting, the keys answer the first. The two
@@ -1995,8 +2002,8 @@ says, so "no, and here's what to do instead" lands in the same step.
   prompt. Anything that isn't a shortcut key is read as a denial plus that
   explanation.
 
-**Terminal approval keys:** `y` allow, `n` deny, `a` allow for the run, `!` always
-allow, `x` always deny.
+**Terminal approval keys:** `y` allow once, `a` allow for this chat, `!` always allow
+(saves a rule), `n` deny, `x` always deny (saves a rule).
 
 Stopping a run while an approval is waiting is recorded as an interruption, not a
 refusal, so the agent isn't told you rejected something you never answered.
@@ -2273,7 +2280,7 @@ project's agent wins if both use the same name.
   which asks for approval because it grants write access. One approval covers the
   whole delegated task's local actions, confined to the project. Since that includes
   running shell commands, it asks wherever shell commands ask: in every mode except
-  full auto, auto-approve edits included. "Allow for run" on it, or an allow rule,
+  full auto, auto-approve edits included. "Allow for this chat" on it, or an allow rule,
   stops the asking.
 - **Its report comes with evidence.** A writable subagent works under the same rules
   as the main agent about tests: it never deletes, skips, or weakens one to pass, and
@@ -2458,7 +2465,7 @@ A subagent reports back into the current turn. `spawn_session` instead spins off
 - **Never more permissive.** It inherits the current approval policy.
 - **After outside text, it asks.** Once the chat has read anything from outside (see
   "Untrusted content" under "Memory across sessions"), `spawn_session` and
-  `schedule_run` ask you first in every mode, past an allow rule and "Allow for run":
+  `schedule_run` ask you first in every mode, past an allow rule and "Allow for this chat":
   the agent writes the new session's first message, which that session reads as yours.
   A session started from such a chat (including a proposal you start) is marked, so
   its own memory saves ask too. A chat that spawned a session counts as having read
@@ -2769,7 +2776,7 @@ And it skips only the ordinary prompt: the one your mode shows, or one from your
 rule, a shell command that reaches outside the project or can throw away work, reading
 or changing a credential file, a memory save or session launch after the chat has read
 outside text, and, on a host without a sandbox, running shell unconfined before you
-have chosen "Allow for run" on such a prompt.
+have chosen "Allow for this chat" on such a prompt.
 
 ### How hooks run
 
@@ -3065,7 +3072,7 @@ dependencies, `gh`, `curl`) isn't impossible; it just needs that grant.
 - `--allow-shell-network` lets shell commands reach the network for that run under any
   policy. It isn't remembered for the next run.
 - `--on-approval allow` alone never grants it under ask or auto-edit, since it
-  approves each command the way plain "Allow" does.
+  approves each command the way "Allow once" does.
 
 **Installs behave well offline and online:**
 
@@ -3339,7 +3346,7 @@ or text copied from web pages or tool output.
   you first, in every mode. So does a session that such a chat spawned or scheduled,
   since its first message is text the agent wrote there. Compacting the chat
   (`/compact` included) doesn't clear it.
-  Neither an allow rule, "Allow for run", nor full auto skips it: a memory rides along
+  Neither an allow rule, "Allow for this chat", nor full auto skips it: a memory rides along
   in every later conversation, which is exactly where an injected instruction would
   try to persist.
 - **Permission rules** can target a scope: `memory_save(global)`, `memory_delete(repo)`.

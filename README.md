@@ -374,8 +374,8 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only:
   the agent researches and proposes a plan, with writes and shell commands
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
-  call you can approve once, deny, *allow for the run* (auto-approves that kind of
-  tool for the rest of the conversation), or *always allow* / *always deny*, which
+  call you can allow once, deny, *allow for this chat* (auto-approves that kind of
+  tool for the rest of the chat, until Houston quits), or *always allow* / *always deny*, which
   saves a permission rule so the choice sticks across future runs (the app names the
   saved rule, with Undo). In the app, `Y`, `A` and `N` answer a waiting approval. File edits show
   an inline red/green **diff** so you can review exactly what changes before
@@ -902,12 +902,12 @@ is `allow`; an unrecognized value is treated as `deny`.
 
 **Shell network.** Shell commands run in a sandbox with network off until the run
 is granted it, because the sandbox can read your whole filesystem.
-Interactively that grant is "Allow for run" on a shell command, or, under full
-auto, **Allow network for this chat** on the card Houston shows once a command
-fails for lack of network (commands that need no network never ask; Houston doesn't
-re-run the failed command itself). `--on-approval allow` approves each command the way
-plain "Allow" does, so under `ask` or `auto-edit` those commands still run
-offline. Pass `--allow-shell-network` to grant shell network for the run under
+Interactively that grant is **Allow network for this chat** on the card Houston
+shows, in every mode, once a command fails for lack of network (commands that need
+no network never ask; Houston doesn't re-run the failed command itself). Approving a
+shell command, even for the whole chat, never grants it. `--on-approval allow`
+approves each command the way "Allow once" does, so under `ask` or `auto-edit` those
+commands still run offline. Pass `--allow-shell-network` to grant shell network for the run under
 any policy; granted traffic still goes through the egress allowlist. Under
 `full-auto`, `--on-approval allow` (its default) also answers that card with yes
 when a command fails without network.

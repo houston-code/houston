@@ -33,8 +33,8 @@ describe('approval prompt keys', () => {
 
   it('shows each key on its button without changing the button names', () => {
     render(<ToolGroup items={[waiting('c1')]} onApprove={vi.fn()} />)
-    expect(screen.getByRole('button', { name: 'Allow' })).toHaveAttribute('aria-keyshortcuts', 'Y')
-    expect(screen.getByRole('button', { name: 'Allow for run' })).toHaveAttribute('aria-keyshortcuts', 'A')
+    expect(screen.getByRole('button', { name: 'Allow once' })).toHaveAttribute('aria-keyshortcuts', 'Y')
+    expect(screen.getByRole('button', { name: 'Allow for this chat' })).toHaveAttribute('aria-keyshortcuts', 'A')
     expect(screen.getByRole('button', { name: 'Deny' })).toHaveAttribute('aria-keyshortcuts', 'N')
     expect(screen.getByRole('button', { name: 'Always allow' })).not.toHaveAttribute('aria-keyshortcuts')
   })

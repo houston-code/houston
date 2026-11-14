@@ -317,8 +317,8 @@ describe('Transcript', () => {
   // nothing else. (A shared mock would let any earlier click satisfy a later
   // toHaveBeenCalledWith, hiding a button wired to the wrong decision.)
   it.each<[string, ToolApprovalDecision]>([
-    ['Allow', 'allow'],
-    ['Allow for run', 'always'],
+    ['Allow once', 'allow'],
+    ['Allow for this chat', 'always'],
     ['Deny', 'deny']
   ])('reports (callId, %s) decision when its approval button is clicked', (label, decision) => {
     const onApprove = vi.fn()
@@ -344,7 +344,7 @@ describe('Transcript', () => {
 
   it('does not show approval controls for a finished tool', () => {
     renderTranscript([toolItem({ status: 'done', name: 'run_shell', args: { command: 'ls' } })])
-    expect(screen.queryByRole('button', { name: 'Allow' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Allow once' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Deny' })).not.toBeInTheDocument()
   })
 

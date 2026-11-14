@@ -1733,7 +1733,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         warnings.push('Reads a credential or secret file (asked even in full auto).')
       } else if (e.sensitiveWrite && e.protectedWrite) {
         warnings.push(
-          'Changes a project control file (such as .houston, .vscode, .envrc, or a CI workflow) that can run code outside the sandbox later (asked every time; "Allow for run" does not cover it).'
+          'Changes a project control file (such as .houston, .vscode, .envrc, or a CI workflow) that can run code outside the sandbox later (asked every time, even in full auto, unless an allow rule covers this path).'
         )
       } else if (e.sensitiveWrite) {
         warnings.push('Changes a credential or secret file (asked even in full auto).')
@@ -1748,16 +1748,16 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       // command, so it gets no "always" choices.
       const options = e.egressHost
         ? [
-            { optionId: 'allow', name: `Allow ${e.egressHost}`, kind: 'allow_once' },
+            { optionId: 'allow', name: `Allow ${e.egressHost} for this chat`, kind: 'allow_once' },
             { optionId: 'deny', name: 'Keep blocked', kind: 'reject_once' }
           ]
         : e.shellNetwork
         ? [
-            { optionId: 'allow', name: 'Allow network', kind: 'allow_once' },
+            { optionId: 'allow', name: 'Allow network for this chat', kind: 'allow_once' },
             { optionId: 'deny', name: 'No network', kind: 'reject_once' }
           ]
         : [
-            { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+            { optionId: 'allow', name: 'Allow once', kind: 'allow_once' },
             { optionId: 'rule-allow', name: 'Always allow', kind: 'allow_always' },
             { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
             { optionId: 'rule-deny', name: 'Always deny', kind: 'reject_always' }

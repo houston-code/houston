@@ -518,7 +518,7 @@ export function renderApprovalPrompt(
       : ev.sensitiveRead
         ? `\n${paint('⚠ reads a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
         : ev.sensitiveWrite && ev.protectedWrite
-          ? `\n${paint('⚠ changes a project control file that can run code outside the sandbox (asks every time; "Allow for run" does not cover it)', 'yellow', 'bold')}`
+          ? `\n${paint('⚠ changes a project control file that can run code outside the sandbox (asks every time; "Allow for this chat" does not cover it)', 'yellow', 'bold')}`
           : ev.sensitiveWrite
           ? `\n${paint('⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)', 'yellow', 'bold')}`
           : ''
@@ -529,14 +529,14 @@ export function renderApprovalPrompt(
     : ''
   // A network grant reaches one destination; say which before the user picks it.
   const scope = ev.networkScope
-    ? `\n${paint(`  "Allow for run" covers ${stripControlChars(ev.networkScope)} for the rest of this chat.`, 'dim')}`
+    ? `\n${paint(`  "Allow for this chat" covers ${stripControlChars(ev.networkScope)} only, for the rest of this chat.`, 'dim')}`
     : ''
   // Named as the call's tool line names it ("Run", "Write"), not by its wire name.
   const head = paint(`Approve ${describeToolCall(ev.name, ev.args).verb}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
   const keys = opts.picker
     ? ''
-    : `\n${paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim')}` +
+    : `\n${paint('  [y] allow once   [a] allow for this chat   [!] always allow (saves a rule)   [n] deny   [x] always deny', 'dim')}` +
       paint('\n  …or type why not, and that goes back to the agent', 'dim')
   return `\n${head} ${kind}\n  ${summary}${warn}${offline}${scope}${keys}`
 }
@@ -556,14 +556,15 @@ export function approvalOutcome(
       : `Allowed ${opts.egressHost} for this chat`
   }
   if (opts.shellNetwork) {
+    // Any allow answers the chat's question, so every one grants network for the rest of it.
     if (decision === 'deny') return 'Running offline'
-    return decision === 'always' ? 'Network allowed for this run' : 'Network allowed'
+    return 'Network allowed for this chat'
   }
   switch (decision) {
     case 'allow':
       return 'Allowed'
     case 'always':
-      return 'Allowed for this run'
+      return 'Allowed for this chat'
     case 'rule-allow':
       return 'Always allowed (rule saved)'
     case 'rule-deny':
@@ -600,12 +601,16 @@ export function parseApprovalAnswer(answer: string): { decision: ToolApprovalDec
  * type them away and offer only allow/deny/always.
  */
 export const APPROVAL_OPTIONS: { label: string; value: ToolApprovalDecision | 'deny-note'; description: string }[] = [
-  { label: 'Allow', value: 'allow', description: 'run this once' },
-  { label: 'Allow for run', value: 'always', description: 'stop asking for this kind this session' },
-  { label: 'Always allow', value: 'rule-allow', description: 'save a permission rule' },
+  { label: 'Allow once', value: 'allow', description: 'run this call only' },
+  {
+    label: 'Allow for this chat',
+    value: 'always',
+    description: 'stop asking for this kind of tool in this chat (a network call: this destination), until Houston quits'
+  },
+  { label: 'Always allow', value: 'rule-allow', description: 'save a permission rule, kept across restarts' },
   { label: 'Deny', value: 'deny', description: 'refuse this once' },
   { label: 'Deny with a reason…', value: 'deny-note', description: 'tell the agent what to do instead' },
-  { label: 'Always deny', value: 'rule-deny', description: 'save a permission rule' }
+  { label: 'Always deny', value: 'rule-deny', description: 'save a permission rule, kept across restarts' }
 ]
 
 /**
@@ -1979,7 +1984,7 @@ export const HELP_TEXT = [
   '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
   '  /mcp [verb n]         list MCP servers (status, last error); tools · enable · disable · remove · login · logout <n>',
   '  /mcp add [--url u]    add a stdio server (guided), or a remote one: --url <url> [name] [--sse]',
-  '  /mcp reconnect <n|all>  restart a server\'s connection now',
+  "  /mcp reconnect <n>    restart a server's connection now (/mcp reconnect all: every one)",
   '  /mcp search <query>   search the MCP Registry; /mcp add-from-registry <name> reviews one to add',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
@@ -2006,7 +2011,12 @@ export const HELP_TEXT = [
   '  ultrathink            a word in the message: think harder for that turn',
   '',
   'While a turn runs: type and press Enter to steer it; Esc or Ctrl-C stops it.',
-  'Answer approvals with y / n / a.'
+  '',
+  'Approvals:',
+  '  y                     allow this call once',
+  '  a                     allow this kind of tool for the rest of this chat, until Houston quits (a network call: that destination only)',
+  '  !                     always allow: saves a permission rule, kept across restarts',
+  '  n, x                  deny this call, or always deny (saves a rule)'
 ].join('\n')
 
 /** Short tips for keys and prefixes a new user would not find on their own. */

@@ -107,7 +107,7 @@ side effects aren't checkpointed. So a shell command that can throw away work in
 project (`git reset --hard`, a forced `git clean`, `git checkout -- .`, `rm -r` of
 anything but build output and dependencies, `find … -delete`, deleting a branch or
 stash, a forced or deleting `git push`) **asks in every mode**, full auto and "Allow
-for run" included; only an explicit `allow` rule for the command skips it (one that
+for this chat" included; only an explicit `allow` rule for the command skips it (one that
 is exact for the command, or whose pattern names the destructive part itself, never a
 prefix such as `git push` that merely matches it). So does a
 command that destroys data the project doesn't hold and a checkpoint can't restore: a
@@ -173,7 +173,7 @@ the approval flow, not a guarantee that a model never acts on injected text.
 
 Once a conversation has taken in such text (or a subagent's or spawned session's
 report), the actions that would let an injected instruction outlive it **ask in every
-mode**, past allow rules and "Allow for run": saving or deleting a memory, and
+mode**, past allow rules and "Allow for this chat": saving or deleting a memory, and
 launching a session with `spawn_session` or `schedule_run`, whose first message the
 model writes and the new session would otherwise read as the user's. A session launched
 from such a conversation (a spawned one, each run of such a schedule, a proposal the
@@ -181,7 +181,7 @@ user starts) carries that mark, so its own memory writes and launches ask too. A
 scheduled run never runs under a more autonomous mode than the user's current default,
 whatever mode the chat that created it was in.
 
-"Allow for run" is scoped so one approval doesn't widen into unrelated autonomy: it
+"Allow for this chat" is scoped so one approval doesn't widen into unrelated autonomy: it
 covers a tool kind for the chat, except that `schedule_run`, `spawn_session`, and
 `dispatch_writable_agent` each need their own grant, each MCP server is granted
 separately, and network egress is granted per destination. A writable subagent runs

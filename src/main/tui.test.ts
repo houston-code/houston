@@ -40,6 +40,7 @@ import {
   parseApprovalAnswer,
   renderQuestion,
   HELP_TEXT,
+  APPROVAL_OPTIONS,
   wrapHelp,
   resolveQuestionAnswer,
   parseSlashCommand,
@@ -317,13 +318,28 @@ describe('approval prompt', () => {
     expect(renderApprovalPrompt(ev({ shellNetwork: true }), makePainter(false), { picker: true })).not.toContain('[y]')
   })
 
+  it('states how long each approval answer lasts', () => {
+    const p = renderApprovalPrompt(ev(), makePainter(false))
+    expect(p).toContain('[y] allow once')
+    expect(p).toContain('[a] allow for this chat')
+    expect(p).toContain('[!] always allow (saves a rule)')
+    expect(p).not.toContain('for run')
+    const labels = APPROVAL_OPTIONS.map((o) => o.label)
+    expect(labels).toEqual(['Allow once', 'Allow for this chat', 'Always allow', 'Deny', 'Deny with a reason…', 'Always deny'])
+    expect(APPROVAL_OPTIONS[1].description).toContain('until Houston quits')
+    expect(HELP_TEXT).toContain('allow this kind of tool for the rest of this chat, until Houston quits')
+  })
+
   it('words each approval outcome', () => {
     expect(approvalOutcome('allow')).toBe('Allowed')
     expect(approvalOutcome('rule-allow')).toBe('Always allowed (rule saved)')
     expect(approvalOutcome('rule-deny')).toBe('Always denied (rule saved)')
     expect(approvalOutcome('deny', { note: 'use pnpm' })).toBe('Denied: use pnpm')
     expect(approvalOutcome('deny', { shellNetwork: true })).toBe('Running offline')
-    expect(approvalOutcome('always', { shellNetwork: true })).toBe('Network allowed for this run')
+    // Either allow answers the chat-wide question, so both say so.
+    expect(approvalOutcome('always', { shellNetwork: true })).toBe('Network allowed for this chat')
+    expect(approvalOutcome('allow', { shellNetwork: true })).toBe('Network allowed for this chat')
+    expect(approvalOutcome('always')).toBe('Allowed for this chat')
     expect(approvalOutcome('always', { egressHost: 'registry.example.com' })).toBe(
       'Allowed registry.example.com for this chat'
     )
@@ -369,9 +385,9 @@ describe('approval prompt', () => {
     expect(renderApprovalPrompt(ev(), makePainter(false))).not.toContain('Runs without network')
   })
 
-  it('names what "Allow for run" covers on a network prompt', () => {
+  it('names what "Allow for this chat" covers on a network prompt', () => {
     const p = renderApprovalPrompt(ev({ networkScope: 'GitHub reads on acme/app' }), makePainter(false))
-    expect(p).toContain('"Allow for run" covers GitHub reads on acme/app for the rest of this chat.')
+    expect(p).toContain('"Allow for this chat" covers GitHub reads on acme/app only, for the rest of this chat.')
     expect(renderApprovalPrompt(ev(), makePainter(false))).not.toContain('covers')
   })
 
@@ -1665,7 +1681,7 @@ describe('runTui', () => {
     await runTui(opts, d)
     expect(rec.approvals).toEqual([['run-1', 'c1', 'always']])
     expect(t.text()).not.toContain('[y] allow')
-    expect(t.text()).toContain('↳ Allowed for this run')
+    expect(t.text()).toContain('↳ Allowed for this chat')
   })
 
   it('says Esc at the approval picker denied the call', async () => {

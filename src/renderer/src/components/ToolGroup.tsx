@@ -697,7 +697,7 @@ function ApprovalPrompt({
   )
   const keysTitle = chatGrant
     ? 'Keys: Y allows, N keeps it blocked (while you are not typing in a text box)'
-    : 'Keys: Y allows, A allows for this run, N denies (while you are not typing in a text box)'
+    : 'Keys: Y allows once, A allows for this chat, N denies (while you are not typing in a text box)'
   const shared = {
     ref,
     className: 'tool-row__approval',
@@ -755,8 +755,8 @@ function ApprovalPrompt({
       {item.sensitiveRead && (
         <p className="tool-row__approval-note">
           This reads a credential or secret file. Reads normally run without asking, so
-          Houston is checking first even in full auto. Choose "Allow for run" to stop asking
-          about credential reads for the rest of this conversation.
+          Houston is checking first even in full auto. Choose "Allow for this chat" to stop
+          asking about credential reads for the rest of this chat.
         </p>
       )}
       {item.sensitiveWrite && item.protectedWrite && (
@@ -764,7 +764,7 @@ function ApprovalPrompt({
           This changes a project control file (such as .houston, .vscode, .envrc, a git hook
           folder, or a CI workflow) that can run code outside the sandbox later or change
           Houston&apos;s own settings. Houston asks every time, even in full auto, and
-          &quot;Allow for run&quot; does not cover it; only an allow rule for this path does.
+          &quot;Allow for this chat&quot; does not cover it; only an allow rule for this path does.
         </p>
       )}
       {item.sensitiveWrite && !item.protectedWrite && (
@@ -781,14 +781,28 @@ function ApprovalPrompt({
       )}
       {item.networkScope && (
         <p className="tool-row__approval-note">
-          "Allow for run" covers {item.networkScope} for the rest of this chat.
+          "Allow for this chat" covers {item.networkScope} only, for the rest of this chat.
         </p>
       )}
-      <button className="btn btn--sm btn--ok" aria-keyshortcuts="Y" onClick={() => onApprove(item.id, 'allow')}>
-        Allow <KeyHint k="Y" />
+      <button
+        className="btn btn--sm btn--ok"
+        aria-keyshortcuts="Y"
+        title="Run this call only"
+        onClick={() => onApprove(item.id, 'allow')}
+      >
+        Allow once <KeyHint k="Y" />
       </button>
-      <button className="btn btn--sm" aria-keyshortcuts="A" onClick={() => onApprove(item.id, 'always')}>
-        Allow for run <KeyHint k="A" />
+      <button
+        className="btn btn--sm"
+        aria-keyshortcuts="A"
+        title={
+          item.networkScope
+            ? `Stop asking about ${item.networkScope} for the rest of this chat, until Houston quits`
+            : 'Stop asking for this kind of tool for the rest of this chat, until Houston quits'
+        }
+        onClick={() => onApprove(item.id, 'always')}
+      >
+        Allow for this chat <KeyHint k="A" />
       </button>
       <button
         className="btn btn--sm"

@@ -4620,7 +4620,11 @@ describe('networkBlockHint', () => {
   it('points a headless run at --allow-shell-network, since it has no approval prompt', () => {
     expect(networkBlockHint(false, failed, dnsErr, true)).toBe(HEADLESS_NETWORK_BLOCKED_HINT)
     expect(HEADLESS_NETWORK_BLOCKED_HINT).toContain('--allow-shell-network')
-    expect(HEADLESS_NETWORK_BLOCKED_HINT).not.toContain('Allow for run')
+    expect(HEADLESS_NETWORK_BLOCKED_HINT).not.toContain('Allow for this chat')
+    // Approving a shell command never grants network; the interactive hint points at
+    // the separate shell-network question instead.
+    expect(NETWORK_BLOCKED_HINT).not.toContain('Allow for this chat')
+    expect(NETWORK_BLOCKED_HINT).toContain('may reach the network for this chat')
     // The same gates as the interactive hint: granted network, success, or an
     // unrelated failure stay silent.
     expect(networkBlockHint(true, failed, dnsErr, true)).toBe('')

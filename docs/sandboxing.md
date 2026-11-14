@@ -295,10 +295,12 @@ rather than falling back to unrestricted egress.
 
 **When shell has network.** With the proxy in place, full auto gives shell commands
 proxied network from the start: the allowlist, not an offline default, is what bounds a
-prompt-injected command. Ask and auto-edit grant it with "Allow for run" on a shell
-command. Under mode `all` there is no proxy, so full auto runs shell offline until the
-one-time shell-network consent (`offerShellNetwork` in
-[`src/main/agent/loop.ts`](../src/main/agent/loop.ts)), as before.
+prompt-injected command. Ask and auto-edit start offline and ask the one-time
+shell-network consent (`offerShellNetwork` in
+[`src/main/agent/loop.ts`](../src/main/agent/loop.ts)) the first time a sandboxed command
+fails without network; approving a shell command, even for the chat, never grants it.
+Under mode `all` there is no proxy, so full auto also runs shell offline until that
+consent, as before.
 
 **Per-chat host grants.** Each run registers a random token with the policy
 (`registerEgressRun` in [`src/main/agent/egress.ts`](../src/main/agent/egress.ts)), and
@@ -316,7 +318,7 @@ read the user's files, a command that reads another live run's environment could
 borrow that token, and with it the hosts the user allowed in that chat; that widens
 nothing past what the user already approved. A run holds at most 20 refused hosts and
 raises at most 3 questions per tool call, naming the rest to the agent instead. Grants
-live in memory per conversation, like the other "Allow for run" grants.
+live in memory per conversation, like the other "Allow for this chat" grants.
 
 Known residuals, accepted and documented: an allowlisted collaborative host (e.g.
 github.com) still accepts authenticated writes, so exfiltration to *your own
@@ -414,8 +416,8 @@ it ([`src/main/sandbox/windows.ts`](../src/main/sandbox/windows.ts),
 
 - the backend reports `sandboxed: false`;
 - the approval gate **never silently auto-approves** an unconfined shell command: each one
-  asks **even in full-auto** until you grant per-run consent ("Allow for run" on such a
-  prompt)
+  asks **even in full-auto** until you grant consent for the chat ("Allow for this chat"
+  on such a prompt)
   ([`src/main/agent/approval.ts`](../src/main/agent/approval.ts));
 - the structured file tools' JS-level path containment still holds on **every** OS, so
   `write_file` / `edit_file` / `apply_patch` stay confined to the project regardless of

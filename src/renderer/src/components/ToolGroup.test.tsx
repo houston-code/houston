@@ -197,7 +197,7 @@ describe('ToolGroup', () => {
       />
     )
     // A completed tool has no approval controls.
-    expect(screen.queryByRole('button', { name: 'Allow' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Allow once' })).not.toBeInTheDocument()
     unmount()
 
     render(
@@ -214,10 +214,10 @@ describe('ToolGroup', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
     expect(onApprove).toHaveBeenCalledWith('call-7', 'allow')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Allow for run' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow for this chat' }))
     expect(onApprove).toHaveBeenCalledWith('call-7', 'always')
 
     fireEvent.click(screen.getByRole('button', { name: 'Always allow' }))
@@ -908,7 +908,7 @@ describe('ToolGroup', () => {
     const note = screen.getByText(/Runs without network/)
     expect(note).toHaveTextContent('Runs without network. If it needs the network, Houston asks before allowing it.')
     expect(note.textContent).not.toContain('\u2014')
-    fireEvent.click(screen.getByRole('button', { name: 'Allow for run' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow for this chat' }))
     expect(onApprove).toHaveBeenCalledWith('call-12', 'always')
   })
 
@@ -922,7 +922,7 @@ describe('ToolGroup', () => {
     expect(screen.queryByText(/Runs without network/)).not.toBeInTheDocument()
   })
 
-  it('names what "Allow for run" covers on a network prompt', () => {
+  it('names what "Allow for this chat" covers on a network prompt', () => {
     const onApprove = vi.fn()
     render(
       <ToolGroup
@@ -940,7 +940,7 @@ describe('ToolGroup', () => {
     )
     const note = screen.getByText(/covers GitHub posts/)
     expect(note).toHaveTextContent(
-      '"Allow for run" covers GitHub posts and updates on acme/app (PRs, issues, comments, reviews) for the rest of this chat.'
+      '"Allow for this chat" covers GitHub posts and updates on acme/app (PRs, issues, comments, reviews) only, for the rest of this chat.'
     )
     expect(note.textContent).not.toContain('\u2014')
   })
