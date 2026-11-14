@@ -177,6 +177,28 @@ describe('FilesPanel opened at a file', () => {
     await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('/repo', 'e2e/screens/home.png'))
   })
 
+  it('Refresh keeps the file picked since and the folders opened since', async () => {
+    installApi({
+      '': [dir('e2e', 'e2e'), dir('src', 'src'), file('README.md', 'README.md')],
+      e2e: [file('a.png', 'e2e/a.png')],
+      src: [file('main.ts', 'src/main.ts')]
+    })
+    render(<FilesPanel workspace="/repo" onClose={vi.fn()} initialPath="e2e/a.png" docked />)
+    expect(await screen.findByText('a.png')).toBeInTheDocument()
+    // The user opens another folder and picks another file there.
+    fireEvent.click(screen.getByRole('button', { name: /src/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /main\.ts/ }))
+    const selectedName = (): string | null =>
+      document.querySelector('.files-row__btn--selected .files-row__name')?.textContent ?? null
+    await waitFor(() => expect(selectedName()).toBe('main.ts'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' })).not.toBeDisabled())
+    expect(selectedName()).toBe('main.ts')
+    expect(screen.getByText('main.ts')).toBeInTheDocument()
+    expect(screen.getByText('a.png')).toBeInTheDocument()
+  })
+
   it('normalizes the paths it is given', () => {
     expect(normalizeRelPath('./a/b.png')).toBe('a/b.png')
     expect(normalizeRelPath('a\\b.png')).toBe('a/b.png')

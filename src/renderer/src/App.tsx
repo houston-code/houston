@@ -94,7 +94,7 @@ import { deliverMidRunMessage } from './lib/midRunMessage'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
 import { usePrStatus } from './hooks/usePrStatus'
 import type { ShipAction } from '@shared/shipAction'
-import { saveComposerDraft } from './lib/composerDraft'
+import { loadComposerDraft, saveComposerDraft } from './lib/composerDraft'
 import type { ForkPoint } from '@shared/conversation-io'
 import {
   endsWithRecordedError,
@@ -116,6 +116,7 @@ import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { chatSettingsFor, defaultChatSettings, differsFromDefaults, withChatSettings, type ChatSettings } from './lib/chatSettings'
 import { Transcript, type RewindHandlers } from './components/Transcript'
 import { FileLinkContext, type FileLinks } from './components/FileLink'
+import { filesPanelKey } from './lib/fileLinks'
 import { RewindDialog } from './components/RewindDialog'
 import { RewindPicker } from './components/RewindPicker'
 import { rewindDoneText, rewindsConversation, type RewindMode, type RewindOutcome } from '@shared/rewind'
@@ -169,6 +170,7 @@ import { desktopCommandAction, type DesktopCommandAction, type SettingsSection }
 import { pageForWords } from './components/settings/pageIds'
 import type { WhatsNew } from '@shared/update'
 import { describeRule, ruleActionOf, savedRulesText, waitForSavedRules, withoutRules } from './lib/ruleToast'
+import { captureEventsAfter, createNavSequence, eventsForRun, finishCompact, resendAfterRewind } from './lib/chatSwitch'
 
 // These overlays aren't on the initial render path, so load them as separate
 // chunks fetched on first open instead of bloating the main bundle. SettingsModal
@@ -258,6 +260,9 @@ export default function App(): JSX.Element {
   const [filesTarget, setFilesTarget] = useState<string | undefined>(undefined)
   // The line to show in the previewed file, when a link named one.
   const [filesLine, setFilesLine] = useState<number | undefined>(undefined)
+  // Bumped on every reveal, so opening the same file again (after picking another one
+  // in the tree) remounts the panel onto it instead of being a no-op state update.
+  const [filesOpenSeq, setFilesOpenSeq] = useState(0)
   const [sideChatOpen, setSideChatOpen] = useState(false)
   // The open chat's decisions on its propose_session cards (keyed by call id).
   const [proposalStates, setProposalStates] = useState<Record<string, ProposalState>>({})
@@ -371,6 +376,14 @@ export default function App(): JSX.Element {
     return roots
   }, [])
   const chat = useChat(currentId)
+  // The open conversation, readable from an async continuation that must not act on
+  // a chat the user has since navigated away from.
+  const currentIdRef = useRef(currentId)
+  currentIdRef.current = currentId
+  // Every navigation also bumps `nav`, so a slower open (or a chat being created) can
+  // tell a later click overtook it, even one back to the same chat.
+  const [nav] = useState(createNavSequence)
+
   // What each subagent in this chat spent, for the cost breakdown.
   // The chat's current todo list, pinned above the message box while it matters.
   const todos = useMemo(() => currentTodos(chat.items), [chat.items])
@@ -397,7 +410,7 @@ export default function App(): JSX.Element {
   // would flash before the chat replaced them.
   const [launchSettled, setLaunchSettled] = useState(false)
   // selectConversation is defined further down; the launch below reads it from here.
-  const selectConversationRef = useRef<((id: string) => Promise<void>) | null>(null)
+  const selectConversationRef = useRef<((id: string) => Promise<boolean>) | null>(null)
   // Listing reads every chat from disk in the main process, and several effects ask
   // for it at once (two on mount, two when a run starts or ends): overlapping asks
   // share a run instead of each paying for their own (see coalesced).
@@ -656,6 +669,7 @@ export default function App(): JSX.Element {
             open: ({ path, line }) => {
               setFilesTarget(path)
               setFilesLine(line)
+              setFilesOpenSeq((n) => n + 1)
               showFilesRef.current()
             }
           }
@@ -790,6 +804,23 @@ export default function App(): JSX.Element {
   const creatingWorktree =
     currentId === null && worktreeMode && repoInfo !== null && canCreateWorktree(repoInfo)
 
+  // Put text that went nowhere back in its chat's message box: straight into the open
+  // chat's, or as another chat's saved draft (after any draft already there), which
+  // its composer shows when that chat is reopened.
+  const giveBackText = useCallback((cid: string | null, text: string, images?: ImageAttachment[]) => {
+    if (currentIdRef.current === cid) {
+      setComposerPrefill((prev) => ({
+        text,
+        ...(images?.length ? { images } : {}),
+        seq: (prev?.seq ?? 0) + 1,
+        conversationId: cid
+      }))
+      return
+    }
+    const draft = loadComposerDraft(cid)
+    saveComposerDraft(cid, draft ? `${draft}\n\n${text}` : text)
+  }, [])
+
   // Start a turn immediately with the given text/images, creating a conversation
   // first if this is the very first message — in a fresh worktree when set up.
   const sendNow = useCallback(
@@ -797,6 +828,10 @@ export default function App(): JSX.Element {
       if (!settings?.selected || !workspace) return
       let convId = currentId
       if (!convId) {
+        // The user can open another chat while this one is being created (a new
+        // worktree takes a moment); `token` tells whether they're still here after.
+        const token = nav.mark()
+        const stillHere = (): boolean => nav.isLatest(token) && currentIdRef.current === null
         // Creating the conversation (and, in worktree mode, `git worktree add`) can
         // take a beat, during which the composer is still enabled and `currentId`
         // is still null. Guard re-entry so a second Enter can't spawn a duplicate
@@ -817,13 +852,33 @@ export default function App(): JSX.Element {
           })
         } catch (e) {
           // Worktree/branch creation failed (e.g. a branch appeared since we last
-          // checked) — surface it and keep the user on the new-chat screen.
-          chat.notify(`Couldn't start the chat: ${(e as Error).message}`, 'error')
+          // checked) — surface it and keep the user on the new-chat screen. The
+          // composer already cleared, so the message goes back in it.
+          const here = stillHere()
+          giveBackText(null, text, images)
+          if (here) chat.notify(`Couldn't start the chat: ${(e as Error).message}`, 'error')
           return
         } finally {
           creatingConvRef.current = false
         }
         convId = conv.id
+        if (!stillHere()) {
+          // They moved on: run the first turn in the new chat without taking over the
+          // view they're in now (its transcript would get this turn appended).
+          const started = await chat.startDetached({
+            conversationId: conv.id,
+            userText: text,
+            images,
+            ...(invokedAs ? { invokedAs } : {}),
+            providerId: settings.selected.providerId,
+            model: settings.selected.model,
+            approvalPolicy: settings.approvalPolicy,
+            reasoningEffort: settings.reasoningEffort
+          })
+          if (!started) giveBackText(conv.id, text, images)
+          void refreshConversations()
+          return
+        }
         // The new chat keeps the defaults it started with as its own settings.
         setChatSettings({
           selected: settings.selected,
@@ -844,13 +899,23 @@ export default function App(): JSX.Element {
       })
       void refreshConversations()
     },
-    [settings, workspace, currentId, creatingWorktree, branchName, baseBranch, chat, refreshConversations]
+    [settings, workspace, currentId, creatingWorktree, branchName, baseBranch, chat, refreshConversations, nav, giveBackText]
   )
 
   // Messages typed while a run is active are buffered (in the main process, keyed
   // by conversation) and sent combined as the next turn when the run finishes —
   // surviving navigation to other chats. This is the open conversation's view.
-  const queue = useInputQueue(currentId)
+  const queue = useInputQueue(currentId, {
+    onEnqueueFailed: (cid, text, images) => {
+      giveBackText(cid, text, images)
+      if (currentIdRef.current === cid) {
+        chat.notify("Couldn't queue that message, so it's back in the message box.", 'error')
+      }
+    },
+    onError: (cid, message) => {
+      if (currentIdRef.current === cid) chat.notify(message, 'error')
+    }
+  })
 
   // Uncommitted-change counts for the titlebar Changes badge (refreshes on run
   // completion / window focus).
@@ -873,19 +938,36 @@ export default function App(): JSX.Element {
     }
   }, [workspace])
 
+  // Resolves true once the chat is in view, false when it no longer exists or a later
+  // navigation overtook this one (clicking A then B quickly: B wins even if A's reads
+  // come back last).
   const selectConversation = useCallback(
-    async (id: string) => {
+    async (id: string): Promise<boolean> => {
+      const token = nav.begin()
       // Fetch the persisted conversation and any live run for it together, so the
       // reset + adopt below happen back-to-back in one render (no flicker where the
-      // composer shows Send for a conversation whose run is still going).
-      const [conv, activeRunId, pendingPrompts, liveTranscript, checkpoint] = await Promise.all([
-        window.api.getConversation(id),
-        window.api.getActiveRun(id),
-        window.api.getPendingPrompts(id),
-        window.api.getLiveTranscript(id),
-        window.api.getCheckpoint(id)
-      ])
-      if (!conv) return
+      // composer shows Send for a conversation whose run is still going). Events the
+      // run streams after its live transcript is read, while the other reads finish,
+      // are held and replayed after adopting it, so none go missing.
+      const live = captureEventsAfter(window.api.onAgentEvent, window.api.getLiveTranscript(id))
+      let fetched
+      try {
+        fetched = await Promise.all([
+          window.api.getConversation(id),
+          window.api.getActiveRun(id),
+          window.api.getPendingPrompts(id),
+          live.snapshot,
+          window.api.getCheckpoint(id)
+        ])
+      } catch (e) {
+        live.take()
+        throw e
+      }
+      const [conv, activeRunId, pendingPrompts, liveTranscript, checkpoint] = fetched
+      if (!conv || !nav.isLatest(token)) {
+        live.take()
+        return false
+      }
       const unreadAnchor = chatStatusRef.current[id]?.unread?.anchor
       const saved = savedSettingsRef.current
       const own = saved ? chatSettingsFor(conv, saved) : null
@@ -932,16 +1014,28 @@ export default function App(): JSX.Element {
         Boolean(conv.lastError),
         conv.lastError ?? null
       )
+      // Restore the revert/redo affordance for the conversation's latest turn — the
+      // checkpoint state is built only from live events and lost on a reset/rebuild.
+      // Seeded before adopting, so a file write among the replayed events counts on
+      // top of it rather than being overwritten by the older snapshot.
+      chat.seedCheckpoint(checkpoint)
       // A run for this conversation is still in flight in the main process —
       // re-adopt it so the composer shows Stop and events/approvals reconnect.
       // Replaying liveTranscript restores the in-flight turn's streamed output that
       // isn't on disk yet (otherwise it vanishes on switch-back, most visibly on a
       // freshly spawned session); pendingPrompts re-renders any approval/question
-      // still awaiting the user, so a run parked on a prompt isn't left wedged.
-      if (activeRunId) chat.adopt(activeRunId, pendingPrompts, liveTranscript, chatStatusRef.current[id]?.startedAt)
-      // Restore the revert/redo affordance for the conversation's latest turn — the
-      // checkpoint state is built only from live events and lost on a reset/rebuild.
-      chat.seedCheckpoint(checkpoint)
+      // still awaiting the user, so a run parked on a prompt isn't left wedged; and
+      // `since` is what streamed while the other reads were still in flight.
+      const since = live.take()
+      if (activeRunId) {
+        chat.adopt(
+          activeRunId,
+          pendingPrompts,
+          liveTranscript,
+          chatStatusRef.current[id]?.startedAt,
+          eventsForRun(since, activeRunId)
+        )
+      }
       // The chat's model is gone from settings: say which one it uses now.
       if (own?.modelChanged) {
         chat.notify(
@@ -951,8 +1045,9 @@ export default function App(): JSX.Element {
           'info'
         )
       }
+      return true
     },
-    [chat]
+    [chat, nav]
   )
   selectConversationRef.current = selectConversation
 
@@ -971,13 +1066,14 @@ export default function App(): JSX.Element {
   // are picked first. New worktree is the default for git repos.
   const enterNewChat = useCallback(
     (ws: string | null) => {
+      nav.begin()
       setLastWorkspace(ws)
       setCurrentId(null)
       setChatSettings(null)
       setProposalStates({})
       chat.reset([])
     },
-    [chat]
+    [chat, nav]
   )
 
   // New chat never opens the folder picker: with no folder yet it lands on the empty
@@ -1047,12 +1143,13 @@ export default function App(): JSX.Element {
       saveComposerDraft(id, '') // drop the deleted conversation's lingering draft
       if (res.worktree?.message) alert(res.worktree.message)
       if (id === currentId) {
+        nav.begin()
         setCurrentId(null)
         chat.reset([])
       }
       await refreshConversations()
     },
-    [currentId, chat, refreshConversations]
+    [currentId, chat, refreshConversations, nav]
   )
 
   // "Fork from here": a new chat holding the conversation up to a message. From one
@@ -1150,7 +1247,10 @@ export default function App(): JSX.Element {
         const meta = conversations.find((c) => c.id === id)
         const ws = meta ? newChatFolder(meta) : workspace
         if (ws) enterNewChat(ws)
-        else setCurrentId(null)
+        else {
+          nav.begin()
+          setCurrentId(null)
+        }
         setUndoToast({
           text:
             fromReply === undefined
@@ -1163,7 +1263,7 @@ export default function App(): JSX.Element {
         })
       }
     },
-    [currentId, conversations, workspace, enterNewChat, selectConversation]
+    [currentId, conversations, workspace, enterNewChat, selectConversation, nav]
   )
   const onMarkAllRead = useCallback(() => void window.api.markAllChatsRead(), [])
 
@@ -1789,9 +1889,11 @@ export default function App(): JSX.Element {
   // The bar itself flips to "Reverted … / Redo"; see checkpointNotice for what is said.
   const onRevert = useCallback(async () => {
     const expected = chat.checkpoint?.files ?? 0
+    const conv = currentIdRef.current
     const n = await chat.revertCheckpoint()
+    if (n === null) return // the failure is already in the transcript
     const notice = checkpointNotice('revert', n, expected)
-    if (notice) chat.notify(notice, 'error')
+    if (notice && currentIdRef.current === conv) chat.notify(notice, 'error')
   }, [chat])
 
   const onRetry = useCallback(() => {
@@ -1823,9 +1925,11 @@ export default function App(): JSX.Element {
 
   const onReapply = useCallback(async () => {
     const expected = chat.checkpoint?.files ?? 0
+    const conv = currentIdRef.current
     const n = await chat.reapplyCheckpoint()
+    if (n === null) return // the failure is already in the transcript
     const notice = checkpointNotice('redo', n, expected)
-    if (notice) chat.notify(notice, 'error')
+    if (notice && currentIdRef.current === conv) chat.notify(notice, 'error')
   }, [chat])
 
   const dispatch = useCallback(
@@ -1860,28 +1964,39 @@ export default function App(): JSX.Element {
     [currentId]
   )
 
+  // Whether `id` is still the chat in view with no navigation since `token` (from
+  // nav.mark() when the async work began).
+  const stillOn = useCallback(
+    (id: string, token: number) => currentIdRef.current === id && nav.isLatest(token),
+    [nav]
+  )
+
   // Rewind the open chat to just before `target`, then reload it (transcript, usage,
   // the latest turn's revert) from what main stored. Null when refused or failed;
-  // the reason is shown in the transcript.
+  // the reason is shown in the transcript. A user who opened another chat meanwhile
+  // is left there: the rewound chat shows its new state when they return.
   const performRewind = useCallback(
     async (target: RewindItemTarget, mode: RewindMode): Promise<RewindOutcome | null> => {
-      if (!currentId) return null
+      const id = currentId
+      if (!id) return null
+      const token = nav.mark()
       let res
       try {
-        res = await window.api.rewind(currentId, target.turn, mode, target.text)
+        res = await window.api.rewind(id, target.turn, mode, target.text)
       } catch {
         res = { ok: false as const, error: "Couldn't rewind this conversation." }
       }
       if (!res.ok) {
-        chat.notify(res.error, 'error')
+        if (stillOn(id, token)) chat.notify(res.error, 'error')
         return null
       }
-      await selectConversation(currentId)
-      chat.notify(rewindDoneText(mode, res), res.conflicts.length > 0 ? 'error' : 'info')
-      setCanUndoRewind(res.undoable)
+      if (stillOn(id, token) && (await selectConversation(id))) {
+        chat.notify(rewindDoneText(mode, res), res.conflicts.length > 0 ? 'error' : 'info')
+        setCanUndoRewind(res.undoable)
+      }
       return res
     },
-    [currentId, chat, selectConversation]
+    [currentId, chat, selectConversation, nav, stillOn]
   )
 
   const onConfirmRewind = useCallback(
@@ -1889,11 +2004,12 @@ export default function App(): JSX.Element {
       const pending = rewindConfirm
       setRewindConfirm(null)
       if (!pending) return
+      const id = currentId
       const done = await performRewind(pending.target, mode)
-      // The message left the chat: put it back in the composer to send again or change.
-      if (done && rewindsConversation(mode)) prefillComposer(done.text)
+      // The message left the chat: put it back in its composer to send again or change.
+      if (done && rewindsConversation(mode)) giveBackText(id, done.text)
     },
-    [rewindConfirm, performRewind, prefillComposer]
+    [rewindConfirm, currentId, performRewind, giveBackText]
   )
 
   const onEditMessage = useCallback(
@@ -1907,14 +2023,17 @@ export default function App(): JSX.Element {
   )
 
   const onUndoRewind = useCallback(async () => {
-    if (!currentId) return
-    const res = await window.api.undoRewind(currentId)
+    const id = currentId
+    if (!id) return
+    const token = nav.mark()
+    const res = await window.api.undoRewind(id)
+    if (!stillOn(id, token)) return
     setCanUndoRewind(false)
     if (!res.ok) {
       chat.notify(res.error, 'error')
       return
     }
-    await selectConversation(currentId)
+    if (!(await selectConversation(id))) return
     const left = res.conflicts.length
       ? ` Left ${res.conflicts.length} file${res.conflicts.length === 1 ? '' : 's'} that changed since: ${res.conflicts.slice(0, 5).join(', ')}.`
       : ''
@@ -1922,7 +2041,7 @@ export default function App(): JSX.Element {
       `Undid the rewind${res.reapplied ? ` and put back ${res.reapplied} file${res.reapplied === 1 ? '' : 's'}` : ''}.${left}`,
       left ? 'error' : 'info'
     )
-  }, [currentId, chat, selectConversation])
+  }, [currentId, chat, selectConversation, nav, stillOn])
 
   // Retry on the last reply: take the conversation back to just before the last
   // message the user sent (the files are left as they are), then send it again, so
@@ -1939,6 +2058,8 @@ export default function App(): JSX.Element {
     const id = currentId
     if (!id || !lastTurn || chat.running) return
     const { target, item } = lastTurn
+    const selected = settings?.selected
+    let token = nav.mark()
     let res
     try {
       res = await window.api.rewind(id, target.turn, 'conversation', target.text)
@@ -1946,13 +2067,35 @@ export default function App(): JSX.Element {
       res = { ok: false as const, error: "Couldn't retry this reply." }
     }
     if (!res.ok) {
-      chat.notify(res.error, 'error')
+      if (stillOn(id, token)) chat.notify(res.error, 'error')
       return
     }
-    await selectConversation(id)
-    if (currentIdRef.current !== id) return
-    dispatch(item.text, item.images, item.invokedAs)
-  }, [currentId, lastTurn, chat, selectConversation, dispatch])
+    // The message left the chat with the rewind, so it is sent again to `id` whichever
+    // chat is open by now, or handed back to its message box.
+    await resendAfterRewind({
+      stillOpen: () => stillOn(id, token),
+      reload: async () => {
+        const ok = await selectConversation(id)
+        token = nav.mark()
+        return ok
+      },
+      sendInView: () => dispatch(item.text, item.images, item.invokedAs),
+      sendDetached: async () =>
+        !!selected &&
+        !!settings &&
+        (await chat.startDetached({
+          conversationId: id,
+          userText: item.text,
+          images: item.images,
+          ...(item.invokedAs ? { invokedAs: item.invokedAs } : {}),
+          providerId: selected.providerId,
+          model: selected.model,
+          approvalPolicy: settings.approvalPolicy,
+          reasoningEffort: settings.reasoningEffort
+        })),
+      giveBack: () => giveBackText(id, item.text, item.images)
+    })
+  }, [currentId, lastTurn, chat, settings, selectConversation, dispatch, nav, stillOn, giveBackText])
 
   const rewindHandlers = useMemo<RewindHandlers | undefined>(
     () =>
@@ -1997,14 +2140,17 @@ export default function App(): JSX.Element {
       const pending = editing
       if (!pending) return send()
       setEditing(null)
+      const id = currentId
       const done = await performRewind(pending.target, pending.mode)
-      if (!done) {
-        prefillComposer(text, images)
+      // Refused, or the user has opened another chat meanwhile (sending now would land
+      // the edit there): the text goes back to its own chat's message box.
+      if (!done || currentIdRef.current !== id) {
+        giveBackText(id, text, images)
         return
       }
       send()
     },
-    [editing, performRewind, prefillComposer]
+    [editing, currentId, performRewind, giveBackText]
   )
 
   // A message the user wrote in the composer.
@@ -2039,11 +2185,6 @@ export default function App(): JSX.Element {
     },
     [workspace, chat]
   )
-
-  // The open conversation, readable from an async continuation that must not act on
-  // a chat the user has since navigated away from.
-  const currentIdRef = useRef(currentId)
-  currentIdRef.current = currentId
 
   // The agent's open `ask_user` question, if it is waiting on one. While it is, the
   // run can't read a steer (it is blocked on the answer), so Enter answers it instead.
@@ -2188,34 +2329,29 @@ export default function App(): JSX.Element {
       return
     }
     const id = currentId
+    let token = nav.mark()
     setCompacting({ id })
     let res: Awaited<ReturnType<typeof window.api.compactConversation>>
     try {
       res = await window.api.compactConversation(id, settings.selected.providerId, settings.selected.model)
     } catch (e) {
-      res = { ok: false, summarized: 0, error: (e as Error).message }
+      res = { ok: false, summarized: 0, error: (e as Error)?.message }
     } finally {
       setCompacting(null)
     }
-    // Moved to another chat meanwhile: its log is saved; don't paint it over this one.
-    const here = currentIdRef.current === id
-    if (res.ok && res.messages) {
-      if (here) chat.reset(itemsFromMessages(res.messages))
-      if (here) chat.notify(`Compacted ${res.summarized} earlier messages.`)
-    } else if (!here) {
-      return
-    } else if (res.ok) {
-      chat.notify(
-        res.reason === 'single-turn'
-          ? "This conversation is a single turn, so there are no earlier turns to summarize. Start a new chat to free up context."
-          : 'Nothing to compact yet.'
-      )
-    } else if (res.reason === 'cancelled') {
-      chat.notify('Compaction cancelled. Nothing was changed.')
-    } else {
-      chat.notify(`Couldn't compact: ${res.error ?? 'unknown error'}`)
-    }
-  }, [currentId, settings, chat, compacting])
+    // Rebuilt from disk, as opening it would (usage, the turn's revert, a live run),
+    // and only while the user is still on it: compacting can take a while, and the
+    // chat they opened meanwhile must keep its own transcript and run.
+    await finishCompact(res, {
+      stillOpen: () => stillOn(id, token),
+      reload: async () => {
+        const ok = await selectConversation(id)
+        token = nav.mark()
+        return ok
+      },
+      notify: (text, tone) => chat.notify(text, tone)
+    })
+  }, [currentId, settings, chat, compacting, nav, stillOn, selectConversation])
 
   const onCancelCompact = useCallback(() => {
     if (compacting) void window.api.cancelCompaction(compacting.id)
@@ -3458,7 +3594,7 @@ export default function App(): JSX.Element {
               workspace ? (
                 <FilesPanel
                   // A new "Show in Files" target (or line) remounts the tree to reveal it.
-                  key={`${workspace}:${filesTarget ?? ''}:${filesLine ?? ''}`}
+                  key={filesPanelKey(workspace, filesTarget, filesLine, filesOpenSeq)}
                   workspace={workspace}
                   initialPath={filesTarget}
                   initialLine={filesLine}
@@ -3664,6 +3800,7 @@ export default function App(): JSX.Element {
             setViewer(null)
             setFilesTarget(rel)
             setFilesLine(undefined)
+            setFilesOpenSeq((n) => n + 1)
             showFiles()
             return null
           }}

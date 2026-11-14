@@ -137,7 +137,14 @@ export function FilesPanel({
   const panelRef = useRef<HTMLElement>(null)
   useFocusTrap(docked ? NO_TRAP : panelRef, onClose)
 
-  const reload = useCallback(async () => {
+  // The open folders, for Refresh to re-read without the reveal's closure going stale.
+  const expandedRef = useRef(expanded)
+  expandedRef.current = expanded
+
+  // `reveal` is the first load: expand down to `initialPath` and select it. Refresh
+  // re-reads the folders already open and keeps the selection, rather than snapping
+  // back to the file the panel was opened on and collapsing everything else.
+  const reload = useCallback(async (reveal: boolean) => {
     if (!workspace) {
       setChildrenByDir({})
       return
@@ -148,8 +155,18 @@ export function FilesPanel({
       const kids = await window.api.listWorkspaceDir(workspace, '')
       const loaded: Record<string, FileEntry[]> = { '': kids }
       const open = new Set<string>()
+      if (!reveal) {
+        for (const dir of expandedRef.current) {
+          try {
+            loaded[dir] = await window.api.listWorkspaceDir(workspace, dir)
+            open.add(dir)
+          } catch {
+            // Gone since it was opened: leave it closed.
+          }
+        }
+      }
       // Reveal a requested file: load and expand each folder above it, then select it.
-      const target = initialPath ? normalizeRelPath(initialPath) : ''
+      const target = reveal && initialPath ? normalizeRelPath(initialPath) : ''
       if (target) {
         const parts = target.split('/')
         for (let i = 1; i < parts.length; i++) {
@@ -173,7 +190,7 @@ export function FilesPanel({
   }, [workspace, initialPath])
 
   useEffect(() => {
-    void reload()
+    void reload(true)
   }, [reload])
 
   // Fetch a folder's children once, on first expand.
@@ -250,7 +267,7 @@ export function FilesPanel({
         <button
           type="button"
           className="btn btn--sm"
-          onClick={() => void reload()}
+          onClick={() => void reload(false)}
           disabled={loadingRoot || !workspace}
           title="Refresh"
           aria-label="Refresh"

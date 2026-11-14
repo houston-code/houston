@@ -84,10 +84,13 @@ export interface ChatController {
    * Call after {@link reset}.
    */
   seedCheckpoint: (checkpoint: Checkpoint | null) => void
-  /** Revert the current checkpoint's file changes. Returns the count restored. */
-  revertCheckpoint: () => Promise<number>
-  /** Re-apply a reverted checkpoint's file changes. Returns the count re-applied. */
-  reapplyCheckpoint: () => Promise<number>
+  /**
+   * Revert the current checkpoint's file changes. Returns the count restored, or null
+   * when the call failed (a notice says so in the chat it was made in).
+   */
+  revertCheckpoint: () => Promise<number | null>
+  /** Re-apply a reverted checkpoint's file changes. Returns the count re-applied, or null on failure. */
+  reapplyCheckpoint: () => Promise<number | null>
   /**
    * Replace the transcript and (optionally) seed usage and the errored flag, e.g.
    * when switching conversations — `errored` restores the persisted Retry banner.
@@ -109,8 +112,24 @@ export interface ChatController {
    * transcript just rebuilt from the log. `startedAt` is when the run began (from the
    * main process's chat status), so the status bar's clock counts from the turn's
    * start rather than from the switch back.
+   *
+   * `since` are the run's events that arrived after `liveTranscript` was read but
+   * before this call (the reopen's other reads were still in flight). They are in
+   * neither, so they are handled last, as if they had just arrived.
    */
-  adopt: (runId: string, pendingPrompts?: AgentEvent[], liveTranscript?: AgentEvent[], startedAt?: number) => void
+  adopt: (
+    runId: string,
+    pendingPrompts?: AgentEvent[],
+    liveTranscript?: AgentEvent[],
+    startedAt?: number,
+    since?: AgentEvent[]
+  ) => void
+  /**
+   * Start a turn in a conversation that is not (or no longer) the one in view, without
+   * touching this view: its events stream to that chat, which shows the run when it is
+   * reopened. Resolves false when the turn could not be started.
+   */
+  startDetached: (params: SendParams) => Promise<boolean>
   /** Append a transient notice to the transcript (e.g. slash-command feedback). */
   notify: (text: string, tone?: 'info' | 'error') => void
 }
@@ -144,103 +163,105 @@ export function useChat(conversationId: string | null = null): ChatController {
   const convIdRef = useRef<string | null>(conversationId)
   convIdRef.current = conversationId
 
-  useEffect(() => {
-    return window.api.onAgentEvent((e: AgentEvent) => {
-      if (e.type === 'turn_start') {
-        // The main process auto-started a follow-up turn from the queue. Adopt it
-        // only when it's for the conversation we're viewing; otherwise it's a
-        // background run whose result we'll see from disk on next open.
-        if (e.conversationId !== convIdRef.current) return
-        runIdRef.current = e.runId
-        setRunning(true)
-        setMeter(startMeter(Date.now()))
-        setErrored(false)
-        setFailure(null)
-        setCheckpoint(null)
-        setItems((prev) => [
-          ...prev,
-          {
-            kind: 'user',
-            id: `u-${e.runId}`,
-            text: e.userText,
-            ...(e.images?.length ? { images: e.images } : {}),
-            ...(e.invokedAs ? { invokedAs: e.invokedAs } : {}),
-            at: new Date().toISOString()
-          }
-        ])
-        return
-      }
-      if (e.runId !== runIdRef.current) return
-      if (e.type === 'usage') {
-        // The main process accumulates and persists; the event carries the
-        // conversation's cumulative totals, so we set rather than sum.
-        const delta = e.outputTokens ? e.outputTokens - outputSeenRef.current : 0
-        if (e.outputTokens) outputSeenRef.current = e.outputTokens
-        setMeter((m) => (m ? meterOnEvent(m, e, delta) : m))
-        setUsage((prev) => ({
-          context: e.inputTokens || prev?.context || 0,
-          output: e.outputTokens || prev?.output || 0,
-          cost: e.cost || prev?.cost || 0,
-          cacheRead: e.cacheReadTokens ?? prev?.cacheRead,
-          perModel: e.perModel ?? prev?.perModel,
-          ...(e.context ?? prev?.contextParts ? { contextParts: e.context ?? prev?.contextParts } : {})
-        }))
-        // ...and the round's own numbers go on the turn, for its details line.
-        setItems((prev) => reduceEvent(prev, e))
-        return
-      }
-      // Track successful file writes so the turn's changes can be reverted.
-      if (
-        e.type === 'tool_result' &&
-        e.ok &&
-        (FILE_WRITE_TOOLS.has(e.name) || DELEGATED_WRITE_TOOLS.has(e.name))
-      ) {
-        const runId = e.runId
-        // Count the call at once, so the affordance arrives with the result...
-        if (FILE_WRITE_TOOLS.has(e.name)) {
-          setCheckpoint((prev) => ({
-            runId,
-            files: (prev?.runId === runId ? prev.files : 0) + 1,
-            reverted: false
-          }))
+  // One handler for live events and for the ones adopt replays. It reads only refs
+  // and state setters, so it never goes stale.
+  const onEvent = useCallback((e: AgentEvent) => {
+    if (e.type === 'turn_start') {
+      // The main process auto-started a follow-up turn from the queue. Adopt it
+      // only when it's for the conversation we're viewing; otherwise it's a
+      // background run whose result we'll see from disk on next open.
+      if (e.conversationId !== convIdRef.current) return
+      runIdRef.current = e.runId
+      setRunning(true)
+      setMeter(startMeter(Date.now()))
+      setErrored(false)
+      setFailure(null)
+      setCheckpoint(null)
+      setItems((prev) => [
+        ...prev,
+        {
+          kind: 'user',
+          id: `u-${e.runId}`,
+          text: e.userText,
+          ...(e.images?.length ? { images: e.images } : {}),
+          ...(e.invokedAs ? { invokedAs: e.invokedAs } : {}),
+          at: new Date().toISOString()
         }
-        // ...then take the main process's checkpoint, which counts distinct files (an
-        // apply_patch can touch several; two edits of one file are one change) and is
-        // the only place a writable subagent's edits show up. Ignored if the user has
-        // since moved to another conversation or started another turn.
-        const conv = convIdRef.current
-        if (conv && window.api.getCheckpoint) {
-          void window.api
-            .getCheckpoint(conv)
-            .then((cp) => {
-              const sameTurn = runIdRef.current === runId || runIdRef.current === null
-              if (cp && cp.runId === runId && sameTurn && convIdRef.current === conv) setCheckpoint(cp)
-            })
-            .catch(() => {})
-        }
-      }
-      // A fresh plan (initial, or a revision after "suggest changes") opens/refreshes
-      // the review panel; the previous one, if any, is superseded in the transcript.
-      if (e.type === 'text' || e.type === 'reasoning' || e.type === 'turn_discarded') {
-        setMeter((m) => (m ? meterOnEvent(m, e) : m))
-      }
-      if (e.type === 'plan_ready') setPendingPlan({ callId: e.callId, plan: e.plan })
+      ])
+      return
+    }
+    if (e.runId !== runIdRef.current) return
+    if (e.type === 'usage') {
+      // The main process accumulates and persists; the event carries the
+      // conversation's cumulative totals, so we set rather than sum.
+      const delta = e.outputTokens ? e.outputTokens - outputSeenRef.current : 0
+      if (e.outputTokens) outputSeenRef.current = e.outputTokens
+      setMeter((m) => (m ? meterOnEvent(m, e, delta) : m))
+      setUsage((prev) => ({
+        context: e.inputTokens || prev?.context || 0,
+        output: e.outputTokens || prev?.output || 0,
+        cost: e.cost || prev?.cost || 0,
+        cacheRead: e.cacheReadTokens ?? prev?.cacheRead,
+        perModel: e.perModel ?? prev?.perModel,
+        ...(e.context ?? prev?.contextParts ? { contextParts: e.context ?? prev?.contextParts } : {})
+      }))
+      // ...and the round's own numbers go on the turn, for its details line.
       setItems((prev) => reduceEvent(prev, e))
-      if (e.type === 'error') {
-        setErrored(true)
-        setFailure({ message: e.message, ...(e.cause ? { cause: e.cause } : {}) })
+      return
+    }
+    // Track successful file writes so the turn's changes can be reverted.
+    if (
+      e.type === 'tool_result' &&
+      e.ok &&
+      (FILE_WRITE_TOOLS.has(e.name) || DELEGATED_WRITE_TOOLS.has(e.name))
+    ) {
+      const runId = e.runId
+      // Count the call at once, so the affordance arrives with the result...
+      if (FILE_WRITE_TOOLS.has(e.name)) {
+        setCheckpoint((prev) => ({
+          runId,
+          files: (prev?.runId === runId ? prev.files : 0) + 1,
+          reverted: false
+        }))
       }
-      if (e.type === 'done' || e.type === 'error') {
-        setRunning(false)
-        setMeter(null)
-        runIdRef.current = null
-        // A run can only finish once its plan review is resolved (the tool unblocks
-        // it), so a plan still pending here means the run ended some other way — drop
-        // the now-unresolvable panel.
-        setPendingPlan(null)
+      // ...then take the main process's checkpoint, which counts distinct files (an
+      // apply_patch can touch several; two edits of one file are one change) and is
+      // the only place a writable subagent's edits show up. Ignored if the user has
+      // since moved to another conversation or started another turn.
+      const conv = convIdRef.current
+      if (conv && window.api.getCheckpoint) {
+        void window.api
+          .getCheckpoint(conv)
+          .then((cp) => {
+            const sameTurn = runIdRef.current === runId || runIdRef.current === null
+            if (cp && cp.runId === runId && sameTurn && convIdRef.current === conv) setCheckpoint(cp)
+          })
+          .catch(() => {})
       }
-    })
+    }
+    // A fresh plan (initial, or a revision after "suggest changes") opens/refreshes
+    // the review panel; the previous one, if any, is superseded in the transcript.
+    if (e.type === 'text' || e.type === 'reasoning' || e.type === 'turn_discarded') {
+      setMeter((m) => (m ? meterOnEvent(m, e) : m))
+    }
+    if (e.type === 'plan_ready') setPendingPlan({ callId: e.callId, plan: e.plan })
+    setItems((prev) => reduceEvent(prev, e))
+    if (e.type === 'error') {
+      setErrored(true)
+      setFailure({ message: e.message, ...(e.cause ? { cause: e.cause } : {}) })
+    }
+    if (e.type === 'done' || e.type === 'error') {
+      setRunning(false)
+      setMeter(null)
+      runIdRef.current = null
+      // A run can only finish once its plan review is resolved (the tool unblocks
+      // it), so a plan still pending here means the run ended some other way — drop
+      // the now-unresolvable panel.
+      setPendingPlan(null)
+    }
   }, [])
+
+  useEffect(() => window.api.onAgentEvent(onEvent), [onEvent])
 
   const send = useCallback(async (params: SendParams) => {
     const runId = crypto.randomUUID()
@@ -367,20 +388,56 @@ export function useChat(conversationId: string | null = null): ChatController {
     if (runIdRef.current) void window.api.setAgentEffort(runIdRef.current, effort)
   }, [])
 
-  const revertCheckpoint = useCallback(async (): Promise<number> => {
-    if (!checkpoint) return 0
-    const restored = await window.api.restoreCheckpoint(checkpoint.runId)
-    // Keep the checkpoint (now reverted) so the change can be redone.
-    setCheckpoint({ ...checkpoint, reverted: true })
-    return restored
-  }, [checkpoint])
+  const notify = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
+    setItems((prev) => [...prev, { kind: 'notice', id: crypto.randomUUID(), text, tone }])
+  }, [])
 
-  const reapplyCheckpoint = useCallback(async (): Promise<number> => {
-    if (!checkpoint) return 0
-    const reapplied = await window.api.reapplyCheckpoint(checkpoint.runId)
-    setCheckpoint({ ...checkpoint, reverted: false })
-    return reapplied
-  }, [checkpoint])
+  // Revert / Redo the turn's changes. The bar flips only if the user is still on the
+  // chat it was clicked in: the reply can arrive after they've opened another chat,
+  // whose own checkpoint must not be overwritten. A failed call says so there.
+  const applyCheckpoint = useCallback(
+    async (action: 'revert' | 'redo'): Promise<number | null> => {
+      if (!checkpoint) return 0
+      const conv = convIdRef.current
+      const cp = checkpoint
+      try {
+        const n =
+          action === 'revert'
+            ? await window.api.restoreCheckpoint(cp.runId)
+            : await window.api.reapplyCheckpoint(cp.runId)
+        // Keep the checkpoint (now reverted) so the change can be redone, and back.
+        if (convIdRef.current === conv) setCheckpoint({ ...cp, reverted: action === 'revert' })
+        return n
+      } catch (e) {
+        if (convIdRef.current === conv) {
+          notify(`Couldn't ${action} this turn's changes: ${(e as Error)?.message ?? 'unknown error'}`, 'error')
+        }
+        return null
+      }
+    },
+    [checkpoint, notify]
+  )
+  const revertCheckpoint = useCallback(() => applyCheckpoint('revert'), [applyCheckpoint])
+  const reapplyCheckpoint = useCallback(() => applyCheckpoint('redo'), [applyCheckpoint])
+
+  const startDetached = useCallback(async (params: SendParams): Promise<boolean> => {
+    try {
+      await window.api.startAgent({
+        runId: crypto.randomUUID(),
+        conversationId: params.conversationId,
+        userText: params.userText,
+        images: params.images,
+        ...(params.invokedAs ? { invokedAs: params.invokedAs } : {}),
+        providerId: params.providerId,
+        model: params.model,
+        approvalPolicy: params.approvalPolicy,
+        ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {})
+      })
+      return true
+    } catch {
+      return false
+    }
+  }, [])
 
   const reset = useCallback(
     (
@@ -406,7 +463,13 @@ export function useChat(conversationId: string | null = null): ChatController {
   )
 
   const adopt = useCallback(
-    (runId: string, pendingPrompts: AgentEvent[] = [], liveTranscript: AgentEvent[] = [], startedAt?: number) => {
+    (
+      runId: string,
+      pendingPrompts: AgentEvent[] = [],
+      liveTranscript: AgentEvent[] = [],
+      startedAt?: number,
+      since: AgentEvent[] = []
+    ) => {
       runIdRef.current = runId
       setRunning(true)
       // The clock counts from the run's start. The token count can't recover rounds that
@@ -427,16 +490,15 @@ export function useChat(conversationId: string | null = null): ChatController {
       // Re-open the review panel for a plan that was still awaiting a decision.
       const plan = [...pendingPrompts].reverse().find((ev) => ev.type === 'plan_ready')
       if (plan?.type === 'plan_ready') setPendingPlan({ callId: plan.callId, plan: plan.plan })
+      // Then what arrived while the reopen was still reading: through the live handler,
+      // so a run that finished in that gap ends here too.
+      for (const ev of since) onEvent(ev)
     },
-    []
+    [onEvent]
   )
 
   const seedCheckpoint = useCallback((next: Checkpoint | null) => {
     setCheckpoint(next)
-  }, [])
-
-  const notify = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
-    setItems((prev) => [...prev, { kind: 'notice', id: crypto.randomUUID(), text, tone }])
   }, [])
 
   return {
@@ -462,6 +524,7 @@ export function useChat(conversationId: string | null = null): ChatController {
     reapplyCheckpoint,
     reset,
     adopt,
+    startDetached,
     notify
   }
 }

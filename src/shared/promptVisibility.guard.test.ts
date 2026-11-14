@@ -98,7 +98,10 @@ describe('prompt visibility guard', () => {
       why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" + project-card /init + Changes-view review-comment invocations, the mid-run steer, its idle send, and its off-chat queue (user text), and Retry on the last reply (resends that user message as it was, keeping its invokedAs)'
     },
     'renderer/src/components/Composer.tsx': { count: 3, why: 'the /review invocation and two sends of composer text' },
-    'renderer/src/hooks/useChat.ts': { count: 1, why: 'startAgent, forwarding invokedAs' },
+    'renderer/src/hooks/useChat.ts': {
+      count: 2,
+      why: 'startAgent for the chat in view and startDetached for one the user has left (a retried or first message), both forwarding invokedAs'
+    },
     'renderer/src/lib/midRunMessage.ts': { count: 1, why: 'a mid-run message sent as its own turn once the run ended (user text)' },
     'renderer/src/hooks/useInputQueue.ts': {
       count: 2,
