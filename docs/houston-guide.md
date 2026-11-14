@@ -2133,9 +2133,14 @@ carries the news with it.
 A subagent reports back into the current turn. `spawn_session` instead spins off a
 *separate* chat that runs in the background.
 
-- **What it gets:** the agent hands it a task, optionally on its own git branch and
-  worktree. It starts fresh with its prompt or, with context "fork", with a copy of
-  the spawning chat so far.
+- **What it gets:** the agent hands it a task. It starts fresh with its prompt or,
+  with context "fork", with a copy of the spawning chat so far.
+- **Its own checkout.** In a git repository it runs on a new branch and worktree by
+  default (named after its title, like `houston/docs-pass-1a2b3c`), branched from
+  what the spawning chat has checked out, so two sessions never edit one folder. The
+  agent can name the branch and base, or keep the session in the same folder when you
+  ask for that. A repository with no commits yet has nothing to branch from, so the
+  session shares the folder.
 - **Never more permissive.** It inherits the current approval policy.
 - **When it ends,** the chat that started it gets a short report (title, how it ended,
   the start of its answer) as a Houston note, and you see a notice in the transcript.
@@ -2229,7 +2234,9 @@ what branch each one is on. Pick a number to open one.
 Ask the agent for a recurring (or one-time) background run, such as "every morning
 at 9, run the tests and summarize failures", and it stores a schedule with
 `schedule_run`. At each occurrence, a fresh session starts with the stored prompt,
-under the approval policy of the chat that created it.
+under the approval policy of the chat that created it. A schedule made from a chat
+in one of Houston's worktrees runs in the main checkout instead, since that
+worktree goes away with its chat.
 
 ### Schedule formats
 

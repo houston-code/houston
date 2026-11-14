@@ -236,6 +236,7 @@ import {
   scheduleCreate,
   scheduleList
 } from './scheduler'
+import { autoBranchFor, getRepoInfo, houstonWorktreeHome } from './worktree'
 import { matchingHooks, notificationFor, runHooks, type HookOutcome, type HookSession } from './hooks'
 import { loadAgents, type CustomAgent } from './agents'
 import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
@@ -3224,17 +3225,35 @@ export async function startRun(
       // approval policy — never more permissive.
       ...(spawnAvailable
         ? {
-            spawnSession: ({
+            spawnSession: async ({
               context,
+              sameCheckout,
               ...input
             }: {
               title?: string
               prompt: string
               worktree?: { branch: string; base?: string }
+              sameCheckout?: boolean
               context?: SessionContext
-            }) =>
-              engineSpawnSession({
+            }) => {
+              // In a git repository a spawned session gets its own worktree unless the
+              // agent opted out, as a started proposal does: two sessions writing one
+              // checkout overwrite each other's changes. It branches from what this chat
+              // has checked out (its own worktree's branch, say), not the main checkout.
+              let worktree = input.worktree
+              if (!worktree && !sameCheckout) {
+                const repo = await getRepoInfo(workspace)
+                // A repository with no commits yet has nothing to branch from.
+                if (repo.isRepo && !repo.unborn) {
+                  worktree = {
+                    branch: autoBranchFor(input.title || input.prompt.split('\n')[0]!),
+                    ...(repo.currentBranch ? { base: repo.currentBranch } : {})
+                  }
+                }
+              }
+              return engineSpawnSession({
                 ...input,
+                ...(worktree ? { worktree } : {}),
                 providerId: req.providerId,
                 model: req.model,
                 approvalPolicy: run.policy,
@@ -3244,7 +3263,8 @@ export async function startRun(
                 // A fork carries this chat's history up to (not including) the turn
                 // that is handing off, which is still mid-call.
                 ...(context === 'fork' ? { history: forkableHistory(messages) } : {})
-              }),
+              })
+            },
             // Bound proposals: a few per turn, and never the same title twice in a
             // chat, so a run can't bury the user in cards.
             proposeSession: ({ title }: { title: string }) => {
@@ -3276,7 +3296,9 @@ export async function startRun(
                   model: req.model,
                   approvalPolicy: run.policy,
                   ...(run.effort !== undefined ? { reasoningEffort: run.effort } : {}),
-                  workspace
+                  // A chat's own worktree is disposable; the schedule outlives it, so it
+                  // targets the same folder in the main checkout.
+                  workspace: houstonWorktreeHome(workspace)
                 }),
               list: () => scheduleList(),
               cancel: (id: string) => scheduleCancel(id)
