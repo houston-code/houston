@@ -13,7 +13,7 @@ import type {
 import { anthropicMaxTokens, anthropicThinking } from './reasoning'
 import { releaseDateFrom } from './release-date'
 import { parseToolArguments } from './tool-args'
-import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS } from './idle-fetch'
+import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS, StreamClosedEarlyError } from './idle-fetch'
 import { anthropicWebSearch, isFirstPartyAnthropic, type AnthropicCreateClient } from './native-search'
 import { SDK_MAX_RETRIES } from '../agent/retry'
 
@@ -183,7 +183,11 @@ function mapStopReason(reason: string | null | undefined): StopReason {
   switch (reason) {
     case 'tool_use':
       return 'tool_use'
+    // A reply that filled the model's context window is cut off like an output-limit
+    // stop, so the loop continues it (and compacts if the next request no longer fits)
+    // instead of presenting a truncated answer as complete.
     case 'max_tokens':
+    case 'model_context_window_exceeded':
       return 'max_tokens'
     case 'end_turn':
     case 'stop_sequence':
@@ -400,7 +404,19 @@ export function createMessagesProvider(
         }
       }
 
-      const final = await stream.finalMessage()
+      let final: Anthropic.Message
+      try {
+        final = await stream.finalMessage()
+      } catch (err) {
+        // The SDK keeps a message only once `message_stop` arrives, so a body that ended
+        // cleanly before it (a proxy or a dropped connection closing the stream) rejects
+        // here with a plain error the retry policy reads as permanent. The reply was cut
+        // off, not refused: fail it as a transient error so the loop retries the turn.
+        if (/stream ended without producing a Message/i.test(String((err as Error | null)?.message ?? ''))) {
+          throw new StreamClosedEarlyError(err)
+        }
+        throw err
+      }
       const stopReason = mapStopReason(final.stop_reason)
       // A block the stream opened but never closed was cut off mid-call.
       for (const [index, buf] of toolBuffers) {

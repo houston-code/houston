@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { ChatMessage, ChatRequest } from '@shared/agent'
+import { isRetryableError } from '../agent/retry'
 import {
   markMessagesCacheBreakpoint,
   createAnthropicProvider,
@@ -532,6 +533,11 @@ describe('anthropic tool calls cut off at the output limit', () => {
     return out
   }
 
+  it('reports a reply that filled the context window as cut off, not finished', async () => {
+    const out = await eventsFor([{ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'part' } }], 'model_context_window_exceeded')
+    expect(out.at(-1)).toMatchObject({ type: 'done', stopReason: 'max_tokens' })
+  })
+
   it('reports a refusal stop as a refusal, not a clean finish', async () => {
     const out = await eventsFor([], 'refusal')
     expect(out.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn', refusal: 'refusal' })
@@ -650,5 +656,79 @@ describe('anthropic max_tokens sizing', () => {
     expect(raised.max_tokens).toBe(128_000)
     const small = await captureRequest({ model: 'claude-haiku-4-5', reasoningEffort: 'high', maxTokens: 2048 })
     expect(small.max_tokens).toBeGreaterThan((small.thinking as { budget_tokens: number }).budget_tokens)
+  })
+})
+
+describe('anthropic stream closed before message_stop', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  /** The SDK's real MessageStream over newline-delimited events, as a proxy cut them. */
+  async function realStream(events: unknown[]): Promise<unknown> {
+    const { MessageStream } = await vi.importActual<typeof import('@anthropic-ai/sdk/lib/MessageStream')>(
+      '@anthropic-ai/sdk/lib/MessageStream'
+    )
+    const body = events.map((e) => JSON.stringify(e)).join('\n') + '\n'
+    return MessageStream.fromReadableStream(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode(body))
+          c.close()
+        }
+      })
+    )
+  }
+
+  const messageStart = {
+    type: 'message_start',
+    message: {
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      model: 'claude-opus-4-8',
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: { input_tokens: 5, output_tokens: 1 }
+    }
+  }
+  const textBlock = [
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'half an ans' } }
+  ]
+
+  async function run(events: unknown[]): Promise<{ out: unknown[]; caught: unknown }> {
+    h.stream.mockReturnValue(await realStream(events))
+    const out: unknown[] = []
+    let caught: unknown
+    try {
+      for await (const ev of createAnthropicProvider('sk-test').streamChat({
+        model: 'claude-opus-4-8',
+        messages: [{ role: 'user', content: 'hi' }]
+      })) {
+        out.push(ev)
+      }
+    } catch (e) {
+      caught = e
+    }
+    return { out, caught }
+  }
+
+  it('fails a reply cut off mid-stream as a retryable error, not a finished turn', async () => {
+    const { out, caught } = await run([messageStart, ...textBlock])
+    expect(out.some((e) => (e as { type: string }).type === 'done')).toBe(false)
+    expect(caught).toBeInstanceOf(Error)
+    expect(isRetryableError(caught)).toBe(true)
+  })
+
+  it('still finishes a reply that reached message_stop', async () => {
+    const { out, caught } = await run([
+      messageStart,
+      ...textBlock,
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 3 } },
+      { type: 'message_stop' }
+    ])
+    expect(caught).toBeUndefined()
+    expect(out.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
   })
 })

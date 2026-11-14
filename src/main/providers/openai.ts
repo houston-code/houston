@@ -49,6 +49,10 @@ export function toOpenAIMessages(system: string | undefined, messages: ChatMessa
         out.push({ role: 'user', content: m.content })
       }
     } else if (m.role === 'assistant') {
+      // Nothing to send: the model ended its turn without text or tool calls. An
+      // assistant message with neither is a 400 on strict hosts, and since it stays in
+      // the history it would fail every later request too, so leave it out.
+      if (!m.content && !m.toolCalls?.length) continue
       const msg: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {
         role: 'assistant',
         content: m.content || null
@@ -185,8 +189,12 @@ export function createChatCompletionsProvider(
         { signal: req.signal }
       )
 
-      // Accumulate streamed tool calls by their `index`.
-      const toolAcc = new Map<number, { id: string; name: string; args: string }>()
+      // Accumulate streamed tool calls by their `index`. Some hosts send every call of a
+      // parallel batch at the same index (or with none), telling them apart only by id,
+      // so a different id at an index starts a new call instead of joining its JSON onto
+      // the last one. A host that repeats the same id on every chunk still accumulates.
+      const toolAcc: { id: string; name: string; args: string }[] = []
+      const slotByIndex = new Map<number, number>()
       let finishReason: string | null = null
       // A refusal streams as `delta.refusal` text instead of content.
       let refused = false
@@ -258,11 +266,12 @@ export function createChatCompletionsProvider(
         }
         if (delta?.tool_calls) {
           for (const tc of delta.tool_calls) {
-            const idx = tc.index
-            let acc = toolAcc.get(idx)
-            if (!acc) {
+            const idx = typeof tc.index === 'number' ? tc.index : -1
+            const slot = slotByIndex.get(idx)
+            let acc = slot === undefined ? undefined : toolAcc[slot]
+            if (!acc || (tc.id && acc.id && tc.id !== acc.id)) {
               acc = { id: tc.id ?? '', name: '', args: '' }
-              toolAcc.set(idx, acc)
+              slotByIndex.set(idx, toolAcc.push(acc) - 1)
             }
             if (tc.id) acc.id = tc.id
             if (tc.function?.name) acc.name = tc.function.name
@@ -272,10 +281,10 @@ export function createChatCompletionsProvider(
         if (choice.finish_reason) finishReason = choice.finish_reason
       }
 
-      let hadToolCalls = toolAcc.size > 0
+      let hadToolCalls = toolAcc.length > 0
       // Tool calls follow any content in a Chat Completions reply, so at the output limit
       // the last one is the call the model was still writing, whatever its JSON parses to.
-      const accs = [...toolAcc.values()]
+      const accs = toolAcc
       const cutOff = finishReason === 'length' ? accs.length - 1 : -1
       for (const [i, acc] of accs.entries()) {
         const args = i === cutOff ? null : parseToolArguments(acc.args)

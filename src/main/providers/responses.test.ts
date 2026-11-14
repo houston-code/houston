@@ -8,6 +8,7 @@ import {
   toResponsesTools
 } from './responses'
 import { openaiResponsesReasoning } from './reasoning'
+import { isRetryableError } from '../agent/retry'
 
 // Mock the lazily-imported SDK so we can feed a synthetic Responses event stream
 // and assert how the adapter turns it into provider events.
@@ -179,6 +180,20 @@ describe('toResponsesInput: reasoning replay', () => {
       { role: 'assistant', content: 'x', reasoning: [{ text: 'plan', id: 'rs_1', encryptedContent: 'E' }] }
     ]
     expect(toResponsesInput(msgs, true, 'gpt-5').some((i) => i.type === 'reasoning')).toBe(true)
+  })
+
+  it('drops the reasoning of a turn that ended on reasoning alone, which has no item to follow it', () => {
+    // A reasoning item with no message or function_call after it is a 400 ("provided
+    // without its required following item"), on this request and every later one.
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: '', reasoning: [{ text: 'hmm', id: 'rs_9', encryptedContent: 'ENC9' }] },
+      { role: 'user', content: 'again' }
+    ]
+    expect(toResponsesInput(msgs, true)).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+      { role: 'user', content: [{ type: 'input_text', text: 'again' }] }
+    ])
   })
 
   it('sends an empty summary when the turn requested no reasoning summary', () => {
@@ -423,6 +438,31 @@ describe('responses truncated replies', () => {
   })
 })
 
+describe('responses stream closed before its terminal event', () => {
+  beforeEach(() => h.create.mockReset())
+
+  it('fails the turn as a retryable error instead of a clean end_turn', async () => {
+    // A proxy or a dropped connection can end the body cleanly mid-reply: no
+    // response.completed or response.incomplete ever arrives.
+    h.create.mockResolvedValue(streamOf([{ type: 'response.output_text.delta', delta: 'half an ans' }]))
+    const events: ProviderStreamEvent[] = []
+    let caught: unknown
+    try {
+      for await (const ev of createResponsesProvider('k').streamChat({
+        model: 'gpt-5',
+        messages: [{ role: 'user', content: 'hi' }]
+      } as ChatRequest)) {
+        events.push(ev)
+      }
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(Error)
+    expect(isRetryableError(caught)).toBe(true)
+    expect(events.some((e) => e.type === 'done')).toBe(false)
+  })
+})
+
 describe('reasoning-summary org gate', () => {
   beforeEach(() => h.create.mockReset())
 
@@ -468,7 +508,9 @@ describe('reasoning-summary org gate', () => {
   it('retries without the summary so an unverified org still gets a working turn', async () => {
     h.create
       .mockRejectedValueOnce(summaryGateError())
-      .mockResolvedValueOnce(streamOf([{ type: 'response.output_text.delta', delta: 'pong' }]))
+      .mockResolvedValueOnce(
+        streamOf([{ type: 'response.output_text.delta', delta: 'pong' }, { type: 'response.completed', response: {} }])
+      )
     const provider = createResponsesProvider('k')
     const events = await drain(provider.streamChat(req))
 
@@ -482,8 +524,8 @@ describe('reasoning-summary org gate', () => {
   it('remembers the gate so later turns skip the rejected round-trip', async () => {
     h.create
       .mockRejectedValueOnce(summaryGateError())
-      .mockResolvedValueOnce(streamOf([]))
-      .mockResolvedValueOnce(streamOf([]))
+      .mockResolvedValueOnce(streamOf([{ type: 'response.completed', response: {} }]))
+      .mockResolvedValueOnce(streamOf([{ type: 'response.completed', response: {} }]))
     const provider = createResponsesProvider('k')
     await drain(provider.streamChat(req))
     await drain(provider.streamChat(req))
