@@ -9,6 +9,12 @@ import { sanitizeServerId } from './mcp'
  *
  * `{project}` in an argument stands for the open project's folder, filled in when
  * the entry is opened for review (left as is, for the user to replace, with none open).
+ *
+ * Every package is pinned to an exact version. `npx -y <pkg>` and `uvx <pkg>` fetch
+ * and run whatever release the registry calls newest at that moment, with the user's
+ * own privileges and outside the sandbox, so an unpinned entry hands a hijacked
+ * publish (or a bad one) straight to every user who adds it. A pin runs the release
+ * that was reviewed; upgrading is a deliberate edit, here or in the user's own config.
  */
 
 export interface McpCatalogEntry {
@@ -43,7 +49,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     publisher: REFERENCE,
     transport: 'stdio',
     command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-filesystem', PROJECT_PLACEHOLDER],
+    args: ['-y', '@modelcontextprotocol/server-filesystem@2.3.0', PROJECT_PLACEHOLDER],
     needs: 'Node.js (npx)',
     note: 'Every argument after the package name is a folder it may use. Add more on new lines.'
   },
@@ -54,7 +60,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     publisher: REFERENCE,
     transport: 'stdio',
     command: 'uvx',
-    args: ['mcp-server-git', '--repository', PROJECT_PLACEHOLDER],
+    args: ['mcp-server-git@2026.11.11', '--repository', PROJECT_PLACEHOLDER],
     needs: 'uv (uvx)'
   },
   {
@@ -64,7 +70,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     publisher: REFERENCE,
     transport: 'stdio',
     command: 'uvx',
-    args: ['mcp-server-fetch'],
+    args: ['mcp-server-fetch@2026.11.11'],
     needs: 'uv (uvx)',
     note: 'Its requests go straight to the web, outside Houston’s per-site approval for web_fetch.'
   },
@@ -75,7 +81,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     publisher: REFERENCE,
     transport: 'stdio',
     command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-memory'],
+    args: ['-y', '@modelcontextprotocol/server-memory@2.1.1'],
     needs: 'Node.js (npx)'
   },
   {
@@ -85,7 +91,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     publisher: REFERENCE,
     transport: 'stdio',
     command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-sequential-thinking'],
+    args: ['-y', '@modelcontextprotocol/server-sequential-thinking@2.1.1'],
     needs: 'Node.js (npx)'
   },
   {
@@ -95,7 +101,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     publisher: REFERENCE,
     transport: 'stdio',
     command: 'uvx',
-    args: ['mcp-server-time'],
+    args: ['mcp-server-time@2026.11.11'],
     needs: 'uv (uvx)'
   },
   {
@@ -117,7 +123,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     publisher: 'Microsoft',
     transport: 'stdio',
     command: 'npx',
-    args: ['-y', '@playwright/mcp@latest'],
+    args: ['-y', '@playwright/mcp@0.0.85'],
     needs: 'Node.js (npx)'
   }
 ]

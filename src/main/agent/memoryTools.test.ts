@@ -188,6 +188,17 @@ describe('memoryTaintSource', () => {
       expect(memoryTaintSource([turn('run_shell', { command })], kindOf), command).toBe('run_shell')
     }
   })
+
+  it("flags the MCP listing tools, read-kind though they are, since a server writes what they return", () => {
+    const withMeta = (n: string) =>
+      ({ ...kinds, mcp_list_resources: 'read', mcp_list_prompts: 'read', mcp_read_resource: 'mcp', mcp_get_prompt: 'mcp' })[n] as
+        | 'read'
+        | 'mcp'
+        | undefined
+    for (const name of ['mcp_list_resources', 'mcp_list_prompts', 'mcp_read_resource', 'mcp_get_prompt']) {
+      expect(memoryTaintSource([turn('read_file'), turn(name)], withMeta), name).toBe(name)
+    }
+  })
 })
 
 describe('memoryTaintSource: carriers without a tool call', () => {

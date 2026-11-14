@@ -237,6 +237,16 @@ export function permissionSubject(toolName: string, args: Record<string, unknown
       // `path` left a patch with no subject: no file rule, not even `*` over a path,
       // could match the files it wrote or deleted. Each is matched (see matchRule).
       return patchTargets(args.patch).join(PATCH_SUBJECT_SEPARATOR)
+    case 'mcp_read_resource':
+      // The server's namespace, then what is asked of it: `mcp__<server>__<uri>`, so
+      // a rule over a server's tools (`mcp__proj-db__*`) covers its resources and
+      // prompts too, and one uri can be singled out. Blank before this, so no rule but
+      // the tool's own `*` reached these calls, whichever server they named. A blank
+      // argument still yields a non-empty subject, so "Always allow" on a malformed
+      // call saves a rule that matches nothing rather than the tool-wide `*`.
+      return `mcp__${s('server')}__${s('uri')}`
+    case 'mcp_get_prompt':
+      return `mcp__${s('server')}__${s('name')}`
     default:
       // Namespaced MCP tools (mcp__<id>__<tool>) take arbitrary args, so match on
       // the tool name itself — lets rules target a server/tool, e.g. `mcp__github__*`.
@@ -1447,7 +1457,17 @@ function escapeRegExp(s: string): string {
 function subjectKind(toolName: string): 'shell' | 'url' | 'path' | 'opaque' {
   if (toolName === 'run_shell') return 'shell'
   if (toolName === 'web_fetch') return 'url'
-  if (toolName === 'web_search' || toolName.startsWith('mcp__')) return 'opaque'
+  // The MCP meta-tools' subjects are `mcp__<server>__<uri or name>` (see
+  // permissionSubject), not paths: read as one, a `..` in the uri would climb out of
+  // the server prefix and dodge a deny on the server.
+  if (
+    toolName === 'web_search' ||
+    toolName.startsWith('mcp__') ||
+    toolName === 'mcp_read_resource' ||
+    toolName === 'mcp_get_prompt'
+  ) {
+    return 'opaque'
+  }
   return 'path'
 }
 

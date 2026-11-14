@@ -2745,7 +2745,10 @@ Under the server list in Settings > MCP Servers:
   server, and Playwright. **Review** opens one with its command and arguments (one per
   line) filled in, the open project's folder where it needs one, for you to check and
   edit. **Add server** saves it switched off unless you tick **Switch it on now**. This
-  list ships with Houston; nothing is downloaded to show it.
+  list ships with Houston; nothing is downloaded to show it. Each entry names an
+  exact package version (`@modelcontextprotocol/server-memory@2.1.1`), so `npx` or
+  `uvx` runs that release rather than whatever was published last; edit the version
+  to upgrade.
 - **Browse registry** searches the official MCP Registry
   (registry.modelcontextprotocol.io) by name, or lists everything with an empty search.
   Each result shows its description, version, how it is delivered (npm, PyPI or Docker
@@ -2807,6 +2810,16 @@ or **OAuth** for servers that need a sign-in:
 When a server exposes MCP resources or prompt templates, the agent gets meta-tools to
 discover and fetch them: `mcp_list_resources` / `mcp_read_resource` and
 `mcp_list_prompts` / `mcp_get_prompt`.
+
+- They see only the chat's own servers. Another chat's servers may be connected at
+  the same time (a trusted project's `proj-*` server, say), but they aren't listed,
+  and reading from one is refused.
+- A permission rule over a server covers its resources and prompts too: their
+  subject is `mcp__<server>__<uri or prompt name>`, so a deny on `mcp__proj-db__*`
+  blocks `mcp_read_resource` and `mcp_get_prompt` for that server. The approval
+  prompt names the server.
+- Listings are fenced as untrusted text, since each server writes its own names
+  and descriptions.
 
 Houston also:
 
