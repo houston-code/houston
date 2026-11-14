@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+
 /**
  * A `fetch` for the provider SDKs that fails a response body which stops delivering
  * bytes. A network switch or a sleeping laptop can leave the streaming socket
@@ -22,6 +24,65 @@
 export const STREAM_IDLE_TIMEOUT_MS = 120_000
 
 /**
+ * The idle window for streams that can honestly stay silent for minutes: a model served
+ * from the user's own machine or network (a local server loading weights, or prefilling
+ * a long prompt on modest hardware, sends nothing until the first token), and a Chat
+ * Completions request that asked for reasoning (that API streams nothing while the model
+ * thinks, so a long think looks exactly like a dead socket). Cutting those at the default
+ * window threw away work the host was still doing, then paid for it again on the retry.
+ */
+export const EXTENDED_STREAM_IDLE_TIMEOUT_MS = 10 * 60_000
+
+/**
+ * The idle window a request made inside {@link withStreamIdleWindow} asks for. Read when
+ * the request is sent, so a window set around an SDK call covers that call's stream.
+ */
+const requestedWindow = new AsyncLocalStorage<number>()
+
+/**
+ * Run `fn` with every stream it opens through {@link idleTimeoutFetch} allowed to stay
+ * quiet for at least `ms`. Never shortens a fetch's own window, nor one an enclosing
+ * call already asked for.
+ */
+export function withStreamIdleWindow<T>(ms: number, fn: () => T): T {
+  return requestedWindow.run(Math.max(ms, requestedWindow.getStore() ?? 0), fn)
+}
+
+/** The window {@link withStreamIdleWindow} set for the current call, if any. */
+export function requestedStreamIdleWindow(): number | undefined {
+  return requestedWindow.getStore()
+}
+
+/**
+ * Whether a base URL points at the user's own machine or private network: loopback,
+ * `localhost` (and `*.localhost`), the unspecified address, a private IPv4 range, an
+ * mDNS `.local` name, or an IPv6 unique-local address. That's where self-hosted model
+ * servers (Ollama, LM Studio, vLLM, llama.cpp) live. A malformed URL is not local.
+ */
+export function isLocalModelHost(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false
+  let host: string
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  host = host.replace(/^\[|\]$/g, '')
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true
+  if (host === '::1' || host === '::' || host === '0.0.0.0') return true
+  if (/^f[cd][0-9a-f]{2}:/.test(host)) return true
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host)
+  if (!v4) return false
+  const [a, b] = [Number(v4[1]), Number(v4[2])]
+  return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)
+}
+
+/** The idle window for a provider client talking to `baseUrl`. */
+export function streamIdleTimeoutFor(baseUrl: string | undefined): number {
+  return isLocalModelHost(baseUrl) ? EXTENDED_STREAM_IDLE_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS
+}
+
+/**
  * Deadline for a model-listing request ("Fetch models", "Test key"): the response must
  * start within it, and its body may not go quiet for longer. The SDKs' own default is ten
  * minutes for the headers alone, and the Gemini SDK sets none at all, so on a network
@@ -36,7 +97,7 @@ export const STREAM_IDLE_CODE = 'HOUSTON_STREAM_IDLE'
 /** The response body went quiet for longer than the idle window. */
 export class StreamIdleError extends Error {
   readonly code = STREAM_IDLE_CODE
-  constructor(idleMs: number) {
+  constructor(readonly idleMs: number) {
     super(`Provider stream timed out: no data for ${Math.round(idleMs / 1000)}s`)
     this.name = 'StreamIdleError'
   }
@@ -59,16 +120,37 @@ export class StreamClosedEarlyError extends Error {
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 
 /**
+ * The idle window of the {@link StreamIdleError} on `err` or its `cause` chain (the SDKs
+ * may wrap it), or undefined when the failure wasn't an idle stall.
+ */
+export function streamIdleWindowOf(err: unknown): number | undefined {
+  let e: unknown = err
+  // Bounded walk: a cause chain can be cyclic.
+  for (let i = 0; i < 8 && e !== undefined && e !== null; i++) {
+    if ((e as { code?: unknown }).code === STREAM_IDLE_CODE) {
+      const ms = (e as { idleMs?: unknown }).idleMs
+      return typeof ms === 'number' ? ms : STREAM_IDLE_TIMEOUT_MS
+    }
+    const next = (e as { cause?: unknown }).cause
+    if (next === e) break
+    e = next
+  }
+  return undefined
+}
+
+/**
  * Wrap `base` so every response body errors with {@link StreamIdleError} once it has
- * waited `idleMs` for its next chunk. The clock only runs while a read is pending, so
+ * waited `idleMs` (or the longer window {@link withStreamIdleWindow} asked for around
+ * the request) for its next chunk. The clock only runs while a read is pending, so
  * a consumer that's slow to read never trips it. Headers, status and an abort through
  * the request's own signal behave exactly as before.
  */
 export function idleTimeoutFetch(
-  idleMs: number = STREAM_IDLE_TIMEOUT_MS,
+  baseIdleMs: number = STREAM_IDLE_TIMEOUT_MS,
   base: Fetch = (input, init) => globalThis.fetch(input, init)
 ): Fetch {
   return async (input, init) => {
+    const idleMs = Math.max(baseIdleMs, requestedWindow.getStore() ?? 0)
     const res = await base(input, init)
     // Statuses that can never carry a body; wrapping one would make Response throw.
     if (!res.body || [101, 204, 205, 304].includes(res.status)) return res
