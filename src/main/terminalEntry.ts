@@ -122,6 +122,7 @@ import { mergeCommands } from '@shared/commands'
 import { runOutcome, runOutcomePhrase } from '@shared/runEnd'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
 import { highlightToHtml, type HljsLike } from './syntax'
+import { filterTerminalOutput } from './tui-wrap'
 import {
   createConversation,
   setMessages,
@@ -1111,8 +1112,11 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
           interrupted = true
           handler(signal)
         }),
-      out: (s) => process.stdout.write(s),
-      err: (s) => process.stderr.write(s),
+      // On a terminal, the answer and the progress lines are text the model and its
+      // tools wrote, so they pass the TUI's output filter: no escape in them can drive
+      // the terminal. Piped output stays byte-exact for the script reading it.
+      out: (s) => process.stdout.write(process.stdout.isTTY ? filterTerminalOutput(s) : s),
+      err: (s) => process.stderr.write(process.stderr.isTTY ? filterTerminalOutput(s) : s),
       readStdin: readAllStdin,
       readStdinLines,
       ...(opts.version ? { version: opts.version } : {}),

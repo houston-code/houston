@@ -1,7 +1,7 @@
 import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import { spinnerFrame, type TuiIo, type Painter, type ImagePasteRequest, type ImagePasteResult } from './tui'
-import { visibleWidth, stripControlChars } from './tui-wrap'
+import { filterTerminalOutput, visibleWidth, stripControlChars } from './tui-wrap'
 import type { NotifySpec } from '@shared/notify'
 import { findUltrathink, ultrathinkHint, type KeywordRange, type UltrathinkEffect } from '@shared/ultrathink'
 import {
@@ -467,21 +467,26 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     // until it is complete, so most text deltas arrive here empty, and erasing the
     // spinner for each one left it blank for most of a long answer.
     if (!s) return
+    const safe = filterTerminalOutput(s)
     // The transcript viewer owns the screen: hold the output and print it, in order,
     // once the viewer closes, so nothing lands on the alternate screen and is lost.
     if (pagerOpen) {
-      heldOutput.push(s)
+      heldOutput.push(safe)
       return
     }
     if (screenReader) {
-      const plain = plainText(s)
+      const plain = plainText(safe)
       if (plain) rawWrite(plain)
       return
     }
     // Clear the spinner line before real output so streamed text never lands on a
     // spinner frame; the timer redraws it on the next tick, on the fresh line.
-    if (cancelTimer) repaint(CLEAR_LINE + s)
-    else rawWrite(s)
+    // Everything the TUI prints comes through here, much of it text Houston didn't
+    // write. The filter keeps Houston's own colours and links and shows any other
+    // control character, so no string can repaint the lines above, write the
+    // clipboard or query the terminal (see filterTerminalOutput).
+    if (cancelTimer) repaint(CLEAR_LINE + safe)
+    else rawWrite(safe)
   }
 
   // --- Interrupt watch. While a turn streams, the interface is paused AND the
@@ -753,7 +758,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         }
       }
       rl.resume()
-      rl.question(prompt, { signal: ac.signal }, (answer) => {
+      // A prompt can carry a server's field label (an MCP elicitation), so it is
+      // filtered like any other write.
+      rl.question(filterTerminalOutput(prompt), { signal: ac.signal }, (answer) => {
         questionAbort = null
         rl.pause() // back to idle: stop echoing until the next read
         pending = null
@@ -1700,7 +1707,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const draw = (): void => {
         const screen = renderPagerScreen(state, doc, { rows: rows(), cols: width, title: source.title, paint })
         // Every row is positioned and cleared on its own: nothing scrolls, nothing wraps.
-        repaint(screen.map((row, i) => `\x1b[${i + 1};1H\x1b[2K${row}`).join(''))
+        // Rows are chat text, so each passes the same filter as every other write.
+        repaint(screen.map((row, i) => `\x1b[${i + 1};1H\x1b[2K${filterTerminalOutput(row)}`).join(''))
       }
       const listen = (): void => {
         stdin.setRawMode(true)
@@ -1866,7 +1874,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       if (spinnerLabel !== null) drawSpinner()
     },
     setStatus: (status) => {
-      statusLabel = status
+      statusLabel = filterTerminalOutput(status)
       if (spinnerLabel !== null) drawSpinner()
     },
     signal: (sig: TerminalSignal) => {
@@ -1900,13 +1908,13 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     startSpinner: (label) => {
       // A turn is running again, so nothing is waiting on the user any more.
       disarmReminder()
-      spinnerLabel = label
+      spinnerLabel = filterTerminalOutput(label)
       spinnerStart = now()
       tick = 0
       // Said once, as a line: what it is doing now.
       if (screenReader) {
-        announced = label
-        announce(lowerFirst(label))
+        announced = spinnerLabel
+        announce(lowerFirst(spinnerLabel))
       }
       startTimer()
       // A turn is now running with no prompt up — watch for Ctrl-C so it can be
@@ -1915,10 +1923,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     setSpinnerLabel: (label) => {
       if (spinnerLabel === null) return
-      spinnerLabel = label
-      if (screenReader && label !== announced) {
-        announced = label
-        announce(lowerFirst(label))
+      // A label can name an MCP server's tool, which the server chose.
+      const safeLabel = filterTerminalOutput(label)
+      spinnerLabel = safeLabel
+      if (screenReader && safeLabel !== announced) {
+        announced = safeLabel
+        announce(lowerFirst(safeLabel))
       }
     },
     stopSpinner: () => {
@@ -1999,7 +2009,11 @@ function runPicker(
       // \r first: the up-move is counted from column 0 of the row under the picker.
       // Erase and redraw go out as one write, so `write` can paint them atomically.
       const erase = !first && prevRows > 0 ? `\r\x1b[${prevRows}A\x1b[0J` : '' // up N physical rows, erase to end
-      const lines = session.lines({ width: process.stdout.columns || 0, height: process.stdout.rows || 0 })
+      // Option labels can be the model's text (an ask_user answer) and /resume rows are
+      // chat titles and previews, so every line passes the same filter as other writes.
+      const lines = session
+        .lines({ width: process.stdout.columns || 0, height: process.stdout.rows || 0 })
+        .map(filterTerminalOutput)
       // Count PHYSICAL rows, not logical lines: a rendered line wider than the terminal
       // wraps to several rows, so moving up by the logical count would under-count and
       // the picker would walk down the screen, leaving duplicated rows on each keypress.

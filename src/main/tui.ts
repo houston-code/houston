@@ -97,9 +97,12 @@ import {
   stripControlCharsKeepLines,
   osc52Copy,
   osc8Link,
+  terminalText,
+  filterTerminalOutput,
   visibleWidth,
   wrapAnsi
 } from './tui-wrap'
+import { approvalSubject, visibleText } from '@shared/visibleText'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -484,13 +487,17 @@ export function renderToolStart(
   opts: { sentence?: boolean } = {}
 ): string {
   const { verb, target } = describeToolCall(name, args)
-  // A tool the shared labels don't know keeps the old best-effort argument hint. The
-  // hint is the model's argument (a command, a path), so its control characters go.
-  const raw = stripControlChars((target || (verb === name ? toolArgHint(args) : '')).replace(/\s+/g, ' '))
+  // A tool the shared labels don't know keeps the old best-effort argument hint.
+  // The hint is the model's argument (a command, a path) and an MCP tool's verb is its
+  // server's name for it, so both are cleaned of control characters.
+  const raw = terminalText(target || (verb === name ? toolArgHint(args) : ''), { lines: false }).replace(/\s+/g, ' ')
   const hint = truncate(raw.trim(), 80)
-  if (opts.sentence) return hint ? `Using tool ${verb}: ${hint}` : `Using tool ${verb}`
+  if (opts.sentence) {
+    const label = terminalText(verb, { lines: false })
+    return hint ? `Using tool ${label}: ${hint}` : `Using tool ${label}`
+  }
   const suffix = hint ? `  ${paint(hint, 'dim')}` : ''
-  return `${paint('·', 'dim')} ${paint(verb, 'cyan')}${suffix}`
+  return `${paint('·', 'dim')} ${paint(terminalText(verb, { lines: false }), 'cyan')}${suffix}`
 }
 
 /**
@@ -501,8 +508,11 @@ export function renderToolStart(
  */
 export function toolCallTag(name: string, args: Record<string, unknown> | undefined): string {
   const { verb, target } = describeToolCall(name, args)
-  const hint = (target || (verb === name && args ? toolArgHint(args) : '')).replace(/\s+/g, ' ').trim()
-  return hint ? `${verb} ${truncate(hint, 40)}` : verb
+  const hint = terminalText(target || (verb === name && args ? toolArgHint(args) : ''), { lines: false })
+    .replace(/\s+/g, ' ')
+    .trim()
+  const shownVerb = terminalText(verb, { lines: false })
+  return hint ? `${shownVerb} ${truncate(hint, 40)}` : shownVerb
 }
 
 /** Prefix the first line of a rendered result with its call's tag, after the indent. */
@@ -522,39 +532,114 @@ export function tagResultLines(rendered: string, tag: string, paint: Painter): s
 export function toolArgHint(args: Record<string, unknown>): string {
   for (const key of ['path', 'file', 'file_path', 'command', 'cmd', 'query', 'url', 'pattern']) {
     const v = args[key]
-    if (typeof v === 'string' && v.trim()) return truncate(stripControlChars(v.replace(/\s+/g, ' ')).trim(), 80)
+    if (typeof v === 'string' && v.trim()) return truncate(terminalText(v, { lines: false }).replace(/\s+/g, ' ').trim(), 80)
   }
   return ''
 }
 
 /**
+ * At most this many terminal rows of a command before the approval repeats its start
+ * just above the choices. Past it, the head of the prompt (what is being approved, and
+ * the command's first line) has scrolled up out of sight, which is exactly where a
+ * command padded with dozens of lines would hide its first, dangerous one.
+ */
+export const APPROVAL_TEXT_MAX_ROWS = 16
+// A run of spaces or tabs this long inside a line is shown as a count, so padding can't
+// push the rest of a line (or the next one) off screen either.
+const APPROVAL_SPACE_RUN = new RegExp(`[ \\t]{16,}`, 'g')
+
+/**
+ * Text an approval is about (a command, a memory's body), laid out for the terminal so
+ * the user sees every character that will be used and nothing can hide:
+ *
+ *  - every control, bidi and zero-width character is shown as `<U+XXXX>`
+ *    ({@link visibleText}), a carriage return and an escape included, so the text can't
+ *    repaint itself as something harmless, and no character is cut or dropped;
+ *  - a multi-line text has numbered lines, so a line break is never mistaken for a
+ *    space and the reader can tell where each line starts;
+ *  - a run of blank lines folds to one "(N blank lines)" row, and a long run of spaces
+ *    to "<N spaces>", so padding can't scroll the start of the text out of view;
+ *  - a text still taller than {@link APPROVAL_TEXT_MAX_ROWS} rows is printed whole and
+ *    then followed by a line repeating its length and first line, next to the choices.
+ *
+ * Returns the lines, each indented by two spaces.
+ */
+export function renderApprovalText(text: string, paint: Painter, width = 80): string[] {
+  const spaced = (l: string): string => l.replace(APPROVAL_SPACE_RUN, (run) => paint(`<${run.length} spaces>`, 'dim'))
+  const lines = visibleText(text).split('\n')
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop() // a final newline ends the last line
+  if (lines.length <= 1) return [`  ${spaced(lines[0] ?? '')}`]
+  const digits = String(lines.length).length
+  const gutter = (n: string): string => paint(`${n.padStart(digits)} │`, 'dim')
+  const out: string[] = []
+  let blankFrom = -1
+  const flushBlank = (end: number): void => {
+    if (blankFrom < 0) return
+    const n = end - blankFrom
+    out.push(
+      n === 1
+        ? `  ${gutter(String(blankFrom + 1))}`
+        : `  ${paint(`${' '.repeat(digits)} ┆ (${n} blank lines, ${blankFrom + 1}-${end})`, 'dim')}`
+    )
+    blankFrom = -1
+  }
+  lines.forEach((l, i) => {
+    if (!l.trim()) {
+      if (blankFrom < 0) blankFrom = i
+      return
+    }
+    flushBlank(i)
+    out.push(`  ${gutter(String(i + 1))} ${spaced(l)}`)
+  })
+  flushBlank(lines.length)
+  const cols = Math.max(20, width)
+  const rows = out.reduce((n, l) => n + Math.max(1, Math.ceil(visibleWidth(l) / cols)), 0)
+  if (rows > APPROVAL_TEXT_MAX_ROWS) {
+    const first = spaced(lines.find((l) => l.trim()) ?? '')
+    out.push(
+      paint(`  ↑ ${lines.length} lines in all, shown above. Line 1: `, 'dim') + truncateVisible(first, Math.max(20, cols - 40))
+    )
+  }
+  return out
+}
+
+/** How many lines a text spans, for the approval header ("3 lines"); null for one line. */
+function lineCount(text: string): string | null {
+  const n = text.replace(/\n$/, '').split('\n').length
+  return n > 1 ? `${n} lines` : null
+}
+
+/**
  * The approval prompt shown for a `tool_approval` event. The kind + an unconfined
  * shell warning matter for consent, so they're surfaced prominently.
+ *
+ * What is being approved is shown whole, never cut to fit: for a shell command the
+ * command itself (from the call's arguments, so exactly what will run), for a memory
+ * its description and body, and otherwise the call's summary. All of it goes through
+ * {@link renderApprovalText}, so a carriage return, an escape, a bidi override or a
+ * page of blank lines in the model's text shows up instead of disguising it.
  */
 export function renderApprovalPrompt(
   ev: Extract<AgentEvent, { type: 'tool_approval' }>,
   paint: Painter,
   /** The arrow-key picker lists the choices itself; the typed-answer keys would repeat them. */
-  opts: { picker?: boolean } = {}
+  opts: { picker?: boolean; width?: number } = {}
 ): string {
+  const text = (t: string): string => renderApprovalText(t, paint, opts.width).join('\n')
   // The full-auto shell-network question comes after a command already failed offline.
   // It decides the chat's shell network, not the command, so frame it as a network grant
   // and "deny" as "keep offline", not "block".
   // The egress question likewise comes after the proxy refused a host the allowlist
   // doesn't name; it decides that one host for the chat.
-  // The summary is the model's own text (for a shell call, the command itself), so a
-  // carriage return or an erase-line escape in it could overwrite what is about to be
-  // approved with something harmless. Its control characters go; its lines stay.
-  const summary = stripControlCharsKeepLines(ev.summary)
   if (ev.egressHost) {
-    const host = stripControlChars(ev.egressHost)
+    const host = terminalText(ev.egressHost, { lines: false })
     const head = paint(`A command tried to reach ${host}, which isn't on the sandbox's allowed domains.`, 'bold')
     const note = paint(
       '  It was blocked. Allowing it applies to shell commands in the rest of this chat, for this host only.',
       'dim'
     )
     const keys = opts.picker ? '' : `\n${paint(`  [y] allow ${host} for this chat   [n] keep blocked`, 'dim')}`
-    return `\n${head}\n  ${summary}\n${note}${keys}`
+    return `\n${head}\n${text(ev.summary)}\n${note}${keys}`
   }
   if (ev.shellNetwork) {
     const head = paint('This command could not reach the network.', 'bold')
@@ -563,7 +648,7 @@ export function renderApprovalPrompt(
       'dim'
     )
     const keys = opts.picker ? '' : `\n${paint('  [y] allow network for this chat   [n] keep offline', 'dim')}`
-    return `\n${head}\n  ${summary}\n${note}${keys}`
+    return `\n${head}\n${text(ev.summary)}\n${note}${keys}`
   }
   const warn =
     ev.kind === 'shell' && ev.sandboxed === false
@@ -582,16 +667,25 @@ export function renderApprovalPrompt(
     : ''
   // A network grant reaches one destination; say which before the user picks it.
   const scope = ev.networkScope
-    ? `\n${paint(`  "Allow for this chat" covers ${stripControlChars(ev.networkScope)} only, for the rest of this chat.`, 'dim')}`
+    ? `\n${paint(`  "Allow for this chat" covers ${terminalText(ev.networkScope, { lines: false })} only, for the rest of this chat.`, 'dim')}`
     : ''
+  // A command is shown from its arguments (the summary adds a "(background)" note to
+  // it); a memory shows its summary line, then what would be saved.
+  const parts = approvalSubject(ev.name, ev.args)
+  const command = ev.name === 'run_shell' && parts.length ? parts[0] : null
+  const subject = command
+    ? text(command.text)
+    : [text(ev.summary), ...parts.map((p) => `${paint(`  ${p.label}:`, 'dim')}\n${text(p.text)}`)].join('\n')
+  const extent = command ? lineCount(command.text) : null
+  const background = command && command.label !== 'Command' ? paint('  (runs in the background)', 'dim') : ''
   // Named as the call's tool line names it ("Run", "Write"), not by its wire name.
-  const head = paint(`Approve ${describeToolCall(ev.name, ev.args).verb}`, 'bold')
-  const kind = paint(`[${ev.kind}]`, 'dim')
+  const head = paint(`Approve ${terminalText(describeToolCall(ev.name, ev.args).verb, { lines: false })}`, 'bold')
+  const kind = paint(`[${ev.kind}]${extent ? ` · ${extent}` : ''}`, 'dim')
   const keys = opts.picker
     ? ''
     : `\n${paint('  [y] allow once   [a] allow for this chat   [!] always allow (saves a rule)   [n] deny   [x] always deny', 'dim')}` +
       paint('\n  …or type why not, and that goes back to the agent', 'dim')
-  return `\n${head} ${kind}\n  ${summary}${warn}${offline}${scope}${keys}`
+  return `\n${head} ${kind}${background}\n${subject}${warn}${offline}${scope}${keys}`
 }
 
 /**
@@ -723,9 +817,9 @@ export function extractDiff(args: Record<string, unknown>): string | null {
 
 /** Colorize a unified diff, capped at `maxLines` so a huge edit doesn't flood the terminal. */
 export function colorizeDiff(diff: string, paint: Painter, maxLines = 40): string {
-  // Built from the model's arguments: drop control characters so none can paint over
-  // the change being approved (tabs stay, as indentation).
-  const lines = stripControlCharsKeepLines(diff).split('\n')
+  // Built from the model's arguments: no control character in it may paint over the
+  // change being approved.
+  const lines = terminalText(diff).split('\n')
   const shown = lines.slice(0, maxLines).map((l) => {
     // Header markers must be checked before +/- since `+++`/`---` also start with them.
     if (l.startsWith('+++') || l.startsWith('---') || l.startsWith('@@')) return paint(l, 'cyan')
@@ -817,8 +911,8 @@ export function renderToolResult(
   if (!ok && deniedPromptText(output) !== null) return ''
   if (ok && name === PRESENT_PLAN_TOOL) return paint(`  ↳ ${PLAN_OUTCOME_LABEL[planOutcome(output)]}`, 'dim')
   // A command's output (or a fetched page, or an MCP result) can carry escapes that
-  // move the cursor or write the clipboard; show its text without them.
-  const lines = output.split('\n').map(stripControlCharsKeepLines)
+  // move the cursor or write the clipboard; show its text without them working.
+  const lines = terminalText(output).split('\n')
   if (!ok) {
     // "✗ Run failed", matching the row above it, not the wire name.
     const failed = paint(`  ✗ ${describeToolCall(name, undefined).verb} failed`, 'red')
@@ -883,7 +977,7 @@ export function renderRecoveredOutput(
     return paint(`· no tool call #${index} (this conversation has ${results.length})`, 'yellow')
   }
   const picked = results[results.length - index]
-  const lines = picked.output.split('\n').map(stripControlCharsKeepLines)
+  const lines = terminalText(picked.output).split('\n')
   const shown = lines.slice(0, OUTPUT_LINES)
   const head = paint(`▣ ${picked.name}`, 'bold') + paint(`  (${index} back, ${lines.length} lines)`, 'dim')
   const more =
@@ -1005,7 +1099,7 @@ export function renderEditSummary(preview: FileDiffPreview[], paint: Painter): s
   const files = preview.slice(0, EDIT_SUMMARY_FILES).map((f) => {
     const { added, removed } = diffStat(f.diff)
     const more = f.truncated ? '…' : ''
-    const name = stripControlChars(f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path)
+    const name = terminalText(f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path, { lines: false })
     const tag = f.created ? paint(' (new)', 'dim') : f.deleted ? paint(' (deleted)', 'dim') : ''
     const counts = [
       added || !removed ? paint(`+${added}${more}`, 'green') : '',
@@ -1219,9 +1313,9 @@ export function renderBackgroundSessions(
             `${s.outcome === 'error' ? '✗' : '■'} ${runOutcomePhrase({ outcome: s.outcome, limit: s.limit })}`,
             s.outcome === 'error' ? 'red' : 'yellow'
           )
-    const branch = s.branch ? paint(`  ${s.branch}`, 'magenta') : ''
+    const branch = s.branch ? paint(`  ${terminalText(s.branch, { lines: false })}`, 'magenta') : ''
     const when = paint(formatRelativeTime(s.startedAt, now), 'dim')
-    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${state}  ${s.title}${branch}  ${when}`)
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${state}  ${terminalText(s.title, { lines: false })}${branch}  ${when}`)
   })
   lines.push(paint('  Enter a number to open one, or anything else to cancel', 'dim'))
   return lines.join('\n')
@@ -1257,7 +1351,7 @@ export function renderProposals(list: TuiProposal[], paint: Painter): string {
           : p.status === 'dismissed'
             ? paint('dismissed', 'dim')
             : paint('open', 'cyan')
-    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${p.title}  ${state}`)
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${terminalText(p.title, { lines: false })}  ${state}`)
   })
   lines.push(
     paint('  /proposals start <n> runs one as its own session · here <n> asks for it in this chat · dismiss <n>', 'dim')
@@ -1304,7 +1398,7 @@ export function renderRewindPoints(points: RewindPoint[], paint: Painter, max = 
   const shown = points.slice(-max)
   const lines = [paint('Rewind to just before which message?', 'bold')]
   if (shown.length < points.length) lines.push(paint(`  (${points.length - shown.length} older not shown)`, 'dim'))
-  for (const p of shown) lines.push(`  ${paint(String(p.turn + 1).padStart(3), 'cyan')}  ${p.label}`)
+  for (const p of shown) lines.push(`  ${paint(String(p.turn + 1).padStart(3), 'cyan')}  ${terminalText(p.label, { lines: false })}`)
   lines.push(paint('  enter a number, or nothing to cancel', 'dim'))
   return lines.join('\n')
 }
@@ -1426,7 +1520,7 @@ export function renderConversationList(convs: ResumeEntry[], now: number, paint:
   convs.forEach((c, i) => {
     const when = paint(formatRelativeTime(c.updatedAt, now), 'dim')
     // The same states the desktop sidebar shows: failed in red, unread in blue.
-    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${stripControlChars(c.title)}  ${when}${unreadMark(c, paint)}`)
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${terminalText(c.title, { lines: false })}  ${when}${unreadMark(c, paint)}`)
   })
   lines.push(paint('  Enter a number to resume, or anything else to cancel', 'dim'))
   return lines.join('\n')
@@ -1497,14 +1591,14 @@ export function formatRelativeTime(then: number, now: number): string {
 
 /** The question line of an `ask_user` prompt. */
 export function renderQuestionHeader(question: string, paint: Painter): string {
-  return `\n${paint('? ', 'magenta')}${paint(stripControlCharsKeepLines(question), 'bold')}`
+  return `\n${paint('? ', 'magenta')}${paint(terminalText(question), 'bold')}`
 }
 
 /** The numbered options + typing hint for answering an `ask_user` question by hand. */
 export function renderQuestionChoices(options: QuestionOption[], multiSelect: boolean, paint: Painter): string {
   const lines = options.map((o, i) => {
-    const desc = o.description ? paint(`  (${stripControlChars(o.description)})`, 'dim') : ''
-    return `  ${paint(String(i + 1), 'cyan')}. ${stripControlChars(o.label)}${desc}`
+    const desc = o.description ? paint(`  (${terminalText(o.description, { lines: false })})`, 'dim') : ''
+    return `  ${paint(String(i + 1), 'cyan')}. ${terminalText(o.label, { lines: false })}${desc}`
   })
   const hint = multiSelect
     ? 'Enter numbers (comma-separated) or type an answer'
@@ -1587,17 +1681,17 @@ export function renderPlan(
   paint: Painter,
   opts: { actions?: boolean; width?: number; highlight?: (lang: string, code: string) => string } = {}
 ): string {
-  // Every part of the plan is the model's text, so none of it reaches the terminal
-  // with its control characters (the body's are dropped by the markdown renderer).
-  const lines = [`\n${paint('▣ Plan:', 'magenta')} ${paint(stripControlChars(plan.title), 'bold')}`]
+  // Every part of the plan is the model's text (the body's control characters are
+  // handled by the markdown renderer).
+  const lines = [`\n${paint('▣ Plan:', 'magenta')} ${paint(terminalText(plan.title, { lines: false }), 'bold')}`]
   const body = plan.body?.trim()
   if (body) {
     lines.push('', renderMarkdownAnsi(body, { paint, width: opts.width ?? 0, highlight: opts.highlight }))
   } else {
-    if (plan.overview) lines.push('', stripControlCharsKeepLines(plan.overview))
-    for (const step of plan.steps ?? []) lines.push(`  • ${stripControlChars(step)}`)
+    if (plan.overview) lines.push('', terminalText(plan.overview))
+    for (const step of plan.steps ?? []) lines.push(`  • ${terminalText(step, { lines: false })}`)
   }
-  if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.map(stripControlChars).join(', ')}`, 'dim'))
+  if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.map((f) => terminalText(f, { lines: false })).join(', ')}`, 'dim'))
   const verify = planVerifySteps(plan)
   if (verify.length) lines.push('', paint(`Checks: ${verify.map(stripControlChars).join('; ')}`, 'dim'))
   // Houston's own answer to whether those checks can run here, worked out from the
@@ -4225,7 +4319,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       conversationId = entry!.id
       messages = conv.messages
       deps.io.out(
-        paint(`· continuing "${entry!.title}" (${plural(messages.length, 'message')})\n`, 'dim')
+        paint(`· continuing "${terminalText(entry!.title, { lines: false })}" (${plural(messages.length, 'message')})\n`, 'dim')
       )
       const recap = renderRecap(messages, paint, { width: columns() })
       if (recap) deps.io.out(`${recap}\n`)
@@ -4701,8 +4795,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       let code: number
       try {
         code = await deps.runUserShell(shellCmd, (chunk) => {
-          // Stream it: a build or a test run should look alive, not hung.
-          deps.io.out(chunk)
+          // Stream it: a build or a test run should look alive, not hung. Its colours
+          // stay, but nothing else in it (a file it printed, say) can drive the terminal.
+          deps.io.out(filterTerminalOutput(chunk))
           captured += chunk
         })
       } catch (e) {
@@ -4826,7 +4921,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         try {
           deps.persist.rename(conversationId, result.title)
-          deps.io.out(paint(`· renamed to "${result.title}"\n`, 'dim'))
+          deps.io.out(paint(`· renamed to "${terminalText(result.title, { lines: false })}"\n`, 'dim'))
         } catch (e) {
           deps.io.out(paint(`· couldn't rename: ${(e as Error).message}\n`, 'yellow'))
         }
@@ -4842,7 +4937,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           )
           continue
         }
-        const title = currentTitle() ?? 'this chat'
+        const title = terminalText(currentTitle() ?? 'this chat', { lines: false })
         // discardPending: type-ahead must not answer a question about deleting.
         const ans = await deps.io.readLine(
           paint(`Delete "${title}" and its ${plural(messages.length, 'message')}? This cannot be undone. [y/N] `, 'yellow'),
@@ -5183,7 +5278,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`· ${preview.error}\n`, 'yellow'))
           continue
         }
-        deps.io.out(`${paint(`Rewind to “${point.label}”?`, 'bold')} ${rewindConfirmText(mode, preview)}\n`)
+        deps.io.out(`${paint(`Rewind to “${terminalText(point.label, { lines: false })}”?`, 'bold')} ${rewindConfirmText(mode, preview)}\n`)
         const yes = await deps.io.readLine('Rewind? [y/N] ', { discardPending: true })
         if (!yes || !/^y(es)?$/i.test(yes.trim())) {
           deps.io.out(paint('· cancelled\n', 'dim'))
@@ -5552,7 +5647,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         try {
           if (result.op === 'start') {
             const started = await deps.proposals.start(conversationId, picked.callId, policy)
-            deps.io.out(paint(`· started "${started.title}" in the background; /spawned opens it\n`, 'green'))
+            deps.io.out(paint(`· started "${terminalText(started.title, { lines: false })}" in the background; /spawned opens it\n`, 'green'))
             continue
           }
           deps.proposals.decide(conversationId, picked.callId, result.op === 'here' ? 'here' : 'dismissed')
@@ -5561,7 +5656,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         if (result.op === 'dismiss') {
-          deps.io.out(paint(`· dismissed "${picked.title}"\n`, 'dim'))
+          deps.io.out(paint(`· dismissed "${terminalText(picked.title, { lines: false })}"\n`, 'dim'))
           continue
         }
         // "here": ask for it in this chat, as a normal turn. Fall through.
@@ -5851,7 +5946,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           thought.text += e.delta
           if (reasoningDisplay !== 'show') break
           // Model text, so it can't carry a terminal control of its own.
-          const safe = stripControlCharsKeepLines(e.delta)
+          const safe = terminalText(e.delta)
           if (!safe) break
           if (screenReader && speaking !== 'thinking') {
             deps.io.out(`${freshLine()}\nhouston, thinking:\n`)
@@ -5912,7 +6007,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             const title = toolArgs.get(e.callId)?.title
             deps.io.out(
               paint(
-                `  · proposed a session${typeof title === 'string' ? `: ${title}` : ''}. /proposals to start it, ask for it here, or dismiss it\n`,
+                `  · proposed a session${typeof title === 'string' ? `: ${terminalText(title, { lines: false })}` : ''}. /proposals to start it, ask for it here, or dismiss it\n`,
                 'cyan'
               )
             )
@@ -5946,7 +6041,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'tool_progress': {
           if (!e.message.trim()) break
           const tag = callTag(e.callId)
-          deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(stripControlChars(e.message).trim(), 80)}\n`, 'dim'))
+          deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(terminalText(e.message, { lines: false }).trim(), 80)}\n`, 'dim'))
           break
         }
         case 'subagent_start':
@@ -5955,7 +6050,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           subagentTracker.apply(e, conversationId)
           const line = subagentLines.line(e)
           if (line) {
-            const text = `  ${'  '.repeat(line.depth)}${truncate(line.text, Math.max(40, columns() - 6))}\n`
+            const text = `  ${'  '.repeat(line.depth)}${truncate(terminalText(line.text, { lines: false }), Math.max(40, columns() - 6))}\n`
             deps.io.out(line.tone === 'plain' ? text : paint(text, line.tone))
           }
           break
@@ -5963,14 +6058,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'subagent':
           // Line mode can't update a row in place, so print discrete markers: a
           // start line, then a done/error line, indented under the parent tool.
-          deps.io.out(paint(`    ${subagentGlyph(e.status)} ${stripControlChars(e.label)}\n`, 'dim'))
+          deps.io.out(paint(`    ${subagentGlyph(e.status)} ${terminalText(e.label, { lines: false })}\n`, 'dim'))
           break
         case 'review_finding': {
           const line = printFinding(e.parentCallId, e.finding)
           if (line) {
             const s = e.finding.status
             const tone = s === 'confirmed' ? 'yellow' : s === 'candidate' ? undefined : 'dim'
-            const text = `      ${truncate(stripControlChars(line), 120)}\n`
+            const text = `      ${truncate(terminalText(line, { lines: false }), 120)}\n`
             deps.io.out(tone ? paint(text, tone) : text)
           }
           break
@@ -5979,22 +6074,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
           if (retryStreak === 0) {
             const line = e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `retrying (${retryProgress(e)})… ${e.message}`
-            deps.io.out(paint(`\n· ${stripControlCharsKeepLines(line)}\n`, 'yellow'))
+            deps.io.out(paint(`\n· ${terminalText(line)}\n`, 'yellow'))
           }
           retryStreak = e.attempt
           break
         case 'model_fallback':
           deps.io.setSpinnerLabel?.('Switching model')
-          deps.io.out(
-            paint(`\n· ${stripControlCharsKeepLines(`${e.from} unavailable, falling back to ${e.to}… ${e.reason}`)}\n`, 'yellow')
-          )
+          deps.io.out(paint(`\n· ${terminalText(`${e.from} unavailable, falling back to ${e.to}… ${e.reason}`)}\n`, 'yellow'))
           break
         case 'tool_approval':
           if (e.kind === 'write') promptedWrites.add(e.callId)
           enqueue(async () => {
             if (screenReader) deps.io.out('\nwaiting for approval\n')
             // Context (name, kind, unsandboxed warning) + the diff for a write.
-            deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select })}\n`)
+            deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select, width: columns() })}\n`)
             if (e.kind === 'write') {
               // Prefer the main process's preview: it is diffed against the files'
               // actual contents, so an overwrite shows what changed rather than the
@@ -6095,9 +6188,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                 multiSelect: multi,
                 // Shown cleaned; the answer is still the label as the agent wrote it.
                 options: e.options.map((o) => ({
-                  label: stripControlChars(o.label),
+                  label: terminalText(o.label, { lines: false }),
                   value: o.label,
-                  ...(o.description ? { description: stripControlChars(o.description) } : {})
+                  ...(o.description ? { description: terminalText(o.description, { lines: false }) } : {})
                 }))
               })
               if (r.kind === 'commit') answer = r.value
@@ -6120,7 +6213,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             // Everything here but the field values is the remote server's text.
             if (screenReader) deps.io.out('\nwaiting for your input\n')
             deps.io.out(
-              `\n${paint(`MCP server "${stripControlChars(e.serverId)}" requests input:`, 'cyan')} ${stripControlCharsKeepLines(e.message)}\n`
+              `\n${paint(`MCP server "${terminalText(e.serverId, { lines: false })}" requests input:`, 'cyan')} ${terminalText(e.message)}\n`
             )
             const proceed = await deps.io.readLine('Provide it? [y/N] ', { discardPending: true })
             if (proceed === null || !/^y(es)?$/i.test(proceed.trim())) {
@@ -6133,7 +6226,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             const raw: Record<string, string> = {}
             for (const f of e.fields) {
               if (f.description) {
-                deps.io.out(paint(`  ${stripControlChars(f.name)}: ${stripControlCharsKeepLines(f.description)}\n`, 'dim'))
+                deps.io.out(paint(`  ${terminalText(f.name, { lines: false })}: ${terminalText(f.description)}\n`, 'dim'))
               }
               for (;;) {
                 const hints = [
@@ -6142,7 +6235,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                 ]
                   .filter(Boolean)
                   .join('; ')
-                const label = stripControlChars(`${f.title ?? f.name}${hints ? ` (${hints})` : ''}`)
+                const label = terminalText(`${f.title ?? f.name}${hints ? ` (${hints})` : ''}`, { lines: false })
                 const ans = await deps.io.readLine(`${label}: `, {
                   discardPending: true
                 })
@@ -6156,7 +6249,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                   raw[f.name] = ans
                   break
                 }
-                deps.io.out(paint(`· ${stripControlChars(check.error)}\n`, 'yellow'))
+                deps.io.out(paint(`· ${terminalText(check.error, { lines: false })}\n`, 'yellow'))
               }
             }
             const built = buildElicitationContent(e.fields, raw)
@@ -6198,7 +6291,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               paint(`\n· tried ${retryStreak} more time${retryStreak === 1 ? '' : 's'}, then stopped\n`, 'yellow')
             )
           }
-          deps.io.out(paint(`\nError: ${stripControlCharsKeepLines(e.message)}\n`, 'red'))
+          deps.io.out(paint(`\nError: ${terminalText(e.message)}\n`, 'red'))
           break
         case 'limit':
           deps.io.out(paint(`\n· ${limitNoticeText(e.reason)}\n`, 'yellow'))
@@ -6209,7 +6302,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension) — display-only, never
           // part of the model's context.
-          deps.io.out(paint(`\n· ${stripControlCharsKeepLines(e.message)}\n`, 'dim'))
+          deps.io.out(paint(`\n· ${terminalText(e.message)}\n`, 'dim'))
           break
         case 'runtime_missing':
           // Display-only: the model already got the hint in the run_shell result.

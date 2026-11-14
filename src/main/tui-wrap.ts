@@ -4,6 +4,7 @@
  * naive `.length` over-counts and a naive wrap breaks early / mid-escape. These
  * helpers measure and wrap by *visible* width, leaving the color codes intact.
  */
+import { revealControls } from '@shared/visibleText'
 
 // ESC (0x1b). Built from a char code so no control character appears in source
 // (a literal ESC in a regex trips eslint's no-control-regex).
@@ -39,9 +40,12 @@ export function stripControlChars(s: string): string {
  * multi-line command): newlines and tabs stay, so it keeps its shape, and every
  * other control character goes, a carriage return included (one could rewrite the
  * line it follows). Only the control characters are removed, never the printable
- * rest of an escape sequence: "ESC[2K" leaves "[2K" on screen. That is deliberate
- * where the text is something the user approves, because removing a whole OSC
- * ("ESC]0;curl x|sh;BEL") would hide the very words the shell runs.
+ * rest of an escape sequence: "ESC[2K" leaves "[2K" on screen, since removing a
+ * whole OSC ("ESC]0;curl x|sh;BEL") would hide the words inside it.
+ *
+ * The terminal's display sinks use {@link terminalText} instead, which shows each
+ * control character as `<U+XXXX>` rather than removing it; this stays for callers
+ * that need the text itself without them.
  */
 export function stripControlCharsKeepLines(s: string): string {
   // eslint-disable-next-line no-control-regex -- removing control characters is the point
@@ -49,12 +53,82 @@ export function stripControlCharsKeepLines(s: string): string {
 }
 
 /**
+ * Text Houston didn't write (a reply, reasoning, a command's output, a tool's
+ * argument, a server's message, a conversation title), made safe to print: nothing in
+ * it can drive the terminal, and nothing is silently dropped either.
+ *
+ * Colour codes (SGR) are removed, since they are only styling (a command's coloured
+ * output) but can also conceal text. Every other control character, the ESC that
+ * opens a cursor move, an erase, a title or clipboard write (OSC 0/52) or an
+ * answerback query included, is shown as `<U+XXXX>`, so the sequence is inert and
+ * the reader can see it was there. A CRLF line ending becomes a plain newline, and a
+ * carriage return ending the text is dropped (it is half of a CRLF cut between two
+ * stream chunks, and dropping one can only stop it repainting, never hide anything);
+ * any other carriage return, the character that repaints a line, is shown.
+ *
+ * `lines: false` is for one-line slots (a title, a label, a tool row's hint): line
+ * breaks and tabs become spaces instead.
+ */
+export function terminalText(s: string, opts: { lines?: boolean } = {}): string {
+  const text = s.replace(/\r$/, '')
+  if (opts.lines === false) {
+    return revealControls(stripAnsi(text.replace(/[ \t]*\r?\n[ \t]*/g, ' ').replace(/\t/g, ' ')), { keepLines: false })
+  }
+  return revealControls(stripAnsi(text.replace(/\r\n/g, '\n')))
+}
+
+// The escape sequences the output filter recognizes as one unit: a CSI (cursor
+// moves, erases, colours: ESC [ params intermediates final) and an OSC terminated by
+// BEL or ST (titles, hyperlinks, clipboard, notifications).
+const ESCAPE_UNIT = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]|${ESC}\\][^\\x07${ESC}]*(?:\\x07|${ESC}\\\\)`, 'g')
+const SGR_ONLY = new RegExp(`^${ESC}\\[[0-9;:]*m$`)
+// Ending a hyperlink is harmless whoever writes it.
+const OSC8_CLOSE = new Set([`${ESC}]8;;${ESC}\\`, `${ESC}]8;;\x07`])
+
+// The exact OSC sequences Houston itself built (osc8Link, osc52Copy), which the output
+// filter lets through. Matching the whole sequence means text that copies one can
+// only repeat Houston's own link or copy, never aim it elsewhere. Bounded: oldest go first.
+const trustedOsc = new Set<string>()
+const MAX_TRUSTED_OSC = 512
+function trustOsc(seq: string): string {
+  trustedOsc.delete(seq)
+  trustedOsc.add(seq)
+  if (trustedOsc.size > MAX_TRUSTED_OSC) trustedOsc.delete(trustedOsc.values().next().value as string)
+  return seq
+}
+
+/**
+ * The last line of defence before bytes reach the terminal: every write the TUI makes
+ * through its output seam passes here, so a string that skipped {@link terminalText}
+ * still can't move the cursor, rewrite the lines above, set the title, write the
+ * clipboard or query the terminal. Houston's own styling passes untouched: SGR colour
+ * codes, plus the hyperlinks and clipboard writes it built itself (see `trustOsc`).
+ * Anything else has its control characters shown as `<U+XXXX>`, like
+ * {@link terminalText}; newlines and tabs stay, and CRLF becomes a newline.
+ */
+export function filterTerminalOutput(s: string): string {
+  // eslint-disable-next-line no-control-regex -- the fast path: nothing to filter
+  if (!/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(s)) return s
+  let out = ''
+  let last = 0
+  const plain = (t: string): string => revealControls(t.replace(/\r\n/g, '\n'))
+  for (const m of s.matchAll(ESCAPE_UNIT)) {
+    const seq = m[0]
+    out += plain(s.slice(last, m.index))
+    out += SGR_ONLY.test(seq) || OSC8_CLOSE.has(seq) || trustedOsc.has(seq) ? seq : revealControls(seq)
+    last = m.index + seq.length
+  }
+  return out + plain(s.slice(last))
+}
+
+/**
  * The OSC 52 sequence that asks the terminal to put `text` on the system
  * clipboard. Only for text WE chose to copy (e.g. `/share`'s fixed invite); this
- * is exactly the escape `stripControlChars` keeps out of untrusted output.
+ * is exactly the escape `stripControlChars` keeps out of untrusted output, and the
+ * output filter lets this exact sequence through because Houston built it.
  */
 export function osc52Copy(text: string): string {
-  return `\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`
+  return trustOsc(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`)
 }
 
 /**
@@ -290,5 +364,5 @@ function hardSplit(word: string, width: number): string[] {
  * characters, or a crafted label could end the link early and inject its own.
  */
 export function osc8Link(url: string, text: string): string {
-  return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`
+  return `${trustOsc(`\x1b]8;;${url}\x1b\\`)}${text}\x1b]8;;\x1b\\`
 }

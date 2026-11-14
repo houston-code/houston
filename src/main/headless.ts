@@ -13,7 +13,7 @@ import { loadProjectConfig, parseProjectMcpServers } from './agent/projectConfig
 import { parseToolList } from './agent/toolScope'
 import { getTool } from './agent/tools'
 import { formatSchemaErrors, schemaProblems, validateJson, type JsonSchema } from '@shared/jsonSchema'
-import { stripControlChars } from './tui-wrap'
+import { stripControlChars, terminalText } from './tui-wrap'
 import { missingKeyHint } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { formatReceiptLines, type TurnReceipt } from '@shared/evidence'
@@ -1293,23 +1293,23 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           break
         case 'tool_start':
           t.finalText = ''
-          if (!opts.json) deps.err(`· ${e.name}\n`)
+          if (!opts.json) deps.err(`· ${terminalText(e.name, { lines: false })}\n`)
           break
         case 'tool_result':
           // Surface failures (successes are noise) so a script tailing stderr sees a
           // tool error instead of silence — mirrors the TUI's ✗ marker.
-          if (!opts.json && !e.ok) deps.err(`· ${e.name} failed\n`)
+          if (!opts.json && !e.ok) deps.err(`· ${terminalText(e.name, { lines: false })} failed\n`)
           break
         case 'retry':
           if (!opts.json)
             deps.err(
               e.throttle
                 ? `· ${throttleNotice(e.throttle, retryProgress(e))}\n`
-                : `· retrying (${retryProgress(e)})… ${e.message}\n`
+                : `· retrying (${retryProgress(e)})… ${terminalText(e.message)}\n`
             )
           break
         case 'model_fallback':
-          if (!opts.json) deps.err(`· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`)
+          if (!opts.json) deps.err(`· ${terminalText(`${e.from} unavailable, falling back to ${e.to}… ${e.reason}`)}\n`)
           break
         case 'usage':
           t.inTok += e.inputTokens
@@ -1350,7 +1350,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // in unattended runs instead of being rubber-stamped ('fail' also flips
           // the exit code so a script can tell the run hit a permission wall).
           if (opts.onApproval === 'allow') {
-            if (!opts.json) deps.err(`· auto-approving ${e.name}\n`)
+            if (!opts.json) deps.err(`· auto-approving ${terminalText(e.name, { lines: false })}\n`)
             // 'allow' is plain "Allow", which runs shell offline until the run has the
             // shell-network grant, and only --allow-shell-network gives that here.
             if (e.shellOffline && !notedOffline && !opts.json) {
@@ -1360,7 +1360,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
             deps.resolveApproval(e.runId, e.callId, 'allow')
           } else {
             if (!opts.json) {
-              deps.err(`· denying ${e.name} (no interactive user; pass --on-approval allow to permit gated calls)\n`)
+              deps.err(`· denying ${terminalText(e.name, { lines: false })} (no interactive user; pass --on-approval allow to permit gated calls)\n`)
             }
             if (opts.onApproval === 'fail') t.approvalDenied = true
             deps.resolveApproval(e.runId, e.callId, 'deny')
@@ -1418,7 +1418,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           break
         case 'error':
           t.errored = true
-          deps.err(`Error: ${e.message}\n`)
+          deps.err(`Error: ${terminalText(e.message)}\n`)
           break
         case 'done':
           if (!opts.json) {
@@ -1434,8 +1434,9 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // matching the read-only intent of the default policy. Re-run with --full-auto
           // (which isn't Plan mode, so this is never reached) to actually make changes.
           if (!opts.json) {
-            deps.out(`\n${e.plan.title}\n`)
-            if (e.plan.body) deps.out(`${e.plan.body}\n`)
+            // The plan is the model's text: printed for a reader, so without its control characters.
+            deps.out(`\n${terminalText(e.plan.title, { lines: false })}\n`)
+            if (e.plan.body) deps.out(`${terminalText(e.plan.body)}\n`)
             if (e.plan.readiness) {
               for (const line of formatReadinessLines(e.plan.readiness)) deps.err(`· ${stripControlChars(line)}\n`)
             }
@@ -1449,7 +1450,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension). Meta output, so stderr —
           // stdout stays the model's answer; --json already emitted the raw event.
-          if (!opts.json) deps.err(`· ${e.message}\n`)
+          if (!opts.json) deps.err(`· ${terminalText(e.message)}\n`)
           break
         case 'runtime_missing':
           // Meta output like a notice: stderr, so stdout stays the model's answer.
@@ -1462,23 +1463,23 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // how far along it is. stderr, like the other tool activity; --json already
           // emitted the raw event.
           const line = opts.json ? null : subagentLines.line(e)
-          if (line) deps.err(`·   ${'  '.repeat(line.depth - 1)}${line.text}\n`)
+          if (line) deps.err(`·   ${'  '.repeat(line.depth - 1)}${terminalText(line.text, { lines: false })}\n`)
           break
         }
         case 'tool_progress':
           // Live progress from a long-running tool (a multi-dimension review) — without
           // it the run reads as a stall between tool_start and its result. stderr, like
           // the other tool activity.
-          if (!opts.json && e.message.trim()) deps.err(`·   ${e.message.trim()}\n`)
+          if (!opts.json && e.message.trim()) deps.err(`·   ${terminalText(e.message, { lines: false }).trim()}\n`)
           break
         case 'subagent':
           // A nested subagent row (e.g. one review dimension) starting/finishing.
-          if (!opts.json) deps.err(`·   ${e.status === 'running' ? '▷' : e.status === 'done' ? '✓' : '✗'} ${e.label}\n`)
+          if (!opts.json) deps.err(`·   ${e.status === 'running' ? '▷' : e.status === 'done' ? '✓' : '✗'} ${terminalText(e.label, { lines: false })}\n`)
           break
         case 'review_finding': {
           // A review finding as it's raised, then its verdict. stderr, like the rows above.
           const line = opts.json ? null : printFinding(e.parentCallId, e.finding)
-          if (line) deps.err(`·     ${line}\n`)
+          if (line) deps.err(`·     ${terminalText(line, { lines: false })}\n`)
           break
         }
         case 'elicitation':
@@ -1488,7 +1489,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // calls; auto-accepting would send fabricated field values to an external
           // server as if the user typed them.
           if (!opts.json) {
-            deps.err(`· declining input request from MCP server "${e.serverId}" (no interactive user in headless mode)\n`)
+            deps.err(`· declining input request from MCP server "${terminalText(e.serverId, { lines: false })}" (no interactive user in headless mode)\n`)
           }
           deps.resolveElicitation(e.runId, e.elicitId, { action: 'decline' })
           break

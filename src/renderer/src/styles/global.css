@@ -4483,6 +4483,9 @@ button.finding__head:focus-visible,
   font-size: 0.85em;
   color: var(--text-dim);
 }
+.tool-row__approval-note--warn {
+  color: var(--warn, #d9a23a);
+}
 /* The optional "why not" that rides along with a denial, so the agent is told what
    to do instead. Full-width under the verdict buttons. */
 .tool-row__approval-reason {

