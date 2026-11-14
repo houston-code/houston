@@ -32,7 +32,9 @@ is closed at the approval layer instead. A command that can throw away work ther
 (`git reset --hard`, a forced `git clean`, `rm -r` of source, a forced or deleting
 push; `shellDiscardsWork` in
 [`src/main/agent/permissions.ts`](../src/main/agent/permissions.ts)) asks in every
-mode, full auto included, which is what lets a new install start in full auto where
+mode, full auto included, and an allow rule skips that only when it is exact for the
+command or names the destructive part (see `shellAllowCoversTripwires`). That is what
+lets a new install start in full auto where
 one of these backends is active. A command that destroys data outside the project
 through a server the sandbox doesn't confine (a database reset or drop over a local
 socket, a Docker volume, `terraform destroy`) asks the same way.

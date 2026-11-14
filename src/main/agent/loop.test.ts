@@ -5779,6 +5779,145 @@ describe('permission gates: batched sensitive reads and subagent calls', () => {
     expect(existsSync(join(ws, 'keep.txt'))).toBe(true)
   })
 
+  // A prefix rule (`rm`) is not consent to every command it matches: a
+  // writable subagent's command that discards work still asks unless the rule names it.
+  it("prompts for a writable subagent's discarding command a prefix allow merely matches", async () => {
+    h.sandboxed = true
+    h.settings.permissionRules = [{ action: 'allow', tool: 'run_shell', match: 'rm' }]
+    writeFileSync(join(ws, 'keep.txt'), 'keep me\n')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'tidy', prompt: 'go' } }),
+          callTurn({ id: 's1', name: 'run_shell', arguments: { command: 'rm -rf src keep.txt' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(approvalsOf(r).map((a) => a.callId)).toEqual(['d1.shell.1'])
+    expect(toolMessageFor(requests, 's1')).toContain('Denied by the user.')
+    expect(existsSync(join(ws, 'keep.txt'))).toBe(true)
+  })
+
+  /** A stand-in under the run_shell name that records each command instead of running it. */
+  const probeShell = (ran: string[]): ToolDef => ({
+    kind: 'shell',
+    summarize: () => 'probe run_shell',
+    schema: {
+      name: 'run_shell',
+      description: 'probe run_shell',
+      parameters: {
+        type: 'object',
+        properties: { command: { type: 'string' } },
+        required: ['command'],
+        additionalProperties: false
+      }
+    },
+    execute: async (a) => {
+      ran.push(String((a as { command?: string }).command))
+      return 'ok'
+    }
+  })
+
+  it('"Always allow" on `git push origin x` saves a prefix that never covers a forced push, even in full auto', async () => {
+    const ran: string[] = []
+    h.probeTools = [probeShell(ran)]
+    h.sandboxed = true
+    const shell = (id: string, command: string): ProviderStreamEvent[] =>
+      callTurn({ id, name: 'run_shell', arguments: { command } })
+    // First, in ask mode, the user picks "Always allow" on an ordinary push.
+    await run({
+      policy: 'ask',
+      provider: recording([shell('a1', 'git push origin x'), shell('a2', 'git push origin y'), finalText('done')], []),
+      onApproval: (id, decide) => decide(id === 'a1' ? 'rule-allow' : 'deny')
+    })
+    expect(h.addedRules).toEqual([{ action: 'allow', tool: 'run_shell', match: 'git push' }])
+    expect(ran).toEqual(['git push origin x', 'git push origin y'])
+    // Then, in full auto with that rule saved, a forced push still asks. "Always allow"
+    // on it saves that exact command (the prefix doesn't make it redundant), which then
+    // runs unasked, while another forced push still asks.
+    h.settings.permissionRules = [...(h.addedRules as PermissionRule[])]
+    h.addedRules = []
+    ran.length = 0
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          shell('s1', 'git push --force origin x'),
+          shell('s2', 'git push --force origin x'),
+          shell('s3', 'git push --force origin other'),
+          shell('s4', 'git push origin z'),
+          shell('s5', 'git diff --no-index /dev/null ~/.ssh/id_rsa'),
+          finalText('done')
+        ],
+        []
+      ),
+      onApproval: (id, decide) => decide(id === 's1' ? 'rule-allow' : 'deny')
+    })
+    expect(approvalsOf(r).map((a) => a.callId)).toEqual(['s1', 's3', 's5'])
+    expect(h.addedRules).toEqual([{ action: 'allow', tool: 'run_shell', match: 'git push --force origin x', exact: true }])
+    expect(ran).toEqual(['git push --force origin x', 'git push --force origin x', 'git push origin z'])
+  })
+
+  it('a user deny still refuses a target after an "Always allow" rule for it is prepended', async () => {
+    writeFileSync(join(ws, 'notes.txt'), 'original\n')
+    // The prepended allow sits first, as addPermissionRule saves it; the older deny wins.
+    h.settings.permissionRules = [
+      { action: 'allow', tool: 'write_file', match: 'notes.txt', exact: true },
+      { action: 'deny', tool: 'write_file', match: 'notes*' }
+    ]
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'w1', name: 'write_file', arguments: { path: 'notes.txt', content: 'clobbered\n' } }),
+          // The deny names write_file; it covers the other file-editing tools too.
+          callTurn({
+            id: 'e1',
+            name: 'edit_file',
+            arguments: { path: 'notes.txt', old_string: 'original', new_string: 'clobbered' }
+          }),
+          finalText('done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(approvalsOf(r)).toEqual([])
+    expect(toolMessageFor(requests, 'w1')).toBe('Denied by a permission rule.')
+    expect(toolMessageFor(requests, 'e1')).toBe('Denied by a permission rule.')
+    expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('original\n')
+  })
+
+  // The shell session keeps its working directory between calls, so after a `cd` out of
+  // the workspace every later command reads and writes relative to the outside, and
+  // asks until one moves back in. Runs the real shell.
+  it('asks for every command while the shell session sits outside the workspace', async () => {
+    h.sandboxed = true
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 's1', name: 'run_shell', arguments: { command: 'cd' } }),
+          callTurn({ id: 's2', name: 'run_shell', arguments: { command: 'cat x' } }),
+          callTurn({ id: 's3', name: 'run_shell', arguments: { command: `cd '${ws}'` } }),
+          callTurn({ id: 's4', name: 'run_shell', arguments: { command: 'echo back-inside' } }),
+          finalText('done')
+        ],
+        []
+      ),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(approvalsOf(r).map((a) => a.callId)).toEqual(['s1', 's2', 's3'])
+    expect(resultFor(r, 's4')?.ok).toBe(true)
+  }, 30_000)
+
   // Consent to a writable dispatch is consent to edit the project, not to overwrite a
   // credential file only the user can restore: same prompt as the main loop's.
   it("prompts for a writable subagent's write to .env, flagged as a sensitive write", async () => {

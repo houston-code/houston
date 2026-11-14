@@ -1,4 +1,5 @@
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
+import { resolve as resolveFsPath } from 'node:path'
 import type {
   AgentEvent,
   AgentRunRequest,
@@ -127,7 +128,7 @@ import {
   writePaths,
   writeTouchesUnknownPaths
 } from './readCache'
-import { createShellSession, shellCwdLabel } from './shell-session'
+import { createShellSession, shellCwdLabel, type ShellSession } from './shell-session'
 import { getMcpToolDefs, releaseMcpRun } from '../mcp/manager'
 import {
   MCP_LAZY_THRESHOLD,
@@ -168,6 +169,8 @@ import {
   permissionSubject,
   persistedRules,
   isSensitiveWrite,
+  shellAllowCoversTripwires,
+  shellCwdOutsideRoots,
   shellReferencesExternalPath,
   shellDiscardsWork
 } from './permissions'
@@ -1647,7 +1650,8 @@ export async function startRun(
     // outage budget (see RetryBudget).
     let providerReached = false
     const rules = await loadProjectRules(workspace)
-    // Permission-rule precedence, highest first (first match wins):
+    // Permission-rule precedence, highest first. A matching deny wins in any tier;
+    // otherwise the first matching allow or ask, in this order, decides:
     //   1. Admin managed policy — org-distributed, root-owned; deny/ask only.
     //   2. Project guardrails    — .houston/settings.json; deny/ask only.
     //   3. The user's own rules  — global Settings; allow/deny/ask.
@@ -2168,6 +2172,41 @@ export async function startRun(
     // (nothing launches until then) and closed in the run's `finally`.
     const browserBackend = browserBackendOrNull()
     if (browserBackend) browserSession = new BrowserSession(browserBackend)
+    // Whether a name a command gives is a file or directory where it runs (the session's
+    // cwd) or in a root, so `git checkout src` reads as restoring a path (see
+    // shellDiscardsWork). Best-effort and synchronous: it runs inside the gate.
+    const pathExistsFor =
+      (session: ShellSession) =>
+      (p: string): boolean =>
+        [session.cwd, ...roots].some((base) => {
+          try {
+            return existsSync(resolveFsPath(base, p))
+          } catch {
+            return false
+          }
+        })
+    // The tripwires one `run_shell` command sets off, judged where it will run, and the
+    // rule verdict the gate should act on. It leaves the workspace when it names a path
+    // outside it, or when the session's cwd (which carries over between calls) is
+    // already outside: then every relative path it names is too. It may throw away work
+    // (see shellDiscardsWork). An allow rule skips a tripwire only when it names it (see
+    // shellAllowCoversTripwires), never from a cwd outside the workspace, which no rule
+    // names; otherwise the verdict reads as no rule at all, so the tripwire prompts.
+    const shellTripwires = (
+      command: string,
+      session: ShellSession,
+      matched: PermissionRule['action'] | null
+    ): { escapes: boolean; discards: boolean; ruleAction: PermissionRule['action'] | null } => {
+      const pathExists = pathExistsFor(session)
+      const cwdOutside = shellCwdOutsideRoots(session.cwd, roots)
+      const escapes = cwdOutside || shellReferencesExternalPath(command, roots)
+      const discards = shellDiscardsWork(command, pathExists)
+      const uncovered =
+        matched === 'allow' &&
+        (escapes || discards) &&
+        (cwdOutside || !shellAllowCoversTripwires(permissionRules, command, roots, pathExists))
+      return { escapes, discards, ruleAction: uncovered ? null : matched }
+    }
     // Watches the roots' exec-capable git state across this run's shell commands,
     // its writable subagents' included (see gitGuard.ts).
     const gitGuard = new GitGuard(gitGuardRoots)
@@ -2277,8 +2316,9 @@ export async function startRun(
         // (see persistedRules). The rules and the dedupe use the run's roots, as the gate
         // does, so a `cd` out of the workspace is saved rather than dropped.
         const action = decision === 'rule-allow' ? 'allow' : 'deny'
-        for (const rule of persistedRules(action, toolName, execArgs, roots)) {
-          if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, rule.match, roots)) {
+        const pathExists = pathExistsFor(shellSession)
+        for (const rule of persistedRules(action, toolName, execArgs, roots, pathExists)) {
+          if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, rule.match, roots, pathExists)) {
             continue
           }
           addPermissionRule(rule)
@@ -2396,7 +2436,9 @@ export async function startRun(
     const noteUserRuleUse = (name: string, subject: string, action: PermissionRule['action']): void => {
       queueMicrotask(() => {
         try {
-          if (matchRule(permissionRules.slice(0, guardrailRuleCount), name, subject, roots) !== null) return
+          // A guardrail tier decided when it reaches the same verdict (a deny there wins
+          // outright; an allow or ask there comes first).
+          if (matchRule(permissionRules.slice(0, guardrailRuleCount), name, subject, roots) === action) return
           const userEnd = permissionRules.length - projectAllowCount
           for (let i = guardrailRuleCount; i < userEnd; i++) {
             if (matchRule([permissionRules[i]], name, subject, roots) === action) {
@@ -2535,28 +2577,27 @@ export async function startRun(
      *   to edit the project is not consent to overwrite what only the user can restore.
      */
     const gateSubagentLocal =
-      (callId: string) =>
+      (callId: string, session?: ShellSession) =>
       async (
         name: string,
         kind: ToolKind,
         gateArgs: Record<string, unknown>,
         runCall: () => Promise<string>
       ): Promise<string> => {
-        const ruleAction = matchRun(name, permissionSubject(name, gateArgs))
-        if (ruleAction === 'deny') return ruleDenialText(name, gateArgs)
+        const matched = matchRun(name, permissionSubject(name, gateArgs))
+        if (matched === 'deny') return ruleDenialText(name, gateArgs)
         const sensitiveRead = isSensitiveRead(kind, gateArgs)
-        const shellEscapesWorkspace =
-          kind === 'shell' &&
-          name === 'run_shell' &&
-          typeof gateArgs.command === 'string' &&
-          shellReferencesExternalPath(gateArgs.command, roots)
-        // A command that can throw away work in the project asks too: the dispatch is
-        // consent to edit, not to reset the tree or delete what the user hasn't committed.
-        const discardsWork =
-          kind === 'shell' &&
-          name === 'run_shell' &&
-          typeof gateArgs.command === 'string' &&
-          shellDiscardsWork(gateArgs.command)
+        // A command that leaves the workspace or can throw away work in the project asks
+        // too: the dispatch is consent to edit, not to reset the tree or delete what the
+        // user hasn't committed. Judged where the subagent's own shell sits (see
+        // shellTripwires), and an allow skips it only when it names the tripwire.
+        const trip =
+          kind === 'shell' && name === 'run_shell' && typeof gateArgs.command === 'string'
+            ? shellTripwires(gateArgs.command, session ?? shellSession, matched)
+            : null
+        const shellEscapesWorkspace = trip?.escapes === true
+        const discardsWork = trip?.discards === true
+        const ruleAction = trip ? trip.ruleAction : matched
         const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs)
         const mustApprove =
           kind === 'read'
@@ -2710,6 +2751,8 @@ export async function startRun(
       // What a writable agent's tools ran and changed, for the evidence note on its result.
       const ranCommands: DelegatedCommand[] = []
       const changedFiles: string[] = []
+      // The writable tier's own shell session (see below), which its gate reads the cwd of.
+      const subShellSession = writable ? createShellSession(workspace) : undefined
       const result = await runSubAgent({
         // Pinned to the run's configured provider, not the fallback route: a
         // dispatch's `model` override is validated against `req.providerId`'s
@@ -2733,7 +2776,7 @@ export async function startRun(
               writable: true,
               roots,
               checkpointRunId: runId,
-              shellSession: createShellSession(workspace),
+              shellSession: subShellSession,
               shellOutputMaxBytes: resolveShellOutputBudget(settings),
               // The run's guard, so a change a delegated command makes to git state is
               // caught like the parent's own; asked under a row of its own.
@@ -2762,7 +2805,7 @@ export async function startRun(
             }
           : {}),
         // Permission rules + the sensitive-read prompt on every local call, either tier.
-        gateLocal: gateSubagentLocal(callId),
+        gateLocal: gateSubagentLocal(callId, subShellSession),
         // Web access for either tier, every call gated per destination (the
         // subagent's shell stays offline regardless). getSecret/searchProvider let
         // web_search resolve its key; collectSecrets masks credentials on egress —
@@ -5111,19 +5154,18 @@ export async function startRun(
             // A permission rule can force-allow or force-ask; otherwise the policy
             // decides — folding in the honest sandbox status so unconfined shell on a
             // host without an enforceable sandbox is never silently auto-approved.
-            const shellEscapesWorkspace =
-              tool.kind === 'shell' &&
-              call.name === 'run_shell' &&
-              typeof execArgs.command === 'string' &&
-              shellReferencesExternalPath(execArgs.command, roots)
-            // A command that can throw away work in the project (git reset --hard, rm -r of
-            // source, a forced push) asks in every mode: shell side effects aren't
-            // checkpointed, so only the user can say the loss is fine.
-            const discardsWork =
-              tool.kind === 'shell' &&
-              call.name === 'run_shell' &&
-              typeof execArgs.command === 'string' &&
-              shellDiscardsWork(execArgs.command)
+            // A command that leaves the workspace, or that can throw away work in the
+            // project (git reset --hard, rm -r of source, a forced push), asks in every
+            // mode: shell side effects aren't checkpointed, so only the user can say the
+            // loss is fine. An allow rule skips that only when it names the tripwire
+            // (see shellTripwires): a `git push` prefix is not consent to force-push.
+            const trip =
+              tool.kind === 'shell' && call.name === 'run_shell' && typeof execArgs.command === 'string'
+                ? shellTripwires(execArgs.command, shellSession, execRuleAction)
+                : null
+            const shellEscapesWorkspace = trip?.escapes === true
+            const discardsWork = trip?.discards === true
+            const gateRuleAction = trip ? trip.ruleAction : execRuleAction
             // Reading a credential/secret file prompts even in full-auto (see
             // isSensitivePath): reads normally never prompt, so this is the one gate
             // that keeps a committed `.env` or private key from flowing into the
@@ -5171,7 +5213,7 @@ export async function startRun(
                 ? memoryTaintSource(messages, (n) => lookupTool(n)?.kind) !== null
                 : false
             const { mustApprove, unsandboxedShell } = decideApproval({
-              ruleAction: execRuleAction,
+              ruleAction: gateRuleAction,
               policy: run.policy,
               kind: tool.kind,
               override: kindOverride,

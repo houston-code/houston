@@ -182,7 +182,12 @@ for the *denied* path, not only the allowed one, and a security pass before the 
 - `src/main/agent/permissions.ts`: permission-rule matching. Subject and pattern are
   canonicalized per kind before comparison (paths anchored to the roots, URL authority
   lowercased, shell commands dequoted and `$'...'` decoded) so a re-spelling of a denied
-  subject cannot slip past a rule. An allow reads a shell command the other way: a
+  subject cannot slip past a rule. A matching deny wins wherever it sits in the list
+  (only allow and ask are first-match), and a deny or ask on one file-editing tool
+  covers all five. An allow skips the workspace-escape and discard tripwires only when
+  it is exact or its own text trips them (`shellAllowCoversTripwires`), so a saved
+  prefix like `git push` never approves `git push --force`. An allow reads a shell
+  command the other way: a
   quoted `*`, `~`, `$`, or space stays distinct from a bare one, and an empty `''` word
   from no word at all, so approving a literal never approves the expansion. Words split
   only on unquoted space, tab, and newline, as in bash: quoted or escaped whitespace is
