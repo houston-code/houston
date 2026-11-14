@@ -733,7 +733,8 @@ export interface AppSettings {
    * End-of-run verification gate (opt-in). When the model stops naturally after
    * modifying files, run {@link verifyCommand} and, if it fails, feed the output
    * back for a bounded number of self-correction passes before accepting done.
-   * Off by default and inert unless a command is configured.
+   * Off by default. With no command configured, a Full auto run uses the one the
+   * project's files suggest (`inferVerifyCommand`); other modes run nothing.
    */
   verifyOnStop?: boolean
   /**

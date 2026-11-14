@@ -7182,6 +7182,77 @@ describe('loop control — verification gate', () => {
     expect(types(r).at(-1)).toBe('done')
   })
 
+  describe('with no command set', () => {
+    const writePackage = (): void =>
+      writeFileSync(join(ws, 'package.json'), JSON.stringify({ scripts: { typecheck: 'tsc', test: 'vitest run' } }))
+
+    it('uses the command the project suggests in Full auto, and says so once', async () => {
+      writePackage()
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      const r = await withSettings({ verifyOnStop: true, verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto' })
+      )
+      expect(h.verifyRuns).toHaveLength(1)
+      expect(h.verifyRuns[0]).toMatchObject({ command: 'npm run typecheck && npm test', allowNetwork: false })
+      const notices = r.events.filter(
+        (e) => e.type === 'notice' && /Verifying with `npm run typecheck && npm test`/.test(e.message)
+      )
+      expect(notices).toHaveLength(1)
+      expect((notices[0] as { message: string }).message).toContain('package.json')
+    })
+
+    it('says so only once across several passes', async () => {
+      writePackage()
+      let stops = 0
+      const provider: Provider = {
+        async *streamChat() {
+          if (stops++ % 2 === 0) {
+            yield { type: 'tool_call', call: { id: `w${stops}`, name: 'write_file', arguments: { path: 'out.txt', content: `v${stops}` } } }
+            yield { type: 'done', stopReason: 'tool_use' }
+          } else {
+            yield { type: 'text', text: 'done' }
+            yield { type: 'done', stopReason: 'end_turn' }
+          }
+        }
+      }
+      h.verifyRunner = async () => ({ passed: false, output: 'still failing', aborted: false })
+      const r = await withSettings(
+        { verifyOnStop: true, verifyMaxPasses: 2, maxIterations: 40, stallDetection: false },
+        () => run({ provider, policy: 'full-auto' })
+      )
+      expect(h.verifyRuns).toHaveLength(2)
+      expect(r.events.filter((e) => e.type === 'notice' && /^Verifying with/.test(e.message))).toHaveLength(1)
+    })
+
+    it('runs nothing outside Full auto', async () => {
+      writePackage()
+      const r = await withSettings({ verifyOnStop: true, verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'auto-edit' })
+      )
+      expect(h.verifyRuns).toHaveLength(0)
+      expect(types(r)).not.toContain('verification')
+    })
+
+    it('runs nothing when the gate is off, or when the project suggests nothing', async () => {
+      writePackage()
+      await withSettings({ verifyOnStop: false }, () => run({ provider: writeThenStop(), policy: 'full-auto' }))
+      expect(h.verifyRuns).toHaveLength(0)
+      rmSync(join(ws, 'package.json'))
+      await withSettings({ verifyOnStop: true }, () => run({ provider: writeThenStop(), policy: 'full-auto' }))
+      expect(h.verifyRuns).toHaveLength(0)
+    })
+
+    it('keeps a command the user set over the inferred one, with no notice', async () => {
+      writePackage()
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      const r = await withSettings({ verifyOnStop: true, verifyCommand: 'make check', verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto' })
+      )
+      expect(h.verifyRuns[0]).toMatchObject({ command: 'make check' })
+      expect(r.events.some((e) => e.type === 'notice' && /^Verifying with/.test(e.message))).toBe(false)
+    })
+  })
+
   it('passes first time: emits a passed verification then done', async () => {
     h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
     const r = await withSettings(

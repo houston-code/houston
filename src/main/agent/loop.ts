@@ -239,6 +239,7 @@ import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skill
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
+import { inferVerifyCommand } from '../verifyInfer'
 import { formatPromptSnapshot, localDateStamp, resolvePromptSnapshot } from './promptSnapshot'
 import { memoryStore, type MemoryStore } from './memoryStore'
 import { buildMemoryIndex } from './memoryIndex'
@@ -326,6 +327,7 @@ import {
   shouldVerify,
   runVerification,
   verifyFailureMessage,
+  inferredVerifyNotice,
   resolveVerifyMaxPasses
 } from './verify-gate'
 
@@ -3407,8 +3409,22 @@ export async function startRun(
     // difference means the shell changed files. Outside a git repo only write-kind
     // calls arm it.
     let filesModified = false
+    // The command the gate runs: the user's own, or, when the gate is on with none set,
+    // the one the project's files suggest (package.json scripts, Cargo, Go, pytest).
+    // An inferred command runs only in Full auto, where shell commands already run
+    // without asking, and gets network only where the agent's own shell commands
+    // would; it is announced once, the first time it runs.
+    const userVerifyCommand = (settings.verifyCommand ?? '').trim()
+    const inferredVerify =
+      settings.verifyOnStop === true && userVerifyCommand === '' ? inferVerifyCommand(workspace) : null
+    const verifyCommandFor = (): { command: string; inferred: boolean } | null => {
+      if (userVerifyCommand) return { command: userVerifyCommand, inferred: false }
+      if (inferredVerify && run.policy === 'full-auto') return { command: inferredVerify.command, inferred: true }
+      return null
+    }
+    let inferredVerifyAnnounced = false
     const verifyGateConfigured =
-      settings.verifyOnStop === true && (settings.verifyCommand ?? '').trim() !== ''
+      settings.verifyOnStop === true && (userVerifyCommand !== '' || inferredVerify !== null)
     const treeAtStart = verifyGateConfigured ? await workingTreeFingerprint(workspace) : null
     let shellMayHaveEdited = false
     // Snapshots around shell commands (see shellEdits.ts) stop for the rest of the run
@@ -4263,11 +4279,13 @@ export async function startRun(
           const treeNow = await workingTreeFingerprint(workspace)
           if (treeNow !== null && treeNow !== treeAtStart) filesModified = true
         }
+        const verify = verifyCommandFor()
         if (
           stopReason === 'end_turn' &&
+          verify !== null &&
           shouldVerify({
             enabled: settings.verifyOnStop === true,
-            command: settings.verifyCommand,
+            command: verify.command,
             filesModified,
             passesRun: verifyPassesRun,
             maxPasses: verifyMaxPasses,
@@ -4277,17 +4295,24 @@ export async function startRun(
           })
         ) {
           verifyPassesRun += 1
+          if (verify.inferred && !inferredVerifyAnnounced && inferredVerify) {
+            inferredVerifyAnnounced = true
+            emit({ type: 'notice', message: inferredVerifyNotice(verify.command, inferredVerify.source) })
+          }
           const result = await runVerification({
-            command: settings.verifyCommand!,
+            command: verify.command,
             workspace,
             roots,
-            // The verify command is USER-authored (a settings field the agent can't
-            // change), not agent-authored, so it isn't part of the shell-exfiltration
-            // vector the shell-network consent guards. Keep its prior network behavior
-            // (full-auto, or an explicit shell-network grant) so a verify command that
-            // hits the network isn't silently starved in full-auto.
+            // A user-set verify command is USER-authored (a settings field the agent
+            // can't change), not agent-authored, so it isn't part of the
+            // shell-exfiltration vector the shell-network consent guards. Keep its prior
+            // network behavior (full-auto, or an explicit shell-network grant) so a
+            // verify command that hits the network isn't silently starved in full-auto.
+            // An inferred one runs scripts the project (and so the agent) can edit, so
+            // it gets network only on the agent's own shell-network grant.
             allowNetwork:
-              (run.policy === 'full-auto' || run.shellNetworkGranted) && !egressUnavailable,
+              (verify.inferred ? run.shellNetworkGranted : run.policy === 'full-auto' || run.shellNetworkGranted) &&
+              !egressUnavailable,
             // The user-authored verify command still egresses through the same
             // per-domain allowlist — the policy is about destinations, not authorship.
             egressProxy,
@@ -4299,11 +4324,11 @@ export async function startRun(
             return
           }
           emit({ type: 'verification', passed: result.passed })
-          run.evidence.recordGate(redact(settings.verifyCommand!), result.passed)
+          run.evidence.recordGate(redact(verify.command), result.passed)
           if (!result.passed) {
             // Push the failure feedback as a system note so the model sees it next
             // turn and the transcript shows it as Houston's, not the user's; then loop.
-            messages.push(systemNoteMessage(verifyFailureMessage(settings.verifyCommand!, result.output)))
+            messages.push(systemNoteMessage(verifyFailureMessage(verify.command, result.output)))
             persist(messages)
             continue
           }

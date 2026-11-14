@@ -1159,6 +1159,12 @@ files under the field: the `typecheck` and `test` scripts in `package.json` (run
 npm, pnpm, yarn, or bun by lockfile), `cargo test`, `go test ./...`, or `pytest`.
 **Use this command** fills the field; it doesn't turn verification on.
 
+With verification on and the field left empty, Houston uses the command it would
+suggest, but only in Full auto, where shell commands already run without asking. It
+says which command it is using the first time it runs one in a turn. That command
+gets network access only if you allowed the agent's own shell commands to use the
+network. In the other modes an empty field still means nothing runs.
+
 ### Watching a running turn
 
 - **Desktop:** the status bar shows how long the turn has run and the output tokens
