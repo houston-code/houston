@@ -32,8 +32,9 @@ import {
 import { throttleNotice } from '@shared/rateLimit'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
-import { agentTurn, commandTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
+import { agentTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
 import { builtinCommands, mergeCommands, parseSlashCommand, resolveCommand, type Command } from '@shared/commands'
+import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { modelDisplayName } from '@shared/models'
 import { limitNoticeText, runEndNoticeText, runEndRecords } from '@shared/runEnd'
@@ -1267,7 +1268,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   const runCommand = async (
     s: Session,
     line: string
-  ): Promise<{ kind: 'turn'; turn: InvokedTurn } | { kind: 'reply'; text: string } | null> => {
+  ): Promise<
+    { kind: 'turn'; turn: InvokedTurn; run?: PreparedCommandRun } | { kind: 'reply'; text: string } | null
+  > => {
     const parsed = parseSlashCommand(line)
     if (!parsed || !/^[\w:-]+$/.test(parsed.name)) return null
     const commands = acpCommands(await loadCustomCommands(s.cwd))
@@ -1348,9 +1351,15 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         return turn ? { kind: 'turn', turn } : { kind: 'reply', text: 'Use /agent <name> <task>. /agents lists them.' }
       }
       default: {
-        // A template command: first-party (`/review`, `/init`) or the workspace's own.
-        const turn = commandTurn(cmd, arg, line)
-        return turn ? { kind: 'turn', turn } : null
+        // A template command: first-party (`/review`, `/init`), the workspace's own, or
+        // a skill's `/<skill-name>`, with whatever its frontmatter asks of this one turn.
+        const prepared = await prepareCommandRun(cmd, arg, line, {
+          settings,
+          trusted: await workspaceTrusted(s.cwd, settings.trustedFolders).catch(() => false)
+        })
+        if (!prepared) return null
+        if (!prepared.ok) return { kind: 'reply', text: prepared.error }
+        return { kind: 'turn', turn: prepared.run.turn, run: prepared.run }
       }
     }
   }
@@ -1394,6 +1403,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     if (busy(s)) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
     const text = command ? command.turn.text : typed
     const invokedAs = command ? command.turn.invokedAs : undefined
+    // What the command's frontmatter applied or ignored, said before the turn runs.
+    const run = command?.run
+    if (run?.notes.length) update(s.id, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `${run.notes.join('\n')}\n\n` } })
     const prior = messagesOf(s)
 
     const runId = newId()
@@ -1412,10 +1424,12 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       runId,
       conversationId: s.id,
       workspace: s.cwd,
-      providerId: s.providerId,
-      model: s.model,
+      // A command's model and effort apply to this turn only; the session keeps its own.
+      providerId: run?.model?.providerId ?? s.providerId,
+      model: run?.model?.model ?? s.model,
       approvalPolicy: s.mode,
-      ...(s.effort ? { reasoningEffort: s.effort } : {}),
+      ...(run?.effort ? { reasoningEffort: run.effort } : s.effort ? { reasoningEffort: s.effort } : {}),
+      ...(run?.turnAllowRules?.length ? { turnAllowRules: run.turnAllowRules } : {}),
       ...(deps.maxIterations !== undefined ? { overrides: { maxIterations: deps.maxIterations } } : {}),
       messages,
       // Per-run servers, like the headless --mcp-config: merged as `run-<id>`, values

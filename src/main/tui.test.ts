@@ -8,6 +8,7 @@ import type { AppSettings, Hook, McpServerConfig, ProviderConfig } from '@shared
 import { catalogForPlatform } from '@shared/provider-catalog'
 import type {
   AgentEvent,
+  AgentRunRequest,
   ChatMessage,
   ConversationSettingsPatch,
   ElicitationResult,
@@ -105,6 +106,7 @@ import {
   promptFolderTrust,
   runTrustCommand,
   summarizeElevated,
+  elevatedSource,
   parseSettingsAction,
   resolveHookEventInput,
   buildHook,
@@ -122,6 +124,7 @@ import {
 } from './tui'
 import { drivePicker, type PickerKey, type PickerOutcome, type PickerSpec } from './tui-picker'
 import { COMMANDS } from './tui-complete'
+import { skillCommandTemplate, skillCommands } from './agent/skills'
 
 /** A full ProviderConfig from a partial — fills kind/label/builtIn for /login tests. */
 const prov = (over: Partial<ProviderConfig>): ProviderConfig =>
@@ -1280,6 +1283,7 @@ interface Recorder {
     policy: string
     reasoningEffort?: string
     messages: ChatMessage[]
+    turnAllowRules?: AgentRunRequest['turnAllowRules']
   }>
   approvals: Array<[string, string, string]>
   questions: Array<[string, string, string]>
@@ -1309,7 +1313,8 @@ function deps(
         model: req.model,
         policy: req.approvalPolicy,
         reasoningEffort: req.reasoningEffort,
-        messages: req.messages.map((m) => ({ ...m }))
+        messages: req.messages.map((m) => ({ ...m })),
+        ...(req.turnAllowRules ? { turnAllowRules: req.turnAllowRules } : {})
       })
       for (const e of events) send({ ...e, runId: req.runId } as AgentEvent)
       onMessages?.(onMessagesEcho ? onMessagesEcho(req) : req.messages)
@@ -2794,6 +2799,82 @@ describe('runTui', () => {
     ])
   })
 
+  it('runs a skill as /<skill> [task] through the command list, and a built-in keeps its name', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.commands = async () =>
+      skillCommands([
+        { name: 'pdf', description: 'Work with PDFs', path: '.houston/skills/pdf/SKILL.md' },
+        { name: 'hidden', description: 'x', path: '.houston/skills/hidden/SKILL.md', userInvocable: false },
+        // A built-in's name stays the built-in's.
+        { name: 'cost', description: 'not this one', path: '.houston/skills/cost/SKILL.md' }
+      ])
+    const t = fakeIo(['/pdf merge a and b', '/hidden', '/cost', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages[0]).toEqual({
+      role: 'user',
+      content: `${skillCommandTemplate('pdf')}\n\nmerge a and b`,
+      invokedAs: { kind: 'command', label: '/pdf', detail: 'Work with PDFs', typed: '/pdf merge a and b' }
+    })
+    expect(t.text()).toContain('· /pdf: Work with PDFs')
+    expect(t.text()).toMatch(/Unknown command|unknown command/i)
+  })
+
+  it("runs a custom command's turn on its frontmatter model and effort, without changing the chat's", async () => {
+    const { d, rec } = deps(
+      [{ runId: 'x', type: 'done', stopReason: 'end_turn' }],
+      {
+        providers: [
+          { id: 'anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }, { id: 'haiku' }], defaultModel: 'claude' }
+        ] as unknown as AppSettings['providers']
+      }
+    )
+    d.commands = async () => [
+      { name: 'quick', description: 'Quick look', template: 'Look at $ARGUMENTS', source: 'project', model: 'haiku', effort: 'low' }
+    ]
+    const t = fakeIo(['/quick the logs', 'and now this', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0]).toMatchObject({ providerId: 'anthropic', model: 'haiku', reasoningEffort: 'low' })
+    expect(rec.runs[0].messages[0].content).toBe('Look at the logs')
+    expect(t.text()).toContain('· /quick runs on anthropic/haiku for this turn')
+    expect(t.text()).toContain('· /quick thinks at low effort for this turn')
+    // The next turn is back on the chat's own model.
+    expect(rec.runs[1].model).toBe('claude')
+    expect(rec.runs[1].reasoningEffort).not.toBe('low')
+  })
+
+  it("pre-approves a user command's allowed-tools for its turn only, and ignores an untrusted project's", async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.commands = async () => [
+      { name: 'mine', description: 'Mine', template: 'Mine', source: 'user', allowedTools: 'read_file, run_shell(npm test*)' },
+      { name: 'theirs', description: 'Theirs', template: 'Theirs', source: 'project', allowedTools: 'run_shell' }
+    ]
+    const t = fakeIo(['/mine', '/theirs', 'plain', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0].turnAllowRules).toEqual([
+      { action: 'allow', tool: 'read_file', match: '*' },
+      { action: 'allow', tool: 'run_shell', match: 'npm test*' }
+    ])
+    expect(t.text()).toContain('· pre-approved for this turn: read_file, run_shell(npm test*)')
+    expect(rec.runs[1].turnAllowRules).toBeUndefined()
+    expect(t.text()).toContain("· ignoring allowed-tools in /theirs: this folder isn't trusted")
+    expect(rec.runs[2].turnAllowRules).toBeUndefined()
+  })
+
+  it("dispatches a command with agent: to that subagent", async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.commands = async () => [{ name: 'audit', description: 'Audit', template: 'Audit $ARGUMENTS', source: 'project', agent: 'auditor' }]
+    const t = fakeIo(['/audit deps', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0].messages[0].content).toMatch(/^Use the `auditor` subagent/)
+    expect(rec.runs[0].messages[0].content).toContain('Audit deps')
+    expect(rec.runs[0].messages[0].invokedAs).toMatchObject({ label: '/audit', typed: '/audit deps' })
+  })
+
   it('/share copies the invite over OSC 52 and prints it', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const t = fakeIo(['/share', null])
@@ -4081,6 +4162,14 @@ describe('summarizeElevated', () => {
       '2 allow rules, 1 MCP server'
     )
     expect(summarizeElevated({ allowRules: [], hooks: [1], mcpServers: [] })).toBe('1 hook')
+  })
+
+  it('counts commands that pre-approve tools, and names where the config lives', () => {
+    const onlyCommands = { allowRules: [], hooks: [], mcpServers: [], commands: [1] }
+    expect(summarizeElevated(onlyCommands)).toBe('1 command that pre-approves tools')
+    expect(elevatedSource(onlyCommands)).toBe('.houston/commands')
+    expect(elevatedSource({ ...onlyCommands, hooks: [1] })).toBe('.houston/settings.json and .houston/commands')
+    expect(elevatedSource({ allowRules: [1], hooks: [], mcpServers: [] })).toBe('.houston/settings.json')
   })
 })
 

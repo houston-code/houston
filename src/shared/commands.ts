@@ -3,6 +3,7 @@
  * commands are prompt templates loaded from `.houston/commands/*.md` in the
  * workspace. Pure helpers live here so main + renderer share one definition.
  */
+import type { ReasoningEffort } from './agent'
 
 export interface Command {
   name: string
@@ -17,10 +18,29 @@ export interface Command {
   autoRun?: boolean
   /** Menu heading the command is listed under; custom commands have none. */
   group?: CommandGroup
-  /** What may follow the name, shown dimmed beside it (for example `[name]`). */
+  /**
+   * What may follow the name, shown dimmed beside it (for example `[name]`). A
+   * custom command sets it with its `argument-hint` frontmatter.
+   */
   args?: string
+  /**
+   * Where a custom command was loaded from: the workspace's `.houston/commands`
+   * (`project`, untrusted unless the folder is) or the user's `~/.houston/commands`.
+   */
+  source?: 'project' | 'user'
   /** `/<skill-name>`: runs a skill (listed under its own heading). */
   skill?: boolean
+  /** Custom-command frontmatter `model`: the model this one turn runs on. */
+  model?: string
+  /** Custom-command frontmatter `effort`: the thinking effort for this one turn. */
+  effort?: ReasoningEffort
+  /** Custom-command frontmatter `agent`: dispatch the expanded prompt to this subagent. */
+  agent?: string
+  /**
+   * Custom-command frontmatter `allowed-tools`, as written: tools pre-approved for
+   * this one turn, in permission-rule syntax (`read_file`, `run_shell(git status*)`).
+   */
+  allowedTools?: string
 }
 
 /** Menu headings, in the order the menu shows them. Custom commands come last. */
@@ -190,6 +210,16 @@ export function agentInvocationPrompt(name: string, task: string): string {
 export function mergeCommands(builtin: Command[], custom: Command[]): Command[] {
   const names = new Set(builtin.map((c) => c.name.toLowerCase()))
   return [...builtin, ...custom.filter((c) => !names.has(c.name.toLowerCase()))]
+}
+
+/**
+ * Whether a custom command sets a frontmatter option that changes how its turn runs
+ * (model, effort, agent, allowed-tools). The desktop composer can't express those by
+ * filling the message box, so such a command runs straight away, prepared by the
+ * main process.
+ */
+export function commandHasRunOptions(cmd: Command): boolean {
+  return Boolean(cmd.model || cmd.effort || cmd.agent || cmd.allowedTools)
 }
 
 /**

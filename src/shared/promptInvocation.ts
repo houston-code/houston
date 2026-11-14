@@ -37,7 +37,18 @@ export interface PromptInvocation {
 export interface InvokedTurn {
   text: string
   invokedAs: PromptInvocation
+  /**
+   * Desktop only: the main process's token for a custom command's per-turn options
+   * (model, effort, pre-approved tools), handed back when the turn is sent. The
+   * options themselves never cross into the renderer, so it can't widen them.
+   */
+  grant?: string
 }
+
+/** What preparing a custom command in the main process gave the desktop app. */
+export type CommandPrepareResult =
+  | { ok: true; turn: InvokedTurn; notes: string[] }
+  | { ok: false; error: string }
 
 /** Caps on the record at the IPC boundary. It's display text, never instructions. */
 const MAX_LABEL = 120
@@ -82,11 +93,17 @@ export function invocationText(inv: PromptInvocation): string {
  * A template slash command run as a turn: `/review` in either client, or a custom
  * `.houston/commands` command the terminal runs directly. `typed` is the line the
  * user entered. Null when `cmd` has no template (an action command, not a turn).
+ *
+ * `expanded` is the template already expanded by the caller (a custom command's
+ * `@file` and shell context are filled in by the main process); without it the
+ * template is expanded here. A command whose frontmatter names an `agent` becomes
+ * the same dispatch `/agent <name>` sends, with the expanded prompt as the task.
  */
-export function commandTurn(cmd: Command, args: string, typed: string): InvokedTurn | null {
+export function commandTurn(cmd: Command, args: string, typed: string, expanded?: string): InvokedTurn | null {
   if (cmd.template === undefined) return null
+  const body = expanded ?? expandTemplate(cmd.template, args)
   return {
-    text: expandTemplate(cmd.template, args),
+    text: cmd.agent ? agentInvocationPrompt(cmd.agent, body) : body,
     invokedAs: {
       kind: 'command',
       label: `/${cmd.name}`,

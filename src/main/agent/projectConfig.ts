@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { HOOK_EVENTS, type Hook, type McpServerConfig, type PermissionRule } from '@shared/types'
 import { sanitizeServerId } from '@shared/mcp'
 import { parseTightenOnlyRules } from './permissions'
+import { loadProjectCommands } from './commands'
 
 /**
  * Per-project config from `.houston/settings.json` in the workspace.
@@ -41,6 +42,18 @@ export interface ProjectElevatedConfig {
   allowRules: PermissionRule[]
   hooks: Hook[]
   mcpServers: McpServerConfig[]
+  /**
+   * The project's `.houston/commands` that ask for more than a prompt: tools
+   * pre-approved for their turn (`allowed-tools`). Part of the fingerprint, so a
+   * pull that adds or widens one drops a trusted folder back to asking.
+   */
+  commands?: ProjectCommandGrant[]
+}
+
+/** One project command's elevating frontmatter, as the trust fingerprint sees it. */
+export interface ProjectCommandGrant {
+  name: string
+  allowedTools: string
 }
 
 /**
@@ -190,10 +203,29 @@ export function mergeRunMcpServers(
  * when the project elevates nothing (then there is nothing to consent to).
  */
 export function elevatedConfigHash(elevated: ProjectElevatedConfig): string {
-  if (!elevated.allowRules.length && !elevated.hooks.length && !elevated.mcpServers.length) return ''
-  return createHash('sha256')
-    .update(JSON.stringify([elevated.allowRules, elevated.hooks, elevated.mcpServers]))
-    .digest('hex')
+  const commands = elevated.commands ?? []
+  if (!elevated.allowRules.length && !elevated.hooks.length && !elevated.mcpServers.length && !commands.length) {
+    return ''
+  }
+  // Commands join the hashed tuple only when there are any, so a folder trusted
+  // before commands were fingerprinted keeps its trust until one appears.
+  const parts: unknown[] = [elevated.allowRules, elevated.hooks, elevated.mcpServers]
+  if (commands.length) parts.push(commands)
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
+}
+
+/** The project's commands that carry elevating frontmatter, sorted by name. */
+export async function projectCommandGrants(workspace: string): Promise<ProjectCommandGrant[]> {
+  let commands
+  try {
+    commands = await loadProjectCommands(workspace)
+  } catch {
+    return []
+  }
+  return commands
+    .filter((c) => c.allowedTools)
+    .map((c) => ({ name: c.name, allowedTools: c.allowedTools ?? '' }))
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 export interface ProjectConfig {
@@ -213,10 +245,12 @@ export async function loadProjectConfig(workspace: string): Promise<ProjectConfi
   } catch {
     raw = undefined // missing or malformed — no project config
   }
+  const commands = await projectCommandGrants(workspace)
   const elevated: ProjectElevatedConfig = {
     allowRules: parseProjectAllowRules(raw),
     hooks: parseProjectHooks(raw),
-    mcpServers: parseProjectMcpServers(raw)
+    mcpServers: parseProjectMcpServers(raw),
+    ...(commands.length ? { commands } : {})
   }
   return {
     permissionRules: parseProjectRules(raw),

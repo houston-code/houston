@@ -9,6 +9,7 @@ import {
   loadSkills,
   loadSkillBody,
   resolveSkillInstructions,
+  skillCommands,
   type Skill
 } from './skills'
 import { HOUSTON_GUIDE } from './guide-content'
@@ -200,6 +201,29 @@ describe('loadSkills — bundled resources', () => {
       const skills = await loadSkills(ws)
       const out = await resolveSkillInstructions(ws, skills, 'plain')
       expect(out).toBe('Just instructions.')
+    })
+  })
+})
+
+describe('skills offered as slash commands', () => {
+  it('reads user-invocable: false, which keeps a skill out of the menu but loadable', async () => {
+    await withWorkspace(async (ws) => {
+      for (const [name, extra] of [['open', ''], ['hidden', 'user-invocable: false\n'], ['shown', 'user-invocable: true\n']] as const) {
+        mkdirSync(join(ws, '.houston/skills', name), { recursive: true })
+        writeFileSync(join(ws, '.houston/skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: d\n${extra}---\nbody`)
+      }
+      const home = mkdtempSync(join(tmpdir(), 'houston-skills-home-'))
+      try {
+        const skills = await loadSkills(ws, home)
+        expect(skills.find((s) => s.name === 'hidden')?.userInvocable).toBe(false)
+        expect(skills.find((s) => s.name === 'open')?.userInvocable).toBeUndefined()
+        expect(skillCommands(skills).map((c) => c.name)).toEqual(['open', 'shown'])
+        expect(skillCommands(skills)[0]).toMatchObject({ args: '[task]', skill: true })
+        // The model can still load it.
+        expect(await resolveSkillInstructions(ws, skills, 'hidden')).toBe('body')
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
     })
   })
 })

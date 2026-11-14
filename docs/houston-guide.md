@@ -651,10 +651,12 @@ either way.
 
 Type `/` in the composer for the command menu. In the terminal it appears under what
 you're typing, filters as you go, and lists what each command does, including any
-this project defines in `.houston/commands`.
+this project defines in `.houston/commands` and its skills. In the terminal, `/` also
+completes mid-message, after a space (Tab fills in the name); a command still runs
+only when the message starts with it.
 
 In the desktop app, a bare `/` lists every command under headings (Chat, Modes,
-Review and undo, Extend, Setup, then your own). Typing more finds commands by any
+Review and undo, Extend, Setup, then your own commands, then Skills). Typing more finds commands by any
 part of the name, an alias, a word of the description, or the letters in order:
 `/wind` finds `/rewind`, `/think` finds `/reasoning`, `/sandbox` finds `/doctor`.
 Commands that take something after the name show it beside the name, such as
@@ -759,9 +761,35 @@ Any Markdown file at `.houston/commands/<name>.md` becomes a `/name` command.
 ```markdown
 ---
 description: Ship the branch to staging
+argument-hint: <environment> [version]
+model: claude-haiku-5-5
+effort: low
+allowed-tools: run_shell(git status*), run_shell(git log*), read_file
 ---
 Deploy the current branch and report what happened.
 ```
+
+#### Frontmatter options
+
+| Key | Effect |
+| --- | --- |
+| `description` | what the command does, shown in the menus |
+| `argument-hint` | what may follow the name, shown beside it in the menus (like `/model [name]`) |
+| `model` | the model this one turn runs on: `provider/model`, a model id, or a provider (its default model). The chat keeps its own model; one that isn't set up, or has no API key, is skipped with a note |
+| `effort` | the thinking effort for this one turn: `off`, `low`, `medium`, `high` or `xhigh` |
+| `agent` | hand the expanded prompt to that `.houston/agents` subagent, the same as `/agent <name> <prompt>` |
+| `allowed-tools` | tools pre-approved for this one turn, comma-separated, in permission-rule syntax: a tool name (`read_file`) or a tool with a pattern (`run_shell(npm test*)`). They rank below every saved rule, so your own deny and ask rules still win, and the checks that ask in every mode (credential files, commands that discard work) still ask |
+
+When a command sets any of these, a dim line says what applies to the turn. In the
+desktop app such a command runs straight away rather than filling the message box,
+and waits for a running turn to end.
+
+**Trust:** a project's commands come from the repository. In a folder you haven't
+trusted (see Trusted folders), Houston ignores a project command's `allowed-tools`
+and says so; its `model`, `effort` and `agent` still apply, since every tool call
+still goes through your rules and the approval policy. Trusting the folder covers its
+commands' `allowed-tools`, and a change to them asks again. Commands in
+`~/.houston/commands` are yours and apply in full.
 
 ## The terminal composer
 
@@ -1981,7 +2009,9 @@ untrusted repo can never auto-approve anything.
 
 The same project file can also define `allow` rules, `hooks`, and `mcpServers`. Those
 *elevate* (they auto-approve matching actions or run processes as you), so Houston
-ignores them until you explicitly trust the folder.
+ignores them until you explicitly trust the folder. A project command in
+`.houston/commands` whose frontmatter pre-approves tools (`allowed-tools`) elevates
+the same way, and counts toward the same decision.
 
 - **How you're asked:** the desktop app shows a banner above the composer, and the
   interactive terminal asks at session start (Trust / Not now / Never).
@@ -2059,10 +2089,12 @@ in `.claude/skills` aren't read directly; import them in Settings instead.
   agent the first time it reads or edits a matching file in the conversation. A
   pattern without a `/` matches the file name in any folder.
 
-**Run one yourself** with `/<skill-name>` in the desktop app or the terminal, followed
-by anything you want to add (`/pdf-tools split report.pdf`). Skills are listed under
-their own heading in the slash menu. A custom command or a built-in with the same
-name wins.
+**Run one yourself** with `/<skill-name>` in the desktop app, the terminal or an
+editor, followed by anything you want to add (`/pdf-tools split report.pdf`). It asks
+the agent to load that skill and apply it. Skills are listed under their own heading
+in the slash menu, after your own commands. A custom command or a built-in with the
+same name wins. Frontmatter `user-invocable: false` keeps a skill out of the menu; the
+agent can still load it.
 
 **How it's loaded (progressive disclosure):**
 

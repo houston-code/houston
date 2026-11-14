@@ -6,7 +6,8 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { AppSettings, ApprovalPolicy } from '@shared/types'
 import { limitNoticeText } from '@shared/runEnd'
-import { REVIEW_TEMPLATE } from '@shared/commands'
+import { REVIEW_TEMPLATE, mergeCommands } from '@shared/commands'
+import { skillCommandTemplate, skillCommands, type Skill } from './agent/skills'
 import {
   BLOCKING_EVENT_TYPES,
   type AgentEvent,
@@ -783,6 +784,71 @@ describe('ACP server: slash commands, config options and session info', () => {
     await h.call('session/prompt', { sessionId, prompt: text('/nosuchcommand please') })
     expect(h.loop.requests[3].messages.at(-1)).toEqual({ role: 'user', content: '/tmp/out.log is empty, why?' })
     expect(h.loop.requests[4].messages.at(-1)).toEqual({ role: 'user', content: '/nosuchcommand please' })
+    await h.end()
+  })
+
+  it('offers the skills after the commands and runs one as an invoked turn', async () => {
+    const skill = (name: string, description: string, extra: Partial<Skill> = {}): Skill => ({
+      name,
+      description,
+      path: `.houston/skills/${name}/SKILL.md`,
+      ...extra
+    })
+    const h = harness({
+      run: done,
+      deps: {
+        // What loadSlashCommands hands the server: the custom commands, then the skills.
+        commands: async () =>
+          mergeCommands(
+            [{ name: 'deploy', description: 'Ship it', template: 'Deploy' }],
+            skillCommands([
+              skill('pdf', 'Work with PDFs'),
+              skill('hidden', 'x', { userInvocable: false }),
+              skill('deploy', 'shadowed by the command')
+            ])
+          )
+      }
+    })
+    const sessionId = await ready(h)
+    const cmds = await commandsOf(h, sessionId)
+    const names = cmds.map((c) => c.name)
+    expect(names.indexOf('pdf')).toBeGreaterThan(names.indexOf('deploy'))
+    expect(names).not.toContain('hidden')
+    expect(names.filter((n) => n === 'deploy')).toHaveLength(1)
+    expect(cmds.find((c) => c.name === 'pdf')).toEqual({ name: 'pdf', description: 'Work with PDFs', input: { hint: '[task]' } })
+    await h.call('session/prompt', { sessionId, prompt: text('/pdf merge them') })
+    expect(h.loop.requests[0].messages.at(-1)).toEqual(
+      expect.objectContaining({
+        content: `${skillCommandTemplate('pdf')}\n\nmerge them`,
+        invokedAs: expect.objectContaining({ label: '/pdf', detail: 'Work with PDFs' })
+      })
+    )
+    await h.end()
+  })
+
+  it("applies a command's effort and allowed-tools to its turn only, and says what it applied", async () => {
+    const h = harness({
+      run: done,
+      deps: {
+        commands: async () => [
+          { name: 'quick', description: 'Quick', template: 'Quick look', source: 'user', effort: 'low', allowedTools: 'glob' },
+          { name: 'theirs', description: 'Theirs', template: 'Theirs', source: 'project', allowedTools: 'run_shell' }
+        ]
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('/quick') })
+    expect(h.loop.requests[0]).toMatchObject({
+      reasoningEffort: 'low',
+      turnAllowRules: [{ action: 'allow', tool: 'glob', match: '*' }]
+    })
+    expect(replies(h, sessionId).join('')).toContain('pre-approved for this turn: glob')
+    await h.call('session/prompt', { sessionId, prompt: text('/theirs') })
+    expect(h.loop.requests[1].turnAllowRules).toBeUndefined()
+    expect(replies(h, sessionId).join('')).toContain("ignoring allowed-tools in /theirs: this folder isn't trusted")
+    await h.call('session/prompt', { sessionId, prompt: text('plain') })
+    expect(h.loop.requests[2].reasoningEffort).not.toBe('low')
+    expect(h.loop.requests[2].turnAllowRules).toBeUndefined()
     await h.end()
   })
 

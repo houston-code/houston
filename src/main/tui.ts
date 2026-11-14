@@ -18,6 +18,7 @@ import {
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
+import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
 import { HOOK_TIMEOUT_MAX_S, HOOK_TIMEOUT_MIN_S, HOOK_TIMEOUT_MS } from './agent/hooks'
 import { appendUserTurn } from './agent/userTurn'
 import {
@@ -36,10 +37,12 @@ import { formatReadinessLines, planVerifySteps, readinessOk } from '@shared/plan
 import { diffStat, type FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
+  commandHasRunOptions,
   mergeCommands,
   resolveCommand,
   type Command
 } from '@shared/commands'
+import { resolveModelArg } from '@shared/modelArg'
 import {
   agentTurn,
   commandTurn,
@@ -1617,7 +1620,14 @@ export type SlashResult =
    * A template command (custom `.houston/commands` or first-party `/review`) or
    * `/agent`: run the prompt as a turn, recorded as the command the user typed.
    */
-  | ({ kind: 'prompt' } & InvokedTurn)
+  | ({
+      kind: 'prompt'
+      /**
+       * A custom command whose frontmatter changes how its turn runs (model, effort,
+       * agent, allowed-tools): the driver prepares it in full before sending.
+       */
+      command?: { cmd: Command; args: string }
+    } & InvokedTurn)
   | { kind: 'unknown'; name: string }
   | { kind: 'not-a-command' }
 
@@ -1626,7 +1636,10 @@ export type SlashResult =
  * never the prompt behind it (that's what the model reads, not the user).
  */
 export function invocationEcho(inv: PromptInvocation): string {
-  return inv.detail ? `· ${inv.label}: ${inv.detail}` : `· running ${inv.label}`
+  // The label and detail can come from a repository's own files (a command's or a
+  // skill's description), so they never reach the terminal with escape sequences.
+  const label = stripControlChars(inv.label)
+  return inv.detail ? `· ${label}: ${stripControlChars(inv.detail)}` : `· running ${label}`
 }
 
 /**
@@ -1806,6 +1819,7 @@ export function parseSlashCommand(
       // custom `.houston/commands`). A match runs its expanded prompt as a turn.
       const cmd = resolveCommand(commands, name)
       const turn = cmd ? commandTurn(cmd, arg, line) : null
+      if (turn && cmd && commandHasRunOptions(cmd)) return { kind: 'prompt', ...turn, command: { cmd, args: arg } }
       if (turn) return { kind: 'prompt', ...turn }
       return { kind: 'unknown', name }
     }
@@ -1823,32 +1837,7 @@ export function splitDefaultFlag(arg: string): { rest: string; asDefault: boolea
   return { rest: words.filter((w) => w !== '--default').join(' '), asDefault }
 }
 
-/**
- * Resolve a `/model` argument into a provider + model. Accepts `providerId`,
- * `providerId/model`, or a bare model id that a configured provider offers.
- */
-export function resolveModelArg(
-  arg: string,
-  settings: AppSettings
-): { providerId: string; model: string } | null {
-  const slash = arg.indexOf('/')
-  if (slash >= 0) {
-    const providerId = arg.slice(0, slash)
-    const model = arg.slice(slash + 1)
-    const p = settings.providers.find((pr) => pr.id === providerId)
-    if (p && model) return { providerId, model }
-    return null
-  }
-  const byProvider = settings.providers.find((p) => p.id === arg)
-  if (byProvider) {
-    const model = byProvider.defaultModel ?? byProvider.models[0]?.id
-    if (model) return { providerId: byProvider.id, model }
-    return null
-  }
-  const owner = settings.providers.find((p) => p.models.some((m) => m.id === arg))
-  if (owner) return { providerId: owner.id, model: arg }
-  return null
-}
+export { resolveModelArg }
 
 export const HELP_TEXT = [
   'Commands:',
@@ -3091,14 +3080,28 @@ export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {
  * id (like headless), so nothing is persisted and turns can't collide.
  */
 /** Pluralized summary of a project's elevating config, e.g. "2 hooks, 1 MCP server". */
-export function summarizeElevated(c: { allowRules: unknown[]; hooks: unknown[]; mcpServers: unknown[] }): string {
+export function summarizeElevated(c: {
+  allowRules: unknown[]
+  hooks: unknown[]
+  mcpServers: unknown[]
+  commands?: unknown[]
+}): string {
+  const commands = c.commands?.length ?? 0
   return [
     c.allowRules.length ? `${c.allowRules.length} allow rule${c.allowRules.length === 1 ? '' : 's'}` : '',
     c.hooks.length ? `${c.hooks.length} hook${c.hooks.length === 1 ? '' : 's'}` : '',
-    c.mcpServers.length ? `${c.mcpServers.length} MCP server${c.mcpServers.length === 1 ? '' : 's'}` : ''
+    c.mcpServers.length ? `${c.mcpServers.length} MCP server${c.mcpServers.length === 1 ? '' : 's'}` : '',
+    commands ? `${commands} command${commands === 1 ? '' : 's'} that pre-approve${commands === 1 ? 's' : ''} tools` : ''
   ]
     .filter(Boolean)
     .join(', ')
+}
+
+/** Which of the project's files define its elevating config, for the trust prompt. */
+export function elevatedSource(c: { allowRules: unknown[]; hooks: unknown[]; mcpServers: unknown[]; commands?: unknown[] }): string {
+  const settings = c.allowRules.length > 0 || c.hooks.length > 0 || c.mcpServers.length > 0
+  if (!c.commands?.length) return '.houston/settings.json'
+  return settings ? '.houston/settings.json and .houston/commands' : '.houston/commands'
 }
 
 /**
@@ -3126,9 +3129,9 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
 
   deps.io.out(
     `\n${paint(state === 'changed' ? 'This project’s trusted configuration changed.' : 'This project asks for extra permissions.', 'cyan')}\n` +
-      `  Its .houston/settings.json defines ${summarizeElevated(cfg.elevated)}.\n` +
+      `  It defines ${summarizeElevated(cfg.elevated)} (in ${elevatedSource(cfg.elevated)}).\n` +
       paint(
-        '  Hooks and MCP servers run as you, and allow rules auto-approve matching actions.\n' +
+        '  Hooks and MCP servers run as you, and allow rules and pre-approving commands auto-approve matching actions.\n' +
           '  Only trust folders whose authors you trust; until then Houston ignores them.\n',
         'dim'
       )
@@ -3454,7 +3457,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // command once the turn ends.
   deps.io.onSteer?.((text) => {
     if (!activeRunId) return false
-    const slash = parseSlashCommand(text.trim(), deps.getSettings(), customCommands)
+    const slash = parseSlashCommand(text.trim(), deps.getSettings(), templateCommands)
     if (slash.kind !== 'not-a-command' && slash.kind !== 'unknown') return false
     return deps.steerRun?.(activeRunId, text) ?? false
   })
@@ -3899,6 +3902,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Set when this turn's text is a prompt Houston wrote for a command (/review,
     // /agent): saved on the message so every client shows the command, not the prompt.
     let invokedAs: PromptInvocation | undefined
+    // A custom command's per-turn model, effort and pre-approved tools (its
+    // frontmatter): this one turn only, never saved as the chat's settings.
+    let turnRun: PreparedCommandRun | null = null
     // Persist composer submissions (commands included) for cross-restart recall;
     // approval/question answers go through a different read and aren't saved.
     if (!wakeTurn) deps.persistHistory?.(text)
@@ -4747,9 +4753,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // run its expanded prompt as a normal turn. Fall through — don't `continue`.
         // The typed line is already on screen; one dim line says what it runs, and
         // the prompt itself stays out of the scrollback.
+        if (result.command) {
+          const prepared = await prepareCommandRun(result.command.cmd, result.command.args, text, {
+            settings: deps.getSettings(),
+            trusted: await workspaceTrusted(opts.cwd, deps.getSettings().trustedFolders).catch(() => false)
+          })
+          if (prepared && !prepared.ok) {
+            deps.io.out(paint(`· ${stripControlChars(prepared.error)}\n`, 'yellow'))
+            continue
+          }
+          if (prepared) {
+            turnRun = prepared.run
+            result = { kind: 'prompt', ...prepared.run.turn }
+          }
+        }
         text = result.text
         invokedAs = result.invokedAs
         deps.io.out(paint(`${invocationEcho(result.invokedAs)}\n`, 'dim'))
+        for (const note of turnRun?.notes ?? []) deps.io.out(paint(`· ${stripControlChars(note)}\n`, 'dim'))
       } else {
         // 'handled' — informational commands print here where the state lives.
         handleInfoCommand(
@@ -4825,10 +4846,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       runId,
       ...(conversationId ? { conversationId } : {}),
       workspace: opts.cwd,
-      providerId,
-      model,
+      providerId: turnRun?.model?.providerId ?? providerId,
+      model: turnRun?.model?.model ?? model,
       approvalPolicy: policy,
-      reasoningEffort: effort,
+      reasoningEffort: turnRun?.effort ?? effort,
+      ...(turnRun?.turnAllowRules?.length ? { turnAllowRules: turnRun.turnAllowRules } : {}),
       messages,
       // show_images results print as clickable file links (see renderImageLinks).
       imageLinks: true,

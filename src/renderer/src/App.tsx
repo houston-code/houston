@@ -866,7 +866,7 @@ export default function App(): JSX.Element {
   // Start a turn immediately with the given text/images, creating a conversation
   // first if this is the very first message — in a fresh worktree when set up.
   const sendNow = useCallback(
-    async (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation) => {
+    async (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation, commandGrant?: string) => {
       if (!settings?.selected || !workspace) return
       let convId = currentId
       if (!convId) {
@@ -915,7 +915,8 @@ export default function App(): JSX.Element {
             providerId: settings.selected.providerId,
             model: settings.selected.model,
             approvalPolicy: settings.approvalPolicy,
-            reasoningEffort: settings.reasoningEffort
+            reasoningEffort: settings.reasoningEffort,
+            ...(commandGrant ? { commandGrant } : {})
           })
           if (!started) giveBackText(conv.id, text, images)
           void refreshConversations()
@@ -937,7 +938,8 @@ export default function App(): JSX.Element {
         providerId: settings.selected.providerId,
         model: settings.selected.model,
         approvalPolicy: settings.approvalPolicy,
-        reasoningEffort: settings.reasoningEffort
+        reasoningEffort: settings.reasoningEffort,
+        ...(commandGrant ? { commandGrant } : {})
       })
       void refreshConversations()
     },
@@ -2053,8 +2055,14 @@ export default function App(): JSX.Element {
   }, [chat])
 
   const dispatch = useCallback(
-    (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation) => {
-      // Defer messages typed mid-run; main combines and sends them when it ends.
+    (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation, commandGrant?: string) => {
+      // Defer messages typed mid-run; main combines and sends them when it ends. (A
+      // command with per-turn options never queues: the composer holds it until the
+      // turn ends, and main refuses one that races a run.)
+      if (chat.running && commandGrant) {
+        chat.notify('That command runs once the current turn ends. Send it again then.', 'error')
+        return
+      }
       if (chat.running && settings?.selected) {
         queue.enqueue({
           text,
@@ -2065,9 +2073,9 @@ export default function App(): JSX.Element {
           approvalPolicy: settings.approvalPolicy,
           reasoningEffort: settings.reasoningEffort
         })
-      } else void sendNow(text, images, invokedAs)
+      } else void sendNow(text, images, invokedAs, commandGrant)
     },
-    [chat.running, settings, queue, sendNow]
+    [chat, settings, queue, sendNow]
   )
 
   // ---- Rewind ----
@@ -2288,9 +2296,30 @@ export default function App(): JSX.Element {
   const onInvoke = useCallback(
     (turn: InvokedTurn) =>
       void sendAfterEdit(turn.invokedAs.typed ?? turn.text, undefined, () =>
-        dispatch(turn.text, undefined, turn.invokedAs)
+        dispatch(turn.text, undefined, turn.invokedAs, turn.grant)
       ),
     [dispatch, sendAfterEdit]
+  )
+
+  // A custom command whose frontmatter sets its turn's model, effort, agent or tools:
+  // main reads it from disk and decides what this folder's trust allows, then the
+  // turn goes out like any invoked one, carrying main's token for those options.
+  const onRunCommand = useCallback(
+    (cmd: Command, args: string, typed: string) => {
+      if (!workspace) return
+      void window.api
+        .prepareCommand(workspace, cmd.name, args, typed)
+        .then((res) => {
+          if (!res.ok) {
+            chat.notify(res.error, 'error')
+            return
+          }
+          if (res.notes.length) chat.notify(res.notes.join('. ').concat('.'))
+          onInvoke(res.turn)
+        })
+        .catch(() => chat.notify(`Couldn't run /${cmd.name}.`, 'error'))
+    },
+    [workspace, chat, onInvoke]
   )
 
   // The project card's "Write one with /init": the same turn as typing /init.
@@ -3778,6 +3807,7 @@ export default function App(): JSX.Element {
             onSend={onSend}
             onShellEscape={runShellEscape}
             onInvoke={onInvoke}
+            onRunCommand={onRunCommand}
             onSteer={onSteer}
             answering={openQuestion !== null}
             onSaveMemory={onSaveMemory}
