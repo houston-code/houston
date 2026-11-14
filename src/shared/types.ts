@@ -753,6 +753,13 @@ export interface AppSettings {
    */
   stallDetection?: boolean
   /**
+   * When the model ends a turn after making edits and Houston's record of the turn
+   * shows a gap (open todo items, no passing check after the last change, a failed
+   * last test run, a todo marked done with nothing behind it, a loosened test), send
+   * it one note listing them before it finishes. On by default.
+   */
+  doneEvidenceNote?: boolean
+  /**
    * End-of-run verification gate (opt-in). When the model stops naturally after
    * modifying files, run {@link verifyCommand} and, if it fails, feed the output
    * back for a bounded number of self-correction passes before accepting done.

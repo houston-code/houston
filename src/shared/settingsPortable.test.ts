@@ -128,6 +128,7 @@ describe('import checks per preference', () => {
     ['maxIterationsCeiling', 200, 0],
     ['costCeilingUsd', 2.5, Number.NaN],
     ['stallDetection', true, 1],
+    ['doneEvidenceNote', false, 'no'],
     ['verifyOnStop', true, 'yes'],
     ['verifyCommand', 'npm test', ['npm']],
     ['subagentHistoryMb', 16, 5000],

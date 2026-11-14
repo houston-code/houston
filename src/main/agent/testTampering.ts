@@ -174,6 +174,9 @@ export function detectTestEdits(files: FileChange[]): TestEdit[] {
     }
     if (f.before !== null && now.asserts < was.asserts && dropped('asserts')) {
       edits.push({ path: f.path, kind: 'asserts', detail: `${plural(now.asserts, 'assertion')}, down from ${was.asserts}` })
+    } else if (f.before !== null && now.cases < was.cases && dropped('cases')) {
+      // A removed test whose assertions lived in a shared helper drops no assertion here.
+      edits.push({ path: f.path, kind: 'cases', detail: `${plural(now.cases, 'test')}, down from ${was.cases}` })
     }
   }
 

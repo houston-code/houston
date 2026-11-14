@@ -580,6 +580,20 @@ export function LoopControlSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
       <label className="field field--checkbox">
         <input
           type="checkbox"
+          checked={settings.doneEvidenceNote !== false}
+          onChange={(e) =>
+            setSettings((s) => ({ ...s, doneEvidenceNote: e.target.checked }))
+          }
+        />
+        <span>
+          Before the model finishes after changing files, tell it once what Houston&apos;s
+          record of the turn shows is still open: unfinished todo items, no passing check
+          since the last change, a failed last test run, or a loosened test. On by default.
+        </span>
+      </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
           checked={settings.verifyOnStop ?? false}
           onChange={(e) =>
             setSettings((s) => ({ ...s, verifyOnStop: e.target.checked }))

@@ -851,7 +851,8 @@ receipt.
   green.
 - **Test edits to review.** Edits the agent's file tools made that loosen a test: a
   deleted test file, an added skip or focus marker (`.skip(`, `.only(`, `xit(`,
-  `@pytest.mark.skip`, `t.Skip(`, `#[ignore]`), fewer assertions in a test file, a
+  `@pytest.mark.skip`, `t.Skip(`, `#[ignore]`), fewer assertions or fewer tests in a
+  test file, a
   `package.json` test script that now always passes (`|| true`, `--passWithNoTests`), or
   a test runner config (vitest, jest, pytest) that changed which tests run. Houston
   compares each file with how it was before the turn, so a test moved to another file
@@ -875,6 +876,23 @@ before the last change, and the agent is told to run it on the final code.
 
 Items about writing something ("Write tests for the API") never need a run behind
 them.
+
+### Before it finishes
+
+When the agent ends a turn after changing files, Houston checks its own record of the
+turn and, if something is still open, tells the agent once before it finishes:
+
+- todo items from this turn's list that are still pending or in progress
+- no test, typecheck, build, or lint run that passed after the last code change (a
+  change to prose only, such as a README, doesn't need one)
+- a last test run that failed
+- a todo marked done that claims a check nothing backs
+- test edits to review (listed above)
+
+The agent then closes the gap or says in its reply why it can't (no test suite, a check
+only you can run). It's one note per turn, built from what already ran, with no extra
+commands. Nothing is sent when there is no gap. Turn it off with **Check before
+finishing** in Settings (Loop control), or `"doneEvidenceNote": false` in settings.
 
 ### An accepted plan's progress
 
