@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { version as PKG_VERSION } from '../../../package.json'
 import { MAX_MCP_MESSAGE_CHARS } from './sse-client'
-import { McpClient, type SpawnFn } from './client'
+import { McpClient, parseMcpPromptList, parseMcpResourceList, parseMcpToolList, type SpawnFn } from './client'
 import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
 
 interface ToolDecl {
@@ -35,6 +35,16 @@ function fakeServer(tools: ToolDecl[], callResult: (params: unknown) => unknown)
   const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
   return (() => child) as unknown as SpawnFn
 }
+
+describe('2025-11-25 list metadata', () => {
+  it('accepts icons and dotted tool names, and keeps no icon URL', () => {
+    const icons = [{ src: 'https://example.com/i.png', mimeType: 'image/png', sizes: ['48x48'] }]
+    const tools = parseMcpToolList({ tools: [{ name: 'files.read', title: 'Read', icons, inputSchema: { type: 'object' } }] })
+    expect(tools).toEqual([{ name: 'files.read', inputSchema: { type: 'object' } }])
+    expect(parseMcpResourceList({ resources: [{ uri: 'file:///a', name: 'a', icons }] })).toEqual([{ uri: 'file:///a', name: 'a' }])
+    expect(JSON.stringify(parseMcpPromptList({ prompts: [{ name: 'p', icons }] }))).not.toContain('example.com')
+  })
+})
 
 describe('McpClient (fake stdio server)', () => {
   it('launches a Windows .cmd shim (npx) through cmd.exe with its arguments intact', async () => {

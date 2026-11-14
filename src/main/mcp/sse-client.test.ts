@@ -22,6 +22,16 @@ describe('parseSseEvents', () => {
     expect(rest).toBe('')
   })
 
+  it('reads id and retry, keeps an id-only priming event, and ignores an id holding NUL', () => {
+    const { events } = parseSseEvents('id: 7\ndata:\n\nid: e-8\nretry: 1500\n\nid: bad\u0000id\ndata: {"a":1}\n\nretry: soon\ndata: x\n\n')
+    expect(events).toEqual([
+      { event: 'message', data: '', id: '7' },
+      { event: 'message', data: '', id: 'e-8', retry: 1500 },
+      { event: 'message', data: '{"a":1}' },
+      { event: 'message', data: 'x' }
+    ])
+  })
+
   it('joins multi-line data and keeps the unterminated remainder', () => {
     const { events, rest } = parseSseEvents('data: line1\ndata: line2\n\ndata: partial')
     expect(events).toEqual([{ event: 'message', data: 'line1\nline2' }])

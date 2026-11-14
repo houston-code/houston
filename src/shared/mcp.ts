@@ -60,6 +60,24 @@ export function parseHeaderLines(text: string): Record<string, string> {
 // ---- Elicitation (server asks the user for input mid-call) ----
 
 /**
+ * The allowed values of a single-select enum property, in either shape the spec
+ * defines: a plain `enum` array, or (since 2025-11-25) a titled `oneOf`/`anyOf` list
+ * of `{ const, title }` options. Only string values count; anything else is []
+ * (the field is then a plain string input).
+ */
+function elicitationEnumValues(p: Record<string, unknown>): string[] {
+  if (Array.isArray(p.enum)) return p.enum.filter((v): v is string => typeof v === 'string')
+  const options = Array.isArray(p.oneOf) ? p.oneOf : Array.isArray(p.anyOf) ? p.anyOf : null
+  if (!options) return []
+  const values: string[] = []
+  for (const o of options) {
+    const c = o && typeof o === 'object' ? (o as { const?: unknown }).const : undefined
+    if (typeof c === 'string') values.push(c)
+  }
+  return values
+}
+
+/**
  * Parse an elicitation `requestedSchema` (the MCP spec's flat object-of-primitives
  * subset of JSON Schema) into renderable field descriptors. Defensive at the trust
  * boundary: a missing/foreign schema yields [] (a message-only confirmation), and
@@ -74,7 +92,7 @@ export function parseElicitationFields(schema: unknown): ElicitationField[] {
   const fields: ElicitationField[] = []
   for (const [name, raw] of Object.entries(props as Record<string, unknown>)) {
     const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
-    const enumValues = Array.isArray(p.enum) ? p.enum.filter((v) => typeof v === 'string') : []
+    const enumValues = elicitationEnumValues(p)
     const kind: ElicitationField['kind'] = enumValues.length
       ? 'enum'
       : p.type === 'number' || p.type === 'integer' || p.type === 'boolean'
