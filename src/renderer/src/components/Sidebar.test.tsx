@@ -103,7 +103,10 @@ describe('Sidebar — expanded rendering', () => {
     render(<Sidebar {...props} />)
 
     const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
-    expect(alpha).toHaveAttribute('tabindex', '0')
+    const beta = screen.getByText('Beta').closest('.conv') as HTMLElement
+    // One Tab stop for the list: the open chat. The other rows are reached by arrow keys.
+    expect(beta).toHaveAttribute('tabindex', '0')
+    expect(alpha).toHaveAttribute('tabindex', '-1')
     // Dispatched on the row itself, so the handler's target === currentTarget guard passes.
     fireEvent.keyDown(alpha, { key: 'Enter' })
     expect(props.onSelect).toHaveBeenCalledWith('a')
@@ -1496,5 +1499,68 @@ describe('Sidebar right-click menu', () => {
     const row = screen.getByText('Alpha').closest('.conv') as HTMLElement
     fireEvent.contextMenu(row, { clientX: 0, clientY: 0 })
     expect(screen.getByRole('menu', { name: 'Actions for Alpha' })).toBeInTheDocument()
+  })
+})
+
+describe('Sidebar keyboard navigation', () => {
+  it('moves between chat rows with Up, Down, Home and End, nested chats included', () => {
+    const props = baseProps({
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha', updatedAt: 4 }),
+        makeConv({ id: 'b', title: 'Beta', updatedAt: 3 }),
+        makeConv({ id: 'k', title: 'Kid', updatedAt: 2, spawnedFrom: { conversationId: 'b', title: 'Beta' } }),
+        makeConv({ id: 'c', title: 'Gamma', updatedAt: 1 })
+      ],
+      currentId: null
+    })
+    render(<Sidebar {...props} />)
+    const rows = [...document.querySelectorAll<HTMLElement>('.sidebar__list [data-conv-id]')]
+    expect(rows.map((r) => r.dataset.convId)).toEqual(['a', 'b', 'k', 'c'])
+    // With no chat open the first row is the one Tab stop.
+    expect(rows.filter((r) => r.tabIndex === 0)).toEqual([rows[0]])
+
+    rows[0].focus()
+    fireEvent.keyDown(rows[0], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rows[1])
+    expect(rows[1]).toHaveAttribute('tabindex', '0')
+    expect(rows[0]).toHaveAttribute('tabindex', '-1')
+    fireEvent.keyDown(rows[1], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rows[2])
+    fireEvent.keyDown(rows[2], { key: 'End' })
+    expect(document.activeElement).toBe(rows[3])
+    fireEvent.keyDown(rows[3], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rows[3])
+    fireEvent.keyDown(rows[3], { key: 'Home' })
+    expect(document.activeElement).toBe(rows[0])
+    fireEvent.keyDown(rows[0], { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(rows[0])
+    // Moving focus doesn't open a chat; Enter does.
+    expect(props.onSelect).not.toHaveBeenCalled()
+  })
+
+  it('skips spawned chats that are folded away', () => {
+    const props = baseProps({
+      conversations: [
+        makeConv({ id: 'b', title: 'Beta', updatedAt: 3 }),
+        makeConv({ id: 'k', title: 'Kid', updatedAt: 2, spawnedFrom: { conversationId: 'b', title: 'Beta' } }),
+        makeConv({ id: 'c', title: 'Gamma', updatedAt: 1 })
+      ],
+      collapsedParents: new Set(['b'])
+    })
+    render(<Sidebar {...props} />)
+    const rows = [...document.querySelectorAll<HTMLElement>('.sidebar__list [data-conv-id]')]
+    expect(rows.map((r) => r.dataset.convId)).toEqual(['b', 'c'])
+    rows[0].focus()
+    fireEvent.keyDown(rows[0], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rows[1])
+  })
+
+  it('leaves arrow keys alone outside a row', () => {
+    const props = baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' }), makeConv({ id: 'b', title: 'Beta' })] })
+    render(<Sidebar {...props} />)
+    const search = screen.getByLabelText('Search chats')
+    search.focus()
+    fireEvent.keyDown(search, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(search)
   })
 })
