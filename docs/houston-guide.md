@@ -322,6 +322,13 @@ and cost as usage.
   chat, so reopening it later starts in that mode, as in the terminal.
 - **Model and reasoning effort** are session options the editor can show as pickers.
   A change applies from the next prompt and is saved on the chat.
+- **Launch flags** set defaults for clients that never change them (a benchmark
+  runner, a CI job): `--approval <policy>` or `--full-auto` sets the mode new
+  sessions start in, `--effort <level>` their reasoning effort, and `--max-turns <n>`
+  a hard step cap on every prompt, for example
+  `houston --acp --full-auto --max-turns 1000`.
+- **Token usage**: each prompt's reply carries the turn's token totals (input,
+  output, and cached input), alongside the running cost.
 - **Slash commands** the editor can offer: `/review`, `/init`, `/compact`,
   `/agent <name> <task>`, `/plan`, `/ask`, `/auto`, `/full`, `/approval [mode]`,
   `/model [name]`, `/reasoning [level]`, `/skills`, `/agents` and `/help`, plus the

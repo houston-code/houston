@@ -59,6 +59,7 @@ Usage:
   houston -p "<prompt>" [options]      one-shot run; assistant text on stdout (also --prompt)
   houston -p - [options] < task.md     one-shot run with the prompt read from stdin
   houston --acp                        serve the Agent Client Protocol on stdio, for editors
+                                       (--approval, --effort, --max-turns set its defaults)
 
   houston providers [...]              manage model providers and their API keys
   houston open [dir]                   open a folder in the Houston desktop app
@@ -77,8 +78,8 @@ Options:
                         --on-approval allow)
   --json                (-p) machine-readable: an init line, one JSON event per
                         line, then a {"type":"result",...} summary line
-  --effort <level>      (-p) reasoning effort for this run: off | low | medium | high | xhigh
-  --max-turns <n>       (-p) hard cap on model steps for this run
+  --effort <level>      (-p, --acp) reasoning effort for this run: off | low | medium | high | xhigh
+  --max-turns <n>       (-p, --acp) hard cap on model steps for each turn
   --max-cost <usd>      (-p) tell the agent to wrap up once the run costs this much
   --verify <command>    (-p) after the agent edits, run this check and send failures back
   --no-memory           (-p) run without the memories saved in earlier sessions
