@@ -1061,3 +1061,46 @@ describe('fork from a message', () => {
     expect(screen.queryByRole('button', { name: 'Fork from here' })).toBeNull()
   })
 })
+
+describe('Transcript for screen readers', () => {
+  const noop = (): void => {}
+  const view = (items: DisplayItem[], announceReplies?: boolean) =>
+    render(
+      <Transcript
+        items={items}
+        onApprove={noop}
+        onAnswer={noop}
+        onElicit={noop}
+        {...(announceReplies !== undefined ? { announceReplies } : {})}
+      />
+    )
+  const live = (container: HTMLElement): string =>
+    container.querySelector('[aria-live="polite"]')?.textContent ?? ''
+
+  it('is a labelled log that leaves announcing to the polite region', () => {
+    view([userItem(), assistantItem()])
+    const log = screen.getByRole('log', { name: 'Conversation' })
+    expect(log).toHaveAttribute('aria-live', 'off')
+  })
+
+  it('makes each message an article with a heading naming who wrote it', () => {
+    view([userItem(), assistantItem({ at: '2026-11-14T15:42:00' }), userItem({ id: 'u2', text: 'again' })])
+    const articles = screen.getAllByRole('article')
+    expect(articles).toHaveLength(3)
+    const time = new Date('2026-11-14T15:42:00').toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    expect(articles.map((a) => within(a).getByRole('heading').textContent)).toEqual(['You', `Houston, ${time}`, 'You'])
+  })
+
+  it('says only that a reply is ready, unless reading replies is on', () => {
+    const off = view([userItem(), assistantItem({ text: 'It is **fixed**.' })])
+    expect(live(off.container)).toBe('Response ready.')
+    off.unmount()
+    const on = view([userItem(), assistantItem({ text: 'It is **fixed**.' })], true)
+    expect(live(on.container)).toBe('Houston replied: It is fixed.')
+  })
+
+  it('names a failed tool when reading replies is on', () => {
+    const { container } = view([userItem(), toolItem({ status: 'error', name: 'run_command' })], true)
+    expect(live(container)).toBe('run_command failed.')
+  })
+})
