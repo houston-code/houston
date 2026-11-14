@@ -16,6 +16,7 @@ import {
   turnStatsByReply,
   MAX_LIVE_OUTPUT,
   reduceEvent,
+  type AssistantItem,
   type DisplayItem,
   type NoticeItem,
   type PlanItem,
@@ -372,6 +373,20 @@ describe('reduceEvent — retry', () => {
     expect((items[0] as NoticeItem).text).toBe('⟳ Connection issue: tried 1 more time, then stopped.')
   })
 
+  it('settles the notice when the user stops the run mid-retry', () => {
+    let items: DisplayItem[] = []
+    for (const n of [1, 2]) items = reduceEvent(items, retry(n))
+    items = reduceEvent(items, { runId: 'r', type: 'done', stopReason: 'aborted' } as AgentEvent)
+    const notices = items.filter((i): i is NoticeItem => i.kind === 'notice')
+    expect(notices.map((n) => [n.tone, n.text])).toEqual([
+      ['info', '⟳ Connection issue: tried 2 more times.'],
+      ['info', 'Stopped.']
+    ])
+    expect(notices[0].retry).toBeUndefined()
+    const once = reduceEvent(reduceEvent([], retry(1)), { runId: 'r', type: 'done', stopReason: 'aborted' } as AgentEvent)
+    expect((once[0] as NoticeItem).text).toBe('⟳ Connection issue: tried 1 more time.')
+  })
+
   it('leaves an earlier retry notice alone when an unrelated error follows other output', () => {
     let items = reduceEvent([], retry(1))
     items = reduceEvent(items, { runId: 'r', type: 'text', delta: 'recovered' })
@@ -416,6 +431,13 @@ describe('reduceEvent — turn_discarded', () => {
     ])
     expect(assistants(items)).toEqual([['The answer is 42.', undefined]])
     expect(items.map((i) => i.kind)).toEqual(['notice', 'assistant'])
+  })
+
+  it('keeps when the reply was written on the part that stays', () => {
+    const items = replay([text('First half, '), text('second ha'), discarded(9, 0), retry])
+    const reply = items.find((i): i is AssistantItem => i.kind === 'assistant')
+    expect(reply?.text).toBe('First half, ')
+    expect(reply?.at).toEqual(expect.any(String))
   })
 
   it('takes back only the discarded tail of a bubble a continuation was extending', () => {

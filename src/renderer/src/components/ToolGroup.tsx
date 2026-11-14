@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
 import { cachedImageDataUrl } from '../lib/imageUrl'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -147,18 +147,55 @@ const GLYPH: Record<Exclude<ToolItem['status'], 'running'>, string> = {
   stopped: '⊘'
 }
 
+/**
+ * What each status mark says to a screen reader, in place of the symbol. Keyed by
+ * name so a status without its own words still reads as itself.
+ */
+const STATUS_WORDS: Record<string, string> = {
+  'awaiting-approval': 'waiting for approval',
+  running: 'running',
+  done: 'done',
+  error: 'failed',
+  denied: 'denied',
+  // An approval the run was stopped in front of.
+  stopped: 'not run'
+}
+
+/**
+ * A row's status mark. Each one is an image labelled with its status in words, so a
+ * screen reader says "done" or "failed" rather than the symbol's name.
+ */
 function StatusGlyph({ status, short }: { status: ToolItem['status']; short?: string }): JSX.Element {
-  if (status === 'running') return <span className="tool-row__spinner" aria-label="running" />
+  if (status === 'running') return <span className="tool-row__spinner" role="img" aria-label="running" />
   // A dispatch that came back cut short or empty: the call worked, but its report is not
   // a whole answer, so it gets a warning instead of the check.
   if (short && status === 'done') {
     return (
-      <span className="tool-row__glyph tool-row__glyph--warn" title={short} aria-label={short}>
+      <span className="tool-row__glyph tool-row__glyph--warn" title={short} role="img" aria-label={short}>
         !
       </span>
     )
   }
-  return <span className={`tool-row__glyph tool-row__glyph--${status}`}>{GLYPH[status]}</span>
+  return (
+    <span
+      className={`tool-row__glyph tool-row__glyph--${status}`}
+      role="img"
+      aria-label={STATUS_WORDS[status] ?? status}
+    >
+      {GLYPH[status]}
+    </span>
+  )
+}
+
+/** A todo's or sweep item's state in words, after its text, for screen readers. */
+const TODO_WORDS: Record<Todo['status'], string> = { pending: '', in_progress: ' (in progress)', completed: ' (done)' }
+const SWEEP_WORDS: Record<SweepItemStatus, string> = {
+  pending: '',
+  in_progress: ' (in progress)',
+  pushed: ' (pushed)',
+  pr_open: ' (PR open)',
+  done: ' (done)',
+  failed: ' (failed)'
 }
 
 /**
@@ -258,7 +295,11 @@ function FindingRow({ f, running }: { f: ReviewFinding; running: boolean }): JSX
         {f.location && <span className="finding__loc">{f.location}</span>}
       </span>
       <FindingTag f={f} running={running} />
-      {expandable && <span className="finding__chevron">{open ? '▾' : '▸'}</span>}
+      {expandable && (
+        <span className="finding__chevron" aria-hidden="true">
+          {open ? '▾' : '▸'}
+        </span>
+      )}
     </>
   )
   return (
@@ -302,7 +343,7 @@ function ReviewFindings({ findings, running }: { findings: ReviewFinding[]; runn
           aria-expanded={showDropped}
           onClick={() => setShowDropped((v) => !v)}
         >
-          {showDropped ? '▾' : '▸'} {summary}
+          <span aria-hidden="true">{showDropped ? '▾' : '▸'}</span> {summary}
         </button>
       )}
       {showDropped && dropped.length > 0 && (
@@ -408,6 +449,15 @@ const ToolRow = memo(function ToolRow({
     wasRunning.current = running
   }, [isAgent, running, prefs.toolsExpanded, prefs.expandAll])
   useFollowExpandAll(prefs, setOpen, awaiting)
+  // A command whose output streamed in while it ran: when it fails, the row stays open
+  // on the full output, so what the user was watching doesn't vanish as it ends.
+  const sawLiveOutput = useRef(false)
+  useEffect(() => {
+    if (item.liveOutput) sawLiveOutput.current = true
+  }, [item.liveOutput])
+  useEffect(() => {
+    if (item.status === 'error' && sawLiveOutput.current) setOpen(true)
+  }, [item.status])
   // A review's agents, opened from the row in the transcript drawer.
   const [agentsOpen, setAgentsOpen] = useState(false)
   // Todo/sweep rows render their list inline, so they have nothing extra to expand.
@@ -416,39 +466,53 @@ const ToolRow = memo(function ToolRow({
   const toggle = (): void => {
     if (expandable) setOpen((v) => !v)
   }
+  const linkTarget = target && fileTarget && files ? fileTarget : null
+  // The row's status, verb and (unless it opens a file) target: the toggle's label. The
+  // spaces between them lay out as nothing in the flex row but keep the words apart in
+  // that label ("done Run npm test").
+  const lead = (
+    <>
+      <StatusGlyph status={item.status} short={agentShort} />{' '}
+      <span className="tool-row__icon" aria-hidden="true">
+        {iconFor(item)}
+      </span>
+      <span className="tool-row__verb">{verb}</span>
+      {target && !linkTarget && (
+        <>
+          {' '}
+          <span className={targetClass} title={target}>
+            {target}
+          </span>
+        </>
+      )}
+    </>
+  )
 
   return (
     <div className={`tool-row tool-row--${item.status}`}>
+      {/*
+        The whole head opens and closes the row for a mouse. For the keyboard and
+        screen readers that is the toggle button; the file link sits beside it rather
+        than inside it, since a button's contents can't hold another control. Enter and
+        Space on the button click it, and the click reaches the head's handler.
+      */}
       <div
         className={`tool-row__head${expandable ? ' tool-row__head--clickable' : ''}`}
         onClick={toggle}
-        {...(expandable
-          ? {
-              role: 'button',
-              tabIndex: 0,
-              'aria-expanded': open,
-              onKeyDown: (e: ReactKeyboardEvent) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  toggle()
-                }
-              }
-            }
-          : {})}
+        {...(expandable ? { 'data-disclosure': '' } : {})}
       >
-        <StatusGlyph status={item.status} short={agentShort} />
-        <span className="tool-row__icon">{iconFor(item)}</span>
-        <span className="tool-row__verb">{verb}</span>
-        {target &&
-          (fileTarget && files ? (
-            <FileLink target={fileTarget} links={files} className={targetClass}>
-              {target}
-            </FileLink>
-          ) : (
-            <span className={targetClass} title={target}>
-              {target}
-            </span>
-          ))}
+        {expandable ? (
+          <button type="button" className="tool-row__toggle" aria-expanded={open}>
+            {lead}
+          </button>
+        ) : (
+          lead
+        )}
+        {linkTarget && files && (
+          <FileLink target={linkTarget} links={files} className={targetClass}>
+            {target}
+          </FileLink>
+        )}
         {isAgent && records && records.length > 0 && <SubagentChips records={records} />}
         <span className="tool-row__spacer" />
         {runFor >= 1000 && !(isSubagentTool(item.name) && item.records?.length) && (
@@ -465,7 +529,11 @@ const ToolRow = memo(function ToolRow({
             <span className="diff-stat__del">−{stat.removed}</span>
           </span>
         )}
-        {expandable && <span className="tool-row__chevron">{open ? '▾' : '▸'}</span>}
+        {expandable && (
+          <span className="tool-row__chevron" aria-hidden="true">
+            {open ? '▾' : '▸'}
+          </span>
+        )}
       </div>
 
       {item.status === 'running' && item.progress && !(isAgent && records?.length) && (
@@ -510,8 +578,13 @@ const ToolRow = memo(function ToolRow({
         <ul className="todo-list">
           {todos.map((t, i) => (
             <li key={i} className={`todo todo--${t.status}`}>
-              <span className="todo__mark">{TODO_MARK[t.status]}</span>
-              <span className="todo__text">{t.content}</span>
+              <span className="todo__mark" aria-hidden="true">
+                {TODO_MARK[t.status]}
+              </span>
+              <span className="todo__text">
+                {t.content}
+                <span className="sr-only">{TODO_WORDS[t.status]}</span>
+              </span>
             </li>
           ))}
         </ul>
@@ -521,8 +594,13 @@ const ToolRow = memo(function ToolRow({
         <ul className="todo-list sweep-list">
           {sweep.map((s: SweepItem, i: number) => (
             <li key={i} className={`todo sweep sweep--${s.status}`}>
-              <span className="todo__mark">{SWEEP_MARK[s.status]}</span>
-              <span className="todo__text">{s.task}</span>
+              <span className="todo__mark" aria-hidden="true">
+                {SWEEP_MARK[s.status]}
+              </span>
+              <span className="todo__text">
+                {s.task}
+                <span className="sr-only">{SWEEP_WORDS[s.status]}</span>
+              </span>
               {s.branch && <span className="sweep__chip sweep__chip--branch">{s.branch}</span>}
               {s.pr && <span className="sweep__chip sweep__chip--pr">{s.pr}</span>}
               {s.note && <span className="sweep__note">{s.note}</span>}
@@ -681,7 +759,15 @@ function ApprovalPrompt({
           about credential reads for the rest of this conversation.
         </p>
       )}
-      {item.sensitiveWrite && (
+      {item.sensitiveWrite && item.protectedWrite && (
+        <p className="tool-row__approval-note">
+          This changes a project control file (such as .houston, .vscode, .envrc, a git hook
+          folder, or a CI workflow) that can run code outside the sandbox later or change
+          Houston&apos;s own settings. Houston asks every time, even in full auto, and
+          &quot;Allow for run&quot; does not cover it; only an allow rule for this path does.
+        </p>
+      )}
+      {item.sensitiveWrite && !item.protectedWrite && (
         <p className="tool-row__approval-note">
           This changes a sensitive file: a credential or secret such as .env, or a git hook
           or setting that git can run outside the sandbox later. Houston checks first even
@@ -690,7 +776,7 @@ function ApprovalPrompt({
       )}
       {item.shellOffline && (
         <p className="tool-row__approval-note">
-          Runs without network. Choose "Allow for run" to also allow network for this run.
+          Runs without network. If it needs the network, Houston asks before allowing it.
         </p>
       )}
       {item.networkScope && (
@@ -871,11 +957,15 @@ const ReadAggregateRow = memo(function ReadAggregateRow({ items }: { items: Tool
         }}
       >
         <StatusGlyph status={status} />
-        <span className="tool-row__icon">○</span>
+        <span className="tool-row__icon" aria-hidden="true">
+          ○
+        </span>
         <span className="tool-row__verb">Read</span>
         <span className="tool-row__target">{items.length} files</span>
         <span className="tool-row__spacer" />
-        <span className="tool-row__chevron">{open ? '▾' : '▸'}</span>
+        <span className="tool-row__chevron" aria-hidden="true">
+          {open ? '▾' : '▸'}
+        </span>
       </div>
       {open && (
         <ul className="tool-reads">

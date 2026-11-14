@@ -36,9 +36,11 @@ interface SendParams {
   model: string
   approvalPolicy: ApprovalPolicy
   reasoningEffort?: ReasoningEffort
+  /** A custom command's per-turn options token (see `InvokedTurn.grant`). */
+  commandGrant?: string
 }
 
-type RetryParams = Omit<SendParams, 'userText' | 'images' | 'invokedAs'>
+type RetryParams = Omit<SendParams, 'userText' | 'images' | 'invokedAs' | 'commandGrant'>
 
 /** A revertable set of file changes from the most recent turn. */
 export interface Checkpoint {
@@ -301,7 +303,8 @@ export function useChat(conversationId: string | null = null): ChatController {
         providerId: params.providerId,
         model: params.model,
         approvalPolicy: params.approvalPolicy,
-        ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {})
+        ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {}),
+        ...(params.commandGrant ? { commandGrant: params.commandGrant } : {})
       })
       // A run was already live (one this window hadn't caught up with yet), so main
       // queued the message behind it instead of starting a turn. Its chip is in the
@@ -440,7 +443,8 @@ export function useChat(conversationId: string | null = null): ChatController {
         providerId: params.providerId,
         model: params.model,
         approvalPolicy: params.approvalPolicy,
-        ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {})
+        ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {}),
+        ...(params.commandGrant ? { commandGrant: params.commandGrant } : {})
       })
       return true
     } catch {

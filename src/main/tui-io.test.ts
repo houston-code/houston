@@ -3,7 +3,17 @@ import { ULTRATHINK_HINT, ULTRATHINK_HINT_ALREADY, ULTRATHINK_HINT_NONE } from '
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
-import { resolveColor, createTerminalIo, marksByLine, physicalCursorRow, pickerPhysicalRows, type ReadlineLike } from './tui-io'
+import {
+  resolveColor,
+  createTerminalIo,
+  marksByLine,
+  physicalCursorRow,
+  pickerPhysicalRows,
+  SYNC_BEGIN,
+  SYNC_END,
+  type ReadlineLike
+} from './tui-io'
+import type { PagerSource } from './tui-pager'
 import { visibleWidth } from './tui-wrap'
 
 describe('resolveColor', () => {
@@ -978,6 +988,17 @@ describe('mid-run input', () => {
     expect(t.io.takeQueued!()).toEqual([])
   })
 
+  // A line still being typed when the turn ends was thrown away with the queue.
+  it('keeps a half-typed line for the next composer, apart from the queue', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('sent\r')
+    t.stdin.push('still typing')
+    expect(t.io.takeQueued!()).toEqual(['sent'])
+    expect(t.io.takeDraft!()).toBe('still typing')
+    expect(t.io.takeDraft!()).toBe('')
+  })
+
   it('ignores an empty Enter', () => {
     const t = harness()
     t.io.startSpinner!('Working')
@@ -1208,5 +1229,255 @@ describe('sub-prompts and the picker after the composer', () => {
     stdin.push('\r')
     expect(io.takeQueued!()).toEqual(['é'])
     io.stopSpinner!()
+  })
+})
+
+describe('the transcript viewer (pager)', () => {
+  const ALT_ON = '\x1b[?1049h'
+  const ALT_OFF = '\x1b[?1049l'
+  const flush = (): Promise<void> => new Promise((r) => setImmediate(r))
+  const source = (widths: number[] = []): PagerSource => ({
+    title: 'My chat',
+    render: (width) => {
+      widths.push(width)
+      return { lines: Array.from({ length: 50 }, (_, i) => `doc line ${i}`), prompts: [0, 20] }
+    },
+    plain: () => 'the whole transcript'
+  })
+  function harness(over: Parameters<typeof createTerminalIo>[0] = {}) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let resize: (() => void) | null = null
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      rows: () => 10,
+      now: () => 1000,
+      onResize: (l) => {
+        resize = l
+        return () => {
+          resize = null
+        }
+      },
+      ...over
+    })
+    return {
+      io,
+      stdin,
+      written,
+      text: () => written.join(''),
+      resize: () => resize?.()
+    }
+  }
+
+  it('opens on the alternate screen at the end of the session, and q leaves it', async () => {
+    const t = harness()
+    const open = t.io.pager!(source())
+    expect(t.text()).toContain(ALT_ON)
+    // The last screenful: 9 document rows above the status line.
+    expect(t.text()).toContain('doc line 49')
+    expect(t.text()).not.toContain('doc line 40')
+    t.stdin.push('g')
+    expect(t.text()).toContain('doc line 0')
+    t.stdin.push('q')
+    await expect(open).resolves.toBe(true)
+    expect(t.text().lastIndexOf(ALT_OFF)).toBeGreaterThan(t.text().lastIndexOf(ALT_ON))
+    // Raw mode on while open, back off after.
+    expect(t.stdin.rawModes.at(-1)).toBe(false)
+  })
+
+  it('does not open without a terminal', async () => {
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream
+    const io = createTerminalIo({ stdin, createInterface: () => fakeRl().rl, write: () => {} })
+    await expect(io.pager!(source())).resolves.toBe(false)
+  })
+
+  it('Ctrl-O at the composer opens it and brings the draft back exactly as it was', async () => {
+    const t = harness()
+    let opened = 0
+    t.io.onTranscript!(async (during) => {
+      expect(during).toBe('composer')
+      opened++
+      await t.io.pager!(source())
+    })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('half a thought')
+    // Cursor left of "thought", so a restored cursor shows in where the next key lands.
+    t.stdin.push('\x1bb')
+    t.stdin.push('\x0f')
+    await flush()
+    expect(opened).toBe(1)
+    expect(t.text()).toContain(ALT_ON)
+    t.stdin.push('\x1b') // Esc closes it too
+    await flush()
+    expect(t.text()).toContain(ALT_OFF)
+    t.stdin.push('whole ')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('half a whole thought')
+  })
+
+  it('rewraps at the new size when the terminal is resized while open', async () => {
+    let cols = 80
+    const widths: number[] = []
+    const t = harness({ columns: () => cols })
+    const open = t.io.pager!(source(widths))
+    cols = 40
+    t.resize()
+    expect(widths).toEqual([79, 39])
+    t.stdin.push('q')
+    await open
+  })
+
+  it('holds output that arrives while it is open, then prints it in order', async () => {
+    const t = harness()
+    const open = t.io.pager!(source())
+    t.io.out('first\n')
+    t.io.out('second\n')
+    expect(t.text()).not.toContain('first')
+    t.stdin.push('q')
+    await open
+    const out = t.text()
+    expect(out.indexOf('first')).toBeGreaterThan(out.lastIndexOf(ALT_OFF))
+    expect(out.indexOf('second')).toBeGreaterThan(out.indexOf('first'))
+  })
+
+  it('keeps a background turn from closing the composer under it', async () => {
+    const t = harness()
+    t.io.onTranscript!(async () => {
+      // A wake arriving now must wait: the composer is not idle, it is behind the viewer.
+      const open = t.io.pager!(source())
+      expect(t.io.yieldComposer!()).toBe(false)
+      t.stdin.push('q')
+      await open
+    })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x0f')
+    await flush()
+    await flush()
+    expect(t.io.yieldComposer!()).toBe(true)
+    await expect(read).resolves.toBeNull()
+  })
+
+  it('v hands the transcript to the editor and comes back to the viewer', async () => {
+    const viewed: string[] = []
+    const t = harness({
+      viewText: async (text) => {
+        viewed.push(text)
+        return true
+      }
+    })
+    const open = t.io.pager!(source())
+    t.stdin.push('v')
+    await flush()
+    expect(viewed).toEqual(['the whole transcript'])
+    // Left the alternate screen for the editor, then came back to it.
+    const out = t.text()
+    expect(out.indexOf(ALT_OFF)).toBeGreaterThan(-1)
+    expect(out.lastIndexOf(ALT_ON)).toBeGreaterThan(out.indexOf(ALT_OFF))
+    t.stdin.push('q')
+    await open
+  })
+
+  it('v says how to get an editor when none is set', async () => {
+    const t = harness({ viewText: async () => false })
+    const open = t.io.pager!(source())
+    t.stdin.push('v')
+    await flush()
+    expect(t.text()).toContain('set $VISUAL or $EDITOR')
+    t.stdin.push('q')
+    await open
+  })
+
+  it('mid-run, Ctrl-O and Alt-T go to the driver, which decides', () => {
+    const t = harness()
+    const seen: string[] = []
+    t.io.onTranscript!(async (during) => void seen.push(`transcript:${during}`))
+    t.io.onCycleThoughts!(() => seen.push('thoughts'))
+    t.io.startSpinner!('Working')
+    t.stdin.push('\x0f')
+    t.stdin.push('\x1bt')
+    expect(seen).toEqual(['transcript:run', 'thoughts'])
+    t.io.stopSpinner!()
+  })
+
+  it('Alt-T at the composer lets the driver print its note, then redraws the draft', async () => {
+    const t = harness()
+    t.io.onCycleThoughts!(() => t.io.out('· thoughts: hidden\n'))
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('draft')
+    t.stdin.push('\x1bt')
+    const out = t.text()
+    expect(out.lastIndexOf('draft')).toBeGreaterThan(out.indexOf('· thoughts: hidden'))
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('draft')
+  })
+})
+
+describe('synchronized output (DEC 2026)', () => {
+  const count = (s: string, sub: string): number => s.split(sub).length - 1
+  function harness(syncOutput?: boolean) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let ticks: Array<() => void> = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => 1000,
+      schedule: (fn) => {
+        ticks.push(fn)
+        return () => {
+          ticks = ticks.filter((t) => t !== fn)
+        }
+      },
+      ...(syncOutput === undefined ? {} : { syncOutput })
+    })
+    return { io, stdin, written, text: () => written.join(''), tick: () => ticks.forEach((fn) => fn()) }
+  }
+
+  it('paints each composer redraw atomically, always closing what it opens', async () => {
+    const t = harness(true)
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('abc')
+    t.stdin.push('\x0c') // Ctrl-L: a clear and a redraw, several writes in one repaint
+    t.stdin.push('\r')
+    await read
+    const out = t.text()
+    expect(count(out, SYNC_BEGIN)).toBeGreaterThan(2)
+    expect(count(out, SYNC_BEGIN)).toBe(count(out, SYNC_END))
+    // Never nested: each begin is closed before the next opens.
+    let depth = 0
+    // eslint-disable-next-line no-control-regex -- matching the markers is the point
+    for (const m of out.matchAll(/\x1b\[\?2026([hl])/g)) {
+      depth += m[1] === 'h' ? 1 : -1
+      expect(depth === 0 || depth === 1).toBe(true)
+    }
+    expect(depth).toBe(0)
+  })
+
+  it('paints the spinner and status line atomically', () => {
+    const t = harness(true)
+    t.io.startSpinner!('Working')
+    t.io.setStatus!('model · main')
+    t.tick()
+    const out = t.text()
+    expect(out).toContain(`${SYNC_BEGIN}\r\x1b[2K`)
+    expect(count(out, SYNC_BEGIN)).toBe(count(out, SYNC_END))
+    t.io.stopSpinner!()
+  })
+
+  it('is off when the output is not the terminal', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('abc\r')
+    await read
+    t.io.startSpinner!('Working')
+    t.tick()
+    t.io.stopSpinner!()
+    expect(t.text()).not.toContain(SYNC_BEGIN)
+    expect(t.text()).not.toContain(SYNC_END)
   })
 })

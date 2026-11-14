@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { promises as fsp, realpathSync } from 'node:fs'
+import { promises as fsp, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import {
   APPROVAL_POLICIES,
@@ -267,6 +267,8 @@ export interface HeadlessOptions {
   appendSystemPrompt?: string[]
   /** `--mcp-config`: absolute paths of files listing MCP servers for this run only. */
   mcpConfig?: string[]
+  /** `--add-dir`: absolute paths of extra directories the run may work in, like Settings' additional directories. */
+  addDirs?: string[]
   /**
    * A flag carried a value it can't take. runHeadless reports it and exits with
    * HEADLESS_EXIT.usage before anything runs, rather than silently running with
@@ -315,7 +317,8 @@ export const HEADLESS_FLAGS = new Set([
   '--allowed-tools',
   '--disallowed-tools',
   '--append-system-prompt',
-  '--mcp-config'
+  '--mcp-config',
+  '--add-dir'
 ])
 
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
@@ -367,6 +370,7 @@ export function parseHeadlessArgs(
   let disallowedTools: ToolScopeEntry[] | undefined
   const appendSystemPrompt: string[] = []
   const mcpConfig: string[] = []
+  const addDirs: string[] = []
   let usageError: string | undefined
   // Keep the first bad value: it's the one the caller reads about.
   const bad = (message: string): void => {
@@ -437,6 +441,13 @@ export function parseHeadlessArgs(
       const { value, next } = flagValue(argv, i)
       if (value?.trim()) mcpConfig.push(resolvePath(defaultCwd, value.trim()))
       else bad('--mcp-config needs the path of a JSON file listing MCP servers')
+      i = next
+    } else if (name === '--add-dir') {
+      const { value, next } = flagValue(argv, i)
+      const dir = value?.trim() ? resolvePath(defaultCwd, value.trim()) : undefined
+      if (!dir) bad('--add-dir needs the path of a directory, like --add-dir ../shared')
+      else if (!isDirectory(dir)) bad(`--add-dir: ${quoted(value)} is not a directory`)
+      else if (!addDirs.includes(dir)) addDirs.push(dir)
       i = next
     } else if (name === '--continue') {
       continueSession = true
@@ -527,6 +538,7 @@ export function parseHeadlessArgs(
     ...(disallowedTools !== undefined ? { disallowedTools } : {}),
     ...(appendSystemPrompt.length ? { appendSystemPrompt } : {}),
     ...(mcpConfig.length ? { mcpConfig } : {}),
+    ...(addDirs.length ? { addDirs } : {}),
     ...(usageError !== undefined ? { usageError } : {})
   }
 }
@@ -534,6 +546,15 @@ export function parseHeadlessArgs(
 /** Runtime guard: true when `v` is a known `--input-format`. */
 export function isHeadlessInputFormat(v: unknown): v is HeadlessInputFormat {
   return typeof v === 'string' && (HEADLESS_INPUT_FORMATS as readonly string[]).includes(v)
+}
+
+/** Whether `path` is an existing directory (following symlinks, as a root does). */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 /** A flag value as it appears in an error message. */
@@ -1153,8 +1174,9 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
   }
 
   // Trusted folders: a headless run never prompts, so an undecided (or drifted)
-  // folder's elevating project config (allow rules / hooks / MCP servers) is
-  // simply left off — the loop enforces that; this just says so once. Trust the
+  // folder's elevating project config (allow rules / hooks / MCP servers / command
+  // allowed-tools / plugins) is simply left off — the loop enforces that; this just
+  // says so once. Trust the
   // folder from the desktop app or an interactive `houston -i` session.
   try {
     const projectCfg = await loadProjectConfig(opts.cwd)
@@ -1168,7 +1190,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       const state = folderTrustState(settings.trustedFolders, path, projectCfg.elevatedHash)
       if (state !== 'trusted' && !opts.json) {
         deps.err(
-          "· ignoring this project's allow rules / hooks / MCP servers (folder not trusted; decide in the desktop app or houston -i)\n"
+          "· ignoring this project's allow rules / hooks / MCP servers / command allowed-tools / plugins (folder not trusted; decide in the desktop app or houston -i)\n"
         )
       }
     }
@@ -1217,6 +1239,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       // No one can answer ask_user here, so the loop doesn't offer it.
       unattended: true,
       ...(opts.allowShellNetwork ? { allowShellNetwork: true } : {}),
+      ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
       ...(runOverrides ? { overrides: runOverrides } : {}),
       ...(inputs.toolScope ? { toolScope: inputs.toolScope } : {}),
       ...(inputs.appendSystemPrompt !== undefined ? { appendSystemPrompt: inputs.appendSystemPrompt } : {}),

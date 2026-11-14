@@ -25,6 +25,7 @@ import type { RecordShellResult } from '@shared/shellEscape'
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
+import type { CommandPrepareResult } from '@shared/promptInvocation'
 import type { WorkingTreeChanges, WorkingTreeStats } from '@shared/workingTree'
 import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
 import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
@@ -80,6 +81,7 @@ import type {
 import type { ImportOutcome, ImportScan } from '@shared/importConfig'
 import type { CustomKind, CustomScope, CustomizeOverview, CustomizeResult } from '@shared/customize'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
+import type { RegistrySearchResult } from '@shared/mcpRegistry'
 
 /**
  * The bridge object exposed to the renderer as `window.api`.
@@ -180,6 +182,9 @@ const api = {
   registerHtmlVisual: (html: string): Promise<string | null> => ipcRenderer.invoke(IPC.visualRegisterHtml, html),
   listCommands: (workspace: string): Promise<Command[]> =>
     ipcRenderer.invoke(IPC.commandsList, workspace),
+  /** Prepare a custom command whose frontmatter changes how its turn runs (model, effort, agent, allowed-tools). */
+  prepareCommand: (workspace: string, name: string, args: string, typed: string): Promise<CommandPrepareResult> =>
+    ipcRenderer.invoke(IPC.commandPrepare, workspace, name, args, typed),
   /** The project's and the user's skills (.houston/skills, ~/.houston/skills), name + description, for /skills. */
   listSkills: (workspace: string): Promise<Array<{ name: string; description: string }>> =>
     ipcRenderer.invoke(IPC.skillsList, workspace),
@@ -317,6 +322,9 @@ const api = {
     ipcRenderer.invoke(IPC.mcpOAuthLogout, serverId),
   /** Live per-server MCP connection status (connected / needs-auth / error). */
   getMcpStatuses: (): Promise<McpServerStatus[]> => ipcRenderer.invoke(IPC.mcpStatus),
+  /** One page of MCP Registry search results (empty query lists everything). */
+  searchMcpRegistry: (query: string, cursor?: string): Promise<RegistrySearchResult> =>
+    ipcRenderer.invoke(IPC.mcpRegistrySearch, query, cursor),
 
   // "Open project in…" (a user gesture; launches an external editor / file manager)
   /** Which supported editors can be launched on this machine, for the "Open in…" menu. */

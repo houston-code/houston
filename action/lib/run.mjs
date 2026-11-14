@@ -19,6 +19,7 @@ import {
   resolveApproval
 } from './cli.mjs'
 import {
+  EXTRAHEADER_KEYS,
   SAFE_GIT,
   assertPushTarget,
   capBody,
@@ -26,9 +27,11 @@ import {
   containsSecret,
   fixBranchName,
   implementBranchName,
+  hasPersistedCredential,
   logSafe,
   secretValues,
-  snapshotGitControl
+  snapshotGitControl,
+  withEncodedForms
 } from './guard.mjs'
 import {
   createPullRequest,
@@ -166,12 +169,27 @@ export async function run({ env, exec, log = (s) => process.stdout.write(`${s}\n
 
   const apiKey = env.HOUSTON_ACTION_API_KEY ?? ''
   if (apiKey) log(`::add-mask::${apiKey}`)
-  const secrets = secretValues(env, [apiKey, ghToken])
+  // Each token also in the base64 form a persisted checkout credential takes in git config.
+  const secrets = withEncodedForms(secretValues(env, [apiKey, ghToken]))
 
   const post = input('post') !== 'false'
   const cli = env.HOUSTON_CLI_PATH
   if (!cli) return fail('HOUSTON_CLI_PATH is not set: the install step did not run')
   const node = env.HOUSTON_NODE || process.execPath
+
+  // respond, review and task post the model's text. A checkout that persisted its credential
+  // keeps the token (base64) in git config the agent can read, so refuse the run before
+  // Houston starts rather than trust the output check to catch every encoding. Checked
+  // before the agent touches anything, so the config read is the caller's own.
+  if (mode === 'respond' || mode === 'review' || mode === 'task') {
+    const cfg = await exec('git', [...SAFE_GIT, 'config', '--get-regexp', EXTRAHEADER_KEYS], { cwd: workspace })
+    if (cfg.code === 0 && hasPersistedCredential(cfg.stdout)) {
+      return fail(
+        'the checkout persisted a git credential (an http extraheader in its git config) that Houston could read and post; ' +
+          'check out with persist-credentials: false'
+      )
+    }
+  }
 
   if (mode === 'review') {
     const has = await exec('git', ['cat-file', '-e', `${ctx.baseSha}^{commit}`], { cwd: workspace })
@@ -401,7 +419,16 @@ async function openFixPullRequest(o) {
   if (changed.length) {
     return o.fail(`the run changed .git/${changed.join(', .git/')}; refusing to commit or push from this checkout`)
   }
-  const git = (args, opts = {}) => exec('git', [...SAFE_GIT, ...args], { cwd: workspace, ...opts })
+  // An explicit git dir (no discovery up from the working directory): the snapshot above
+  // vouches for this checkout's `.git` only. The system config stays: it is the runner
+  // image's, outside the checkout, and on Windows it holds the core.autocrlf the checkout
+  // was written with, without which every CRLF file reads as changed.
+  const git = (args, opts = {}) =>
+    exec('git', [...SAFE_GIT, ...args], {
+      cwd: workspace,
+      ...opts,
+      env: { ...(opts.env ?? process.env), GIT_DIR: join(workspace, '.git'), GIT_WORK_TREE: workspace }
+    })
   // The run must leave the checked-out commit where it was: a commit it made, or a branch
   // it switched to, would reach the pull request without the credential check below.
   const head = await git(['rev-parse', 'HEAD'])

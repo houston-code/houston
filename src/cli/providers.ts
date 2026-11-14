@@ -95,7 +95,7 @@ function listProviders(deps: ProvidersDeps): number {
   if (addable.length) {
     deps.out('\nAvailable to add (houston providers add <id>):\n')
     for (const e of addable) {
-      deps.out(`  ${e.id.padEnd(14)} ${e.label}  — ${e.blurb}\n`)
+      deps.out(`  ${e.id.padEnd(14)} ${e.label}: ${e.blurb}\n`)
     }
   }
   return 0
@@ -225,7 +225,7 @@ async function setKeyCommand(rest: string[], deps: ProvidersDeps): Promise<numbe
 
   const known = deps.getSettings().providers.some((p) => p.id === id)
   if (!known) {
-    deps.err(`Note: "${id}" isn't a configured provider yet — add it with: houston providers add ${id}\n`)
+    deps.err(`Note: "${id}" isn't a configured provider yet. Add it with: houston providers add ${id}\n`)
   }
   const { shadowedByEnv } = deps.setKey(id, key)
   deps.out(`Saved key for "${id}" to cli-credentials.json (0600).\n`)

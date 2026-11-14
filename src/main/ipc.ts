@@ -155,8 +155,12 @@ import {
 import { cancelCompaction, compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
-import { loadSlashCommands } from './agent/commands'
+import { loadCommands, loadSlashCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
+import { prepareCommandRun, workspaceTrusted } from './agent/commandRun'
+import { putCommandGrant, takeCommandGrant } from './commandGrants'
+import { resolveCommand } from '@shared/commands'
+import type { CommandPrepareResult } from '@shared/promptInvocation'
 import { loadAgents } from './agent/agents'
 import { registerCustomizeIpc } from './customizeIpc'
 import {
@@ -231,8 +235,10 @@ import {
   type ScheduleDaemonHostDeps
 } from './scheduleDaemonHost'
 import { realLoginAgentDeps } from './loginAgent'
+import { guardIpcHandle, guardIpcOn } from './ipcSender'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 import { wireMediaProtocol } from './mediaProtocol'
+import { searchMcpRegistry } from './mcpRegistry'
 import { noteThrottle, onRateLimitChange, rateLimitSnapshot } from './rateLimitStore'
 
 /** A preferences export is a few KB; anything past this is not one. */
@@ -661,9 +667,15 @@ export function registerIpc(ready?: Promise<unknown>): void {
       open = true
     }
   )
-  /** `ipcMain.handle`, with the request held until startup has finished. */
+  /**
+   * `ipcMain.handle`, refusing any request that isn't from a chat window's own page
+   * (see ipcSender.ts), and holding the rest until startup has finished. Every
+   * handler in the app is registered through this or `on` below, including the
+   * ones customizeIpc, importIpc and scheduleIpc register.
+   */
+  const guardedHandle = guardIpcHandle((channel, listener) => ipcMain.handle(channel, listener))
   const handle: typeof ipcMain.handle = (channel, listener) =>
-    ipcMain.handle(channel, (event, ...args) =>
+    guardedHandle(channel, (event, ...args) =>
       open || !opened ? listener(event, ...args) : opened.then(() => listener(event, ...args))
     )
   /**
@@ -671,8 +683,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
    * screen, the menu's state), and handling one can read settings, which must not
    * happen before the credential store is ready (see index.ts).
    */
+  const guardedOn = guardIpcOn((channel, listener) => ipcMain.on(channel, listener))
   const on: typeof ipcMain.on = (channel, listener) =>
-    ipcMain.on(channel, (event, ...args) => afterReady(() => listener(event, ...args)))
+    guardedOn(channel, (event, ...args) => afterReady(() => listener(event, ...args)))
   /** Run `fn` now, or as soon as startup has finished. */
   const afterReady = (fn: () => void): void => {
     if (open || !opened) fn()
@@ -733,13 +746,14 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // URL can only ever carry what issueReportBody allows.
   handle(IPC.logsReveal, () => revealLogs())
   // Not held for startup: logging needs no credential, and an error during startup is
-  // exactly the one worth keeping.
+  // exactly the one worth keeping. Still sender-checked, so only a chat window's own
+  // page can write to houston.log through it.
   const logRendererError = createRendererErrorLogger()
-  ipcMain.on(IPC.rendererError, (event, raw: unknown) => logRendererError(event.sender.id, raw))
+  guardedOn(IPC.rendererError, (event, raw: unknown) => logRendererError(event.sender.id, raw))
   handle(IPC.issueReportPreview, (): string => issueReportText())
   handle(IPC.issueReportOpen, (): boolean => openIssueReport())
   // The composer's sandbox badge: a cheap read, unlike the full doctor probe.
-  ipcMain.handle(
+  guardedHandle(
     IPC.sandboxStatus,
     (): SandboxStatus => ({ backend: activeBackendId(), enforced: isSandboxed() })
   )
@@ -1044,7 +1058,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
   )
 
   // Trusted folders: whether this workspace's project config elevates anything
-  // (allow rules / hooks / MCP servers), and where the user's consent stands.
+  // (allow rules / hooks / MCP servers / command allowed-tools / plugin files), and
+  // where the user's consent stands. Plugin sources never leave main; only their
+  // names do.
   handle(IPC.folderTrustStatus, async (_event, workspace: string): Promise<FolderTrustStatus> => {
     if (typeof workspace !== 'string' || !workspace) return { state: 'none' }
     const cfg = await loadProjectConfig(workspace)
@@ -1054,8 +1070,11 @@ export function registerIpc(ready?: Promise<unknown>): void {
       counts: {
         allowRules: cfg.elevated.allowRules.length,
         hooks: cfg.elevated.hooks.length,
-        mcpServers: cfg.elevated.mcpServers.length
-      }
+        mcpServers: cfg.elevated.mcpServers.length,
+        ...(cfg.elevated.commands?.length ? { commands: cfg.elevated.commands.length } : {}),
+        plugins: cfg.elevated.plugins.length
+      },
+      ...(cfg.elevated.plugins.length ? { plugins: cfg.elevated.plugins.map((p) => p.name) } : {})
     }
   })
   // Persist a trust decision. The fingerprint is recomputed here from the file on
@@ -1077,6 +1096,46 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return []
     }
   })
+
+  // A custom command whose frontmatter changes how its turn runs: prepared here, from
+  // the file on disk and this folder's trust, never from what the renderer says.
+  // The per-turn options stay in main under a one-time token (see commandGrants.ts).
+  handle(
+    IPC.commandPrepare,
+    async (_event, workspace: string, name: string, args: string, typed: string): Promise<CommandPrepareResult> => {
+      if (typeof workspace !== 'string' || !workspace || typeof name !== 'string') {
+        return { ok: false, error: 'No folder is open.' }
+      }
+      let root: string
+      try {
+        root = realpathSync(workspace)
+      } catch {
+        return { ok: false, error: "This chat's folder no longer exists." }
+      }
+      const cmd = resolveCommand(await loadCommands(root).catch(() => []), name)
+      if (!cmd) return { ok: false, error: `No command /${name} in this folder any more.` }
+      const settings = getSettings()
+      const prepared = await prepareCommandRun(
+        cmd,
+        typeof args === 'string' ? args : '',
+        typeof typed === 'string' ? typed : `/${name}`,
+        { settings, trusted: await workspaceTrusted(root, settings.trustedFolders).catch(() => false) }
+      )
+      if (!prepared) return { ok: false, error: `/${cmd.name} is not a prompt command.` }
+      if (!prepared.ok) return prepared
+      const { turn, model, effort, turnAllowRules, notes } = prepared.run
+      const grant =
+        model || effort || turnAllowRules?.length
+          ? putCommandGrant({
+              workspace: root,
+              ...(model ? { model } : {}),
+              ...(effort ? { effort } : {}),
+              ...(turnAllowRules?.length ? { turnAllowRules } : {})
+            })
+          : undefined
+      return { ok: true, turn: { ...turn, ...(grant ? { grant } : {}) }, notes }
+    }
+  )
 
   // Read-only listing of the workspace's skills / custom agents for /skills and
   // /agents. Project to {name, description} only — the agent's full systemPrompt
@@ -1268,6 +1327,11 @@ export function registerIpc(ready?: Promise<unknown>): void {
 
   // Live per-server connection status (connected / needs-auth / error) for Settings.
   handle(IPC.mcpStatus, () => getMcpStatuses())
+
+  // Browse the MCP Registry: read-only GETs to its fixed origin, nothing saved or run.
+  handle(IPC.mcpRegistrySearch, (_e, query: unknown, cursor: unknown) =>
+    searchMcpRegistry(typeof query === 'string' ? query : '', typeof cursor === 'string' ? cursor : undefined)
+  )
 
   // Optional-integrations status (gh CLI, formatters) for the Settings hint.
   handle(IPC.integrationsGet, () =>
@@ -1612,6 +1676,17 @@ export function registerIpc(ready?: Promise<unknown>): void {
     // Refusing that send used to drop the message (the bubble was never saved), so
     // queue it instead, and tell the renderer which run it's waiting on.
     const liveRunId = activeRunForConversation(conv.id)
+    if (liveRunId && req.commandGrant) {
+      // A command's per-turn options can't ride a queued follow-up (queued messages
+      // merge into one turn), and dropping them quietly would run it differently.
+      takeCommandGrant(req.commandGrant, '')
+      emitEvent(event.sender, conv.id, {
+        runId: req.runId,
+        type: 'error',
+        message: 'That command runs once the current turn ends. Send it again then.'
+      })
+      return
+    }
     if (liveRunId) {
       const items = addToQueue({
         conversationId: conv.id,
@@ -1668,16 +1743,30 @@ export function registerIpc(ready?: Promise<unknown>): void {
       log.warn(`could not record the recent model: ${(e as Error).message}`)
     }
 
+    // A custom command's per-turn model, effort and pre-approved tools, from main's
+    // own record (the chat keeps the settings recorded above).
+    let grant: ReturnType<typeof takeCommandGrant> = null
+    if (req.commandGrant) {
+      let root = conv.workspace
+      try {
+        root = realpathSync(conv.workspace)
+      } catch {
+        // A folder that's gone matches no grant.
+      }
+      grant = takeCommandGrant(req.commandGrant, root)
+    }
+
     void runAndDrain(
       makeIo(event.sender),
       conv.id,
       {
         runId: req.runId,
         workspace: conv.workspace,
-        providerId: req.providerId,
-        model: req.model,
+        providerId: grant?.model?.providerId ?? req.providerId,
+        model: grant?.model?.model ?? req.model,
         approvalPolicy,
-        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(grant?.effort ? { reasoningEffort: grant.effort } : reasoningEffort ? { reasoningEffort } : {}),
+        ...(grant?.turnAllowRules?.length ? { turnAllowRules: grant.turnAllowRules } : {}),
         messages
       },
       // Record the starting window so only it can approve/answer/cancel this run.

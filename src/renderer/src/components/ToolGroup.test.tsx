@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { ReviewFinding } from '@shared/agent'
 import { APPROVAL_INTERRUPTED_NOTE } from '@shared/promptOutcome'
@@ -104,19 +105,21 @@ describe('ToolGroup', () => {
     expect(screen.queryByText('hello from the shell')).not.toBeInTheDocument()
   })
 
-  it('expands an output row from the keyboard (Enter / Space)', () => {
+  it('expands an output row from the keyboard (Enter / Space)', async () => {
+    const user = userEvent.setup()
     const items: ToolItem[] = [
       tool({ id: 'a', name: 'run_shell', status: 'done', args: { command: 'echo hi' }, output: 'shell output' })
     ]
-    const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
-    const head = container.querySelector('.tool-row__head--clickable') as HTMLElement
-    // The row is a focusable button for assistive tech.
-    expect(head).toHaveAttribute('role', 'button')
-    expect(head).toHaveAttribute('tabindex', '0')
+    render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    // The row's toggle is a real disclosure button, named by the row's status and call.
+    const toggle = screen.getByRole('button', { name: 'done Run echo hi' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
 
-    fireEvent.keyDown(head, { key: 'Enter' })
+    toggle.focus()
+    await user.keyboard('{Enter}')
     expect(screen.getByText('shell output')).toBeInTheDocument()
-    fireEvent.keyDown(head, { key: ' ' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await user.keyboard(' ')
     expect(screen.queryByText('shell output')).not.toBeInTheDocument()
   })
 
@@ -150,6 +153,29 @@ describe('ToolGroup', () => {
     )
     // Done glyph is ✓.
     expect(screen.getByText('✓')).toBeInTheDocument()
+  })
+
+  it('says each status in words to a screen reader, and keeps the symbols out of it', () => {
+    const statuses: [ToolItem['status'], string][] = [
+      ['done', 'done'],
+      ['error', 'failed'],
+      ['denied', 'denied'],
+      ['awaiting-approval', 'waiting for approval'],
+      ['running', 'running']
+    ]
+    for (const [status, words] of statuses) {
+      const { container, unmount } = render(
+        <ToolGroup
+          items={[tool({ id: 'a', name: 'run_shell', status, args: { command: 'make' }, output: 'out' })]}
+          onApprove={vi.fn()}
+        />
+      )
+      const head = container.querySelector('.tool-row__head') as HTMLElement
+      expect(within(head).getByRole('img', { name: words })).toBeInTheDocument()
+      expect(head.querySelector('.tool-row__icon')).toHaveAttribute('aria-hidden', 'true')
+      head.querySelectorAll('.tool-row__chevron').forEach((c) => expect(c).toHaveAttribute('aria-hidden', 'true'))
+      unmount()
+    }
   })
 
   it('shows a labelled spinner (not a glyph) while a tool is running', () => {
@@ -497,6 +523,27 @@ describe('ToolGroup', () => {
     expect(doneLi?.querySelector('.todo__mark')?.textContent).toBe('●')
   })
 
+  it('gives each todo its state in words, with the marks hidden from screen readers', () => {
+    const items: ToolItem[] = [
+      tool({
+        id: 't',
+        name: 'todo_write',
+        status: 'done',
+        args: {
+          todos: [
+            { content: 'Pending item', status: 'pending' },
+            { content: 'Active item', status: 'in_progress' },
+            { content: 'Finished item', status: 'completed' }
+          ]
+        }
+      })
+    ]
+    const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    const texts = [...container.querySelectorAll('.todo__text')].map((t) => t.textContent)
+    expect(texts).toEqual(['Pending item', 'Active item (in progress)', 'Finished item (done)'])
+    container.querySelectorAll('.todo__mark').forEach((m) => expect(m).toHaveAttribute('aria-hidden', 'true'))
+  })
+
   it('renders an image for a tool that produced screenshots', () => {
     const items: ToolItem[] = [
       tool({
@@ -840,9 +887,9 @@ describe('ToolGroup', () => {
     expect(onApprove).toHaveBeenCalledWith('call-14', 'deny')
   })
 
-  // "Allow" runs a shell command offline until the run has a shell-network grant;
-  // only "Allow for run" grants it, so the card has to say so before the user picks.
-  it('tells the user a shell command runs offline and which choice grants network', () => {
+  // A shell command runs offline until the chat has a shell-network grant, whichever
+  // answer the user picks; the card says so, and that network is asked separately.
+  it('tells the user a shell command runs offline and that network is asked separately', () => {
     const onApprove = vi.fn()
     render(
       <ToolGroup
@@ -859,7 +906,7 @@ describe('ToolGroup', () => {
       />
     )
     const note = screen.getByText(/Runs without network/)
-    expect(note).toHaveTextContent('Runs without network. Choose "Allow for run" to also allow network for this run.')
+    expect(note).toHaveTextContent('Runs without network. If it needs the network, Houston asks before allowing it.')
     expect(note.textContent).not.toContain('\u2014')
     fireEvent.click(screen.getByRole('button', { name: 'Allow for run' }))
     expect(onApprove).toHaveBeenCalledWith('call-12', 'always')
@@ -938,6 +985,31 @@ describe('ToolGroup live output', () => {
     rerender(<ToolGroup items={[{ ...running, status: 'done', liveOutput: undefined, output: 'ok' }]} onApprove={vi.fn()} />)
     expect(screen.queryByLabelText('Output so far')).toBeNull()
   })
+
+  it('keeps a failed command open on its output once its output was showing', () => {
+    const running = tool({ id: 'c', name: 'run_shell', status: 'running', args: { command: 'make' }, liveOutput: 'compiling a.c\n' })
+    const { rerender } = render(<ToolGroup items={[running]} onApprove={vi.fn()} />)
+    rerender(
+      <ToolGroup
+        items={[{ ...running, status: 'error', liveOutput: undefined, output: 'compiling a.c\nerror: a.c:3' }]}
+        onApprove={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/error: a\.c:3/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'failed Run make' })).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('folds a command that succeeded, and one that failed without streaming any output', () => {
+    const live = tool({ id: 'c', name: 'run_shell', status: 'running', args: { command: 'make' }, liveOutput: 'compiling\n' })
+    const { rerender, unmount } = render(<ToolGroup items={[live]} onApprove={vi.fn()} />)
+    rerender(<ToolGroup items={[{ ...live, status: 'done', liveOutput: undefined, output: 'built ok' }]} onApprove={vi.fn()} />)
+    expect(screen.queryByText('built ok')).toBeNull()
+    unmount()
+    const quiet = tool({ id: 'q', name: 'run_shell', status: 'running', args: { command: 'false' } })
+    const again = render(<ToolGroup items={[quiet]} onApprove={vi.fn()} />)
+    again.rerender(<ToolGroup items={[{ ...quiet, status: 'error', output: 'exit 1' }]} onApprove={vi.fn()} />)
+    expect(screen.queryByText('exit 1')).toBeNull()
+  })
 })
 
 describe('ToolGroup file links', () => {
@@ -950,9 +1022,15 @@ describe('ToolGroup file links', () => {
       tool({ id: 'r', name: 'read_file', status: 'done', args: { path: 'src/a.ts', offset: 12 }, output: 'x' })
     ]
     const { container } = withLinks(<ToolGroup items={items} onApprove={vi.fn()} />, open)
-    fireEvent.click(screen.getByRole('button', { name: 'src/a.ts' }))
+    const link = screen.getByRole('button', { name: 'src/a.ts' })
+    fireEvent.click(link)
     expect(open).toHaveBeenCalledWith({ path: 'src/a.ts', line: 12 })
-    expect(container.querySelector('.tool-row__head')).toHaveAttribute('aria-expanded', 'false')
+    const toggle = screen.getByRole('button', { name: 'done Read' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    // The link is the toggle's neighbour, not inside it (a button's contents are not
+    // separately reachable).
+    expect(toggle.contains(link)).toBe(false)
+    expect(container.querySelector('.tool-row__head')?.contains(link)).toBe(true)
   })
 
   it('keeps a path outside the project, and a non-file tool, as plain text', () => {

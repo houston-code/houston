@@ -297,7 +297,15 @@ export function memoryTaintSource(
     for (const call of m.toolCalls ?? []) {
       const kind = kindOf(call.name)
       if (kind === 'network' || kind === 'mcp' || call.name.startsWith('mcp__')) return call.name
-      if (call.name === 'dispatch_agent' || call.name === 'dispatch_writable_agent') return call.name
+      if (
+        call.name === 'dispatch_agent' ||
+        call.name === 'dispatch_writable_agent' ||
+        // Read-kind, but each returns names and descriptions an MCP server wrote.
+        call.name === 'mcp_list_resources' ||
+        call.name === 'mcp_list_prompts'
+      ) {
+        return call.name
+      }
       if (REPORTING_TOOLS.has(call.name) && call.id !== exceptCallId && isAnswered(call.id)) return call.name
       if (
         call.name === 'run_shell' &&

@@ -50,6 +50,19 @@ describe('ProposalCard', () => {
     await waitFor(() => expect(h.dismiss).toHaveBeenCalledWith('p1'))
   })
 
+  it('says "Starting" only on the choice that is starting', async () => {
+    let finish = (): void => {}
+    const h = handlers({ dismiss: vi.fn(() => new Promise<void>((done) => (finish = done))) })
+    render(<ProposalCard item={item()} handlers={h} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    // Every choice waits on the one in progress, but Start keeps its own label.
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeDisabled()
+    expect(screen.queryByText('Starting…')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Do it here' })).toBeDisabled()
+    finish()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled())
+  })
+
   it('shows a failed start inline and keeps the choices', async () => {
     const h = handlers({ start: vi.fn(async () => Promise.reject(new Error('Too many background sessions'))) })
     render(<ProposalCard item={item()} handlers={h} />)

@@ -4,11 +4,14 @@
  * wiring + the async file lookup live at the edges so this stays unit-testable.
  */
 import { builtinCommands } from '@shared/commands'
+import { stripControlChars } from './tui-wrap'
 
 /** A slash command, for completion and the live menu. */
 export interface CommandSpec {
   name: string
   description: string
+  /** What may follow the name (a built-in's `args`, a custom command's `argument-hint`), shown dim beside it. */
+  args?: string
 }
 
 /** The TUI's built-in commands, derived from the shared catalog (single source). */
@@ -29,6 +32,17 @@ export function commandQuery(line: string): string | null {
 }
 
 /**
+ * The `/<query>` token at the end of `line` after a space, mid-message ("then run
+ * /rev"). Completion only: a command runs only when the message starts with it, so
+ * this lets a user write a command name into prose (or set one up to send next)
+ * without retyping it. Null at the start of the line (that is {@link commandQuery}).
+ */
+export function inlineCommandQuery(line: string): string | null {
+  const m = /\s\/([\w-]*)$/.exec(line)
+  return m ? m[1] : null
+}
+
+/**
  * Produce a readline-style completion tuple `[completions, substring]` for the
  * current line. `files` are workspace-relative paths already matched against the
  * mention query by the caller (via findFiles). Command completion needs no I/O.
@@ -44,6 +58,13 @@ export function completeInput(
       .filter((c) => c.name.startsWith(cmd))
       .map((c) => `/${c.name} `)
     return [hits, line]
+  }
+  const inline = inlineCommandQuery(line)
+  if (inline !== null) {
+    const hits = commands
+      .filter((c) => c.name.toLowerCase().startsWith(inline.toLowerCase()))
+      .map((c) => `/${c.name} `)
+    return [hits, `/${inline}`]
   }
   const mention = mentionQuery(line)
   if (mention !== null) {
@@ -92,7 +113,15 @@ export const MENU_LIMIT = 8
  */
 export function commandMenu(line: string, commands: CommandSpec[]): CommandSpec[] | null {
   const q = commandQuery(line)
-  if (q === null) return null
+  if (q === null) {
+    // Mid-message, a `/` token lists the commands it could complete to, but only
+    // when one matches: a path in prose ("see /usr/lib") shows nothing.
+    const inline = inlineCommandQuery(line)
+    if (inline === null) return null
+    const p = inline.toLowerCase()
+    const hits = commands.filter((c) => c.name.toLowerCase().startsWith(p))
+    return hits.length ? hits : null
+  }
   const p = q.toLowerCase()
   // Every match: the renderer caps the list, so it can say how many it left out.
   return commands.filter((c) => c.name.toLowerCase().startsWith(p))
@@ -108,11 +137,21 @@ export function renderCommandMenu(
   paint: (s: string, ...styles: string[]) => string
 ): string[] {
   if (!matches.length) return [paint('  (no matching command)', 'dim')]
-  const shown = matches.slice(0, MENU_LIMIT)
-  const width = Math.max(...shown.map((c) => c.name.length))
-  const rows = shown.map(
-    (c) => `  ${paint(`/${c.name}`.padEnd(width + 1), 'cyan')}  ${paint(c.description, 'dim')}`
-  )
+  // A workspace's commands and skills describe themselves from files in the repo:
+  // nothing from them reaches the terminal as an escape sequence.
+  const shown = matches.slice(0, MENU_LIMIT).map((c) => ({
+    name: stripControlChars(c.name),
+    description: stripControlChars(c.description),
+    ...(c.args ? { args: stripControlChars(c.args) } : {})
+  }))
+  const width = Math.max(...shown.map((c) => c.name.length + (c.args ? c.args.length + 1 : 0)))
+  const rows = shown.map((c) => {
+    // The hint sits dim beside the name, like the desktop menu's.
+    const pad = ' '.repeat(Math.max(0, width - c.name.length - (c.args ? c.args.length + 1 : 0)))
+    const name = paint(`/${c.name}`, 'cyan')
+    const hint = c.args ? ` ${paint(c.args, 'dim')}` : ''
+    return `  ${name}${hint}${pad}   ${paint(c.description, 'dim')}`
+  })
   if (matches.length > shown.length) {
     rows.push(paint(`  … ${matches.length - shown.length} more`, 'dim'))
   }

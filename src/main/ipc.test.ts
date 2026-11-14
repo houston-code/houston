@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '@shared/constants'
@@ -12,8 +12,30 @@ const h = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
   isWorktreeDisposable: vi.fn(),
   removeWorktree: vi.fn(),
-  // channel -> the handler registered via ipcMain.handle, captured at registerIpc().
+  // channel -> the handler registered via ipcMain.handle, captured at registerIpc(),
+  // called as the app's own window calls it (see fromApp). `rawHandlers` and
+  // `rawOn` hold the same registrations unwrapped, for the sender-check tests.
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  rawHandlers: new Map<string, (...args: unknown[]) => unknown>(),
+  rawOn: new Map<string, (...args: unknown[]) => unknown>(),
+  // The renderer document the IPC sender check trusts, and the webContents it treats
+  // as registered chat windows (configureIpcSenderPolicy below).
+  appUrl: 'file:///app/out/renderer/index.html',
+  appSenders: new WeakSet<object>(),
+  /**
+   * Make a test's fake event look like what a chat window's page sends: its sender
+   * is a registered chat window, and it comes from that window's main frame showing
+   * the app. The tests below model calls from the app's renderer, so they go through
+   * the real sender check this way rather than around it.
+   */
+  fromApp(event: unknown): unknown {
+    if (!event || typeof event !== 'object') return event
+    const e = event as { sender?: Record<string, unknown> }
+    if (!e.sender || typeof e.sender !== 'object') return event
+    h.appSenders.add(e.sender)
+    if (!e.sender.mainFrame) e.sender.mainFrame = { url: `${h.appUrl}#/chat`, parent: null }
+    return Object.assign(e, { senderFrame: e.sender.mainFrame })
+  },
   // The app-icon badge, set at registration from the restored unread marks.
   setBadgeCount: vi.fn(),
   cancelRun: vi.fn(),
@@ -58,8 +80,11 @@ const h = vi.hoisted(() => ({
 // API at module load, so a sparse surface is enough.
 vi.mock('electron', () => ({
   ipcMain: {
-    handle: (channel: string, fn: (...args: unknown[]) => unknown) => h.handlers.set(channel, fn),
-    on: () => {}
+    handle: (channel: string, fn: (...args: unknown[]) => unknown) => {
+      h.rawHandlers.set(channel, fn)
+      h.handlers.set(channel, (event: unknown, ...args: unknown[]) => fn(h.fromApp(event), ...args))
+    },
+    on: (channel: string, fn: (...args: unknown[]) => unknown) => h.rawOn.set(channel, fn)
   },
   app: {
     getVersion: () => '0.0.0-test',
@@ -116,6 +141,8 @@ vi.mock('./memory', () => ({ saveMemory: h.saveMemory }))
 
 import { MAX_QUESTION_ANSWER_LEN, noteRetryThrottle, registerIpc, resolveDeleteAction } from './ipc'
 import { _resetRateLimits } from './rateLimitStore'
+import { UNTRUSTED_SENDER_ERROR, configureIpcSenderPolicy } from './ipcSender'
+import { log } from './logger'
 // The real checkpoints module (not mocked): the gating tests drive actual snapshots.
 import {
   recordOriginal,
@@ -142,6 +169,8 @@ import { takeQueue } from './agent/queue'
 // invariant here so registering handlers doesn't trip the unconfigured-seam guard.
 const MODULE_USER_DIR = mkdtempSync(join(tmpdir(), 'houston-ipc-userdata-'))
 setUserDataDir(MODULE_USER_DIR)
+// The packaged app's policy, with the tests' fake chat windows as the registry.
+configureIpcSenderPolicy({ startUrl: h.appUrl, isAppContents: (wc) => typeof wc === 'object' && wc !== null && h.appSenders.has(wc) })
 
 /**
  * The delete-confirmation dialog used to be a two-button `window.confirm` whose
@@ -872,7 +901,8 @@ describe('capability listing IPC (skills / agents)', () => {
     if (!fn) throw new Error(`no handler registered for ${channel}`)
     return fn
   }
-  const event = {} // these handlers ignore the IpcMainInvokeEvent
+  // These handlers read nothing from the event; it only has to come from the app window.
+  const event = { sender: {} }
 
   let ws: string
   beforeEach(() => {
@@ -901,6 +931,108 @@ describe('capability listing IPC (skills / agents)', () => {
   it('returns [] for a blank workspace', async () => {
     expect(await handler(IPC.skillsList)(event, '')).toEqual([])
     expect(await handler(IPC.agentsList)(event, '')).toEqual([])
+  })
+})
+
+/**
+ * A custom command's per-turn options reach the run only through main's own record:
+ * the renderer gets a token, never the rules, and a token works once.
+ */
+describe('custom command preparation IPC', () => {
+  registerIpc()
+  const handler = (channel: string): ((...args: unknown[]) => unknown) => {
+    const fn = h.handlers.get(channel)
+    if (!fn) throw new Error(`no handler registered for ${channel}`)
+    return fn
+  }
+  const from = { sender: { id: 5 } }
+  type Prepared = { ok: true; turn: { text: string; invokedAs: unknown; grant?: string }; notes: string[] } | { ok: false; error: string }
+  const prepare = (ws: string, name: string, args = ''): Promise<Prepared> =>
+    handler(IPC.commandPrepare)(from, ws, name, args, `/${name}${args ? ` ${args}` : ''}`) as Promise<Prepared>
+  const runReq = (): Record<string, unknown> => h.runAndDrain.mock.calls.at(-1)![2] as Record<string, unknown>
+
+  let ws: string
+  beforeEach(() => {
+    vi.clearAllMocks()
+    h.activeRun.mockReturnValue(null)
+    ws = realpathSync(mkdtempSync(join(tmpdir(), 'houston-ipc-cmd-')))
+    mkdirSync(join(ws, '.houston/commands'), { recursive: true })
+    writeFileSync(join(ws, '.houston/commands/quick.md'), '---\ndescription: Quick\neffort: low\nallowed-tools: glob\n---\nLook at $ARGUMENTS')
+  })
+  afterEach(() => {
+    updateSettings({ trustedFolders: [] })
+    rmSync(ws, { recursive: true, force: true })
+  })
+
+  it("runs the turn on the command's effort, ignoring an untrusted folder's tools, and keeps the chat's settings", async () => {
+    const res = await prepare(ws, 'quick', 'the logs')
+    if (!res.ok) throw new Error(res.error)
+    expect(res.turn.text).toBe('Look at the logs')
+    expect(res.notes.join('\n')).toMatch(/ignoring allowed-tools in \/quick/)
+    expect(JSON.stringify(res)).not.toContain('"glob"')
+    const conv = createConversation({ workspace: ws, providerId: 'p', model: 'm' })
+    await handler(IPC.agentStart)(from, {
+      runId: 'r1', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', reasoningEffort: 'high',
+      userText: res.turn.text, invokedAs: res.turn.invokedAs, commandGrant: res.turn.grant
+    })
+    expect(runReq()).toMatchObject({ reasoningEffort: 'low' })
+    expect(runReq().turnAllowRules).toBeUndefined()
+    expect(getConversation(conv.id)?.reasoningEffort).toBe('high')
+    // Spent: sending the same token again runs on the chat's own effort.
+    await handler(IPC.agentStart)(from, {
+      runId: 'r2', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', reasoningEffort: 'high',
+      userText: 'again', commandGrant: res.turn.grant
+    })
+    expect(runReq()).toMatchObject({ reasoningEffort: 'high' })
+    deleteConversation(conv.id)
+  })
+
+  it("pre-approves a trusted folder's command tools, for a chat in that folder only", async () => {
+    const { loadProjectConfig } = await import('./agent/projectConfig')
+    const { elevatedHash } = await loadProjectConfig(ws)
+    updateSettings({ trustedFolders: [{ path: ws, decision: 'trusted', hash: elevatedHash, decidedAt: 1 }] })
+    const res = await prepare(ws, 'quick')
+    if (!res.ok) throw new Error(res.error)
+    expect(res.turn.grant).toMatch(/^[0-9a-f]{32}$/)
+    const other = createConversation({ workspace: tmpdir(), providerId: 'p', model: 'm' })
+    await handler(IPC.agentStart)(from, {
+      runId: 'r3', conversationId: other.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: 'x', commandGrant: res.turn.grant
+    })
+    expect(runReq().turnAllowRules).toBeUndefined()
+    const again = await prepare(ws, 'quick')
+    if (!again.ok) throw new Error(again.error)
+    const conv = createConversation({ workspace: ws, providerId: 'p', model: 'm' })
+    await handler(IPC.agentStart)(from, {
+      runId: 'r4', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: again.turn.text, commandGrant: again.turn.grant
+    })
+    expect(runReq().turnAllowRules).toEqual([{ action: 'allow', tool: 'glob', match: '*' }])
+    deleteConversation(conv.id)
+    deleteConversation(other.id)
+  })
+
+  it('refuses a command send that races a live run rather than queue it without its options', async () => {
+    const res = await prepare(ws, 'quick')
+    if (!res.ok) throw new Error(res.error)
+    const conv = createConversation({ workspace: ws, providerId: 'p', model: 'm' })
+    h.activeRun.mockReturnValue('live')
+    const send = vi.fn()
+    updateSettings({ desktopNotifications: false })
+    configureHasKey(() => false)
+    await handler(IPC.agentStart)({ sender: { id: 5, send, isDestroyed: () => false } }, {
+      runId: 'r5', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: res.turn.text, commandGrant: res.turn.grant
+    })
+    expect(h.runAndDrain).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledWith(IPC.agentEvent, expect.objectContaining({ type: 'error', message: expect.stringContaining('once the current turn ends') }))
+    expect(getConversation(conv.id)?.queuedInput).toBeUndefined()
+    deleteConversation(conv.id)
+  })
+
+  it('says so for a command that is gone, and lists skills with the custom commands', async () => {
+    expect(await prepare(ws, 'nope')).toEqual({ ok: false, error: 'No command /nope in this folder any more.' })
+    mkdirSync(join(ws, '.houston/skills/pdf'), { recursive: true })
+    writeFileSync(join(ws, '.houston/skills/pdf/SKILL.md'), '---\nname: pdf\ndescription: PDFs\n---\nbody')
+    const listed = (await handler(IPC.commandsList)(from, ws)) as Array<{ name: string; skill?: boolean }>
+    expect(listed.find((c) => c.name === 'pdf')).toMatchObject({ skill: true })
   })
 })
 
@@ -1070,7 +1202,8 @@ describe('clipboardRead', () => {
     if (!fn) throw new Error(`no handler registered for ${channel}`)
     return fn
   }
-  const event = {} // the handler ignores the IpcMainInvokeEvent
+  // The handler reads nothing from the event; it only has to come from the app window.
+  const event = { sender: {} }
   const read = (): Promise<{ text: string; image: { mediaType: string; data: string } | null }> =>
     handler(IPC.clipboardRead)(event) as Promise<{
       text: string
@@ -1373,5 +1506,86 @@ describe('workspace file handlers', () => {
     updateSettings({ recentWorkspaces: [dir] })
     expect(await call(IPC.workspaceListDir, dir, '')).toEqual([{ name: 'a.txt', path: 'a.txt', isDirectory: false }])
     expect(await call(IPC.workspaceReadFile, dir, 'a.txt')).toMatchObject({ kind: 'text', text: 'hello' })
+  })
+})
+
+/**
+ * Every handler refuses a request unless it comes from a registered chat window's main
+ * frame showing the app's own document. These call the registrations unwrapped, with
+ * events as a helper window, a subframe, or a navigated-away page would send them.
+ */
+describe('IPC sender check', () => {
+  registerIpc()
+  const mainFrame = (url = `${h.appUrl}#/chat`): { url: string; parent: null } => ({ url, parent: null })
+  const appSender = (frame = mainFrame()): Record<string, unknown> => {
+    const sender = { id: 4242, mainFrame: frame, send: () => {}, isDestroyed: () => false, once: () => {} }
+    h.appSenders.add(sender)
+    return sender
+  }
+  const invoke = (channel: string, event: unknown, ...args: unknown[]): Promise<unknown> =>
+    Promise.resolve().then(() => h.rawHandlers.get(channel)!(event, ...args))
+  const channels = [IPC.appGetVersion, IPC.sandboxStatus, IPC.workspaceOpenPath, IPC.conversationDelete, IPC.agentStart, IPC.customizeList]
+
+  it('answers the app window\'s main frame', async () => {
+    const sender = appSender()
+    expect(await invoke(IPC.appGetVersion, { sender, senderFrame: sender.mainFrame })).toEqual(expect.any(String))
+  })
+
+  it('refuses a webContents that is not a registered chat window', async () => {
+    const frame = mainFrame()
+    const stranger = { id: 9, mainFrame: frame }
+    for (const ch of channels) {
+      await expect(invoke(ch, { sender: stranger, senderFrame: frame }), ch).rejects.toThrow(UNTRUSTED_SENDER_ERROR)
+    }
+  })
+
+  it('refuses a subframe of a chat window', async () => {
+    const sender = appSender()
+    const sub = { url: h.appUrl, parent: sender.mainFrame }
+    for (const ch of channels) {
+      await expect(invoke(ch, { sender, senderFrame: sub }), ch).rejects.toThrow(UNTRUSTED_SENDER_ERROR)
+    }
+  })
+
+  it('refuses a chat window showing another document, or with no frame', async () => {
+    const away = appSender(mainFrame('https://attacker.example/'))
+    const otherFile = appSender(mainFrame('file:///tmp/evil.html'))
+    const gone = appSender()
+    for (const ch of channels) {
+      await expect(invoke(ch, { sender: away, senderFrame: away.mainFrame }), ch).rejects.toThrow(UNTRUSTED_SENDER_ERROR)
+      await expect(invoke(ch, { sender: otherFile, senderFrame: otherFile.mainFrame }), ch).rejects.toThrow(UNTRUSTED_SENDER_ERROR)
+      await expect(invoke(ch, { sender: gone, senderFrame: null }), ch).rejects.toThrow(UNTRUSTED_SENDER_ERROR)
+    }
+  })
+
+  it('logs a renderer error only from a chat window\'s own page', () => {
+    const report = h.rawOn.get(IPC.rendererError)!
+    const error = vi.spyOn(log, 'error').mockImplementation(() => {})
+    try {
+      const stranger = { id: 11, mainFrame: mainFrame() }
+      report({ sender: stranger, senderFrame: stranger.mainFrame }, { kind: 'error', message: 'forged' })
+      expect(error).not.toHaveBeenCalled()
+      const sender = appSender()
+      report({ sender, senderFrame: sender.mainFrame }, { kind: 'error', message: 'real' })
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('real'))
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  it('drops a fire-and-forget message from an untrusted sender', () => {
+    const viewing = h.rawOn.get(IPC.chatViewing)!
+    const once = vi.fn()
+    const stranger = { id: 10, mainFrame: mainFrame(), once }
+    viewing({ sender: stranger, senderFrame: stranger.mainFrame }, 'chat-1', true)
+    expect(once).not.toHaveBeenCalled()
+    const sender = appSender()
+    const sub = { url: h.appUrl, parent: sender.mainFrame }
+    const trustedOnce = vi.fn()
+    sender.once = trustedOnce
+    viewing({ sender, senderFrame: sub }, 'chat-1', true)
+    expect(trustedOnce).not.toHaveBeenCalled()
+    viewing({ sender, senderFrame: sender.mainFrame }, 'chat-1', true)
+    expect(trustedOnce).toHaveBeenCalled()
   })
 })

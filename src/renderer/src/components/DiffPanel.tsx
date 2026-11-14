@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { DiffHunk, FileDiff, WorkingTreeChanges } from '@shared/workingTree'
+import type { DiffHunk, FileChangeStatus, FileDiff, WorkingTreeChanges } from '@shared/workingTree'
 import {
   canRevertHunks,
   fileDiffSignature,
@@ -23,8 +23,11 @@ import {
 } from '../lib/diffComments'
 import { CONTEXT_STEP, contextRoom, expandHunk, fileLines, hunkMatches } from '../lib/diffContext'
 import { DiffView, lineKey, type DiffLayout, type DiffLineTarget } from './DiffView'
+import { ItemBoundary } from './ItemBoundary'
 import { Icon } from './Icon'
 import { CommitForm } from './CommitForm'
+import { PathLabel } from './PathLabel'
+import { ipcErrorMessage } from '../lib/ipcError'
 
 /** Below this many files the list starts fully expanded; above it, collapsed. */
 const AUTO_EXPAND_LIMIT = 8
@@ -37,6 +40,17 @@ const SCOPE_LABEL: Record<ChangesScope, string> = {
   chat: 'This chat',
   tree: 'Working tree'
 }
+
+/** Each file's change as a letter in its row, and in words for a screen reader. */
+const STATUS_TAG: Record<FileChangeStatus, { letter: string; label: string }> = {
+  added: { letter: 'A', label: 'Added' },
+  modified: { letter: 'M', label: 'Modified' },
+  deleted: { letter: 'D', label: 'Deleted' },
+  renamed: { letter: 'R', label: 'Renamed' },
+  untracked: { letter: 'U', label: 'Untracked' }
+}
+
+const SCOPES = ['turn', 'chat', 'tree'] as const
 
 const STORE_SCOPE = 'houston.changes.scope'
 const STORE_LAYOUT = 'houston.changes.layout'
@@ -315,12 +329,14 @@ function FileSection({
           aria-expanded={open}
         >
           <span className="tool-row__chevron">{open ? '▾' : '▸'}</span>
-          <span className="changes-file__path" title={file.path}>
-            {file.oldPath && file.oldPath !== file.path && (
-              <span className="changes-file__old">{file.oldPath} → </span>
-            )}
-            {file.path}
-          </span>
+          <span
+            className={`changes-file__status changes-file__status--${file.status}`}
+            title={STATUS_TAG[file.status].label}
+          >
+            <span aria-hidden="true">{STATUS_TAG[file.status].letter}</span>
+            <span className="sr-only">{STATUS_TAG[file.status].label}</span>
+          </span>{' '}
+          <PathLabel className="changes-file__path" path={file.path} oldPath={file.oldPath} />
           <span className="tool-row__spacer" />
           {mine.length > 0 && (
             <span className="changes-file__comments" aria-label={`${mine.length} comment${mine.length === 1 ? '' : 's'}`}>
@@ -383,15 +399,20 @@ function FileSection({
                 </div>
                 {confirm === i && confirmBar(i)}
                 {room && contextButton(i, 'above', room.above)}
-                <DiffView
-                  diff={h.lines}
-                  path={file.path}
-                  start={hunkStart(h)}
-                  layout={layout}
-                  onLineClick={onLineClick}
-                  renderBelow={renderBelow}
-                  reveal={reveal}
-                />
+                {/* A hunk that fails to render (a hostile file name or content) shows a
+                    notice in place instead of taking the whole window down; the panel's
+                    open state is remembered, so that would recur on every launch. */}
+                <ItemBoundary resetKey={h.lines}>
+                  <DiffView
+                    diff={h.lines}
+                    path={file.path}
+                    start={hunkStart(h)}
+                    layout={layout}
+                    onLineClick={onLineClick}
+                    renderBelow={renderBelow}
+                    reveal={reveal}
+                  />
+                </ItemBoundary>
                 {room && contextButton(i, 'below', room.below)}
               </div>
               )
@@ -621,7 +642,7 @@ export function DiffPanel({
         if (seq === loadSeq.current) setData({ scope, chat })
       }
     } catch (e) {
-      if (seq === loadSeq.current) setError((e as Error).message)
+      if (seq === loadSeq.current) setError(ipcErrorMessage(e))
     } finally {
       if (seq === loadSeq.current) setLoading(false)
     }
@@ -663,6 +684,21 @@ export function DiffPanel({
     setStoredScope(s)
     writePref(STORE_SCOPE, s)
     setNotice(null)
+  }
+  // Arrow keys pick the next scope that can be chosen (the chat scopes wait for a
+  // chat), as a radio group does.
+  const onScopeKey = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    const step: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }
+    const open = SCOPES.filter((s) => s === 'tree' || conversationId)
+    const i = open.indexOf(scope)
+    let next: number
+    if (e.key in step) next = (i + step[e.key] + open.length) % open.length
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = open.length - 1
+    else return
+    e.preventDefault()
+    pickScope(open[next])
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')[SCOPES.indexOf(open[next])]?.focus()
   }
   const pickLayout = (l: DiffLayout): void => {
     setLayout(l)
@@ -713,13 +749,20 @@ export function DiffPanel({
     <section className="changes-view" aria-label="Changes">
       <header className="changes-panel__head changes-view__head">
         <div className="changes-panel__titles">
-          <div className="changes-view__scopes" role="radiogroup" aria-label="Show changes from">
-            {(['turn', 'chat', 'tree'] as const).map((s) => (
+          <div
+            className="changes-view__scopes"
+            role="radiogroup"
+            aria-label="Show changes from"
+            onKeyDown={onScopeKey}
+          >
+            {SCOPES.map((s) => (
               <button
                 key={s}
                 type="button"
                 role="radio"
                 aria-checked={scope === s}
+                // One Tab stop for the group (the chosen scope); arrows move within it.
+                tabIndex={scope === s ? 0 : -1}
                 className={`changes-view__scope${scope === s ? ' changes-view__scope--on' : ''}`}
                 disabled={s !== 'tree' && !conversationId}
                 title={s !== 'tree' && !conversationId ? 'Start the chat first' : undefined}

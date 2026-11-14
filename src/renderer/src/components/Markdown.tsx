@@ -53,7 +53,13 @@ function renderInline(nodes: Inline[], files: FileLinks | null): JSX.Element[] {
   })
 }
 
-function renderBlock(block: Block, key: number, visuals: boolean, files: FileLinks | null): JSX.Element {
+function renderBlock(
+  block: Block,
+  key: number,
+  visuals: boolean,
+  files: FileLinks | null,
+  streaming: boolean
+): JSX.Element {
   switch (block.type) {
     case 'heading': {
       const Tag = `h${Math.min(block.level, 6)}` as keyof JSX.IntrinsicElements
@@ -73,7 +79,7 @@ function renderBlock(block: Block, key: number, visuals: boolean, files: FileLin
       const kind = visuals ? visualKind(block.lang, block.info) : null
       return kind ? (
         <ItemBoundary key={key} resetKey={block.value}>
-          <VisualBlock kind={kind} block={block} />
+          <VisualBlock kind={kind} block={block} streaming={streaming} />
         </ItemBoundary>
       ) : (
         <CodeBlock key={key} lang={block.lang} value={block.value} />
@@ -84,13 +90,13 @@ function renderBlock(block: Block, key: number, visuals: boolean, files: FileLin
     case 'blockquote':
       return (
         <blockquote key={key} className="md-quote">
-          {block.children.map((b, i) => renderBlock(b, i, visuals, files))}
+          {block.children.map((b, i) => renderBlock(b, i, visuals, files, streaming))}
         </blockquote>
       )
     case 'list': {
       const items = block.items.map((it, i) =>
         it.checked === undefined ? (
-          <li key={i}>{it.blocks.map((b, j) => renderBlock(b, j, visuals, files))}</li>
+          <li key={i}>{it.blocks.map((b, j) => renderBlock(b, j, visuals, files, streaming))}</li>
         ) : (
           // A GFM task item: a read-only box in place of the bullet, like GitHub.
           <li key={i} className="md-task">
@@ -103,7 +109,7 @@ function renderBlock(block: Block, key: number, visuals: boolean, files: FileLin
             >
               {it.checked && <Icon name="check" size={11} />}
             </span>
-            <div className="md-task__body">{it.blocks.map((b, j) => renderBlock(b, j, visuals, files))}</div>
+            <div className="md-task__body">{it.blocks.map((b, j) => renderBlock(b, j, visuals, files, streaming))}</div>
           </li>
         )
       )
@@ -152,19 +158,29 @@ function renderBlock(block: Block, key: number, visuals: boolean, files: FileLin
  * deltas only re-parse when the text actually grows. With `visuals`, svg, mermaid,
  * and html blocks render as inline visuals (see lib/visuals.ts); leave it off for
  * text that comes from outside the conversation's own replies (MCP prompts).
+ * `streaming` says more text is still on its way, so a visual whose closing fence
+ * hasn't arrived yet waits for it; once the text is whole, such a block is just code.
  */
-export const Markdown = memo(function Markdown({ text, visuals = false }: { text: string; visuals?: boolean }): JSX.Element {
+export const Markdown = memo(function Markdown({
+  text,
+  visuals = false,
+  streaming = false
+}: {
+  text: string
+  visuals?: boolean
+  streaming?: boolean
+}): JSX.Element {
   // Model-written text: a render bug on some input shows a notice in its place
   // rather than blanking the window, and the next streamed delta tries again.
   return (
     <ItemBoundary resetKey={text}>
-      <MarkdownBody text={text} visuals={visuals} />
+      <MarkdownBody text={text} visuals={visuals} streaming={streaming} />
     </ItemBoundary>
   )
 })
 
-function MarkdownBody({ text, visuals }: { text: string; visuals: boolean }): JSX.Element {
+function MarkdownBody({ text, visuals, streaming }: { text: string; visuals: boolean; streaming: boolean }): JSX.Element {
   const blocks = parseMarkdown(text)
   const files = useFileLinks()
-  return <div className="md">{blocks.map((b, i) => renderBlock(b, i, visuals, files))}</div>
+  return <div className="md">{blocks.map((b, i) => renderBlock(b, i, visuals, files, streaming))}</div>
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { numberDiff, replacementPairs, tokenize, wordDiff, type DiffLine, type NumberedLine } from '@shared/diff'
 import { diffLanguage, highlightLine, markRuns } from '../lib/diffHighlight'
 
@@ -158,6 +158,10 @@ export function DiffView({
   reveal?: ReadonlySet<string>
 }): JSX.Element {
   const [chunks, setChunks] = useState(1)
+  // With comments on, the line numbers are buttons: one Tab stop for the whole view
+  // (the one used last, else the first), and ArrowUp/ArrowDown move between them.
+  const [focusKey, setFocusKey] = useState<string | null>(null)
+  const preRef = useRef<HTMLPreElement>(null)
   const lines = useMemo(() => {
     const numbered = numberDiff(diff)
     if (!start) return numbered
@@ -211,12 +215,51 @@ export function DiffView({
       </div>
     ) : null
 
+  // The line-number buttons in the order they render.
+  const buttonKeys: string[] = []
+  if (onLineClick) {
+    if (layout === 'split') {
+      for (const r of splitRows(shown)) {
+        if (r.skip !== undefined) continue
+        const left = r.left !== undefined ? shown[r.left] : undefined
+        const right = r.right !== undefined ? shown[r.right] : undefined
+        const lt = left && left.type !== 'ctx' ? targetOf(left) : null
+        const rt = right ? targetOf(right, right.type === 'ctx' ? 'new' : undefined) : null
+        if (lt) buttonKeys.push(lineKey(lt))
+        if (rt) buttonKeys.push(lineKey(rt))
+      }
+    } else {
+      for (const l of shown) {
+        const t = targetOf(l)
+        if (t) buttonKeys.push(lineKey(t))
+      }
+    }
+  }
+  const tabbable = focusKey !== null && buttonKeys.includes(focusKey) ? focusKey : (buttonKeys[0] ?? null)
+  const onGutterKey = (e: ReactKeyboardEvent<HTMLButtonElement>, key: string): void => {
+    const i = buttonKeys.indexOf(key)
+    let next: number
+    if (e.key === 'ArrowDown') next = Math.min(buttonKeys.length - 1, i + 1)
+    else if (e.key === 'ArrowUp') next = Math.max(0, i - 1)
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = buttonKeys.length - 1
+    else return
+    e.preventDefault()
+    const target = buttonKeys[next]
+    setFocusKey(target)
+    preRef.current?.querySelector<HTMLElement>(`[data-line-key="${target}"]`)?.focus()
+  }
+
   // The line number, or with comments on, a button that opens a comment on the line.
   const gutterNo = (t: DiffLineTarget | null, shown: number | undefined): JSX.Element =>
     onLineClick && t ? (
       <button
         type="button"
         className="diff__no diff__no--btn"
+        data-line-key={lineKey(t)}
+        tabIndex={lineKey(t) === tabbable ? 0 : -1}
+        onFocus={() => setFocusKey(lineKey(t))}
+        onKeyDown={(e) => onGutterKey(e, lineKey(t))}
         aria-label={`Comment on ${t.side === 'old' ? 'removed ' : ''}line ${t.line}${path ? ` of ${path}` : ''}`}
         onClick={(e) => {
           e.stopPropagation()
@@ -260,7 +303,7 @@ export function DiffView({
       )
     }
     return (
-      <pre className="diff diff--split" style={{ ['--diff-gutter' as string]: `${width}ch` }}>
+      <pre ref={preRef} className="diff diff--split" style={{ ['--diff-gutter' as string]: `${width}ch` }}>
         {splitRows(shown).map((r, k) =>
           r.skip !== undefined ? (
             skipLine(shown[r.skip], k)
@@ -281,7 +324,7 @@ export function DiffView({
   }
 
   return (
-    <pre className="diff" style={{ ['--diff-gutter' as string]: `${width}ch` }}>
+    <pre ref={preRef} className="diff" style={{ ['--diff-gutter' as string]: `${width}ch` }}>
       {shown.map((l, i) =>
         // A `skip` stands for unchanged lines folded away by hunkDiff; showing it
         // as a normal line would print the count as if it were code.

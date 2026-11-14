@@ -4,9 +4,10 @@ import { Icon } from './Icon'
 
 /**
  * A non-blocking inline banner asking whether to trust a folder whose project
- * config (`.houston/settings.json`) ELEVATES: defines `allow` permission rules,
- * hooks, or MCP servers. Those auto-approve actions or run processes as the
- * user, so an undecided (or drifted) folder runs with them OFF; this banner is
+ * config (`.houston/settings.json`, `.houston/commands`, `.houston/plugins/*.js`)
+ * ELEVATES: defines `allow` permission rules, hooks, MCP servers, commands that
+ * pre-approve tools, or plugin files. Those auto-approve actions or run processes
+ * as the user, so an undecided (or drifted) folder runs with them OFF; this banner is
  * the consent that turns them on. Mirrors GitInitBanner's shape: never gates the
  * run, never steals focus.
  *
@@ -88,9 +89,27 @@ export function TrustFolderBanner({
   const parts = [
     c.allowRules ? `${c.allowRules} allow rule${c.allowRules === 1 ? '' : 's'}` : '',
     c.hooks ? `${c.hooks} hook${c.hooks === 1 ? '' : 's'}` : '',
-    c.mcpServers ? `${c.mcpServers} MCP server${c.mcpServers === 1 ? '' : 's'}` : ''
+    c.mcpServers ? `${c.mcpServers} MCP server${c.mcpServers === 1 ? '' : 's'}` : '',
+    c.commands ? `${c.commands} command${c.commands === 1 ? '' : 's'} that pre-approve${c.commands === 1 ? 's' : ''} tools` : '',
+    // Name every plugin file: trusting the folder consents to running exactly these.
+    c.plugins
+      ? `${c.plugins} plugin${c.plugins === 1 ? '' : 's'}${status.plugins?.length ? ` (${status.plugins.join(', ')})` : ''}`
+      : ''
   ].filter(Boolean)
   const summary = parts.join(', ')
+  // Where the elevating config lives: the settings file, the commands folder, the
+  // plugins folder, or any mix of them.
+  const settingsPart = c.allowRules > 0 || c.hooks > 0 || c.mcpServers > 0
+  const sources = [
+    settingsPart || (!c.commands && !c.plugins) ? '.houston/settings.json' : '',
+    c.commands ? '.houston/commands' : '',
+    c.plugins ? '.houston/plugins' : ''
+  ].filter(Boolean)
+  const source =
+    sources.length < 3 ? sources.join(' and ') : `${sources.slice(0, -1).join(', ')}, and ${sources[sources.length - 1]}`
+  const pluginNote = c.plugins
+    ? ' Plugins also need the projectPlugins setting turned on, and any plugin added or edited later asks again.'
+    : ''
 
   return (
     <section className="git-init-banner trust-banner" role="region" aria-labelledby="trust-banner-title">
@@ -105,8 +124,10 @@ export function TrustFolderBanner({
         </p>
         <p className="git-init-banner__text">
           {status.state === 'changed'
-            ? `The allow rules, hooks, or MCP servers in this project’s .houston/settings.json changed since you trusted it (now: ${summary}). They stay off until you trust it again.`
-            : `Its .houston/settings.json defines ${summary}. Hooks and MCP servers run as you, and allow rules auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.`}
+            ? `The extra permissions in this project’s ${source} changed since you trusted it (now: ${summary}). They stay off until you trust it again.${pluginNote}`
+            : c.commands || c.plugins
+              ? `It defines ${summary} (in ${source}). Hooks, MCP servers, and plugins run as you, and allow rules and pre-approving commands auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.${pluginNote}`
+              : `Its .houston/settings.json defines ${summary}. Hooks and MCP servers run as you, and allow rules auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.`}
         </p>
         <div className="git-init-banner__actions">
           <button

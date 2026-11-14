@@ -105,6 +105,7 @@ export const IPC = {
   /** Keep an interactive HTML visual for its sandboxed frame to load; returns its id. */
   visualRegisterHtml: 'visual:registerHtml',
   commandsList: 'commands:list',
+  commandPrepare: 'commands:prepare',
   /** A verification command inferred from the project's files (Settings > Agent Behavior). */
   verifyInfer: 'verify:infer',
   /** List the workspace's skills (.houston/skills) as {name, description}, for /skills. */
@@ -178,6 +179,8 @@ export const IPC = {
   mcpOAuthLogin: 'mcp:oauthLogin',
   mcpOAuthLogout: 'mcp:oauthLogout',
   mcpStatus: 'mcp:status',
+  /** Read-only search of the official MCP Registry (Settings > MCP Servers, Browse registry). */
+  mcpRegistrySearch: 'mcp:registrySearch',
   // Optional integrations status (gh CLI, formatters) — for the Settings UI hint.
   integrationsGet: 'integrations:get',
   /** Settings > Scheduled runs over the scheduler service. */

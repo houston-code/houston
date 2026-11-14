@@ -103,14 +103,19 @@ export function todoEvidenceGaps(before: Todo[], after: Todo[], ledger: CheckOra
   return gaps
 }
 
-/** The line todo_write adds to its result for the model, one per gap. */
-export function todoGapNote(g: TodoGap): string {
+/** What is missing behind a gap, as one clause: `"X" is marked completed, but ...`. */
+export function todoGapFacts(g: TodoGap): string {
   const what = (kinds: RequiredCheck[]): string => kinds.map((k) => NEED_TEXT[k]).join(', ')
   const facts: string[] = []
   if (g.missing.length) facts.push(`Houston has no passing ${what(g.missing)} recorded this turn`)
   if (g.stale?.length) facts.push(`the last passing ${what(g.stale)} Houston recorded came before a later file change`)
+  return `"${g.item}" is marked completed, but ${facts.join(', and ')}`
+}
+
+/** The line todo_write adds to its result for the model, one per gap. */
+export function todoGapNote(g: TodoGap): string {
   const next = g.stale?.length
     ? 'Run it on the final code, or keep the item open or say so when you report.'
     : "If it didn't run, keep the item open or say so when you report."
-  return `[note: "${g.item}" is marked completed, but ${facts.join(', and ')}. ${next}]`
+  return `[note: ${todoGapFacts(g)}. ${next}]`
 }

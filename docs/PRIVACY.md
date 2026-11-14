@@ -73,6 +73,9 @@ only to the destination you configured:
   flow.
 - **External tools (Model Context Protocol servers).** Data needed for a tool's
   calls goes to the server you configured.
+- **MCP Registry.** When you search it from Settings > MCP Servers or with
+  `/mcp search`, your search words go to the official MCP Registry
+  (registry.modelcontextprotocol.io). Nothing is sent until you search.
 - **GitHub.** If you have the GitHub CLI (`gh`) installed and signed in, the GitHub
   tools send their requests (for example, opening a pull request or reading an
   issue) to GitHub through your own `gh`, under your GitHub account.

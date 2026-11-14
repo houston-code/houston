@@ -2,9 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FileEntry } from '@shared/files'
 import { Icon } from './Icon'
 import { FilePreview } from './FilePreview'
+import { ItemBoundary } from './ItemBoundary'
+import { PathLabel } from './PathLabel'
 import { baseName } from '../lib/paths'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { tabStop, treeKeyDown } from '../lib/rovingFocus'
+import { ipcErrorMessage } from '../lib/ipcError'
 
 /** Debounce before a filter query hits the fuzzy file search (keeps typing smooth). */
 const FILTER_DEBOUNCE_MS = 160
@@ -229,7 +232,7 @@ export function FilesPanel({
       setChildrenByDir(loaded)
       setExpanded(open)
     } catch (e) {
-      setError((e as Error).message)
+      setError(ipcErrorMessage(e))
     } finally {
       loadingRef.current = false
       setLoadingRoot(false)
@@ -439,7 +442,7 @@ export function FilesPanel({
                     >
                       <span className="files-row__chevron" />
                       <Icon name="file" className="files-row__icon" />
-                      <span className="files-row__name files-row__name--path">{p}</span>
+                      <PathLabel className="files-row__name files-row__name--path" path={p} />
                     </button>
                   </div>
                 ))
@@ -468,14 +471,19 @@ export function FilesPanel({
         </div>
 
         <div className="files-panel__preview">
-          <FilePreview
-            workspace={workspace ?? ''}
-            path={selected}
-            onOpen={onOpen}
-            reloadSignal={previewReload}
-            // Only the file the panel was opened on carries the line.
-            line={initialPath && selected === normalizeRelPath(initialPath) ? initialLine : undefined}
-          />
+          {/* A file that fails to preview shows a notice here instead of taking the
+              window down (the docked panel reopens on launch, so it would recur).
+              Selecting another file clears it. */}
+          <ItemBoundary resetKey={selected}>
+            <FilePreview
+              workspace={workspace ?? ''}
+              path={selected}
+              onOpen={onOpen}
+              reloadSignal={previewReload}
+              // Only the file the panel was opened on carries the line.
+              line={initialPath && selected === normalizeRelPath(initialPath) ? initialLine : undefined}
+            />
+          </ItemBoundary>
         </div>
       </div>
     </>

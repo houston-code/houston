@@ -87,11 +87,13 @@ import { cwdFromRoot, runInSession, shellCwdLabel, shellCwdLine, type ShellSessi
 import {
   presentUntrusted,
   presentUntrustedInline,
+  stripBidiControls,
   untrustedPreamble,
   type UntrustedPart
 } from './untrusted'
 import type { FetchedDocument } from './webfetch'
 import { fetchUrlAsDocument, truncationNote } from './webfetch'
+import { OutputTee, SPILL_MAX_BYTES, spillNote, type SpillResult } from './shellSpill'
 import { stripAnsi } from './loopback'
 import { assertNoRedactedValues, findSecret } from './redact'
 import {
@@ -302,6 +304,12 @@ export interface ToolContext {
   /** Max bytes of a single shell command's output kept in a tool result (context guard). */
   shellOutputMaxBytes?: number
   /**
+   * Save a foreground run_shell command's whole output when its result had to be
+   * clamped, redacted, and say where (see shellSpill.ts). Null when the run's spill
+   * budget is spent or the write failed. Unset: clamped output is not kept.
+   */
+  spillShellOutput?: (output: string, truncatedNote?: string) => Promise<SpillResult | null>
+  /**
    * The run's watch over exec-capable git state (hooks, fsmonitor, filter drivers, …)
    * that a shell command could plant for git to run outside the sandbox later (injected
    * by the loop, shared with writable subagents; see gitGuard.ts). run_shell and the
@@ -428,6 +436,8 @@ export interface ToolDef {
 }
 
 const MAX_GLOB_RESULTS = 200
+/** The marker CappedOutput leaves where a stream's middle was dropped while running. */
+const STREAM_TRUNCATION_MARKER = /\n\[\.\.\. \d+ bytes truncated \.\.\.\]\n/
 /** Largest notebook read_file parses and renders; JSON has to be held whole to parse. */
 const MAX_NOTEBOOK_BYTES = 64 * 1024 * 1024
 
@@ -1805,8 +1815,8 @@ const NETWORK_ERROR_RE =
 /** The hint appended to a network-looking failure that ran without network access. */
 export const NETWORK_BLOCKED_HINT =
   '[note: this command ran in the sandbox WITHOUT network access. If it failed because it needs the network ' +
-  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user grants network for the rest ' +
-  'of the run by choosing "Allow for run" on a shell command\'s approval prompt. Then retry.]'
+  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user is asked whether shell ' +
+  'commands may reach the network for this chat. Retry only once they have allowed it.]'
 
 /**
  * {@link NETWORK_BLOCKED_HINT} for a headless run, which has no approval prompt to
@@ -1820,7 +1830,7 @@ export const HEADLESS_NETWORK_BLOCKED_HINT =
   'the network.]'
 
 /**
- * Replaces the network hint on a full-auto command that failed offline once the user
+ * Replaces the network hint on a command that failed offline once the user
  * has answered the shell-network question it raised (see offerShellNetwork in loop.ts).
  */
 export const SHELL_NETWORK_GRANTED_NOTE =
@@ -2229,6 +2239,17 @@ const runShell: ToolDef = {
     // Route through the persistent session only when the backend's shell can run the
     // bash prelude (`cd`/env threading). On a cmd.exe fallback it can't, so run directly.
     const session = ctx.shellSession && backendSupportsSession() ? ctx.shellSession : undefined
+    // Every chunk also goes to a capped copy, so a result clamped below can point at
+    // the whole output on disk (see shellSpill.ts).
+    const tee = ctx.spillShellOutput ? new OutputTee() : null
+    const watch = ctx.onShellOutput
+    const onOutput =
+      tee || watch
+        ? (chunk: string): void => {
+            tee?.push(chunk)
+            watch?.(chunk)
+          }
+        : undefined
     const result = session
       ? await runInSession({
           command,
@@ -2239,7 +2260,7 @@ const runShell: ToolDef = {
           egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal,
-          ...(ctx.onShellOutput ? { onOutput: ctx.onShellOutput } : {}),
+          ...(onOutput ? { onOutput } : {}),
           run: runSandboxed
         })
       : await runSandboxed({
@@ -2251,7 +2272,7 @@ const runShell: ToolDef = {
           egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal,
-          ...(ctx.onShellOutput ? { onOutput: ctx.onShellOutput } : {})
+          ...(onOutput ? { onOutput } : {})
         })
     const segments: string[] = []
     if (result.stdout) segments.push(result.stdout.trimEnd())
@@ -2262,8 +2283,18 @@ const runShell: ToolDef = {
     const parts: string[] = []
     // Clamp first; the network-error scan then runs over the bounded text (errors
     // surface in stderr, which the both-ends clamp keeps), not a multi-MB blob.
-    const body = clampToolResult(segments.join('\n'), ctx.shellOutputMaxBytes)
+    const joined = segments.join('\n')
+    const body = clampToolResult(joined, ctx.shellOutputMaxBytes)
     if (body) parts.push(body)
+    // Clamped here, or already cut while streaming (the per-stream memory cap): the
+    // middle is gone from the result, so say where the whole output is.
+    if (tee && ctx.spillShellOutput && (body !== joined || STREAM_TRUNCATION_MARKER.test(joined))) {
+      const spilled = await ctx.spillShellOutput(
+        tee.text(),
+        tee.overflowed ? `[output cut at ${SPILL_MAX_BYTES} bytes]` : undefined
+      )
+      if (spilled) parts.push(spillNote(spilled))
+    }
     if (result.timedOut) parts.push(shellTimeoutHint(timeoutMs ?? DEFAULT_TIMEOUT_MS))
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
     // A `cd` carries over to later commands, but file tools keep resolving from the
@@ -2527,6 +2558,29 @@ export function sandboxedLoopbackHint(
   )
 }
 
+/** The longest page title {@link envelopeTitle} keeps. */
+const MAX_ENVELOPE_TITLE_CHARS = 120
+
+/**
+ * A page's `<title>`, made fit for the trusted first line of view_localhost's result,
+ * outside the fence. The page picks its title, and a dev server can serve one built
+ * from anything (stored user input, fetched data), of any length and with line breaks,
+ * so a title could otherwise write paragraphs into the slot the agent reads as
+ * Houston's framing. Control characters and line breaks become spaces, bidi controls
+ * and the invisible zero-width characters go, whitespace runs become one space, and
+ * it is cut to {@link MAX_ENVELOPE_TITLE_CHARS}. Unlike an HTTP reason phrase, a title
+ * is often not English, so non-ASCII text is kept (the joiners emoji need included).
+ */
+function envelopeTitle(title: string): string {
+  const clean = stripBidiControls(title)
+    .replace(/[\p{Cc}\u2028\u2029]/gu, ' ')
+    .replace(/[\u200B\u2060\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const chars = [...clean]
+  return chars.length > MAX_ENVELOPE_TITLE_CHARS ? `${chars.slice(0, MAX_ENVELOPE_TITLE_CHARS).join('')}…` : clean
+}
+
 const viewLocalhost: ToolDef = {
   kind: 'network',
   summarize: (a) => {
@@ -2644,7 +2698,8 @@ const viewLocalhost: ToolDef = {
     })
 
     const lines: string[] = []
-    lines.push(`Loaded ${cap.finalUrl}${cap.title ? `: "${cap.title}"` : ''} (${cap.width}×${cap.height})`)
+    const title = envelopeTitle(cap.title)
+    lines.push(`Loaded ${cap.finalUrl}${title ? `: "${title}"` : ''} (${cap.width}×${cap.height})`)
     const note = await ownerNote
     if (note) lines.push(note)
     if (cap.loadError) {
@@ -2657,7 +2712,9 @@ const viewLocalhost: ToolDef = {
     }
     if (cap.steps) {
       lines.push('Steps:')
-      for (const r of cap.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step}: ${r.error}`)
+      // A failed step's error is fenced below rather than written here: it can be the
+      // page's own words (an exception the page threw, text it rendered).
+      for (const r of cap.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step} (its error is in "Step errors" below)`)
       const notRun = steps.length - cap.steps.length
       if (notRun > 0) lines.push(`  (${notRun} later step${notRun === 1 ? '' : 's'} not run)`)
       lines.push(`Now at ${cap.finalUrl}`)
@@ -2708,6 +2765,14 @@ const viewLocalhost: ToolDef = {
     // can carry text from anywhere (stored user input, fetched data, third-party
     // scripts), so both are fenced. Empty ones are reported in the trusted envelope.
     const parts: UntrustedPart[] = []
+    const failed = (cap.steps ?? []).filter((r) => !r.ok)
+    if (failed.length) {
+      parts.push({
+        label: 'Step errors:',
+        text: failed.map((r) => `${r.step}: ${r.error ?? 'failed'}`).join('\n'),
+        source: `${cap.finalUrl} (step errors)`
+      })
+    }
     if (cap.pageText) {
       parts.push({
         label: cap.pageTextTruncated
@@ -2733,14 +2798,13 @@ const viewLocalhost: ToolDef = {
       envelope: lines.join('\n'),
       parts,
       preamble: untrustedPreamble(
-        "the loaded page's visible text and console output",
+        "the loaded page's visible text, console output, and step errors",
         'A local dev server can serve text from anywhere (stored user input, fetched data, third-party scripts)'
       ),
       subject: 'page',
       toolNames: builtinToolNames(),
-      // The title and a failed step's error can carry the page's own words, and both
-      // render outside the fence.
-      alsoScore: [cap.title, ...(cap.steps ?? []).map((r) => r.error ?? '')].join('\n')
+      // The title carries the page's own words and renders outside the fence, clamped.
+      alsoScore: title
     })
   }
 }

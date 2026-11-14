@@ -26,7 +26,7 @@ import type { GitGuard } from './gitGuard'
 import type { EvidenceDraft } from './evidence'
 import { isSandboxed } from '../sandbox'
 import { isSensitiveRead } from './sensitive-paths'
-import { isSensitiveWrite } from './permissions'
+import { isProtectedWrite, isSensitiveWrite } from './permissions'
 import {
   clipText,
   stepHint,
@@ -1055,9 +1055,13 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
               `Reading ${String(call.arguments.path)} needs the user's approval because it looks like a ` +
               'credential or secret file, and this subagent cannot ask for it. Do not retry; note in ' +
               'your report that the main agent can read it with approval if it is needed.'
-          } else if (isSensitiveWrite(tool.kind, call.name, call.arguments)) {
+          } else if (
+            isSensitiveWrite(tool.kind, call.name, call.arguments) ||
+            isProtectedWrite(tool.kind, call.name, call.arguments, roots)
+          ) {
             output =
-              "This call changes a credential or secret file (such as .env) or a git hook or config file, which needs the user's " +
+              'This call changes a credential or secret file (such as .env), a git hook or config file, or a ' +
+              "project control file (such as .houston, .vscode, .envrc, or a CI workflow), which needs the user's " +
               'approval, and this subagent cannot ask for it. Do not retry; note in your report what ' +
               'should change so the main agent can make the change with approval.'
           } else {

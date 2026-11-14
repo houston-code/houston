@@ -81,7 +81,13 @@ import { useChatGap } from './lib/chatGap'
 import { statusText } from './lib/statusLine'
 import { playAttentionSound } from './lib/attentionSound'
 import { RunMeterText } from './components/RunMeterText'
-import { newGroupId } from './lib/chatGroups'
+import {
+  collapsedAfterGroupDelete,
+  newGroupId,
+  sidebarChatOrder,
+  sidebarSections,
+  type SidebarLayoutInput
+} from './lib/chatGroups'
 import { checkpointNotice } from './lib/checkpointNotice'
 import { occludesPreview, ownsShiftTab, shortcutAllowedOverModal, suppressesTips, type OverlayFlags } from './lib/overlays'
 import { baseName } from './lib/paths'
@@ -94,9 +100,15 @@ import {
   SIDEBAR_NUDGE_STEP,
   SIDEBAR_RAIL_WIDTH
 } from './lib/sidebar'
-import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPanel'
-import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH } from './lib/previewPanel'
-import { clampPlanWidth, PLAN_DEFAULT_WIDTH } from './lib/planPanel'
+import {
+  clampTerminalHeight,
+  TERMINAL_DEFAULT_HEIGHT,
+  TERMINAL_MAX_HEIGHT,
+  TERMINAL_MIN_HEIGHT
+} from './lib/terminalPanel'
+import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH, PREVIEW_MAX_WIDTH, PREVIEW_MIN_WIDTH } from './lib/previewPanel'
+import { clampPlanWidth, PLAN_DEFAULT_WIDTH, PLAN_MAX_WIDTH, PLAN_MIN_WIDTH } from './lib/planPanel'
+import type { PanelSize } from './components/PanelResizer'
 import { afterPlan, forgetDockTab, readDockTab, rememberDockTab, type DockState } from './lib/dockLayout'
 import { usePreviewServers } from './hooks/usePreviewServers'
 import { ownedByChat } from './lib/chatScope'
@@ -866,7 +878,7 @@ export default function App(): JSX.Element {
   // Start a turn immediately with the given text/images, creating a conversation
   // first if this is the very first message — in a fresh worktree when set up.
   const sendNow = useCallback(
-    async (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation) => {
+    async (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation, commandGrant?: string) => {
       if (!settings?.selected || !workspace) return
       let convId = currentId
       if (!convId) {
@@ -915,7 +927,8 @@ export default function App(): JSX.Element {
             providerId: settings.selected.providerId,
             model: settings.selected.model,
             approvalPolicy: settings.approvalPolicy,
-            reasoningEffort: settings.reasoningEffort
+            reasoningEffort: settings.reasoningEffort,
+            ...(commandGrant ? { commandGrant } : {})
           })
           if (!started) giveBackText(conv.id, text, images)
           void refreshConversations()
@@ -937,7 +950,8 @@ export default function App(): JSX.Element {
         providerId: settings.selected.providerId,
         model: settings.selected.model,
         approvalPolicy: settings.approvalPolicy,
-        reasoningEffort: settings.reasoningEffort
+        reasoningEffort: settings.reasoningEffort,
+        ...(commandGrant ? { commandGrant } : {})
       })
       void refreshConversations()
     },
@@ -1183,13 +1197,19 @@ export default function App(): JSX.Element {
       saveComposerDraft(id, '') // drop the deleted conversation's lingering draft
       if (res.worktree?.message) alert(res.worktree.message)
       if (id === currentId) {
-        nav.begin()
-        setCurrentId(null)
-        chat.reset([])
+        // Land on a new chat in the deleted chat's project, never its worktree
+        // checkout, which the delete may just have removed.
+        const meta = conversations.find((c) => c.id === id)
+        if (meta) enterNewChat(newChatFolder(meta))
+        else {
+          nav.begin()
+          setCurrentId(null)
+          chat.reset([])
+        }
       }
       await refreshConversations()
     },
-    [currentId, chat, refreshConversations, nav]
+    [currentId, conversations, chat, refreshConversations, nav, enterNewChat]
   )
 
   // "Fork from here": a new chat holding the conversation up to a message. From one
@@ -1363,12 +1383,31 @@ export default function App(): JSX.Element {
     setSettings(await window.api.saveSettings(next))
   }, [])
 
+  // Archiving the open chat takes its row out of the list, so it also leaves the chat
+  // for a new one in the same project (as marking it unread does). An Undo toast
+  // brings it back and reopens it. A search still lists archived chats, so the chat
+  // stays open then.
   const onSetArchived = useCallback(
     async (id: string, archived: boolean) => {
       await window.api.organizeConversation(id, { archived })
+      if (archived && id === currentId && !search) {
+        const meta = conversations.find((c) => c.id === id)
+        if (meta) {
+          enterNewChat(newChatFolder(meta))
+          setUndoToast({
+            text: `Archived “${meta.title}”.`,
+            undo: () => {
+              void window.api
+                .organizeConversation(id, { archived: false })
+                .then(() => refreshConversations())
+                .then(() => selectConversation(id))
+            }
+          })
+        }
+      }
       await refreshConversations()
     },
-    [refreshConversations]
+    [refreshConversations, currentId, search, conversations, enterNewChat, selectConversation]
   )
 
   const onMoveConversation = useCallback(
@@ -1458,13 +1497,19 @@ export default function App(): JSX.Element {
       const members = conversations.filter((c) => c.groupId === groupId)
       await Promise.all(members.map((c) => window.api.organizeConversation(c.id, { groupId: null })))
       const current = await window.api.getSettings()
+      const chatGroups = (current.chatGroups ?? []).filter((g) => g.id !== groupId)
+      // The last group gone, Ungrouped loses its header (and with it the controls to
+      // expand it or clear its label filter), so it can't stay collapsed or filtered.
+      const collapsedSections = collapsedAfterGroupDelete(current.collapsedSections, chatGroups.length)
       const filters = { ...(current.sectionLabelFilters ?? {}) }
       delete filters[groupId]
+      if (chatGroups.length === 0) delete filters.ungrouped
       setSettings(
         await window.api.saveSettings({
           ...current,
-          chatGroups: (current.chatGroups ?? []).filter((g) => g.id !== groupId),
-          sectionLabelFilters: filters
+          chatGroups,
+          sectionLabelFilters: filters,
+          ...(collapsedSections ? { collapsedSections } : {})
         })
       )
       await refreshConversations()
@@ -1768,6 +1813,22 @@ export default function App(): JSX.Element {
     [terminals, persistTerminal, selectConversation]
   )
 
+  // The keyboard and double-click side of the terminal's resizer.
+  const terminalSize = useMemo<PanelSize>(
+    () => ({
+      value: terminalHeight,
+      min: TERMINAL_MIN_HEIGHT,
+      max: TERMINAL_MAX_HEIGHT,
+      defaultValue: TERMINAL_DEFAULT_HEIGHT,
+      onChange: (px) => {
+        const h = clampTerminalHeight(px)
+        setTerminalHeight(h)
+        void persistTerminal({ terminalHeight: h })
+      }
+    }),
+    [terminalHeight, persistTerminal]
+  )
+
   // Drag the panel's top edge: update the height CSS variable live (no re-render of
   // the transcript while dragging), then commit to state/settings on release.
   // Dragging up grows the panel, so height increases as the cursor's Y decreases.
@@ -1917,6 +1978,21 @@ export default function App(): JSX.Element {
     [previewWidth, persistPreview]
   )
 
+  const previewSize = useMemo<PanelSize>(
+    () => ({
+      value: previewWidth,
+      min: PREVIEW_MIN_WIDTH,
+      max: PREVIEW_MAX_WIDTH,
+      defaultValue: PREVIEW_DEFAULT_WIDTH,
+      onChange: (px) => {
+        const w = clampPreviewWidth(px)
+        setPreviewWidth(w)
+        void persistPreview({ previewWidth: w })
+      }
+    }),
+    [previewWidth, persistPreview]
+  )
+
   // ---- Plan-review panel (Plan mode: docked, resizable width, persisted) ----
 
   const pendingPlan = chat.pendingPlan
@@ -1980,6 +2056,21 @@ export default function App(): JSX.Element {
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
     },
+    [planWidth, persistPlan]
+  )
+
+  const planSize = useMemo<PanelSize>(
+    () => ({
+      value: planWidth,
+      min: PLAN_MIN_WIDTH,
+      max: PLAN_MAX_WIDTH,
+      defaultValue: PLAN_DEFAULT_WIDTH,
+      onChange: (px) => {
+        const w = clampPlanWidth(px)
+        setPlanWidth(w)
+        void persistPlan({ planWidth: w })
+      }
+    }),
     [planWidth, persistPlan]
   )
 
@@ -2053,8 +2144,14 @@ export default function App(): JSX.Element {
   }, [chat])
 
   const dispatch = useCallback(
-    (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation) => {
-      // Defer messages typed mid-run; main combines and sends them when it ends.
+    (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation, commandGrant?: string) => {
+      // Defer messages typed mid-run; main combines and sends them when it ends. (A
+      // command with per-turn options never queues: the composer holds it until the
+      // turn ends, and main refuses one that races a run.)
+      if (chat.running && commandGrant) {
+        chat.notify('That command runs once the current turn ends. Send it again then.', 'error')
+        return
+      }
       if (chat.running && settings?.selected) {
         queue.enqueue({
           text,
@@ -2065,9 +2162,9 @@ export default function App(): JSX.Element {
           approvalPolicy: settings.approvalPolicy,
           reasoningEffort: settings.reasoningEffort
         })
-      } else void sendNow(text, images, invokedAs)
+      } else void sendNow(text, images, invokedAs, commandGrant)
     },
-    [chat.running, settings, queue, sendNow]
+    [chat, settings, queue, sendNow]
   )
 
   // ---- Rewind ----
@@ -2288,9 +2385,30 @@ export default function App(): JSX.Element {
   const onInvoke = useCallback(
     (turn: InvokedTurn) =>
       void sendAfterEdit(turn.invokedAs.typed ?? turn.text, undefined, () =>
-        dispatch(turn.text, undefined, turn.invokedAs)
+        dispatch(turn.text, undefined, turn.invokedAs, turn.grant)
       ),
     [dispatch, sendAfterEdit]
+  )
+
+  // A custom command whose frontmatter sets its turn's model, effort, agent or tools:
+  // main reads it from disk and decides what this folder's trust allows, then the
+  // turn goes out like any invoked one, carrying main's token for those options.
+  const onRunCommand = useCallback(
+    (cmd: Command, args: string, typed: string) => {
+      if (!workspace) return
+      void window.api
+        .prepareCommand(workspace, cmd.name, args, typed)
+        .then((res) => {
+          if (!res.ok) {
+            chat.notify(res.error, 'error')
+            return
+          }
+          if (res.notes.length) chat.notify(res.notes.join('. ').concat('.'))
+          onInvoke(res.turn)
+        })
+        .catch(() => chat.notify(`Couldn't run /${cmd.name}.`, 'error'))
+    },
+    [workspace, chat, onInvoke]
   )
 
   // The project card's "Write one with /init": the same turn as typing /init.
@@ -2735,21 +2853,56 @@ export default function App(): JSX.Element {
   // applied. Drives global matching, the help overlay, and palette key hints.
   const shortcuts = useMemo(() => resolveShortcuts(settings?.keybindings), [settings?.keybindings])
 
-  // Keyboard chat-switching (⌘1–9, ⌃Tab / ⌃⇧Tab) over the currently visible list.
+  // What the sidebar lays its sections out from. The Sidebar gets exactly these, and
+  // keyboard chat-switching reads the same layout, so a shortcut lands on the row the
+  // user sees. A search lists every hit outside the groups.
+  const sidebarLayout = useMemo<SidebarLayoutInput>(
+    () => ({
+      conversations: visibleConversations,
+      groups: search ? [] : settings?.chatGroups ?? [],
+      search,
+      collapsedSections: settings?.collapsedSections ?? {},
+      chatStatus,
+      currentId,
+      unreadFirst: settings?.sidebarUnreadFirst ?? false,
+      ...(settings?.sidebarGroupBy ? { groupBy: settings.sidebarGroupBy } : {}),
+      labelFilters
+    }),
+    [
+      visibleConversations,
+      search,
+      settings?.chatGroups,
+      settings?.collapsedSections,
+      settings?.sidebarUnreadFirst,
+      settings?.sidebarGroupBy,
+      labelFilters,
+      chatStatus,
+      currentId
+    ]
+  )
+  // The chats top to bottom as the sidebar shows them (collapsed sections, chats a
+  // label filter hides, and folded spawned chats left out), read when a shortcut fires
+  // so the date sections are current.
+  const sidebarOrder = useCallback(
+    () => sidebarChatOrder(sidebarSections(sidebarLayout), collapsedParents, currentId),
+    [sidebarLayout, collapsedParents, currentId]
+  )
+
+  // Keyboard chat-switching (⌘1–9, ⌃Tab / ⌃⇧Tab) over the sidebar's rows, in its order.
   const jumpToChat = useCallback(
     (index: number) => {
-      const id = chatAtIndex(visibleConversations, index)
+      const id = chatAtIndex(sidebarOrder(), index)
       if (id && id !== currentId) void selectConversation(id)
     },
-    [visibleConversations, currentId, selectConversation]
+    [sidebarOrder, currentId, selectConversation]
   )
 
   const cycleChat = useCallback(
     (dir: 1 | -1) => {
-      const id = cycleChatId(visibleConversations, currentId, dir)
+      const id = cycleChatId(sidebarOrder(), currentId, dir)
       if (id && id !== currentId) void selectConversation(id)
     },
-    [visibleConversations, currentId, selectConversation]
+    [sidebarOrder, currentId, selectConversation]
   )
 
   // Shift+Tab steps to the next approval mode and confirms it in the transcript
@@ -3325,18 +3478,14 @@ export default function App(): JSX.Element {
       }
     >
       <Sidebar
-        conversations={visibleConversations}
-        groups={search ? [] : settings.chatGroups ?? []}
-        search={search}
+        {...sidebarLayout}
         onSearch={setSearch}
         focusSearchSignal={searchFocusSignal}
-        currentId={currentId}
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
         toggleShortcut={shortcutHint('toggle-sidebar', mac, shortcuts)}
         newChatShortcut={shortcutHint('new-chat', mac, shortcuts)}
         settingsShortcut={shortcutHint('open-settings', mac, shortcuts)}
-        chatStatus={chatStatus}
         onSelect={selectConversation}
         onNew={onNewChat}
         onDelete={onDeleteConversation}
@@ -3351,9 +3500,7 @@ export default function App(): JSX.Element {
         onSetArchived={onSetArchived}
         onSetUnread={onSetUnread}
         onMarkAllRead={onMarkAllRead}
-        unreadFirst={settings.sidebarUnreadFirst ?? false}
         onToggleUnreadFirst={onToggleUnreadFirst}
-        {...(settings.sidebarGroupBy ? { groupBy: settings.sidebarGroupBy } : {})}
         onSetGroupBy={(by) => void onSetSidebarGroupBy(by)}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
@@ -3364,12 +3511,10 @@ export default function App(): JSX.Element {
         onRenameGroup={onRenameGroup}
         onDeleteGroup={onDeleteGroup}
         onToggleGroupCollapsed={onToggleGroupCollapsed}
-        collapsedSections={settings.collapsedSections ?? {}}
         onToggleSectionCollapsed={onToggleSectionCollapsed}
         collapsedParents={collapsedParents}
         onToggleParentCollapsed={(id) => void onToggleParentCollapsed(id)}
         labels={chatLabels}
-        labelFilters={labelFilters}
         onSetSectionLabelFilter={(sectionId, ids) => void onSetSectionLabelFilter(sectionId, ids)}
         onSetChatLabels={(id, ids) => void onSetChatLabels(id, ids)}
         onCreateLabel={onCreateLabel}
@@ -3718,6 +3863,7 @@ export default function App(): JSX.Element {
                 controller={terminals}
                 visible={terminalOpen}
                 onResizeMouseDown={onTerminalResizeMouseDown}
+                size={terminalSize}
                 onClose={toggleTerminal}
               />
             </ItemBoundary>
@@ -3778,6 +3924,7 @@ export default function App(): JSX.Element {
             onSend={onSend}
             onShellEscape={runShellEscape}
             onInvoke={onInvoke}
+            onRunCommand={onRunCommand}
             onSteer={onSteer}
             answering={openQuestion !== null}
             onSaveMemory={onSaveMemory}
@@ -3826,6 +3973,7 @@ export default function App(): JSX.Element {
             // keep them alive) while one is open so a preview can't cover it.
             occluded={occludesPreview(overlays)}
             onResizeMouseDown={onPreviewResizeMouseDown}
+            size={previewSize}
             onClose={closeDock}
             // A tab whose content is gone (Files with no folder, a plan already
             // answered) falls back to Preview rather than an empty panel.
@@ -3917,6 +4065,7 @@ export default function App(): JSX.Element {
           onSendToMain={(question, answer) => onInvoke(sideChatTurn(question, answer))}
           onContinueInNewChat={(question, answer) => void onSideChatContinue(sideChatExchangeText(question, answer))}
           onResizeMouseDown={onPlanResizeMouseDown}
+          size={planSize}
         />
       )}
 

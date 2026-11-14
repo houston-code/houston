@@ -28,7 +28,7 @@ import type { PlanReadiness } from '@shared/planReadiness'
 import type { ChatStatusMap, PendingPrompt } from '@shared/chatStatus'
 import type { Todo } from '@shared/todos'
 import { compactionLimitFrom } from '@shared/compactionThreshold'
-import type { TurnReceipt } from '@shared/evidence'
+import type { TestEdit, TurnReceipt } from '@shared/evidence'
 import {
   systemNoteMessage,
   SYSTEM_NOTE_PREFIX,
@@ -73,6 +73,7 @@ import {
   setModelUnavailable
 } from '../agentHost'
 import { createSecretRedactor } from './redact'
+import { runShellSpill } from './shellSpill'
 import { log } from '../logger'
 import { runQuarantineExtraction } from './untrusted'
 import { smallModelFor, withSmallModel } from '@shared/smallModel'
@@ -171,6 +172,7 @@ import {
   isSensitiveWrite,
   shellAllowCoversTripwires,
   shellCwdOutsideRoots,
+  isProtectedWrite,
   shellReferencesExternalPath,
   shellDiscardsWork
 } from './permissions'
@@ -195,6 +197,7 @@ import {
 } from './checkpoints'
 import { EvidenceLedger, type EvidenceDraft } from './evidence'
 import { detectTestEdits, isTestRelevantPath, testEditsNote } from './testTampering'
+import { doneEvidenceNote, type DoneEvidence } from './doneEvidence'
 import { listShells, peekShell } from './shells'
 import {
   backgroundEventsNote,
@@ -260,7 +263,7 @@ import {
   skillRestrictionRefusal,
   type SkillRestriction
 } from './skillSpec'
-import { loadPluginsIfEnabled } from './plugins'
+import { loadTrustedPlugins } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
 import { inferVerifyCommand } from '../verifyInfer'
@@ -269,7 +272,7 @@ import { memoryStore, type MemoryStore } from './memoryStore'
 import { buildMemoryIndex } from './memoryIndex'
 import { MEMORY_SAVE_NAME, MEMORY_WRITE_TOOL_NAMES, memoryTaintSource } from './memoryTools'
 import { gitWritableRoots } from './gitDirs'
-import { GitGuard } from './gitGuard'
+import { GitGuard, reviewGitChanges } from './gitGuard'
 import { ghRepoKey, githubContext, resolveGh, runGh } from './github'
 import {
   COMPACTION_TAIL_FRACTION,
@@ -357,6 +360,8 @@ import {
   runVerification,
   verifyFailureMessage,
   inferredVerifyNotice,
+  inferredVerifySkippedNotice,
+  inferredVerifyBlockedUnconfined,
   resolveVerifyMaxPasses
 } from './verify-gate'
 
@@ -512,6 +517,7 @@ interface RunState {
       shellOffline?: boolean
       sensitiveRead?: boolean
       sensitiveWrite?: boolean
+      protectedWrite?: boolean
       networkScope?: string
     }
   >
@@ -567,9 +573,10 @@ interface RunState {
   /**
    * Whether shell commands may reach the network this run. Drives the sandbox's network
    * switch — network egress is all-or-nothing at the OS layer, so this is one boolean,
-   * not a per-host set. Set by the one-time full-auto shell-network consent, by
-   * "Allow for run" on a shell command (auto-edit/ask), or up front by a headless
-   * `--allow-shell-network`. When false, shell runs offline.
+   * not a per-host set. Set only by the one-time shell-network consent (asked the first
+   * time a sandboxed command fails without network, in any mode) or up front by a
+   * headless `--allow-shell-network`. Approving shell commands never sets it. When
+   * false, shell runs offline.
    */
   shellNetworkGranted: boolean
   /**
@@ -1011,6 +1018,7 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       ...(a.shellOffline ? { shellOffline: true } : {}),
       ...(a.sensitiveRead ? { sensitiveRead: true } : {}),
       ...(a.sensitiveWrite ? { sensitiveWrite: true } : {}),
+      ...(a.protectedWrite ? { protectedWrite: true } : {}),
       ...(a.networkScope ? { networkScope: a.networkScope } : {})
     })
   }
@@ -1677,10 +1685,14 @@ export async function startRun(
     // a user-tier one — only the latter can be skipped by a hook's `approve`.
     const guardrailRules = [...managedPolicy.permissionRules, ...projectConfig.permissionRules]
     const guardrailRuleCount = guardrailRules.length
+    // A custom command's `allowed-tools` for this run come last of all: they fill
+    // only what no saved rule decides, and only with `allow`.
+    const turnAllowRules = (req.turnAllowRules ?? []).filter((r) => r.action === 'allow')
     const permissionRules = [
       ...guardrailRules,
       ...(settings.permissionRules ?? []),
-      ...(projectTrusted ? projectConfig.elevated.allowRules : [])
+      ...(projectTrusted ? projectConfig.elevated.allowRules : []),
+      ...turnAllowRules
     ]
     // Hooks likewise: a trusted folder's project hooks run after the user's own.
     const hooks = projectTrusted
@@ -1801,19 +1813,25 @@ export async function startRun(
     const notedSkills = notedSkillNames(messages.filter((m) => m.role === 'user').map((m) => m.content))
     // Local plugins (.houston/plugins/*.js) register observational lifecycle
     // hooks. They are executable JS run in-process and `vm` is not a security
-    // boundary, so they are NEVER auto-run for an opened repo — only when the user
-    // has explicitly opted into project plugins for a trusted project. See
-    // plugins.ts for the trust boundary.
+    // boundary, so they are NEVER auto-run for an opened repo: only when the user
+    // has turned on the projectPlugins master switch AND trusted this folder for
+    // its current plugin files (each file's hash is in the elevated fingerprint,
+    // so `projectTrusted` is false once one is added or edited). The sources run
+    // are the ones that fingerprint was computed over. See plugins.ts.
     // A plugin failure goes to houston.log and shows once per distinct failure as a
     // run notice; never to stderr, which would draw over the terminal UI.
     const pluginWarningsShown = new Set<string>()
-    const plugins = await loadPluginsIfEnabled(workspace, settings.projectPlugins, (msg) => {
-      const safe = scrubError(msg)
-      log.warn(safe)
-      if (pluginWarningsShown.has(safe)) return
-      pluginWarningsShown.add(safe)
-      emit({ type: 'notice', message: safe })
-    })
+    const plugins = await loadTrustedPlugins(
+      projectConfig.elevated.plugins,
+      { enabled: settings.projectPlugins, trusted: projectTrusted },
+      (msg) => {
+        const safe = scrubError(msg)
+        log.warn(safe)
+        if (pluginWarningsShown.has(safe)) return
+        pluginWarningsShown.add(safe)
+        emit({ type: 'notice', message: safe })
+      }
+    )
     const agentsByName = new Map(agents.map((a) => [a.name, a]))
     const capabilities = buildCapabilities(
       agents,
@@ -2040,6 +2058,8 @@ export async function startRun(
     const knownSecrets = collectSecrets()
     const redact = createSecretRedactor(knownSecrets)
     scrubError = redact
+    // Whole output of a clamped run_shell command, kept for this run (see shellSpill.ts).
+    const shellSpill = runShellSpill(req.runId, redact)
     // What tools report for the turn's receipt. Model-written text it keeps (a command,
     // a page URL, a step's description) is masked like any other text the run keeps; a
     // command's output is only scanned for a test summary and never stored.
@@ -2141,9 +2161,11 @@ export async function startRun(
     }
 
     // Allowed roots: the workspace plus any configured additional directories
-    // that still resolve (deduped). This is the file-tool + sandbox boundary.
+    // that still resolve (deduped), and the session's own (`--add-dir`, `/add-dir`),
+    // which are the same thing scoped to the session. This is the file-tool + sandbox
+    // boundary.
     const roots = [workspace]
-    for (const dir of settings.additionalRoots ?? []) {
+    for (const dir of [...(settings.additionalRoots ?? []), ...(req.addDirs ?? [])]) {
       try {
         const real = realpathSync(dir)
         if (!roots.includes(real)) roots.push(real)
@@ -2292,12 +2314,9 @@ export async function startRun(
           // "Allow for run" on an unconfined-shell prompt is the conscious consent
           // to keep running unsandboxed; a generic override never sets this.
           if (unsandboxedShell) run.shellUnsandboxedOverride = true
-          // Granting shell for the run also lets shell reach the network — the
-          // pre-existing auto-edit/ask semantics; the sandbox reads this flag.
-          if (kind === 'shell') {
-            run.shellNetworkGranted = true
-            grantConversationShellNetwork(conversationId, true)
-          }
+          // Shell network is NOT part of this grant: approving commands for the chat
+          // says nothing about letting them reach the network. That is its own question
+          // (offerShellNetwork), asked the first time a command fails without network.
           grantConversationOverride(conversationId, key, unsandboxedShell)
         }
       } else if (decision === 'rule-allow' || decision === 'rule-deny') {
@@ -2432,7 +2451,7 @@ export async function startRun(
     // Settings. Bookkeeping only: it runs after the gate has its answer, never changes
     // it, and skips calls a guardrail tier decided. The user's rules sit between the
     // guardrails and a trusted project's allow rules (see the tier order above).
-    const projectAllowCount = projectTrusted ? projectConfig.elevated.allowRules.length : 0
+    const projectAllowCount = (projectTrusted ? projectConfig.elevated.allowRules.length : 0) + turnAllowRules.length
     const noteUserRuleUse = (name: string, subject: string, action: PermissionRule['action']): void => {
       queueMicrotask(() => {
         try {
@@ -2473,6 +2492,8 @@ export async function startRun(
       sensitiveRead?: boolean
       /** A change to a credential file: likewise. */
       sensitiveWrite?: boolean
+      /** A change to an in-project control file (see isProtectedWrite): likewise. */
+      protectedWrite?: boolean
       /** A write's per-file diffs, for the approval card and the live row. */
       preview?: FileDiffPreview[] | null
       /** A network call's destination (see networkDestination): what "Allow for run" grants. */
@@ -2489,6 +2510,7 @@ export async function startRun(
         unsandboxedShell,
         sensitiveRead,
         sensitiveWrite,
+        protectedWrite,
         preview,
         networkDest,
         denyNote,
@@ -2508,6 +2530,7 @@ export async function startRun(
           ...(unsandboxedShell ? { sandboxed: false } : {}),
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+          ...(protectedWrite ? { protectedWrite: true } : {}),
           ...(networkScope ? { networkScope } : {})
         })
         // Register the resolver before emitting: a host that answers inside its
@@ -2525,6 +2548,7 @@ export async function startRun(
           ...(unsandboxedShell ? { sandboxed: false } : {}),
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+          ...(protectedWrite ? { protectedWrite: true } : {}),
           ...(networkScope ? { networkScope } : {})
         })
         const { decision, note } = await approval
@@ -2598,7 +2622,8 @@ export async function startRun(
         const shellEscapesWorkspace = trip?.escapes === true
         const discardsWork = trip?.discards === true
         const ruleAction = trip ? trip.ruleAction : matched
-        const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs)
+        const protectedWrite = isProtectedWrite(kind, name, gateArgs, roots)
+        const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs) || protectedWrite
         const mustApprove =
           kind === 'read'
             ? decideApproval({
@@ -2612,7 +2637,8 @@ export async function startRun(
               }).mustApprove
             : ruleAction === 'ask' ||
               ((shellEscapesWorkspace || discardsWork) && ruleAction !== 'allow') ||
-              (sensitiveWrite && ruleAction !== 'allow' && !run.override.has(grantKey(name, kind)))
+              // A control file isn't covered by this run's grant, only by an allow rule.
+              (sensitiveWrite && ruleAction !== 'allow' && (protectedWrite || !run.override.has(grantKey(name, kind))))
         if (!mustApprove) return runCall()
         return promptGatedCall({
           subCallId: mintSubCallId(callId, kind),
@@ -2623,6 +2649,7 @@ export async function startRun(
           unsandboxedShell: false,
           sensitiveRead,
           sensitiveWrite,
+          protectedWrite,
           preview: kind === 'write' ? await previewWrite(name, gateArgs, roots) : null,
           denyNote: `${APPROVAL_DENIED} Do not retry this call; work around it or note it in your report.`,
           runCall
@@ -2980,10 +3007,13 @@ export async function startRun(
       output: string
     ): Promise<string> => {
       // A stopped run asks nothing: nobody is left to answer the card.
-      if (abort.signal.aborted || run.policy !== 'full-auto' || !isSandboxed() || shellNetworkOn() || egressUnavailable) {
+      if (abort.signal.aborted || !isSandboxed() || shellNetworkOn() || egressUnavailable) {
         return output
       }
       const unattended = req.unattended === true
+      // Outside full auto a run with nobody to answer keeps its contract: network only
+      // via --allow-shell-network, never from an automatic answer to this question.
+      if (unattended && run.policy !== 'full-auto') return output
       // Asked once per chat; a decline is remembered, so later failures just say so.
       if (run.shellNetworkDecided) {
         return unattended ? output : withShellNetworkDecision(output, SHELL_NETWORK_DECLINED_NOTE)
@@ -3091,6 +3121,7 @@ export async function startRun(
       ...(req.unattended === true ? { unattended: true } : {}),
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
+      ...(shellSpill ? { spillShellOutput: (out: string, note?: string) => shellSpill.spill(out, note) } : {}),
       gitGuard,
       // Nobody can answer a headless run, so the guard undoes a change instead of asking.
       ...(req.unattended === true ? {} : { askGitGuard: (q: AgentQuestion) => askRunUser(callId, q) }),
@@ -3672,8 +3703,9 @@ export async function startRun(
     // The command the gate runs: the user's own, or, when the gate is on with none set,
     // the one the project's files suggest (package.json scripts, Cargo, Go, pytest).
     // An inferred command runs only in Full auto, where shell commands already run
-    // without asking, and gets network only where the agent's own shell commands
-    // would; it is announced once, the first time it runs.
+    // without asking, only where the OS sandbox confines it (or the run holds the
+    // unconfined-shell consent), and gets network only on the agent's own shell-network
+    // grant; it is announced once, the first time it runs (or is skipped).
     const userVerifyCommand = (settings.verifyCommand ?? '').trim()
     const inferredVerify =
       settings.verifyOnStop === true && userVerifyCommand === '' ? inferVerifyCommand(workspace) : null
@@ -3683,6 +3715,7 @@ export async function startRun(
       return null
     }
     let inferredVerifyAnnounced = false
+    let inferredVerifySkipNoted = false
     const verifyGateConfigured =
       settings.verifyOnStop === true && (userVerifyCommand !== '' || inferredVerify !== null)
     const treeAtStart = verifyGateConfigured ? await workingTreeFingerprint(workspace) : null
@@ -3699,6 +3732,27 @@ export async function startRun(
     let verifyPassesRun = 0
     // Whether the model has been told this turn that its edits loosened a test (once).
     let testEditsNoted = false
+    // Whether the evidence-of-done note went out this turn (once).
+    let doneEvidenceNoted = false
+    // What the ledger says about the turn at a natural stop, for that note. The todo
+    // list counts only if this turn wrote it: one left from an earlier turn isn't
+    // this turn's plan.
+    const doneEvidenceOf = (testEdits: TestEdit[]): DoneEvidence => {
+      let wroteTodos = false
+      for (let i = messages.length - 1; i >= runStart && !wroteTodos; i--) {
+        wroteTodos = messages[i].toolCalls?.some((c) => c.name === 'todo_write') ?? false
+      }
+      const todos = latestTodos(messages)
+      return {
+        filesChanged: run.evidence.changedFiles(),
+        passedAfterLastWrite: run.evidence.passed('any', { afterLastWrite: true }),
+        passedBeforeLastWrite: run.evidence.passed('any'),
+        lastTest: run.evidence.lastTest(),
+        ...(wroteTodos ? { todos } : {}),
+        todoGaps: todoEvidenceGaps(startTodos, todos, run.evidence),
+        testEdits
+      }
+    }
     const verifyMaxPasses = resolveVerifyMaxPasses(settings.verifyMaxPasses)
 
     // The request re-sent verbatim ahead of the tail while `cut` sits inside its turn,
@@ -4587,7 +4641,7 @@ export async function startRun(
           if (treeNow !== null && treeNow !== treeAtStart) filesModified = true
         }
         const verify = verifyCommandFor()
-        if (
+        const verifyDue =
           stopReason === 'end_turn' &&
           verify !== null &&
           shouldVerify({
@@ -4600,32 +4654,67 @@ export async function startRun(
             // Plan suppresses the verify shell command even after a prior edit.
             policy: run.policy
           })
-        ) {
+        // The verify command runs straight through the sandbox runner, outside the
+        // approval gate, so the unconfined-shell consent run_shell needs on a host with no
+        // OS sandbox is checked here: an inferred command (the project's own test script)
+        // never runs unconfined without it. Read live, so "Allow for run" on an
+        // unconfined prompt earlier in the run lets it through.
+        const verifyRefused =
+          verifyDue &&
+          inferredVerifyBlockedUnconfined({
+            inferred: verify.inferred,
+            sandboxed: isSandboxed(),
+            unconfinedConsent: run.shellUnsandboxedOverride
+          })
+        if (verifyRefused && !inferredVerifySkipNoted && inferredVerify) {
+          inferredVerifySkipNoted = true
+          emit({ type: 'notice', message: inferredVerifySkippedNotice(verify.command, inferredVerify.source) })
+        }
+        if (verifyDue && !verifyRefused) {
           verifyPassesRun += 1
           if (verify.inferred && !inferredVerifyAnnounced && inferredVerify) {
             inferredVerifyAnnounced = true
             emit({ type: 'notice', message: inferredVerifyNotice(verify.command, inferredVerify.source) })
           }
+          // Snapshot the git guard's baseline first (a no-op once a shell command has):
+          // a verify command is as able as run_shell to plant a hook or a
+          // command-valued .git/config key for the user's own git to run later.
+          try {
+            await gitGuard.ensureBaseline()
+          } catch {
+            // A failed snapshot only means this command goes unchecked.
+          }
           const result = await runVerification({
             command: verify.command,
             workspace,
             roots,
-            // A user-set verify command is USER-authored (a settings field the agent
-            // can't change), not agent-authored, so it isn't part of the
-            // shell-exfiltration vector the shell-network consent guards. Keep its prior
-            // network behavior (full-auto, or an explicit shell-network grant) so a
-            // verify command that hits the network isn't silently starved in full-auto.
-            // An inferred one runs scripts the project (and so the agent) can edit, so
-            // it gets network only on the agent's own shell-network grant.
-            allowNetwork:
-              (verify.inferred ? run.shellNetworkGranted : run.policy === 'full-auto' || run.shellNetworkGranted) &&
-              !egressUnavailable,
-            // The user-authored verify command still egresses through the same
-            // per-domain allowlist — the policy is about destinations, not authorship.
+            // Even a user-set command runs the project's scripts (`npm test` runs
+            // whatever package.json says), and the agent can edit those, so it is part
+            // of the shell-exfiltration vector the shell-network consent guards: it gets
+            // network exactly when the agent's own shell commands would (shellNetworkOn:
+            // the conscious grant, or Full auto behind the egress allowlist unless the
+            // user declined). An inferred one stays on the explicit grant alone.
+            allowNetwork: verify.inferred ? run.shellNetworkGranted && !egressUnavailable : shellNetworkOn(),
+            // Egress goes through the same per-domain allowlist as run_shell.
             egressProxy,
             signal: abort.signal,
             maxBytes: resolveShellOutputBudget(settings)
           })
+          // The same post-command check run_shell gets: ask about exec-capable git
+          // changes, or undo them when nobody can answer (headless, or a stopped run).
+          let verifyGitNote = ''
+          try {
+            verifyGitNote = await reviewGitChanges(gitGuard, {
+              workspace,
+              ...(req.unattended === true
+                ? {}
+                : // Unique across the chat's turns: question cards are keyed by this id.
+                  { ask: (q: AgentQuestion) => askRunUser(`${runId}:verify-git-${verifyPassesRun}`, q) })
+            })
+          } catch {
+            // Unchecked, as for run_shell.
+          }
+          if (verifyGitNote) emit({ type: 'notice', message: `Verification command: ${verifyGitNote}` })
           if (result.aborted || abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })
             return
@@ -4635,7 +4724,11 @@ export async function startRun(
           if (!result.passed) {
             // Push the failure feedback as a system note so the model sees it next
             // turn and the transcript shows it as Houston's, not the user's; then loop.
-            messages.push(systemNoteMessage(verifyFailureMessage(verify.command, result.output)))
+            messages.push(
+              systemNoteMessage(
+                verifyFailureMessage(verify.command, result.output) + (verifyGitNote ? `\n\n${verifyGitNote}` : '')
+              )
+            )
             persist(messages)
             continue
           }
@@ -4651,6 +4744,19 @@ export async function startRun(
             detail: redact(e.detail)
           }))
           run.evidence.setTestEdits(edits)
+          // The evidence-of-done note (doneEvidence.ts): once per turn, only when the
+          // ledger shows a real gap. It carries the test edits too, so they aren't
+          // raised twice.
+          if (settings.doneEvidenceNote !== false && !doneEvidenceNoted) {
+            const note = doneEvidenceNote(doneEvidenceOf(edits))
+            if (note) {
+              doneEvidenceNoted = true
+              if (edits.length) testEditsNoted = true
+              messages.push(systemNoteMessage(note))
+              persist(messages)
+              continue
+            }
+          }
           if (edits.length && !testEditsNoted) {
             testEditsNoted = true
             messages.push(systemNoteMessage(testEditsNote(edits)))
@@ -5191,7 +5297,12 @@ export async function startRun(
             // Writing one (a file tool targeting it, or a shell command redirecting into,
             // copying over, or removing it) prompts the same way: only the user can
             // restore a `.env` an agent overwrote.
-            const sensitiveWrite = isSensitiveWrite(tool.kind, call.name, execArgs)
+            // Writing an in-project control file (.houston/, .vscode/, .envrc, .husky/, CI
+            // workflows) asks in every mode, and "Allow for run" doesn't cover it: it runs
+            // code outside the sandbox later. Its card carries the sensitive-write warning
+            // with its own reason.
+            const protectedWrite = isProtectedWrite(tool.kind, call.name, execArgs, roots)
+            const sensitiveWrite = isSensitiveWrite(tool.kind, call.name, execArgs) || protectedWrite
             // Network consent is per-DESTINATION: "Allow for run" grants only this host,
             // so approving a fetch to one host never opens egress to every host. The
             // granted-host set stands in for the generic kind override on network calls.
@@ -5240,6 +5351,7 @@ export async function startRun(
               shellDiscardsWork: discardsWork,
               sensitiveRead,
               sensitiveWrite,
+              protectedWrite,
               networkRead: tool.kind === 'network' && fullAutoNetworkRead(call.name, execArgs, settings.webReads),
               memoryTainted: tainted && MEMORY_WRITE_TOOL_NAMES.includes(call.name),
               taintedLaunch: tainted && launchesSession(call.name),
@@ -5249,11 +5361,10 @@ export async function startRun(
             const networkScope = netDest !== null ? describeNetworkDestination(netDest) : undefined
 
             // A shell command on a confining host with no shell-network grant yet runs
-            // offline. Flag its prompt so the card can say only "Allow for run" also grants
-            // network. Not when the egress proxy failed to start: then no grant brings
-            // network back, so pointing at one would mislead. (Full auto never prompts up
-            // front for network: see offerShellNetwork, which asks after a command fails
-            // for lack of it.)
+            // offline. Flag its prompt so the card can say so before the user answers,
+            // and that network is asked about separately (offerShellNetwork, after a
+            // command fails for lack of it). Not when the egress proxy failed to start:
+            // then no answer brings network back, so promising a question would mislead.
             const shellOffline =
               tool.kind === 'shell' &&
               isSandboxed() &&
@@ -5288,6 +5399,7 @@ export async function startRun(
                 ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+                ...(protectedWrite ? { protectedWrite: true } : {}),
                 ...(networkScope ? { networkScope } : {})
               })
               // Registered before the emit so a synchronous answer (headless resolves
@@ -5305,6 +5417,7 @@ export async function startRun(
                 ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+                ...(protectedWrite ? { protectedWrite: true } : {}),
                 ...(networkScope ? { networkScope } : {})
               })
               const { decision, note: denyGuidance } = await approval

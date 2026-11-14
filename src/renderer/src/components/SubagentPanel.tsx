@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { diffStat } from '@shared/diff'
 import { formatTokens, formatUsd } from '@shared/usage'
 import {
@@ -135,6 +136,7 @@ export function SubagentBody({
   const [tab, setTab] = useState<Tab>('report')
   const [showSetup, setShowSetup] = useState(false)
   const [transcript, setTranscript] = useState<string | null>(null)
+  const [reportCopied, showReportCopied] = useTransientFlag(1500)
   const { report: fromOutput, resumeId } = splitSubagentReport(output ?? '')
   const report = (root?.record.report !== undefined ? splitSubagentReport(root.record.report).report : fromOutput).trim()
 
@@ -164,8 +166,16 @@ export function SubagentBody({
         <span>Its changes are part of this turn&apos;s Revert</span>
       )}
       {report && !running && (
-        <button type="button" className="sa-link" onClick={() => void copyText(report)}>
-          Copy report
+        <button
+          type="button"
+          className="sa-link"
+          onClick={() => {
+            void copyText(report).then((ok) => {
+              if (ok) showReportCopied()
+            })
+          }}
+        >
+          {reportCopied ? 'Copied' : 'Copy report'}
         </button>
       )}
       <button type="button" className="sa-link" onClick={openTranscript}>
@@ -530,7 +540,10 @@ export function SubagentTranscript({
     await copyText(recordToMarkdown(node))
     showCopied()
   }
-  return (
+  // Rendered at the document's top level, not inside the tool row that opened it: a
+  // transcript row is contained (content-visibility) and its card clips, which would
+  // squash a fixed-position drawer into the card.
+  return createPortal(
     <div className="drawer-overlay" onClick={onClose}>
       <aside
         ref={panelRef}
@@ -608,7 +621,8 @@ export function SubagentTranscript({
           </div>
         </div>
       </aside>
-    </div>
+    </div>,
+    document.body
   )
 }
 

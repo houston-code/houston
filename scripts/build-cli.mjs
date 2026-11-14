@@ -1,5 +1,5 @@
 import { build } from 'esbuild'
-import { chmodSync, readFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { coveredPackageDirs, uncoveredMessage, uncoveredPackageDirs } from './bundled-packages.mjs'
@@ -67,3 +67,11 @@ if (uncovered) {
 
 chmodSync(outfile, 0o755)
 console.log(`CLI bundle: ${outfile} (v${pkg.version})`)
+
+// The npm package's launcher (packaging/npm/houston.cjs), copied beside the bundle so a
+// source checkout starts it the same way: scripts/install-cli.mjs links `houston` to this
+// copy, which turns on Node's compile cache and then starts houston-cli.cjs. Not a release
+// asset: the release ships only houston-cli.cjs, and the npm package stages its own copy.
+const launcher = resolve(root, 'out/cli/houston.cjs')
+copyFileSync(resolve(root, 'packaging/npm/houston.cjs'), launcher)
+chmodSync(launcher, 0o755)

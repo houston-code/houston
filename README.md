@@ -429,8 +429,9 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Plugins.** Drop a JS file in `.houston/plugins/` to register *observational*
   lifecycle hooks, `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage',
   fn)`, for logging, metrics, or notifications. Plugins are executable code, so they
-  load only after you set `"projectPlugins": true` in settings.json. Each runs in an
-  isolated context
+  load only after you set `"projectPlugins": true` in settings.json and trust the
+  folder for its current plugin files (a plugin added or edited later asks again).
+  Each runs in an isolated context
   with no `require`/`process`/network, hooks can't block or alter a call, and a
   throwing or slow plugin is caught and ignored. To *block* a tool, use a
   *PreToolUse* shell hook instead.
@@ -1078,8 +1079,10 @@ A bare `houston` starts interactive only when it has a real terminal. With a
 prompt piped in (`echo "fix the build" | houston --json`) it runs it one-shot, as
 `-p` would; in CI with nothing piped (no TTY) it prints usage instead of hanging,
 so use `-p "<prompt>"` there.
-`npm run install:cli` symlinks the built bundle (a rebuild is picked up with no
-reinstall) and, if the target dir isn't on your PATH yet, prints the line to add.
+`npm run install:cli` symlinks the built CLI (a rebuild is picked up with no
+reinstall) through a small launcher that turns on Node's compile cache, so it
+starts faster after the first run. If the target dir isn't on your PATH yet, it
+prints the line to add.
 Prefer npm's own linking? The package exposes a `houston` `bin`, so
 `npm run build:cli && npm link` works too. On Windows use `npm link` (npm writes
 a `houston.cmd` shim) or invoke the bundle directly.
@@ -1266,6 +1269,7 @@ npm run build    # typecheck + bundle to out/
 npm test         # unit tests (vitest: node + jsdom projects)
 npm run test:e2e # Electron e2e suite (Playwright; builds first)
 npm run test:e2e:packaged # same suite against an app already built by `npm run dist*`
+npm run test:soak # memory soak: long desktop and CLI sessions checked against e2e/soak/budgets.ts
 npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 ```
 
@@ -1398,9 +1402,9 @@ the agent loop and UI never depend on a specific provider.
 - **Tool execution is sandboxed where the OS allows it.** `run_shell` runs under
   Seatbelt (`sandbox-exec`) on macOS and bubblewrap on Linux: filesystem reads
   allowed, writes restricted to the project + temp dirs, network denied until you
-  grant it (in *full auto*, a once-per-chat card after a command first fails for lack
-  of network; "Allow for run" on a shell approval; or `--allow-shell-network` on a
-  headless run). Granted network is confined to a
+  grant it (a once-per-chat question after a command first fails for lack of network,
+  in every mode; approving a shell command never grants network; or
+  `--allow-shell-network` on a headless run). Granted network is confined to a
   per-domain egress allowlist: direct sockets stay blocked and traffic flows through
   a local proxy that permits package registries, VCS hosts, and domains you add in
   Settings. Windows has no equivalent, so shell commands there run unconfined and
@@ -1422,7 +1426,10 @@ the agent loop and UI never depend on a specific provider.
   forced or deleting push) or wipe data outside it (a database reset or drop, Docker
   volumes, `terraform destroy`), and reading or changing a credential file (a `.env`, a
   private key), ask in every mode, since the sandbox protects everything but the
-  project itself and can read your whole filesystem.
+  project itself and can read your whole filesystem. So does changing a project
+  control file that runs code outside the sandbox later (`.houston/`, `.vscode/`,
+  `.idea/`, `.husky/`, `.devcontainer/`, CI workflows, `.envrc`, `.mcp.json`), which
+  *allow-for-the-run* doesn't cover; only an allow rule for the path does.
   `view_localhost` is restricted to loopback addresses and loads untrusted page
   content in a sandboxed, isolated, no-Node window; its main frame can't be
   navigated or redirected off loopback, and its requests can't reach

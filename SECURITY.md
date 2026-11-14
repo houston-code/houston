@@ -119,12 +119,37 @@ across line continuations), but like the workspace-escape check it is a static
 tripwire: a command assembled from variables isn't seen. A new install starts in full
 auto only where the OS sandbox confines shell commands, and in ask elsewhere.
 
+The optional verify-on-stop command runs outside the tool-approval gate, so it carries
+the same limits itself. A command Houston inferred from the project's files (such as
+`npm test`) runs only where the OS sandbox confines it, or after the user allowed
+unsandboxed shell commands for the run; elsewhere it is skipped with a notice. A
+user-set command gets network exactly when the agent's own shell commands do, since it
+runs project scripts the agent can edit. Each one is followed by the git check below.
+
+The project's **control files** are guarded the same way: a file edit or shell command
+that writes anything under `.houston/`, `.vscode/`, `.idea/`, `.husky/`,
+`.devcontainer/`, `.github/workflows/`, or `.github/actions/`, or any `.envrc` or
+`.mcp.json`, asks in every mode, and "Allow for run" does not cover it; only an
+explicit `allow` rule for the path does. Those files run code outside the sandbox later
+(an editor task, a direnv script, a git hook, a Houston plugin, a CI job) or change
+Houston's own settings for the folder. Like the other shell checks this reads the words
+a command names, so a path assembled from variables, or a write made after a `cd` into
+one of those folders, isn't seen.
+
+A project's elevating configuration (its `allow` rules, hooks, and MCP servers from
+`.houston/settings.json`, and its `.houston/plugins/*.js` files) is honored only after
+the user trusts that folder, and the trust is bound to a fingerprint that includes each
+plugin file's name and content hash. Plugins also need the `projectPlugins` setting,
+which is only a master switch: it never runs a plugin in a folder the user hasn't
+trusted, and a plugin added or edited after the trust turns the folder's trust off until
+the user consents again. Plugins run in Houston's main process, outside the sandbox.
+
 The sandbox also leaves the project's `.git` writable, so ordinary git (commits,
 `git config`, upstreams, hook installers) works inside it. What a command could plant
 there for the user's **own** git to run later, outside the sandbox (a hook,
 `core.fsmonitor`, a filter driver or other command-valued setting, a `commondir`
 redirect, or a nested repository registered as a submodule that carries one), is
-**detected after each shell command** rather than blocked: Houston compares those
+**detected after each shell command** (verify-on-stop included) rather than blocked: Houston compares those
 parts of each root's repository with their state before the command and, on a change,
 asks the user to keep or undo it (an unattended run undoes it). Houston's own git
 calls run hardened against all of these regardless. This is detection, not

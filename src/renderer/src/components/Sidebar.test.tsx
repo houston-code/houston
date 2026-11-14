@@ -1,4 +1,7 @@
 import { createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatStatusMap } from '@shared/chatStatus'
@@ -60,6 +63,17 @@ function baseProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
   }
 }
 
+/** The button that opens a chat row, found by the title its name starts with. */
+function rowButton(title: string): HTMLElement {
+  return screen.getByRole('button', { name: new RegExp(`^${title},`) })
+}
+
+/** A section header's collapse toggle, by the section's name. */
+function sectionToggle(name: string): HTMLElement {
+  const head = screen.getAllByText(name).find((el) => el.classList.contains('section-head__name'))
+  return head?.closest('button') as HTMLElement
+}
+
 /** Open the ⋯ overflow menu for a given conversation row. */
 function openConvMenu(title: string): void {
   const row = screen.getByText(title).closest('.conv') as HTMLElement
@@ -95,21 +109,63 @@ describe('Sidebar — expanded rendering', () => {
     expect(inactive).not.toHaveClass('conv--active')
   })
 
-  it('selects a conversation from the keyboard (focusable row + Enter)', () => {
+  it('selects a conversation from the keyboard (focusable row + Enter)', async () => {
     const props = baseProps({
       conversations: [makeConv({ id: 'a', title: 'Alpha' }), makeConv({ id: 'b', title: 'Beta' })],
       currentId: 'b'
     })
     render(<Sidebar {...props} />)
 
-    const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
-    const beta = screen.getByText('Beta').closest('.conv') as HTMLElement
-    // One Tab stop for the list: the open chat. The other rows are reached by arrow keys.
-    expect(beta).toHaveAttribute('tabindex', '0')
+    // One Tab stop for the list: the open chat's button. The other rows are reached
+    // by arrow keys. Each row opens through its own button, which answers Enter.
+    const alpha = rowButton('Alpha')
+    expect(rowButton('Beta')).toHaveAttribute('tabindex', '0')
     expect(alpha).toHaveAttribute('tabindex', '-1')
-    // Dispatched on the row itself, so the handler's target === currentTarget guard passes.
-    fireEvent.keyDown(alpha, { key: 'Enter' })
+    alpha.focus()
+    expect(alpha).toHaveFocus()
+    await userEvent.keyboard('{Enter}')
     expect(props.onSelect).toHaveBeenCalledWith('a')
+  })
+
+  it('lists each section’s chats as list items, the open one marked current', () => {
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha', groupId: 'g1' }),
+        makeConv({ id: 'b', title: 'Beta' }),
+        makeConv({ id: 'p', title: 'Parent', updatedAt: 0 }),
+        makeConv({ id: 'k', title: 'Kid', spawnedFrom: { conversationId: 'p', title: 'Parent' } })
+      ],
+      currentId: 'b'
+    })
+    render(<Sidebar {...props} />)
+
+    const work = screen.getByRole('list', { name: 'Work' })
+    expect(within(work).getAllByRole('listitem')).toHaveLength(1)
+    const ungrouped = screen.getByRole('list', { name: 'Ungrouped' })
+    expect(within(ungrouped).getByRole('button', { name: /^Beta,/ })).toHaveAttribute('aria-current', 'true')
+    expect(rowButton('Alpha')).not.toHaveAttribute('aria-current')
+    // Spawned chats are a list inside their parent's item.
+    const kids = screen.getByRole('list', { name: 'Spawned from Parent' })
+    expect(kids.closest('[role="listitem"]')).toContainElement(rowButton('Parent'))
+    expect(within(kids).getByRole('listitem')).toContainElement(rowButton('Kid'))
+  })
+
+  it('names a row with what it shows: state, pinned, folder and branch', () => {
+    const props = baseProps({
+      conversations: [
+        makeConv({ id: 'p', title: 'Important', pinned: true }),
+        makeConv({
+          id: 'w',
+          title: 'Feature',
+          worktree: { path: '/r/.houston/worktrees/feat', branch: 'feat/x', repoRoot: '/code/app' }
+        })
+      ],
+      chatStatus: running('w')
+    })
+    render(<Sidebar {...props} />)
+    expect(rowButton('Important')).toHaveAccessibleName('Important, Pinned, houston')
+    expect(rowButton('Feature')).toHaveAccessibleName('Feature, Working, app, branch feat/x')
   })
 
   it('marks every chat with a live run, regardless of which is active', () => {
@@ -171,10 +227,10 @@ describe('Sidebar — expanded rendering', () => {
     expect(within(alpha).getByLabelText('Needs input')).toBeInTheDocument()
     expect(within(alpha).getByText(/Needs approval: run_shell/)).toBeInTheDocument()
     // The row's accessible name carries the reason, not just the title.
-    expect(alpha).toHaveAttribute('aria-label', 'Alpha, Needs approval: run_shell')
+    expect(rowButton('Alpha')).toHaveAttribute('aria-label', 'Alpha, Needs approval: run_shell, houston')
     const beta = screen.getByText('Beta').closest('.conv') as HTMLElement
     expect(beta).toHaveAttribute('data-signal', 'working')
-    expect(beta).toHaveAttribute('aria-label', 'Beta, Working')
+    expect(rowButton('Beta')).toHaveAttribute('aria-label', 'Beta, Working, houston')
   })
 
   it('shows needs input on the open chat too, since it still waits on the user', () => {
@@ -237,8 +293,7 @@ describe('Sidebar — expanded rendering', () => {
     expect(onSetUnread).toHaveBeenLastCalledWith('b', false)
 
     // Option/Alt+U on a focused row toggles it (matched on the physical key).
-    const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
-    fireEvent.keyDown(alpha, { key: '¨', code: 'KeyU', altKey: true })
+    fireEvent.keyDown(rowButton('Alpha'), { key: '¨', code: 'KeyU', altKey: true })
     expect(onSetUnread).toHaveBeenLastCalledWith('a', true)
   })
 
@@ -261,7 +316,7 @@ describe('Sidebar — expanded rendering', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'More actions for Alpha' }))
     expect(screen.queryByRole('button', { name: /Mark as (un)?read/ })).not.toBeInTheDocument()
-    fireEvent.keyDown(screen.getByText('Alpha').closest('.conv') as HTMLElement, { code: 'KeyU', altKey: true })
+    fireEvent.keyDown(rowButton('Alpha'), { code: 'KeyU', altKey: true })
     expect(onSetUnread).not.toHaveBeenCalled()
   })
 
@@ -462,6 +517,11 @@ describe('Sidebar — empty states', () => {
     expect(screen.getByText('No chats yet.')).toBeInTheDocument()
   })
 
+  it('says how many chats are archived when none is active', () => {
+    render(<Sidebar {...baseProps({ conversations: [], statusCounts: { active: 0, archived: 3 } })} />)
+    expect(screen.getByText('No active chats. 3 archived.')).toBeInTheDocument()
+  })
+
   it('shows the no-matches message when a search is active but the list is empty', () => {
     render(<Sidebar {...baseProps({ conversations: [], search: 'xyz' })} />)
     expect(screen.getByText('No matching chats.')).toBeInTheDocument()
@@ -632,6 +692,53 @@ describe('Sidebar — built-in section collapse', () => {
     expect(props.onToggleSectionCollapsed).toHaveBeenCalledWith('pinned')
     // Collapsed → the pinned chat is hidden.
     expect(screen.queryByText('Important')).not.toBeInTheDocument()
+  })
+
+  it('says whether each section is open, and keeps its chevron out of the name', () => {
+    const { rerender } = render(
+      <Sidebar {...baseProps({ conversations: [makeConv({ id: 'p', title: 'Important', pinned: true })] })} />
+    )
+    const toggle = sectionToggle('Pinned')
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(within(toggle).getByText('▾')).toHaveAttribute('aria-hidden', 'true')
+    rerender(
+      <Sidebar
+        {...baseProps({
+          conversations: [makeConv({ id: 'p', title: 'Important', pinned: true })],
+          collapsedSections: { pinned: true }
+        })}
+      />
+    )
+    expect(sectionToggle('Pinned')).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('never hides the header-less chat list, even with a collapsed flag left from a deleted group', () => {
+    render(
+      <Sidebar
+        {...baseProps({ conversations: [makeConv({ id: 'u', title: 'Loose chat' })], collapsedSections: { ungrouped: true } })}
+      />
+    )
+    expect(screen.getByText('Loose chat')).toBeInTheDocument()
+  })
+
+  it('shows every search hit, even in sections the user collapsed', () => {
+    // While searching the app drops the groups, so every hit is Pinned or Ungrouped.
+    render(
+      <Sidebar
+        {...baseProps({
+          search: 'chat',
+          conversations: [
+            makeConv({ id: 'p', title: 'Pinned chat', pinned: true }),
+            makeConv({ id: 'u', title: 'Loose chat' })
+          ],
+          collapsedSections: { pinned: true, ungrouped: true }
+        })}
+      />
+    )
+    expect(screen.getByText('Pinned chat')).toBeInTheDocument()
+    expect(screen.getByText('Loose chat')).toBeInTheDocument()
+    // Collapsing waits until the search is cleared.
+    expect(sectionToggle('Pinned')).toBeDisabled()
   })
 })
 
@@ -1145,6 +1252,71 @@ describe('Sidebar — drag a chat onto a group', () => {
     expect(props.onReorder).not.toHaveBeenCalled()
   })
 
+  describe('onto a project folder section', () => {
+    const byFolder = (): SidebarProps =>
+      baseProps({
+        groupBy: 'folder',
+        groups: [{ id: 'g1', name: 'Work' }],
+        conversations: [
+          makeConv({ id: 'a', title: 'Alpha', workspace: '/code/app', updatedAt: 3 }),
+          makeConv({ id: 'b', title: 'Beta', workspace: '/code/app', updatedAt: 2 }),
+          makeConv({ id: 'c', title: 'Gamma', workspace: '/code/site', updatedAt: 1 }),
+          makeConv({ id: 'g', title: 'Grouped', workspace: '/code/site', groupId: 'g1' })
+        ]
+      })
+    // A folder section by its header (the rows' meta lines repeat the folder name).
+    const folderSection = (name: string): HTMLElement =>
+      sectionToggle(name).closest('.section') as HTMLElement
+
+    it('reorders its own chats', () => {
+      const props = byFolder()
+      render(<Sidebar {...props} />)
+      const app = folderSection('app')
+      stackRowRects(app)
+      fireDrag('drop', app, startConvDrag('Beta'), 2)
+      expect(props.onReorder).toHaveBeenCalledWith(['b', 'a'], undefined)
+    })
+
+    it("refuses a chat from another folder's section, whose folder decides where it goes", () => {
+      const props = byFolder()
+      const { container } = render(<Sidebar {...props} />)
+      const app = folderSection('app')
+      stackRowRects(app)
+      const dataTransfer = startConvDrag('Gamma')
+      fireDrag('dragOver', app, dataTransfer, 2)
+      expect(container.querySelector('.conv-drop-line')).toBeNull()
+      fireDrag('drop', app, dataTransfer, 2)
+      expect(props.onReorder).not.toHaveBeenCalled()
+      expect(props.onMove).not.toHaveBeenCalled()
+    })
+
+    it('takes a chat out of a group into the slot when it belongs to that folder', () => {
+      const props = byFolder()
+      const { container } = render(<Sidebar {...props} />)
+      const site = folderSection('site')
+      stackRowRects(site)
+      const dataTransfer = startConvDrag('Grouped')
+      fireDrag('dragOver', site, dataTransfer, 2)
+      expect(container.querySelector('.conv-drop-line')).not.toBeNull()
+      fireDrag('drop', site, dataTransfer, 2)
+      expect(props.onReorder).toHaveBeenCalledWith(['g', 'c'], { id: 'g', groupId: null })
+    })
+
+    it('takes a chat out of a group without placing it when its folder is another one', () => {
+      const props = byFolder()
+      const { container } = render(<Sidebar {...props} />)
+      const app = folderSection('app')
+      stackRowRects(app)
+      const dataTransfer = startConvDrag('Grouped')
+      fireDrag('dragOver', app, dataTransfer, 2)
+      // No slot to show: it will sit in its own folder's section.
+      expect(container.querySelector('.conv-drop-line')).toBeNull()
+      fireDrag('drop', app, dataTransfer, 2)
+      expect(props.onMove).toHaveBeenCalledWith('g', null)
+      expect(props.onReorder).not.toHaveBeenCalled()
+    })
+  })
+
   it('makes chat rows draggable but not while renaming', () => {
     const props = baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })
     render(<Sidebar {...props} />)
@@ -1177,6 +1349,41 @@ describe('Sidebar — group header menu', () => {
     expect(props.onRenameGroup).toHaveBeenCalledWith('g1', 'Renamed Group')
   })
 
+  it('renames a group from the keyboard with F2, in an input beside the toggle, then hands focus back', () => {
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [makeConv({ id: 'w', title: 'Work item', groupId: 'g1' })]
+    })
+    render(<Sidebar {...props} />)
+
+    fireEvent.keyDown(sectionToggle('Work'), { key: 'F2' })
+    const input = screen.getByDisplayValue('Work') as HTMLInputElement
+    expect(input.closest('button')).toBeNull()
+    expect(props.onToggleGroupCollapsed).not.toHaveBeenCalled()
+    fireEvent.change(input, { target: { value: 'Projects' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onRenameGroup).toHaveBeenCalledWith('g1', 'Projects')
+    expect(sectionToggle('Work')).toHaveFocus()
+  })
+
+  it('opens the group options on right-click, at the pointer, and under ⋯ from the keyboard', () => {
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [makeConv({ id: 'w', title: 'Work item', groupId: 'g1' })]
+    })
+    render(<Sidebar {...props} />)
+    const head = screen.getByText('Work').closest('.section-head') as HTMLElement
+    fireEvent.contextMenu(head, { clientX: 30, clientY: 50 })
+    const menu = screen.getByRole('menu', { name: 'Options for group Work' })
+    expect(menu.style.left).toBe('30px')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    // The context-menu key (Shift+F10) has no pointer.
+    fireEvent.contextMenu(sectionToggle('Work'), { clientX: 0, clientY: 0 })
+    expect(screen.getByRole('menu', { name: 'Options for group Work' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Options for group Work' })).toHaveAttribute('aria-expanded', 'true')
+  })
+
   it('deletes a group via the header menu, firing onDeleteGroup with the group id', () => {
     const props = baseProps({
       groups: [{ id: 'g1', name: 'Work' }],
@@ -1198,6 +1405,20 @@ describe('Sidebar — row menu accessibility', () => {
     expect(more).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(more)
     expect(more).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('keeps ⋯ out of the Tab order, opens the menu from the row by keyboard, and returns focus to the row', () => {
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })} />)
+    const more = screen.getByRole('button', { name: 'More actions for Alpha' })
+    expect(more).toHaveAttribute('tabindex', '-1')
+    const row = rowButton('Alpha')
+    row.focus()
+    // Shift+F10 / the context-menu key: no pointer position.
+    fireEvent.contextMenu(row, { clientX: 0, clientY: 0 })
+    expect(screen.getByRole('menu', { name: 'Actions for Alpha' })).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(row).toHaveFocus()
   })
 
   it('shows a Windows workspace as its folder name, not the whole path', () => {
@@ -1235,7 +1456,7 @@ describe('Sidebar: spawned chats nest under their parent', () => {
 
   it('shows spawned chats indented under the parent, in a labelled group', () => {
     render(<FoldingSidebar {...baseProps({ conversations: convs })} />)
-    const group = screen.getByRole('group', { name: 'Spawned from Add OAuth' })
+    const group = screen.getByRole('list', { name: 'Spawned from Add OAuth' })
     expect(within(group).getByText('Update API docs')).toBeInTheDocument()
     expect(within(group).getByText('Fix flaky e2e')).toBeInTheDocument()
   })
@@ -1271,6 +1492,18 @@ describe('Sidebar: spawned chats nest under their parent', () => {
     // Folded: needs input outranks running, in both the dot and the tag.
     expect(parentRow()).toHaveAttribute('data-signal', 'input')
     expect(screen.getByText('1 needs input')).toHaveClass('conv__tag--input')
+  })
+
+  it("words the folded tag's tooltip by how many of the spawned sessions it covers", () => {
+    const { rerender } = render(
+      <FoldingSidebar {...baseProps({ conversations: convs, chatStatus: running('k2') })} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Hide 2 spawned sessions' }))
+    expect(screen.getByText('1 running')).toHaveAttribute('title', '1 of 2 spawned sessions under this chat is running')
+    rerender(<FoldingSidebar {...baseProps({ conversations: convs, chatStatus: running('k1', 'k2') })} />)
+    expect(screen.getByText('2 running')).toHaveAttribute('title', 'All 2 spawned sessions under this chat are running')
+    rerender(<FoldingSidebar {...baseProps({ conversations: convs.slice(0, 2), chatStatus: running('k1') })} />)
+    expect(screen.getByText('1 running')).toHaveAttribute('title', 'The spawned session under this chat is running')
   })
 
   it('shows a neutral count when nothing under a folded parent is running', () => {
@@ -1372,6 +1605,17 @@ describe('Sidebar: attention outside the rows', () => {
     expect(screen.queryByRole('img', { name: '1 needs input' })).not.toBeInTheDocument()
   })
 
+  it('counts the waiting chats on a collapsed header in plain grammar', () => {
+    const waiting: ChatStatusMap = {
+      a: { running: true, pending: [{ kind: 'question' }] },
+      b: { running: true, pending: [{ kind: 'question' }] }
+    }
+    render(
+      <Sidebar {...baseProps({ conversations: convs, chatStatus: waiting, groups: [{ id: 'g1', name: 'Work', collapsed: true }] })} />
+    )
+    expect(screen.getByRole('img', { name: '2 need input' })).toHaveAttribute('title', '2 need input')
+  })
+
   it('never aggregates working into a header', () => {
     render(
       <Sidebar
@@ -1462,6 +1706,29 @@ describe('Sidebar: the ⋯ menus', () => {
       'Rename group',
       'Delete group'
     ])
+  })
+
+  it('keeps every ⋯ button reachable: transparent, never hidden, shown on focus and while its menu is open', () => {
+    // A hidden button leaves the tab order and can't take focus back from its menu.
+    const css = readFileSync(join(__dirname, '../styles/global.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map((m) => ({
+      selectors: m[1].split(',').map((s) => s.trim()),
+      body: m[2]
+    }))
+    const actionRules = rules.filter((r) => r.selectors.some((s) => s.includes('.conv__action')))
+    expect(actionRules.some((r) => /visibility\s*:\s*hidden/.test(r.body))).toBe(false)
+    // The section header's label filter button follows the same rule.
+    const labelRules = rules.filter((r) => r.selectors.some((s) => s.includes('.section-head__labels')))
+    expect(labelRules.length).toBeGreaterThan(0)
+    expect(labelRules.some((r) => /visibility\s*:\s*hidden/.test(r.body))).toBe(false)
+    const shown = actionRules.find((r) => /opacity\s*:\s*1/.test(r.body))?.selectors ?? []
+    expect(shown).toEqual(
+      expect.arrayContaining([
+        '.conv:focus-within .conv__action',
+        '.section-head:focus-within .conv__action',
+        ".conv__action[aria-expanded='true']"
+      ])
+    )
   })
 })
 
@@ -1597,7 +1864,8 @@ describe('Sidebar: chat labels', () => {
     // Chips follow the user's label order; an id with no label is skipped.
     expect([...row.querySelectorAll('.label-chip')].map((c) => c.textContent)).toEqual(['bug', 'wip', '+1'])
     expect(within(row).getByText('+1')).toHaveAttribute('title', 'review')
-    expect(row).toHaveAttribute('aria-label', expect.stringContaining('labels: bug, wip, review'))
+    // The row's open button carries its name.
+    expect(rowButton('Alpha')).toHaveAttribute('aria-label', expect.stringContaining('labels: bug, wip, review'))
   })
 
   it('ticks labels on and off from the row’s Labels submenu', () => {

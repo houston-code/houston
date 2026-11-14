@@ -550,9 +550,17 @@ export function reduceVim(vim: VimState, s: EditorState, key: EditorKey): VimRes
   switch (key.type) {
     case 'char': {
       let cur: VimResult = { vim, state: s }
-      for (const ch of cps(key.value)) {
-        cur = normalChar(cur.vim, cur.state, ch)
+      const chars = cps(key.value)
+      for (let i = 0; i < chars.length; i++) {
+        cur = normalChar(cur.vim, cur.state, chars[i])
         if (cur.outcome) return cur
+        // A command that entered insert mode ("A", "o", "cw") makes the rest of the
+        // burst text, as it is for a slower typist: fast typing, autorepeat or a
+        // laggy link must not run "hello" as five commands.
+        if (cur.vim.mode === 'insert' && i + 1 < chars.length) {
+          const r = reduceEditor(cur.state, { type: 'char', value: chars.slice(i + 1).join('') })
+          return { vim: cur.vim, state: r.state, ...(r.outcome ? { outcome: r.outcome } : {}) }
+        }
       }
       return cur
     }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { BranchSync } from '@shared/gitActions'
+import { ipcErrorMessage } from '../lib/ipcError'
 
 /**
  * Commit and push from the Changes view without spending an agent turn. The message
@@ -48,8 +49,7 @@ export function CommitForm({
   // A rejected call (the main process threw) still says what went wrong, rather than
   // leaving an unhandled rejection and a form that looks like nothing happened.
   const failed = (what: string, e: unknown): void => {
-    // Without Electron's "Error invoking remote method '<channel>':" wrapper.
-    const detail = (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']*':\s*(?:\w*Error:\s*)?/, '')
+    const detail = ipcErrorMessage(e)
     setStatus({ text: `${what} failed: ${detail || 'unknown error'}`, error: true })
   }
 

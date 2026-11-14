@@ -3,6 +3,7 @@
  * commands are prompt templates loaded from `.houston/commands/*.md` in the
  * workspace. Pure helpers live here so main + renderer share one definition.
  */
+import type { ReasoningEffort } from './agent'
 
 export interface Command {
   name: string
@@ -17,10 +18,29 @@ export interface Command {
   autoRun?: boolean
   /** Menu heading the command is listed under; custom commands have none. */
   group?: CommandGroup
-  /** What may follow the name, shown dimmed beside it (for example `[name]`). */
+  /**
+   * What may follow the name, shown dimmed beside it (for example `[name]`). A
+   * custom command sets it with its `argument-hint` frontmatter.
+   */
   args?: string
+  /**
+   * Where a custom command was loaded from: the workspace's `.houston/commands`
+   * (`project`, untrusted unless the folder is) or the user's `~/.houston/commands`.
+   */
+  source?: 'project' | 'user'
   /** `/<skill-name>`: runs a skill (listed under its own heading). */
   skill?: boolean
+  /** Custom-command frontmatter `model`: the model this one turn runs on. */
+  model?: string
+  /** Custom-command frontmatter `effort`: the thinking effort for this one turn. */
+  effort?: ReasoningEffort
+  /** Custom-command frontmatter `agent`: dispatch the expanded prompt to this subagent. */
+  agent?: string
+  /**
+   * Custom-command frontmatter `allowed-tools`, as written: tools pre-approved for
+   * this one turn, in permission-rule syntax (`read_file`, `run_shell(git status*)`).
+   */
+  allowedTools?: string
 }
 
 /** Menu headings, in the order the menu shows them. Custom commands come last. */
@@ -144,7 +164,8 @@ export function resolveCommand(commands: Command[], name: string): Command | und
   const n = name.toLowerCase()
   const direct = commands.find((c) => c.name.toLowerCase() === n)
   if (direct) return direct
-  const target = COMMAND_ALIASES[n]
+  // Own-property only: a typed `/constructor` must not resolve to Object's members.
+  const target = Object.hasOwn(COMMAND_ALIASES, n) ? COMMAND_ALIASES[n] : undefined
   return target ? commands.find((c) => c.name === target) : undefined
 }
 
@@ -190,6 +211,16 @@ export function agentInvocationPrompt(name: string, task: string): string {
 export function mergeCommands(builtin: Command[], custom: Command[]): Command[] {
   const names = new Set(builtin.map((c) => c.name.toLowerCase()))
   return [...builtin, ...custom.filter((c) => !names.has(c.name.toLowerCase()))]
+}
+
+/**
+ * Whether a custom command sets a frontmatter option that changes how its turn runs
+ * (model, effort, agent, allowed-tools). The desktop composer can't express those by
+ * filling the message box, so such a command runs straight away, prepared by the
+ * main process.
+ */
+export function commandHasRunOptions(cmd: Command): boolean {
+  return Boolean(cmd.model || cmd.effort || cmd.agent || cmd.allowedTools)
 }
 
 /**
@@ -296,8 +327,23 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'add-dir', group: 'Terminal', args: '[path]',
+    description: 'Let the agent work in another folder this session (/add-dir alone lists them)',
+    clients: ['tui']
+  },
+  {
     name: 'verbose', group: 'Terminal',
     description: "Show each tool's full output as it runs",
+    clients: ['tui']
+  },
+  {
+    name: 'thoughts', group: 'Terminal', args: '[show|summary|hide]',
+    description: "How the model's reasoning shows as it streams (Alt-T cycles it)",
+    clients: ['tui']
+  },
+  {
+    name: 'transcript', group: 'Terminal',
+    description: 'The whole session full screen, with reasoning and full tool output (Ctrl-O)',
     clients: ['tui']
   },
   {
@@ -356,7 +402,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   {
     name: 'mcp', group: 'Extend',
-    description: 'List MCP servers (add, remove, login, logout)',
+    description: 'List MCP servers (add, remove, login, logout, registry search)',
     clients: ['gui', 'tui'],
     gui: { description: 'Manage MCP servers in Settings' }
   },
@@ -431,8 +477,11 @@ export function builtinCommands(client: CommandClient): Command[] {
  */
 const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   vim: 'the app\'s composer has no vim mode',
+  'add-dir': 'in the app, add folders the agent may use under Settings, Workspace, Additional folders',
   verbose: 'in the app, open a tool row to see its full output',
   output: 'in the app, open a tool row to see its full output',
+  thoughts: 'in the app, reasoning folds above each reply; Settings > Appearance > Always show reasoning keeps it open',
+  transcript: 'in the app, the chat itself is the full transcript: open a tool row or the reasoning to see it in full',
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
   proposals: 'in the app, proposed sessions appear as cards in the chat, with Start and Dismiss',
   image: 'in the app, attach an image with the + button, or paste or drop it into the message box',
@@ -450,10 +499,10 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
  */
 export function terminalOnlyNote(name: string): string | null {
   const n = name.toLowerCase()
-  const canonical = COMMAND_ALIASES[n] ?? n
+  const canonical = (Object.hasOwn(COMMAND_ALIASES, n) ? COMMAND_ALIASES[n] : undefined) ?? n
   const entry = BUILTIN_COMMAND_CATALOG.find((c) => c.name === canonical)
   if (!entry || entry.clients.includes('gui')) return null
-  const where = DESKTOP_EQUIVALENT[canonical]
+  const where = Object.hasOwn(DESKTOP_EQUIVALENT, canonical) ? DESKTOP_EQUIVALENT[canonical] : undefined
   return `/${n} is a terminal command${where ? `: ${where}` : ''}.`
 }
 

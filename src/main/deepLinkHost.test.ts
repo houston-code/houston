@@ -18,11 +18,13 @@ vi.mock('./helperWindows', () => ({ appWindows: () => h.appWindows }))
 vi.mock('./windows', () => ({ targetWindow: () => h.target, windowShowing: () => undefined }))
 vi.mock('./store', () => ({ getSettings: () => ({ recentWorkspaces: [] }), rememberWorkspace: () => {} }))
 vi.mock('./conversations', () => ({ conversationExists: () => true, listConversations: () => [] }))
-vi.mock('./logger', () => ({ log: { info: () => {} } }))
+vi.mock('./logger', () => ({ log: { info: () => {}, warn: () => {} } }))
 
 /** A fake chat window whose renderer is an event emitter. */
 function fakeWindow(id: number) {
   const webContents = Object.assign(new EventEmitter(), {
+    // The page's main frame, showing the app's own document (the IPC sender check).
+    mainFrame: { url: APP_URL, parent: null },
     isDestroyed: () => false,
     send: (channel: string, ...args: unknown[]) => h.sent.push({ win: id, channel, args })
   })
@@ -37,14 +39,24 @@ function fakeWindow(id: number) {
   }
 }
 
+const APP_URL = 'file:///app/out/renderer/index.html'
+
 async function load(): Promise<typeof import('./deepLinkHost')> {
   vi.resetModules()
   h.ipc.clear()
   h.sent.length = 0
-  return import('./deepLinkHost')
+  const mod = await import('./deepLinkHost')
+  // The sender check treats the fake app windows as the registered chat windows.
+  const { configureIpcSenderPolicy } = await import('./ipcSender')
+  configureIpcSenderPolicy({
+    startUrl: APP_URL,
+    isAppContents: (wc) => (h.appWindows as { webContents: unknown }[]).some((w) => w.webContents === wc)
+  })
+  return mod
 }
 
-const ready = (win: ReturnType<typeof fakeWindow>): void => h.ipc.get(IPC.deepLinkReady)!({ sender: win.webContents })
+const ready = (win: ReturnType<typeof fakeWindow>): void =>
+  h.ipc.get(IPC.deepLinkReady)!({ sender: win.webContents, senderFrame: win.webContents.mainFrame })
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 describe('deep link host', () => {
@@ -103,5 +115,44 @@ describe('deep link host', () => {
     await flush()
     expect(h.sent).toHaveLength(2)
     expect(h.sent[1].channel).toBe(IPC.menuOpenSettings)
+  })
+})
+
+describe('deepLinkReady sender check', () => {
+  it('ignores ready from a subframe or a page that is not the app', async () => {
+    const { wireDeepLinks } = await load()
+    const win = fakeWindow(1)
+    h.appWindows = [win]
+    h.target = win
+    const router = wireDeepLinks({ started: Promise.resolve(), createWindow: () => {} })
+    const hello = h.ipc.get(IPC.deepLinkReady)!
+    hello({ sender: win.webContents, senderFrame: { url: APP_URL, parent: win.webContents.mainFrame } })
+    win.webContents.mainFrame = { url: 'https://attacker.example/', parent: null }
+    hello({ sender: win.webContents, senderFrame: win.webContents.mainFrame })
+    await flush()
+    await router.handle('houston://settings')
+    // Still held: no ready was accepted, so nothing reached the window.
+    expect(h.sent).toEqual([])
+    expect(win.webContents.listenerCount('destroyed')).toBe(0)
+  })
+})
+
+describe('resolvesToNetworkPath', () => {
+  it('flags a share or device as Windows resolves it, including a /x against a share cwd', async () => {
+    const { resolvesToNetworkPath } = await load()
+    expect(resolvesToNetworkPath('\\\\host\\share', 'win32', 'C:\\Users\\me')).toBe(true)
+    expect(resolvesToNetworkPath('/\\host\\share', 'win32', 'C:\\Users\\me')).toBe(true)
+    expect(resolvesToNetworkPath('\\\\?\\UNC\\h\\s', 'win32', 'C:\\Users\\me')).toBe(true)
+    expect(resolvesToNetworkPath('/repo', 'win32', '\\\\srv\\share\\dir')).toBe(true)
+    expect(resolvesToNetworkPath('/repo', 'win32', 'C:\\Users\\me')).toBe(false)
+    expect(resolvesToNetworkPath('C:\\repo', 'win32', '\\\\srv\\share')).toBe(false)
+    // POSIX has no shares in its path syntax.
+    expect(resolvesToNetworkPath('//host/share', 'darwin', '/')).toBe(false)
+  })
+
+  it('makes resolveDirectory refuse a share without touching it', async () => {
+    const { resolveDirectory } = await load()
+    if (process.platform === 'win32') expect(resolveDirectory('\\\\host\\share')).toBeNull()
+    expect(resolveDirectory(process.cwd())).not.toBeNull()
   })
 })

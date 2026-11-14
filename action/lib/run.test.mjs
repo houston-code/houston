@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -193,6 +193,25 @@ describe('respond', () => {
     expect(w.logs.join('\n')).toMatch(/contains a credential/)
   })
 
+  it('refuses a reply carrying the token in the base64 form a persisted checkout credential takes', async () => {
+    const encoded = Buffer.from(`x-access-token:${GH_TOKEN}`).toString('base64')
+    const w = world({ eventName: 'issue_comment', event: mention(), cliOut: resultLine({ finalText: `AUTHORIZATION: basic ${encoded}` }) })
+    expect(await w.go()).toBe(1)
+    expect(w.gh('issue', 'comment')).toEqual([])
+    expect(w.logs.join('\n')).toMatch(/contains a credential/)
+  })
+
+  it('refuses to run when the checkout persisted its credential in git config, posting nothing', async () => {
+    const repo = gitRepo()
+    repo.git('config', 'http.https://github.com/.extraheader', 'AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46Z2hzX3h4eA==')
+    const w = world({ eventName: 'issue_comment', event: mention(), repo })
+    expect(await w.go()).toBe(1)
+    expect(w.cliCall()).toBeUndefined()
+    expect(w.gh('issue', 'comment')).toEqual([])
+    expect(w.logs.join('\n')).toMatch(/persist-credentials: false/)
+    expect(w.outputs()).toMatch(/status<<.*\nerror\n/)
+  })
+
   it('posts a short note and fails when the run errors', async () => {
     const w = world({ eventName: 'issue_comment', event: mention(), cliOut: resultLine({ status: 'error', finalText: '' }) })
     expect(await w.go()).toBe(1)
@@ -318,6 +337,16 @@ describe('review', () => {
     expect(w.gh('pr', 'review')).toHaveLength(1)
   })
 
+  it('refuses to review a checkout that persisted its credential', async () => {
+    const repo = gitRepo()
+    repo.git('config', 'http.extraheader', 'AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46Z2hzX3h4eA==')
+    const w = world({ eventName: 'pull_request', event: (r) => pr(r.base), repo })
+    expect(await w.go()).toBe(1)
+    expect(w.cliCall()).toBeUndefined()
+    expect(w.gh('pr', 'review')).toEqual([])
+    expect(w.logs.join('\n')).toMatch(/persisted a git credential/)
+  })
+
   it('stops before running when the base commit is not checked out', async () => {
     const w = world({ eventName: 'pull_request', event: pr('d'.repeat(40)) })
     expect(await w.go()).toBe(1)
@@ -396,6 +425,31 @@ describe('fix-ci', { timeout: 30_000 }, () => {
     expect(w.logs.join('\n')).toMatch(/changed \.git\/config/)
     expect(w.calls.some((c) => c.cmd === 'git' && c.args.includes('commit'))).toBe(false)
     expect(w.gh('pr', 'create')).toEqual([])
+  })
+
+  it('refuses to commit when the run planted a commondir redirect', async () => {
+    const w = world({
+      eventName: 'workflow_run',
+      event: failed,
+      onCli: (r) => {
+        fix(r)
+        writeFileSync(join(r.dir, '.git', 'commondir'), '/tmp/evil-git\n')
+      }
+    })
+    expect(await w.go()).toBe(1)
+    expect(w.logs.join('\n')).toMatch(/changed \.git\/commondir/)
+    expect(w.calls.some((c) => c.cmd === 'git' && c.args.includes('status'))).toBe(false)
+    expect(w.calls.some((c) => c.cmd === 'git' && c.args.includes('push'))).toBe(false)
+  })
+
+  it('runs its own git with an explicit git dir', async () => {
+    const w = world({ eventName: 'workflow_run', event: failed, onCli: fix })
+    expect(await w.go()).toBe(0)
+    const own = w.calls.filter((c) => c.cmd === 'git' && (c.args.includes('status') || c.args.includes('commit') || c.args.includes('push')))
+    expect(own.length).toBeGreaterThanOrEqual(3)
+    for (const c of own) {
+      expect(c.opts.env).toMatchObject({ GIT_DIR: join(w.repo.dir, '.git'), GIT_WORK_TREE: w.repo.dir })
+    }
   })
 
   it('refuses to commit a change that carries a credential', async () => {
@@ -537,6 +591,34 @@ describe('implement', { timeout: 30_000 }, () => {
     expect(readFileSync(note.args.at(-1), 'utf8')).toMatch(/^@dana This needs a product decision\./)
   })
 
+  it("reads the runner's system git config, so a CRLF checkout is not a change", async () => {
+    // Git for Windows sets core.autocrlf=true in its system config, and a checkout there
+    // writes CRLF. Without that config git would see every text file as changed, and the
+    // run would commit them all.
+    const sys = join(mkdtempSync(join(tmpdir(), 'h-sysconfig-')), 'gitconfig')
+    writeFileSync(sys, '[core]\n\tautocrlf = true\n')
+    // Check app.js out the way Git for Windows does, then copy the checkout (new inodes and
+    // ctimes, as a fresh runner has), so git must look at the content again.
+    const checkout = onMain()
+    rmSync(join(checkout.dir, 'app.js'))
+    checkout.git('-c', 'core.autocrlf=true', 'checkout', '--', 'app.js')
+    expect(readFileSync(join(checkout.dir, 'app.js'), 'utf8')).toBe('bug\r\n')
+    const dir = mkdtempSync(join(tmpdir(), 'h-run-'))
+    cpSync(checkout.dir, dir, { recursive: true, preserveTimestamps: true })
+    const repo = { ...checkout, dir, git: gitIn(dir) }
+    const saved = process.env.GIT_CONFIG_SYSTEM
+    process.env.GIT_CONFIG_SYSTEM = sys
+    try {
+      const w = implement({ repo, cliOut: resultLine({ finalText: 'Nothing to change.' }) })
+      expect(await w.go()).toBe(0)
+      expect(w.gh('pr', 'create')).toEqual([])
+      expect(w.calls.some((c) => c.cmd === 'git' && c.args.includes('commit'))).toBe(false)
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CONFIG_SYSTEM
+      else process.env.GIT_CONFIG_SYSTEM = saved
+    }
+  })
+
   it('tells the issue when the run fails', async () => {
     const w = implement({ onCli: change, cliOut: resultLine({ status: 'stalled' }) })
     expect(await w.go()).toBe(1)
@@ -581,6 +663,15 @@ describe('task', () => {
     expect(w.calls.filter((c) => c.cmd === 'gh')).toEqual([])
     expect(w.calls.some((c) => c.cmd === 'git' && c.args.includes('commit'))).toBe(false)
     expect(readFileSync(w.env.GITHUB_STEP_SUMMARY, 'utf8')).toContain('Three stale TODOs.')
+  })
+
+  it('refuses a checkout that persisted its credential, since the report is published', async () => {
+    const repo = gitRepo()
+    repo.git('config', 'http.extraheader', 'AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46Z2hzX3h4eA==')
+    const w = world({ eventName: 'workflow_dispatch', event: {}, inputs: { prompt: 'Report stale TODOs.' }, repo })
+    expect(await w.go()).toBe(1)
+    expect(w.cliCall()).toBeUndefined()
+    expect(w.logs.join('\n')).toMatch(/persisted a git credential/)
   })
 
   it('needs a prompt', async () => {

@@ -38,7 +38,7 @@ import {
   type McpListKind
 } from './protocol'
 import { withTraceContext } from './trace'
-import { SseEventBuffer, type SseEvent } from './sse-client'
+import { SseEventBuffer, readCappedText, type SseEvent } from './sse-client'
 
 /**
  * A minimal MCP client over the **streamable HTTP** transport (the remote
@@ -341,7 +341,7 @@ export class McpHttpClient implements McpConnection {
     const sid = res.headers.get('mcp-session-id')
     if (sid) this.sessionId = sid
     if (res.status === 401) {
-      await res.text().catch(() => '')
+      await readCappedText(res).catch(() => '')
       const err = new McpUnauthorizedError(
         `MCP ${method} failed: HTTP 401 (the server rejected the credentials or requires OAuth sign-in)`,
         res.headers.get('www-authenticate')
@@ -358,7 +358,7 @@ export class McpHttpClient implements McpConnection {
       // The server expired our session (spec: 404 on a stale Mcp-Session-Id). A
       // mid-flight re-handshake can't be transparent, so mark the client dead;
       // the manager reconnects with a fresh initialize on the next call/run.
-      await res.text().catch(() => '')
+      await readCappedText(res).catch(() => '')
       this.closed = true
       this.pending.failAll(`MCP ${method} failed: the server expired the session`)
       return
@@ -372,7 +372,7 @@ export class McpHttpClient implements McpConnection {
       }
       return
     }
-    const text = await res.text()
+    const text = await readCappedText(res)
     if (!res.ok && !text) throw new Error(`MCP ${method} failed: HTTP ${res.status}`)
     this.dispatchBody(contentType, text)
     if (this.pending.has(id)) {
@@ -478,13 +478,13 @@ export class McpHttpClient implements McpConnection {
         signal: controller.signal
       })
       if (res.status === 404 && this.sessionId) {
-        await res.text().catch(() => '')
+        await readCappedText(res).catch(() => '')
         this.closed = true
         this.pending.failAll('MCP request failed: the server expired the session')
         return
       }
       if (!res.ok || !res.body || !(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
-        await res.text().catch(() => '')
+        await readCappedText(res).catch(() => '')
         return
       }
       const next = await this.readEventStream(res.body)
@@ -536,7 +536,7 @@ export class McpHttpClient implements McpConnection {
         })
         if (res.status === 404 && this.sessionId) {
           // The session expired (as on a POST): the manager reconnects from scratch.
-          await res.text().catch(() => '')
+          await readCappedText(res).catch(() => '')
           this.closed = true
           this.pending.failAll('MCP notification stream failed: the server expired the session')
           reopen = false
@@ -544,7 +544,7 @@ export class McpHttpClient implements McpConnection {
         }
         if (!res.ok || !res.body || !(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
           // No stream on offer (405 and the like) is final; a server error may pass.
-          await res.text().catch(() => '')
+          await readCappedText(res).catch(() => '')
           reopen = res.status >= 500 || res.status === 429
           return
         }
@@ -596,7 +596,7 @@ export class McpHttpClient implements McpConnection {
           signal: controller.signal
         })
         // Drain the (usually empty, 202) body so the connection can be reused.
-        await res.text().catch(() => '')
+        await readCappedText(res).catch(() => '')
       } finally {
         clearTimeout(timer)
       }
