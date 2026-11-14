@@ -98,7 +98,9 @@ export function CostBreakdown({
 
   const tooltip =
     (contextWindow
-      ? `Context: ${usage.context.toLocaleString()} / ${contextWindow.toLocaleString()} tokens (${meterPct}%)`
+      ? `Context: ${usage.context.toLocaleString()} / ${contextWindow.toLocaleString()} tokens${
+          meterPct !== null ? ` (${meterPct}%)` : ''
+        }`
       : `Context: ${usage.context.toLocaleString()} tokens`) +
     `\nOutput this conversation: ${usage.output.toLocaleString()} tokens` +
     (usage.cost > 0 ? `\nEstimated cost: ${formatUsd(usage.cost)} (approximate)` : '') +

@@ -31,7 +31,13 @@ describe('formatTokens', () => {
     expect(formatTokens(1000)).toBe('1k')
     expect(formatTokens(1500)).toBe('1.5k')
     expect(formatTokens(12_345)).toBe('12.3k')
-    expect(formatTokens(999_999)).toBe('1000k')
+    expect(formatTokens(999_949)).toBe('999.9k')
+  })
+
+  it('rolls a count that would round to 1000k (or 1000) over to the next unit', () => {
+    expect(formatTokens(999_950)).toBe('1M')
+    expect(formatTokens(999_999)).toBe('1M')
+    expect(formatTokens(999.6)).toBe('1k')
   })
 
   it('uses M for millions', () => {
@@ -376,6 +382,12 @@ describe('formatUsd', () => {
     expect(formatUsd(0.0042)).toBe('$0.0042')
     expect(formatUsd(0.071)).toBe('$0.071')
     expect(formatUsd(1.234)).toBe('$1.23')
+  })
+
+  it('groups thousands', () => {
+    expect(formatUsd(999.99)).toBe('$999.99')
+    expect(formatUsd(1234.56)).toBe('$1,234.56')
+    expect(formatUsd(1_234_567.891)).toBe('$1,234,567.89')
   })
 })
 

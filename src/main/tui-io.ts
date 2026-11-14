@@ -988,6 +988,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     takeQueued: () => {
       const out = queued
       queued = []
+      return out
+    },
+    /** Take (and clear) the line typed mid-run but not yet sent with Enter. */
+    takeDraft: () => {
+      const out = draft
       draft = ''
       return out
     },

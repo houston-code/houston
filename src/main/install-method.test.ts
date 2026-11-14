@@ -19,6 +19,10 @@ describe('detectInstallMethod', () => {
     ['/home/dev/code/houston/out/cli/houston-cli.cjs', 'source'],
     ['/home/dev/Downloads/houston-cli.cjs', 'download'],
     ['/srv/tools/houston-cli.cjs', 'download'],
+    // The npm package's `houston` runs its launcher, which loads houston-cli.cjs.
+    ['/usr/local/lib/node_modules/@houston-code/cli/houston.cjs', 'npm'],
+    ['C:\\Users\\dev\\AppData\\Roaming\\npm\\node_modules\\@houston-code\\cli\\houston.cjs', 'npm'],
+    ['/home/dev/.bun/install/global/node_modules/@houston-code/cli/houston.cjs', 'bun'],
   ])('%s is %s', (path, method) => {
     expect(detectInstallMethod(path, false)).toBe(method)
   })
@@ -77,6 +81,17 @@ describe('currentInstallMethod', () => {
     writeFileSync(join(pkg, 'houston-cli.cjs'), '')
     mkdirSync(join(dir, 'bin'))
     symlinkSync(join(pkg, 'houston-cli.cjs'), join(dir, 'bin', 'houston'))
+    expect(currentInstallMethod(join(dir, 'bin', 'houston'), false)).toBe('npm')
+  })
+
+  // Read unresolved, the link's own name (`houston`) would pass for an install.sh copy.
+  it.skipIf(process.platform === 'win32')('follows a bin linked to the npm launcher to its package', () => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-install-method-'))
+    const pkg = join(dir, 'lib', 'node_modules', '@houston-code', 'cli')
+    mkdirSync(pkg, { recursive: true })
+    writeFileSync(join(pkg, 'houston.cjs'), '')
+    mkdirSync(join(dir, 'bin'))
+    symlinkSync(join(pkg, 'houston.cjs'), join(dir, 'bin', 'houston'))
     expect(currentInstallMethod(join(dir, 'bin', 'houston'), false)).toBe('npm')
   })
 

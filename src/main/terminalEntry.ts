@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { clearChildReportFlag, setWakeHost, takeBackgroundEvents, wakeNote } from './agent/backgroundEvents'
+import { getMcpRegistryServer, searchMcpRegistry } from './mcpRegistry'
 import { fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -656,11 +657,27 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // SIGTERM, comes from outside (`kill -INT`, a supervisor): stop the runs, restore
   // the terminal and exit rather than die with the terminal modes still on.
   const exitGuard = guardTerminalExit(['SIGHUP', 'SIGTERM', 'SIGINT'], host)
+  // Exiting would kill background sessions mid-run; finish them first (their
+  // conversations are what a later /resume opens). Ctrl-C still force-quits.
+  const waitForBackground = async (): Promise<void> => {
+    const outstanding = sessions.pendingBackgroundSessions()
+    if (outstanding === 0) return
+    io.out(
+      paint(
+        `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish (Ctrl-C to abandon)…\n`,
+        'dim'
+      )
+    )
+    await sessions.waitForBackgroundSessions()
+  }
   let code = 1
   try {
     code = await runTui(tui, {
       getSettings,
       version,
+      // Exiting now would kill background sessions mid-run; finish them first, before
+      // the farewell, so "Bye." is the last line rather than above the wait.
+      beforeExit: () => waitForBackground(),
       // /doctor: probe on demand, reusing whatever the update check already found
       // rather than making the report wait on the network.
       // Roll a turn's writes back: the snapshots exist for every write already,
@@ -802,6 +819,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // interactive flow (discovery, registration, browser, exchange) and persists
       // the tokens through the wired host store.
       mcpStatuses: () => getMcpStatuses(),
+      // Read-only MCP Registry browsing for /mcp search and /mcp add-from-registry.
+      mcpRegistry: { search: searchMcpRegistry, get: getMcpRegistryServer },
       ...(canStoreMcpOAuth()
         ? {
             mcpOAuth: {
@@ -866,18 +885,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         }
       }
     })
-    // Exiting now would kill background sessions mid-run; finish them first (their
-    // conversations are what a later /resume opens). Ctrl-C still force-quits.
-    const outstanding = sessions.pendingBackgroundSessions()
-    if (outstanding > 0) {
-      io.out(
-        paint(
-          `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish (Ctrl-C to abandon)…\n`,
-          'dim'
-        )
-      )
-      await sessions.waitForBackgroundSessions()
-    }
+    // Normally done before the farewell (beforeExit); here too in case the TUI left
+    // without it.
+    await waitForBackground()
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
   } finally {

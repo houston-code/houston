@@ -2,7 +2,7 @@ import type { MemoryRecord, MemoryStoreScope } from '@shared/memoryTypes'
 import type { AppSettings } from '@shared/types'
 import { MemoryError, type MemoryStore } from './agent/memoryStore'
 import type { Painter } from './tui'
-import { stripControlChars } from './tui-wrap'
+import { stripAnsi, stripControlChars } from './tui-wrap'
 
 /**
  * /memory in the terminal: the same review surface as the desktop's Settings >
@@ -68,6 +68,11 @@ export function numberedMemories(store: MemoryStore): MemoryRecord[] {
 
 // Memory text was written by the agent or by hand: keep escape sequences out of the terminal.
 const clean = (s: string): string => stripControlChars(s)
+/**
+ * A memory's body for display: colour codes removed whole (dropping only their ESC
+ * left "[31m" behind), then control characters line by line, so its lines stay.
+ */
+const cleanBody = (s: string): string => stripAnsi(s).split('\n').map(stripControlChars).join('\n')
 
 export function renderMemoryList(store: MemoryStore, enabled: boolean, paint: Painter): string {
   const all = numberedMemories(store)
@@ -133,7 +138,7 @@ export async function runMemoryCommand(
       case 'show':
         return deps.out(
           `${paint(clean(m.name), 'bold')} ${paint(`[${m.type}, ${m.scope === 'repo' ? 'this repository' : 'all projects'}, updated ${m.updated.slice(0, 10)}]`, 'dim')}\n` +
-            `${clean(m.description)}\n\n${clean(m.body)}\n`
+            `${clean(m.description)}\n\n${cleanBody(m.body)}\n`
         )
       case 'pin':
       case 'unpin':

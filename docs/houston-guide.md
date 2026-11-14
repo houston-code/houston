@@ -233,6 +233,8 @@ never from the chat. A chat you use in full auto can't loosen an unattended run.
 - **`--mcp-config <file>`** adds MCP servers for this run only: the `mcpServers`
   shape of `.houston/settings.json`, at most 10. Their tools are named
   `mcp__run-<id>__<tool>`.
+- **`--add-dir <dir>`** lets the run read and edit another folder too, as **Additional
+  folders** in Settings does, for this run only. Repeat it for more folders.
 - **`--input-format stream-json`** (with `--json`) reads one
   `{"type":"user","content":"..."}` line per turn from stdin. Each turn starts after
   the previous one finishes, until end of input.
@@ -693,7 +695,7 @@ safe subset in place. In the desktop app:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/vim`, `/verbose`, `/output`, `/spawned`, `/proposals`,
+**Terminal-only commands.** `/add-dir`, `/vim`, `/verbose`, `/output`, `/spawned`, `/proposals`,
 `/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
@@ -845,7 +847,12 @@ conversation, not a log. To see more:
   goes three results back. Nothing extra is stored for this: the whole output was
   always kept in the conversation.
 
-Very long output is capped, with a note saying how much was left out.
+Very long output is capped, with a note saying how much was left out. When a shell
+command's output is cut in the middle, Houston saves the whole output, with
+credentials masked, to a file in its data folder (`shell-output/`) and the result
+names the file and its line count, so the agent can read the part it needs instead of
+running the command again. Each run keeps at most 64 MB of these files, and they are
+deleted after a day.
 
 In the desktop app, a shell command shows its output in its row while it runs: the
 latest lines, scrolling to follow the newest unless you scroll up to read. It's a
@@ -870,7 +877,11 @@ preview: the file a tool row names (a read opens at the line it started from), a
 file header, a file the receipt lists as changed, and a relative link in a reply
 (`[setup](docs/setup.md)`, `src/app.ts#L42`, or `src/app.ts:42` opens at that line).
 The preview's **Open** button hands the file to its default app. Only files inside the
-project folder open this way; web links still open in your browser.
+project folder open this way; web links still open in your browser. A file that can run
+a program (an app, a script such as `.command`, `.sh`, `.bat` or `.exe`, a `.desktop`
+launcher, or a file marked executable) is shown in its folder instead of opened, and a
+link to a different kind of file (`notes.md` pointing at `run.command`) or to a folder
+isn't opened at all. This applies to every **Open** in the app.
 
 ## What actually ran (the receipt)
 
@@ -922,7 +933,8 @@ receipt.
   green.
 - **Test edits to review.** Edits the agent's file tools made that loosen a test: a
   deleted test file, an added skip or focus marker (`.skip(`, `.only(`, `xit(`,
-  `@pytest.mark.skip`, `t.Skip(`, `#[ignore]`), fewer assertions in a test file, a
+  `@pytest.mark.skip`, `t.Skip(`, `#[ignore]`), fewer assertions or fewer tests in a
+  test file, a
   `package.json` test script that now always passes (`|| true`, `--passWithNoTests`), or
   a test runner config (vitest, jest, pytest) that changed which tests run. Houston
   compares each file with how it was before the turn, so a test moved to another file
@@ -946,6 +958,23 @@ before the last change, and the agent is told to run it on the final code.
 
 Items about writing something ("Write tests for the API") never need a run behind
 them.
+
+### Before it finishes
+
+When the agent ends a turn after changing files, Houston checks its own record of the
+turn and, if something is still open, tells the agent once before it finishes:
+
+- todo items from this turn's list that are still pending or in progress
+- no test, typecheck, build, or lint run that passed after the last code change (a
+  change to prose only, such as a README, doesn't need one)
+- a last test run that failed
+- a todo marked done that claims a check nothing backs
+- test edits to review (listed above)
+
+The agent then closes the gap or says in its reply why it can't (no test suite, a check
+only you can run). It's one note per turn, built from what already ran, with no extra
+commands. Nothing is sent when there is no gap. Turn it off with **Check before
+finishing** in Settings (Loop control), or `"doneEvidenceNote": false` in settings.
 
 ### An accepted plan's progress
 
@@ -1070,6 +1099,12 @@ turn.
 - the language server, or else a fast checker (`eslint`, `ruff`/`pyflakes`, `gofmt`)
   for other files
 - no check at all
+
+Checkers and formatters come from the project first: each folder's
+`node_modules/.bin`, then its `.venv` or `venv`, then the virtualenv you activated
+(`$VIRTUAL_ENV`), and only then your PATH, so the versions the project pins are the
+ones that run. The Python language server is pointed at the project's virtualenv
+interpreter too, so its imports resolve.
 
 ### Navigation tools
 
@@ -1262,7 +1297,16 @@ With verification on and the field left empty, Houston uses the command it would
 suggest, but only in Full auto, where shell commands already run without asking. It
 says which command it is using the first time it runs one in a turn. That command
 gets network access only if you allowed the agent's own shell commands to use the
-network. In the other modes an empty field still means nothing runs.
+network. It also runs only where shell commands are sandboxed: on a computer without
+the OS sandbox (Windows, or Linux without bubblewrap) Houston skips it and says so,
+unless you chose **Allow for run** on an unsandboxed command earlier in the run. In the
+other modes an empty field still means nothing runs.
+
+A command you set yourself runs the project's scripts, which the agent can edit, so it
+gets network exactly when the agent's own shell commands do. After any verification
+command, Houston checks the repository's git hooks and settings the same way it does
+after the agent's shell commands (see "Git hooks and settings"), and asks you to keep or undo
+anything that could run programs outside the sandbox (a run with nobody to ask undoes it).
 
 ### Watching a running turn
 
@@ -1733,7 +1777,8 @@ and settings such as `core.fsmonitor` or a filter driver. Your own terminal's gi
 shell prompt that runs `git status`) would run them outside the sandbox, and neither
 `git status` nor a diff shows them.
 
-So after each shell command Houston checks for those and nothing else:
+So after each shell command (and each verification command it runs when the agent
+stops) Houston checks for those and nothing else:
 
 - **Nothing to see for ordinary git.** Your name and email, remotes, and upstream
   branches never count, and a command that doesn't touch `.git` costs a few file checks.
@@ -2249,7 +2294,8 @@ the terminal. `/agent` alone (or `/agents`) lists them.
   opens it in your default app.
 
 A project file that links outside the project can't be switched, opened, or deleted
-from here.
+from here. **Open** only opens a Markdown file: one that links to another kind of file
+or is marked executable is refused.
 
 ## Background work wakes the chat
 
@@ -2718,12 +2764,29 @@ remote **HTTP** (streamable) or **SSE** endpoint.
 Under the server list in Settings > MCP Servers:
 
 - **+ Add MCP server** adds an empty entry to fill in by hand.
-- **Add from catalog** lists a few well-known servers: the protocol's reference
+- **Recommended** lists a few well-known servers: the protocol's reference
   servers (Filesystem, Git, Fetch, Memory, Sequential thinking, Time), GitHub's hosted
   server, and Playwright. **Review** opens one with its command and arguments (one per
   line) filled in, the open project's folder where it needs one, for you to check and
-  edit. **Add server** saves it switched off unless you tick **Switch it on now**. The
-  catalog ships with Houston; nothing is downloaded to show it.
+  edit. **Add server** saves it switched off unless you tick **Switch it on now**. This
+  list ships with Houston; nothing is downloaded to show it.
+- **Browse registry** searches the official MCP Registry
+  (registry.modelcontextprotocol.io) by name, or lists everything with an empty search.
+  Each result shows its description, version, how it is delivered (npm, PyPI or Docker
+  package, or a remote address) and its repository. **Review** opens the same form as
+  above: npm packages run with `npx`, PyPI packages with `uvx` and Docker images with
+  `docker run`, each pinned to the exact version listed; remote servers connect over
+  HTTP (streamable) or SSE. Variables and headers the entry asks for get one field each,
+  stored encrypted like any other. Houston chooses the command itself and leaves out the
+  publisher's own `npx`, `uvx` or `docker` options, saying which ones so you can add
+  any you need. A package with no exact version, or one that runs as a local web server,
+  can't be added from here. Registry text is written by each publisher: Houston only
+  shows it, never runs it or passes it to the agent. Searching sends only your search
+  words to the registry.
+- In the terminal, `/mcp search <query>` lists registry results, and
+  `/mcp add-from-registry <name>` (the full name the search shows) walks through the
+  same conversion for a local package, asks for its variables, and adds it switched off
+  on a yes. Remote registry servers are added in the desktop app.
 - **Paste JSON** takes the `{ "mcpServers": { "<name>": { ... } } }` object that server
   instructions usually give (a `servers` map or Houston's own list works too). **Read
   it** shows each server it found and anything it couldn't read; adding them saves them
@@ -2828,7 +2891,9 @@ default.
 The structured file tools stay confined to the project on every platform.
 
 **Working across repos.** **Additional folders** (Settings) adds folders to the file
-tools' allowed roots and to the shell sandbox.
+tools' allowed roots and to the shell sandbox. In the terminal, `--add-dir <dir>`
+(repeatable, for both `houston` and `houston -p`) and `/add-dir <dir>` do the same
+for the current session only, without saving anything; `/add-dir` alone lists them.
 
 ### Network for shell commands
 
@@ -2841,9 +2906,10 @@ allowlist bounds where a command can send anything.
 
 - **Full auto:** from the start, through the allowlist. Installing dependencies,
   cloning, and fetching toolchains just work.
-- **Ask / auto-edit:** after "Allow for run" on a shell command. Plain "Allow" and
-  "Always allow" run that one command offline, and until the run has the grant, each
-  shell approval prompt says so.
+- **Ask / auto-edit:** commands start offline, and Houston asks once, the first time
+  one fails for lack of network (the **shell-network consent** below). Approving a
+  command, even for the whole chat, never grants network by itself, and until the chat
+  has the grant, each shell approval prompt says the command runs offline.
 - **Egress set to "All domains":** there is no allowlist to bound it, so even full
   auto starts offline and asks once, the first time a command fails for lack of
   network (the **shell-network consent**). Declining runs commands offline instead of

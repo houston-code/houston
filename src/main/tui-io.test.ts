@@ -978,6 +978,17 @@ describe('mid-run input', () => {
     expect(t.io.takeQueued!()).toEqual([])
   })
 
+  // A line still being typed when the turn ends was thrown away with the queue.
+  it('keeps a half-typed line for the next composer, apart from the queue', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('sent\r')
+    t.stdin.push('still typing')
+    expect(t.io.takeQueued!()).toEqual(['sent'])
+    expect(t.io.takeDraft!()).toBe('still typing')
+    expect(t.io.takeDraft!()).toBe('')
+  })
+
   it('ignores an empty Enter', () => {
     const t = harness()
     t.io.startSpinner!('Working')

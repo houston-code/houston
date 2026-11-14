@@ -1343,3 +1343,35 @@ describe('rate-limit state', () => {
   })
 })
 
+/**
+ * The Files panel's list, preview and Open handlers take the workspace from the
+ * renderer. Only a project the app already knows (a recent project or a chat's
+ * folder) is served, so a renderer bug can't browse, read or open an arbitrary folder.
+ */
+describe('workspace file handlers', () => {
+  registerIpc()
+  const call = (ch: string, ...args: unknown[]): unknown => h.handlers.get(ch)!({ sender: {} }, ...args)
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-ipc-files-'))
+    writeFileSync(join(dir, 'a.txt'), 'hello')
+    updateSettings({ recentWorkspaces: [] })
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('refuses a folder the app does not know', async () => {
+    expect(await call(IPC.workspaceListDir, dir, '')).toEqual([])
+    expect(await call(IPC.workspaceReadFile, dir, 'a.txt')).toEqual({
+      kind: 'error',
+      message: 'That folder is not an open project.'
+    })
+    expect(call(IPC.workspaceOpenPath, dir, 'a.txt')).toEqual({ ok: false, error: 'That folder is not an open project.' })
+    expect(await call(IPC.workspaceListDir, 42, '')).toEqual([])
+  })
+
+  it('serves a recent project', async () => {
+    updateSettings({ recentWorkspaces: [dir] })
+    expect(await call(IPC.workspaceListDir, dir, '')).toEqual([{ name: 'a.txt', path: 'a.txt', isDirectory: false }])
+    expect(await call(IPC.workspaceReadFile, dir, 'a.txt')).toMatchObject({ kind: 'text', text: 'hello' })
+  })
+})

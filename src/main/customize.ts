@@ -14,6 +14,7 @@ import {
 } from '@shared/customize'
 import { GLOBAL_RULES_DIRNAME, GLOBAL_RULES_FILE, GLOBAL_RULES_LABEL, RULES_FILES, loadProjectRules } from './agent/rules'
 import { writeFileAtomicSync } from './atomic-write'
+import { openPathSafely } from './safeOpen'
 
 /**
  * Settings > Customize: list, create, switch on or off, open and delete the skills,
@@ -25,7 +26,10 @@ import { writeFileAtomicSync } from './atomic-write'
  * file that resolves outside its folder (a symlink out of the project) is refused for
  * every change. Switching off writes `disabled: true` into the file's front matter, the
  * flag the loaders skip on, so it works the same in every client. Delete moves the
- * file or skill folder to the system trash rather than erasing it.
+ * file or skill folder to the system trash rather than erasing it. Every open goes
+ * through {@link openPathSafely} and only ever opens a regular `.md` file by its real
+ * path: a committed `SKILL.md -> run.command` link would otherwise have the OS launch
+ * the script (macOS picks the handler by the link's target).
  */
 
 const MAX_ITEMS = 200
@@ -51,8 +55,20 @@ export interface CustomizeDeps {
   home?: string
   /** Move a path to the system trash. */
   trash: (path: string) => Promise<void>
-  /** Open a file in its default app. Resolves to an error message, or '' on success. */
+  /**
+   * Open a file in its default app. Resolves to an error message, or '' on success.
+   * Only ever called with the real path of a regular `.md` file (see openMarkdown).
+   */
   open: (path: string) => Promise<string>
+}
+
+/**
+ * Open a Markdown file Customize names. `within` confines a project file to the
+ * project; the user's own folders are theirs to arrange, so they are not confined,
+ * but the target must still be a regular `.md` file and is opened by its real path.
+ */
+function openMarkdown(path: string, within: string | null, deps: CustomizeDeps): Promise<CustomizeResult> {
+  return openPathSafely(path, { open: deps.open }, { markdownOnly: true, ...(within ? { within } : {}) })
 }
 
 function under(root: string, abs: string): string | null {
@@ -263,8 +279,7 @@ export async function openItem(id: unknown, deps: CustomizeDeps): Promise<Custom
   const p = parseId(id, deps)
   const file = p && existingFile(p)
   if (!file) return { ok: false, error: 'That file is missing or outside its folder.' }
-  const err = await deps.open(file)
-  return err ? { ok: false, error: err } : { ok: true }
+  return openMarkdown(file, p.scope === 'project' ? p.root : null, deps)
 }
 
 /** Move an item (a skill's whole folder, or a command's or agent's file) to the trash. */
@@ -330,7 +345,7 @@ export async function createItem(
     return { ok: false, error: code === 'EEXIST' ? `There is already one named ${clean}.` : (e as Error).message }
   }
   const id = `${kind}:${scope}:${clean}`
-  await deps.open(itemFile(kind, root, clean)).catch(() => '')
+  await openMarkdown(itemFile(kind, root, clean), scope === 'project' ? root : null, deps).catch(() => null)
   return { ok: true, id }
 }
 
@@ -344,6 +359,7 @@ export async function openInstructionFile(label: unknown, deps: CustomizeDeps): 
     found.scope === 'global'
       ? join(home, GLOBAL_RULES_DIRNAME, GLOBAL_RULES_FILE)
       : join(deps.workspace as string, ...found.label.split(/[\\/]/))
-  const err = await deps.open(path)
-  return err ? { ok: false, error: err } : { ok: true }
+  // A project or nested file must resolve inside the project, and every one must be a
+  // regular Markdown file: a committed `AGENTS.md -> run.command` is refused.
+  return openMarkdown(path, found.scope === 'global' ? null : (deps.workspace as string), deps)
 }

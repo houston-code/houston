@@ -9,7 +9,7 @@ import {
   type TokenUsage,
   type ToolCall
 } from '@shared/agent'
-import { getTool, resolveInRoots, type ToolContext, type ToolKind } from './tools'
+import { getTool, resolveInRoots, type ToolContext, type ToolDef, type ToolKind } from './tools'
 import { FileReadTracker, pathsSeenInHistory } from './readCache'
 import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
 import {
@@ -65,6 +65,7 @@ import {
   isContextOverflowError
 } from './compaction'
 import { previewWrite } from './writePreview'
+import { callSegments } from './scheduling'
 
 /**
  * A nested subagent: the main agent delegates a scoped task to a fresh loop with
@@ -502,6 +503,19 @@ const OVERFLOW_STUB_MIN_BYTES = 256
 /** The note on a report cut short because the agent's history outgrew the context window. */
 const CONTEXT_LIMIT_NOTE = "[subagent stopped at the model's context limit; this is what it had]"
 
+/** What running one of a subagent's tool calls produced, before it is recorded. */
+interface CallOutcome {
+  output: string
+  /** Whether the call did what it was asked; refusals and errors don't. */
+  ok: boolean
+  tool: ToolDef | undefined
+  /** A write's real diff, computed before it ran. */
+  preview: Awaited<ReturnType<typeof previewWrite>>
+  finishedAt: number
+}
+
+const noop = (): void => {}
+
 /** Run a subagent loop to completion and return its final report text. */
 export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const { provider, model, workspace, prompt, signal } = opts
@@ -906,15 +920,10 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     const iterFailures: CommandFailure[] = []
     // Files a write this step put back to content they already had (see RevertTracker).
     const iterReverts: string[] = []
-    for (const call of calls) {
-      // Stop between calls too, not just between turns: after Stop the rest of the
-      // batch must not run (a later write would still land) or ask anything (a new
-      // prompt would wait for an answer nobody gives). An aborted run hands back no
-      // transcript, so the unanswered calls leave nothing to resume from.
-      if (signal.aborted) return stop(lastText.trim() || '[subagent aborted]', 'aborted')
-      progress(iter, call)
-      const startedAt = Date.now()
-      const stepIndex = step({ turn: iter + 1, kind: 'tool', tool: call.name, summary: labelFor(call), startedAt })
+    // One call, from its refusal checks through its gate to its result. `admit` is
+    // called the moment a local call has passed its gate and starts to run, so the
+    // next call of a batch can go to its own gate while this one works (see below).
+    const runCall = async (call: ToolCall, stepIndex: number, admit: () => void): Promise<CallOutcome> => {
       const tool = allowedToolSet.has(call.name) ? getTool(call.name) : undefined
       // The real diff of a write, computed before it runs (the "before" is gone after).
       const preview =
@@ -1028,6 +1037,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         let ran = false
         const written = tool.kind === 'write' ? writeTargets(call.name, call.arguments) : []
         const runLocal = async (): Promise<string> => {
+          admit()
           for (const t of targets) await recordOriginal(cpRunId!, roots, t.path)
           for (const t of written) await revertTracker.before(resolve(workspace, t.path))
           const out = await tool.execute(call.arguments, toolCtx)
@@ -1068,6 +1078,13 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         // A refusal by a rule or the user comes back as text without running the call.
         ok = ran
       }
+      return { output, ok, tool, preview, finishedAt: Date.now() }
+    }
+    // Answer a finished call in the transcript, in call order, and finish its step.
+    const record = (
+      { call, startedAt, stepIndex }: { call: ToolCall; startedAt: number; stepIndex: number },
+      { output, ok, tool, preview, finishedAt }: CallOutcome
+    ): void => {
       // Strip secrets here at the single choke point every tool output passes through
       // (execution results, errors, and refusal notes alike) — mirroring the main
       // loop's flushResult — so the provider never sees the plaintext.
@@ -1088,7 +1105,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         }
       }
       if (opts.onStep) {
-        const durationMs = Date.now() - startedAt
+        const durationMs = finishedAt - startedAt
         const shown = clipText(clean, SUBAGENT_CAPS.stepOutput)
         const diff = ok && preview?.length ? preview : undefined
         step(
@@ -1109,6 +1126,47 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
           stepIndex
         )
       }
+    }
+    // The step's calls in order, as the main loop runs its own (see callSegments): a run
+    // of read-only local calls is one batch, anything else (an edit, a command, a web
+    // call, a nested dispatch) runs alone. Within a batch each call still goes to its
+    // gate on its own and in call order, and the next call goes to its gate only once
+    // this one has passed (or was answered without running), so prompts come one at a
+    // time and nothing runs before its gate let it through. Only the reads themselves
+    // overlap, and every result is recorded in call order.
+    const runsAlongside = (call: ToolCall): boolean =>
+      !call.incomplete &&
+      call.name !== 'dispatch_agent' &&
+      allowedToolSet.has(call.name) &&
+      getTool(call.name)?.kind === 'read'
+    for (const segment of callSegments(calls, runsAlongside)) {
+      const started: Array<{ call: ToolCall; startedAt: number; stepIndex: number; outcome: Promise<CallOutcome> }> = []
+      let stopped = false
+      for (const { call } of segment.parallel ? segment.calls : [segment.call]) {
+        // Stop between calls too, not just between turns: after Stop the rest of the
+        // batch must not run (a later write would still land) or ask anything (a new
+        // prompt would wait for an answer nobody gives). An aborted run hands back no
+        // transcript, so the unanswered calls leave nothing to resume from.
+        if (signal.aborted) {
+          stopped = true
+          break
+        }
+        progress(iter, call)
+        const startedAt = Date.now()
+        const stepIndex = step({ turn: iter + 1, kind: 'tool', tool: call.name, summary: labelFor(call), startedAt })
+        let admit!: () => void
+        const admitted = new Promise<void>((resolve) => (admit = resolve))
+        const outcome = runCall(call, stepIndex, admit)
+        started.push({ call, startedAt, stepIndex, outcome })
+        await Promise.race([admitted, outcome.then(noop, noop)])
+      }
+      const settled = await Promise.allSettled(started.map((s) => s.outcome))
+      for (let k = 0; k < started.length; k++) {
+        const result = settled[k]
+        if (result.status === 'rejected') throw result.reason
+        record(started[k], result.value)
+      }
+      if (stopped) return stop(lastText.trim() || '[subagent aborted]', 'aborted')
     }
 
     // Loop detection, as in the main loop: one corrective nudge, then stop.

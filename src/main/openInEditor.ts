@@ -6,6 +6,7 @@ import { isAbsolute, posix } from 'node:path'
 import { resolveBinaryPath } from './agent/format'
 import { resolveInWorkspace } from './agent/tools'
 import { log } from './logger'
+import { checkOpenTarget } from './safeOpen'
 import { EDITORS, editorById, type EditorDef, type EditorStatus, type OpenResult } from '@shared/editors'
 
 /**
@@ -133,14 +134,22 @@ export function revealInFileManager(target: string): OpenResult {
 
 /**
  * Open a workspace-relative file in its OS default application (the editor for
- * source, Preview for an image, and so on). Backs the Files panel's Open action
- * — a user gesture, but the target is confined to the workspace via
- * {@link resolveInWorkspace}, whose realpath check also blocks a committed
- * symlink from opening anything outside the project. `shell.openPath` resolves
- * with a non-empty string on failure (e.g. no handler for the type), which we
- * only log — the click already succeeded from the renderer's point of view.
+ * source, Preview for an image, and so on). Backs the Files panel's, the Changes
+ * panel's and the image viewer's Open action: a user gesture, but the target is
+ * confined to the workspace via {@link resolveInWorkspace}, whose realpath check
+ * blocks a committed symlink from opening anything outside the project, and then
+ * checked by {@link checkOpenTarget}: the real path is what gets opened, a link to a
+ * different file type (`notes.md -> run.command`, which macOS would launch in
+ * Terminal) is refused, and a launchable file (an app, a script, an executable) is
+ * shown in its folder instead of run. `shell.openPath` resolves with a non-empty
+ * string on failure (e.g. no handler for the type), which we only log: the click
+ * already succeeded from the renderer's point of view.
  */
-export function openWorkspacePath(workspace: string, relPath: string): OpenResult {
+export function openWorkspacePath(
+  workspace: string,
+  relPath: string,
+  deps: { platform?: NodeJS.Platform } = {}
+): OpenResult {
   if (!workspace || !relPath) return { ok: false, error: 'No file to open.' }
   let abs: string
   try {
@@ -148,8 +157,13 @@ export function openWorkspacePath(workspace: string, relPath: string): OpenResul
   } catch {
     return { ok: false, error: 'Path is outside the workspace.' }
   }
-  if (!existsSync(abs)) return { ok: false, error: 'That file no longer exists.' }
-  void shell.openPath(abs).then((err) => {
+  const check = checkOpenTarget(abs, { platform: deps.platform })
+  if (check.action === 'refuse') return { ok: false, error: check.error }
+  if (check.action === 'reveal') {
+    shell.showItemInFolder(check.path)
+    return { ok: false, error: check.error }
+  }
+  void shell.openPath(check.path).then((err) => {
     if (err) log.warn(`Open file failed: ${err}`)
   })
   return { ok: true }

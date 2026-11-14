@@ -74,6 +74,7 @@ import type { ScheduleCreateRequest, SchedulePreview, ScheduleResult, ScheduleVi
 import type { ImportOutcome, ImportScan } from '@shared/importConfig'
 import type { CustomKind, CustomScope, CustomizeOverview, CustomizeResult } from '@shared/customize'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
+import type { RegistrySearchResult } from '@shared/mcpRegistry'
 
 /**
  * The bridge object exposed to the renderer as `window.api`.
@@ -306,6 +307,9 @@ const api = {
     ipcRenderer.invoke(IPC.mcpOAuthLogout, serverId),
   /** Live per-server MCP connection status (connected / needs-auth / error). */
   getMcpStatuses: (): Promise<McpServerStatus[]> => ipcRenderer.invoke(IPC.mcpStatus),
+  /** One page of MCP Registry search results (empty query lists everything). */
+  searchMcpRegistry: (query: string, cursor?: string): Promise<RegistrySearchResult> =>
+    ipcRenderer.invoke(IPC.mcpRegistrySearch, query, cursor),
 
   // "Open project in…" (a user gesture; launches an external editor / file manager)
   /** Which supported editors can be launched on this machine, for the "Open in…" menu. */

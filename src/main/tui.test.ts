@@ -16,6 +16,7 @@ import type {
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
+import type { RegistryServer } from '@shared/mcpRegistry'
 import { limitNoticeText } from '@shared/runEnd'
 import { APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
 import {
@@ -351,9 +352,9 @@ describe('approval prompt', () => {
     expect(p).not.toContain('UNSANDBOXED')
   })
 
-  it('says a shell command runs offline and that "Allow for run" grants network', () => {
+  it('says a shell command runs offline and that network is asked separately', () => {
     const p = renderApprovalPrompt(ev({ shellOffline: true }), makePainter(false))
-    expect(p).toContain('Runs without network. Choose "Allow for run" to also allow network for this run.')
+    expect(p).toContain('Runs without network. If it needs the network, Houston asks before allowing it.')
     expect(p).not.toContain('\u2014')
     expect(renderApprovalPrompt(ev(), makePainter(false))).not.toContain('Runs without network')
   })
@@ -2881,7 +2882,7 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(compactCalls).toBe(1)
-    expect(t.text()).toContain('compacted 2 earlier message(s)')
+    expect(t.text()).toContain('compacted 2 earlier messages')
     // The post-compaction turn carries the summarized log plus the new message.
     // (Assert against literals: the driver appends to the adopted array in place,
     // mirroring the /resume path, so `compacted` itself is mutated by the push.)
@@ -2890,6 +2891,29 @@ describe('runTui', () => {
       { role: 'assistant', content: 'ok' },
       { role: 'user', content: 'again' }
     ])
+  })
+
+  it('/compact empties the context meter and sends what was typed while it ran', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'usage', inputTokens: 90000, outputTokens: 10, cost: 0 },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    d.persist = fakePersist().persist
+    d.compact = async () => ({ ok: true, summarized: 1, messages: [{ role: 'user', content: '[summary]' }] })
+    const t = fakeIo(['first', '/compact', '/context', null])
+    // Nothing queued during the turn; "next step" was Enter'ed while compacting.
+    const queued = [[], ['next step']]
+    t.io.takeQueued = () => queued.shift() ?? []
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('compacted 1 earlier message\n')
+    // Sent right after the compaction, before the composer's next line (/context).
+    expect(rec.runs.map((r) => r.messages.at(-1)?.content)).toEqual(['first', 'next step'])
+    // The status line drawn between the compaction and the next turn has no stale fill.
+    const between = t.text().split('compacted 1 earlier message')[1].split('next step')[0]
+    expect(between).toContain('anthropic/claude')
+    expect(between).not.toMatch(/90[,.k]/)
+    expect(t.text().split('next step')[0]).toMatch(/90[,.k]/) // it was shown before
   })
 
   it('/compact before any turn reports there is nothing to compact yet', async () => {
@@ -4441,6 +4465,23 @@ describe('startup tips', () => {
   })
 })
 
+describe('the spinner between tools', () => {
+  // It kept the last tool's verb ("Run 45s") while the model wrote the next reply.
+  it('says Working again once the last running tool returns', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'run_shell', args: { command: 'ls' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_result', callId: 'c1', name: 'run_shell', ok: true, output: 'a' },
+      { runId: 'x', type: 'compaction', summarized: 1 },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ] as AgentEvent[])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.spinner.slice(t.spinner.indexOf('label:Run'))).toContain('label:Working')
+    expect(t.text()).toContain('compacted 1 message\n')
+  })
+})
+
 describe('status line: branch and the running turn', () => {
   it('shows the branch above the composer, re-read before each prompt', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
@@ -4694,7 +4735,7 @@ describe('/spawned — background fan-out', () => {
       get: () => ({ messages: [{ role: 'user', content: 'seeded' }] })
     } as TuiPersist
     await runTui(opts, d)
-    expect(t.text()).toContain('opened: 1 message(s)')
+    expect(t.text()).toContain('opened: 1 message')
   })
 
   // Checking on parallel work must not stop it.
@@ -4770,6 +4811,34 @@ describe('queued follow-ups', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(rec.runs[1].messages.at(-1)?.content).toBe('one\n\ntwo')
+  })
+
+  // Joined, "/compact" then "/cost" was sent as one message and /cost never ran.
+  it('runs a queued command as itself, one entry at a time', async () => {
+    const { d, rec } = deps(done)
+    const t = queueIo(['first', null], [['/cost', 'then this', '/help']])
+    d.io = t.io
+    await runTui(opts, d)
+    // /cost and /help ran as commands; the text between went as its own turn.
+    expect(rec.runs.map((r) => r.messages.at(-1)?.content)).toEqual(['first', 'then this'])
+    expect(t.text()).toContain('Commands:')
+    expect(t.text()).not.toContain('/cost\n\nthen this')
+  })
+
+  it('opens the next composer with a line half-typed while the turn ran', async () => {
+    const { d } = deps(done)
+    const t = queueIo([], [])
+    const composed = ['first', null]
+    const initials: Array<string | undefined> = []
+    t.io.readComposer = async (_p, initial) => {
+      initials.push(initial)
+      return composed.shift() ?? null
+    }
+    const drafts = ['and also']
+    t.io.takeDraft = () => drafts.shift() ?? ''
+    d.io = t.io
+    await runTui(opts, d)
+    expect(initials).toEqual([undefined, 'and also'])
   })
 
   it('prompts normally when nothing was queued', async () => {
@@ -5848,7 +5917,7 @@ describe('/undo, /redo and /changes', () => {
 
   it('describes what undo would act on', () => {
     expect(renderCheckpoint(null, paintNo)).toContain('no changes from this chat to undo')
-    expect(renderCheckpoint({ runId: 'r', files: 3, reverted: false }, paintNo)).toContain('revert 3 file(s)')
+    expect(renderCheckpoint({ runId: 'r', files: 3, reverted: false }, paintNo)).toContain('revert 3 files')
     expect(renderCheckpoint({ runId: 'r', files: 3, reverted: true }, paintNo)).toContain('already undone')
   })
 
@@ -5891,7 +5960,7 @@ describe('/undo, /redo and /changes', () => {
     }
     await runTui(opts, d)
     expect(redone).toEqual(['run-1'])
-    expect(t.text()).toContain('put back 2 file(s)')
+    expect(t.text()).toContain('put back 2 files')
   })
 
   it('says so when there is no checkpoint, without calling undo', async () => {
@@ -5910,6 +5979,37 @@ describe('/undo, /redo and /changes', () => {
     await runTui(opts, d)
     expect(undoCalls).toBe(0)
     expect(t.text()).toContain('no changes from this chat to undo')
+  })
+
+  // The fallback to this session's last run belongs to the chat that ran it: after
+  // /clear or /resume it reverted the other chat's last turn.
+  it('/undo after /clear or /resume does not fall back to the previous chat\'s run', async () => {
+    for (const switchTo of [['/clear'], ['/resume', '1']]) {
+      const { d } = deps(done)
+      const fp = fakePersist([{ id: 'old', title: 'Old chat', updatedAt: 1, messages: [{ role: 'user', content: 'hi' }] }])
+      d.persist = fp.persist
+      const t = fakeIo(['go', ...switchTo, '/undo', null])
+      d.io = t.io
+      const undone: string[] = []
+      d.checkpoint = {
+        info: async () => null, // no stored checkpoint for the chat now open
+        undo: async (runId) => {
+          undone.push(runId)
+          return 1
+        },
+        redo: async () => 0
+      }
+      await runTui(opts, d)
+      expect(undone, switchTo[0]).toEqual([])
+      expect(t.text()).toContain('no changes from this chat to undo')
+    }
+  })
+
+  it('counts files without "(s)"', () => {
+    expect(renderCheckpoint({ runId: 'r', files: 1, reverted: true }, paintNo)).toContain(
+      "the last turn's 1 file change is already undone (/redo puts it back)"
+    )
+    expect(renderCheckpoint({ runId: 'r', files: 1, reverted: false }, paintNo)).toContain('revert 1 file changed')
   })
 
   it('/undo before any turn says so rather than throwing', async () => {
@@ -6408,6 +6508,17 @@ describe('/proposals and /btw', () => {
     expect(rec.runs[1].messages.map((m) => m.content)).toEqual(['hello', 'next'])
   })
 
+  it('renders the side answer as a reply: markdown, wrapped, without control characters', async () => {
+    const { d, t } = wired(['hello', '/btw why?', null])
+    d.sideChat!.ask = async () => ({ answer: '**Because** the `client` is public\x1b]52;c;cGF5\x07.\n\n- one' })
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('Because the client is public]52;c;cGF5.')
+    expect(out).toContain('• one')
+    expect(out).not.toContain('**')
+    expect(out).not.toContain('\x1b]52')
+  })
+
   it('Ctrl-C stops a side answer that is still working and returns to the composer', async () => {
     const { d, t } = wired(['hello', '/btw why PKCE?', 'next', null])
     const cancelled: string[] = []
@@ -6762,7 +6873,7 @@ describe('session commands', () => {
     expect(written[0][1]).toContain('## You\n\nhi')
     expect(written[1][0]).toBe('out.json')
     expect(JSON.parse(written[1][1]).messages[0]).toEqual({ role: 'user', content: 'hi' })
-    expect(t.text()).toContain('exported 1 message(s) to /proj/out.json')
+    expect(t.text()).toContain('exported 1 message to /proj/out.json')
   })
 
   it('/export reports a failed write, and has nothing to do in an empty chat', async () => {
@@ -6915,6 +7026,118 @@ describe('waking at an idle composer', () => {
   })
 })
 
+describe('runTui: /mcp search and /mcp add-from-registry', () => {
+  // A mocked registry client: these tests never reach the network.
+  const weather: RegistryServer = {
+    name: 'io.github.acme/weather',
+    description: 'Forecasts',
+    version: '1.2.3',
+    repositoryUrl: 'https://github.com/acme/weather',
+    packages: [
+      {
+        registryType: 'npm',
+        identifier: '@acme/weather-mcp',
+        version: '1.2.3',
+        transport: 'stdio',
+        env: [
+          { kind: 'env', name: 'WEATHER_KEY', description: 'API key', required: true, secret: true },
+          { kind: 'env', name: 'WEATHER_REGION', description: 'Region', required: false, secret: false, default: 'eu' }
+        ],
+        packageArguments: [],
+        runtimeArguments: []
+      }
+    ],
+    remotes: []
+  }
+  const remoteOnly: RegistryServer = {
+    name: 'com.example/hosted',
+    description: 'Hosted',
+    version: '2.0.0',
+    packages: [],
+    remotes: [{ type: 'streamable-http', url: 'https://hosted.example/mcp', headers: [] }]
+  }
+  const registry = (servers: readonly RegistryServer[]): NonNullable<TuiDeps['mcpRegistry']> => ({
+    search: vi.fn(async () => ({ ok: true as const, page: { servers: [...servers] } })),
+    get: vi.fn(async (name: string) => {
+      const server = servers.find((s) => s.name === name)
+      return server ? { ok: true as const, server } : { ok: false as const, error: 'The registry has no server with that name.' }
+    })
+  })
+
+  it('parses the registry verbs', () => {
+    expect(parseSettingsAction('search weather tools')).toEqual({ op: 'search', query: 'weather tools' })
+    expect(parseSettingsAction('search')).toEqual({ op: 'search', query: '' })
+    expect(parseSettingsAction('add-from-registry io.github.acme/weather')).toEqual({
+      op: 'registry-add',
+      name: 'io.github.acme/weather'
+    })
+    expect(parseSettingsAction('add-from-registry')).toEqual({ op: 'usage' })
+  })
+
+  it('/mcp search lists results with delivery and repository', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const reg = registry([weather])
+    d.mcpRegistry = reg
+    const t = fakeIo(['/mcp search weather', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(reg.search).toHaveBeenCalledWith('weather')
+    const out = t.text()
+    expect(out).toContain('io.github.acme/weather')
+    expect(out).toContain('npm @acme/weather-mcp 1.2.3 (stdio)')
+    expect(out).toContain('https://github.com/acme/weather')
+    expect(out).toContain('/mcp add-from-registry <name>')
+  })
+
+  it('/mcp add-from-registry pins the package, asks for variables, and adds it switched off on a yes', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.mcpRegistry = registry([weather])
+    // args (keep), WEATHER_KEY, WEATHER_REGION (skip), confirm
+    const t = fakeIo(['/mcp add-from-registry io.github.acme/weather', '', 'k-1', '', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([
+      {
+        mcpServers: [
+          {
+            id: 'weather',
+            name: 'weather',
+            transport: 'stdio',
+            command: 'npx',
+            args: ['-y', '@acme/weather-mcp@1.2.3'],
+            env: { WEATHER_KEY: 'k-1' },
+            enabled: false
+          }
+        ]
+      }
+    ])
+    expect(t.text()).toContain('switched off')
+    expect(t.text()).not.toContain('k-1')
+  })
+
+  it('/mcp add-from-registry adds nothing on no, a missing value, a remote-only entry, or an unknown name', async () => {
+    const cases: Array<[Array<string | null>, RegistryServer[], string]> = [
+      [['/mcp add-from-registry io.github.acme/weather', '', 'k', '', 'n', null], [weather], 'not added'],
+      [['/mcp add-from-registry io.github.acme/weather', '', '', '', null], [weather], 'Fill in the WEATHER_KEY variable'],
+      [['/mcp add-from-registry com.example/hosted', null], [remoteOnly], 'desktop app'],
+      [['/mcp add-from-registry io.github.acme/none', null], [weather], 'no server with that name']
+    ]
+    for (const [inputs, servers, expected] of cases) {
+      const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+      const saved: Array<Partial<AppSettings>> = []
+      d.updateSettings = (p) => saved.push(p)
+      d.mcpRegistry = registry(servers)
+      const t = fakeIo(inputs)
+      d.io = t.io
+      await runTui(opts, d)
+      expect(saved).toEqual([])
+      expect(t.text()).toContain(expected)
+    }
+  })
+})
+
 describe('resume picker rows', () => {
   const plain = makePainter(false)
   it('numbers the first nine rows, sanitizes the title and keeps the unread marks', () => {
@@ -7046,7 +7269,7 @@ describe('/resume arrow-key picker', () => {
     expect(first).not.toContain('\x1b')
     // The footer wraps between keys rather than cutting any off.
     expect(first).toContain('ctrl-r rename · ctrl-d or x delete\nctrl-a all folders · esc cancel')
-    expect(t.text()).toContain('resumed: 1 message(s)')
+    expect(t.text()).toContain('resumed: 1 message')
     expect(rec.runs[0].messages[0]).toEqual({ role: 'user', content: 'make the button blue' })
   })
 
@@ -7111,7 +7334,7 @@ describe('/resume arrow-key picker', () => {
       [{ type: 'down' }, ctrl('d'), ...text('y'), esc]
     ])
     await runTui(opts, d)
-    expect(frames[0][2].join('\n')).toContain('Delete "CSS tweaks" and its 1 message(s)? This cannot be undone. [y/N]')
+    expect(frames[0][2].join('\n')).toContain('Delete "CSS tweaks" and its 1 message? This cannot be undone. [y/N]')
     expect(frames[0][3].join('\n')).toContain('· cancelled')
     expect(st.removed).toEqual(['b'])
     const after = frames[1].at(-2)!.join('\n')
@@ -7189,6 +7412,6 @@ describe('/resume arrow-key picker', () => {
     t.io.select = async () => ({ kind: 'type' })
     await runTui(opts, d)
     expect(t.text()).toContain('Enter a number to resume')
-    expect(t.text()).toContain('resumed: 1 message(s)')
+    expect(t.text()).toContain('resumed: 1 message')
   })
 })

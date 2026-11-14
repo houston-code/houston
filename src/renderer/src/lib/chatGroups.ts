@@ -4,6 +4,7 @@
  * under "Ungrouped". Pure logic so it can be unit-tested; the Sidebar renders it.
  */
 import type { ConversationMeta } from '@shared/agent'
+import type { ChatStatusMap } from '@shared/chatStatus'
 import type { ChatGroup, SidebarGroupBy } from '@shared/types'
 import { baseName, shortenPath } from './paths'
 
@@ -20,6 +21,12 @@ export interface SidebarSection {
   id: string
   name: string
   collapsed: boolean
+  /**
+   * The lone Ungrouped list when no group exists: it shows without a header, so
+   * nothing could expand it or clear its label filter, and it is never collapsed
+   * or filtered.
+   */
+  headless?: boolean
   /**
    * The section's top-level chats, in order, after its label filter. Spawned chats
    * nested under a parent are not here.
@@ -205,9 +212,11 @@ export function buildSidebarSections(
     id: string,
     name: string,
     collapsed: boolean,
-    list: ConversationMeta[]
+    list: ConversationMeta[],
+    headless = false
   ): SidebarSection => {
-    const filter = labelFilters[id] ?? []
+    // A header-less list has no filter button to clear its filter with.
+    const filter = headless ? [] : labelFilters[id] ?? []
     const sorted = list.sort(order)
     const labelIds = [
       ...new Set(sorted.flatMap((c) => [c, ...descendantsOf(c.id, children)]).flatMap((c) => c.labels ?? []))
@@ -217,6 +226,7 @@ export function buildSidebarSections(
       id,
       name,
       collapsed,
+      ...(headless ? { headless } : {}),
       conversations: filterByLabels(sorted, filter, children),
       total: sorted.length,
       labelFilter: filter,
@@ -241,18 +251,115 @@ export function buildSidebarSections(
       )
     }
   } else if (ungrouped.length > 0) {
+    const headless = groups.length === 0
     sections.push(
       section(
         'ungrouped',
         'ungrouped',
         groups.length > 0 || pinned.length > 0 ? 'Ungrouped' : 'Chats',
-        collapsedSections.ungrouped ?? false,
-        ungrouped
+        !headless && (collapsedSections.ungrouped ?? false),
+        ungrouped,
+        headless
       )
     )
   }
 
   return sections
+}
+
+/** What the sidebar's layout depends on, named as the Sidebar's own props. */
+export interface SidebarLayoutInput {
+  conversations: ConversationMeta[]
+  groups: ChatGroup[]
+  /** Collapsed state for the built-in and automatic sections, by section id. */
+  collapsedSections: Record<string, boolean>
+  search: string
+  chatStatus: ChatStatusMap
+  currentId: string | null
+  /** Float chats that want attention to the top of each section. */
+  unreadFirst?: boolean
+  groupBy?: SidebarGroupBy
+  /** The current time, for the date sections. */
+  now?: number
+  /** Label filters by section id. */
+  labelFilters?: Record<string, string[]>
+}
+
+/**
+ * The sections exactly as the Sidebar shows them, for the Sidebar itself and for the
+ * keyboard chat-switching that must follow its order, so a chat a label filter hides
+ * is skipped like one in a collapsed section. A chat wants attention when it waits on
+ * the user or has something unseen (the open chat is being looked at). A search shows
+ * every hit, so no section stays collapsed or label-filtered over them.
+ */
+export function sidebarSections(input: SidebarLayoutInput): SidebarSection[] {
+  const { chatStatus, currentId } = input
+  const wantsAttention = (id: string): boolean => {
+    const st = chatStatus[id]
+    return !!st && (st.pending.length > 0 || (st.unread !== undefined && id !== currentId))
+  }
+  const sections = buildSidebarSections(
+    input.conversations,
+    input.groups,
+    input.collapsedSections,
+    input.unreadFirst ? wantsAttention : undefined,
+    input.groupBy ? { by: input.groupBy, now: input.now ?? Date.now() } : undefined,
+    input.search ? {} : input.labelFilters ?? {}
+  )
+  return input.search ? sections.map((s) => (s.collapsed ? { ...s, collapsed: false } : s)) : sections
+}
+
+/**
+ * Whether a parent's spawned chats show under it: unless the user folded them away,
+ * and always while one of them is the open chat, so the open chat is never hidden.
+ */
+export function childrenShown(
+  id: string,
+  children: Record<string, ConversationMeta[]>,
+  collapsedParents: ReadonlySet<string>,
+  currentId: string | null
+): boolean {
+  return !collapsedParents.has(id) || descendantsOf(id, children).some((d) => d.id === currentId)
+}
+
+/**
+ * The chats in the order the sidebar shows them, top to bottom: Pinned, the groups,
+ * then Ungrouped or the automatic sections, each with its spawned chats under it.
+ * The rows a collapsed section or a folded parent hides are left out. This is what
+ * ⌘1–9 and ⌃Tab step through, so a shortcut lands on the row the user sees.
+ */
+export function sidebarChatOrder(
+  sections: SidebarSection[],
+  collapsedParents: ReadonlySet<string>,
+  currentId: string | null
+): ConversationMeta[] {
+  const out: ConversationMeta[] = []
+  const walk = (c: ConversationMeta, children: Record<string, ConversationMeta[]>): void => {
+    out.push(c)
+    const kids = children[c.id] ?? []
+    if (kids.length && childrenShown(c.id, children, collapsedParents, currentId)) {
+      for (const k of kids) walk(k, children)
+    }
+  }
+  for (const s of sections) {
+    if (!s.collapsed) for (const c of s.conversations) walk(c, s.children)
+  }
+  return out
+}
+
+/**
+ * The built-in sections' collapsed state after a group is deleted. With no group
+ * left, Ungrouped loses its header, so a collapsed flag on it would come back to hide
+ * every chat the moment a new group is made; it is dropped instead.
+ */
+export function collapsedAfterGroupDelete(
+  collapsed: Record<string, boolean> | undefined,
+  groupsLeft: number
+): Record<string, boolean> | undefined {
+  if (groupsLeft > 0 || !collapsed?.ungrouped) return collapsed
+  const rest = { ...collapsed }
+  delete rest.ungrouped
+  return rest
 }
 
 /**
@@ -334,6 +441,19 @@ export function dateBucket(at: number, now: number): (typeof DATE_BUCKETS)[numbe
 }
 
 /**
+ * The automatic section a chat outside any group lands in: its project folder, or the
+ * date range of its latest activity (`recency`, which counts its spawned chats).
+ */
+export function autoSectionId(
+  c: ConversationMeta,
+  by: SidebarGroupBy,
+  now: number,
+  recency: (c: ConversationMeta) => number = (c) => c.updatedAt
+): string {
+  return by === 'date' ? dateBucket(recency(c), now) : `auto:folder:${chatFolder(c)}`
+}
+
+/**
  * Split chats into automatic sections. By folder: one section per project folder,
  * named for it (with its parent folders when two share a name), the most recently
  * active first. By date: Today, Yesterday, This week, Older, skipping empty ones. A
@@ -348,7 +468,7 @@ export function autoSections(
   if (by === 'date') {
     const buckets = new Map<string, ConversationMeta[]>()
     for (const c of chats) {
-      const id = dateBucket(recency(c), now)
+      const id = autoSectionId(c, by, now, recency)
       buckets.set(id, [...(buckets.get(id) ?? []), c])
     }
     return DATE_BUCKETS.filter((b) => buckets.has(b.id)).map((b) => ({

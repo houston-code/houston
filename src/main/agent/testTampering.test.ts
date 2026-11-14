@@ -122,6 +122,23 @@ describe('detectTestEdits: test files', () => {
     ])
   })
 
+  it('flags a removed test case whose assertion lived in a helper', () => {
+    const helper = [
+      "it('adds', () => check(1, 2, 3))",
+      "it('adds negatives', () => check(-1, -2, -3))",
+      ''
+    ].join('\n')
+    const after = "it('adds', () => check(1, 2, 3))\n"
+    expect(detectTestEdits([{ path: 'src/add.test.ts', before: helper, after }])).toEqual([
+      { path: 'src/add.test.ts', kind: 'cases', detail: '1 test, down from 2' }
+    ])
+  })
+
+  it('reports a removed test with its assertion once, as fewer assertions', () => {
+    const after = SUITE.replace("  it('rejects strings', () => {\n    expect(() => add('1', 2)).toThrow()\n  })\n", '')
+    expect(detectTestEdits([{ path: 'src/add.test.ts', before: SUITE, after }]).map((e) => e.kind)).toEqual(['asserts'])
+  })
+
   it('counts a commented-out assertion as removed', () => {
     const after = SUITE.replace("    expect(() => add('1', 2))", "    // expect(() => add('1', 2))")
     expect(detectTestEdits([{ path: 'src/add.test.ts', before: SUITE, after }]).map((e) => e.kind)).toEqual(['asserts'])

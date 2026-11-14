@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UsageDay, UsageReport } from '@shared/usageReport'
 import { formatTokens, formatUsd } from '@shared/usage'
 import { useFocusTrap } from '../lib/useFocusTrap'
+import { ipcErrorMessage } from '../lib/ipcError'
 import { Icon } from './Icon'
 import { useRateLimits } from '../hooks/useRateLimits'
 import { rateLimitLine } from '@shared/rateLimitState'
@@ -44,7 +45,7 @@ export function UsagePanel({
     try {
       setData(await window.api.getUsageReport())
     } catch (e) {
-      setError((e as Error).message)
+      setError(ipcErrorMessage(e))
     } finally {
       setLoading(false)
     }

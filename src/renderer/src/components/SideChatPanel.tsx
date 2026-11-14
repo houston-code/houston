@@ -2,13 +2,10 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKe
 import { MAX_SIDE_TURNS, type SideChatView } from '@shared/agent'
 import { Icon } from './Icon'
 import { Markdown } from './Markdown'
+import { PanelResizer, type PanelSize } from './PanelResizer'
+import { ipcErrorMessage } from '../lib/ipcError'
 
 const EMPTY: SideChatView = { turns: [] }
-
-/** The message an IPC rejection carries, without Electron's "Error invoking remote method" prefix. */
-function ipcMessage(e: unknown): string {
-  return e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e)
-}
 
 /**
  * The side chat: a docked panel for quick questions about the open chat, answered
@@ -31,7 +28,8 @@ export function SideChatPanel({
   onClose,
   onSendToMain,
   onContinueInNewChat,
-  onResizeMouseDown
+  onResizeMouseDown,
+  size
 }: {
   conversationId: string
   /** The model answering; absent until one is picked (asking then says so). */
@@ -44,6 +42,8 @@ export function SideChatPanel({
   onSendToMain: (question: string, answer: string) => void
   onContinueInNewChat: (question: string, answer: string) => void
   onResizeMouseDown: (e: React.MouseEvent) => void
+  /** The panel's width, for the resizer's keyboard and double-click controls. */
+  size?: PanelSize
 }): JSX.Element {
   const [view, setView] = useState<SideChatView>(EMPTY)
   const [draft, setDraft] = useState('')
@@ -106,7 +106,7 @@ export function SideChatPanel({
     window.api.askSideChat(conversationId, question, providerId, model).catch((e: unknown) => {
       // Only a question that was never asked rejects: put it back to edit.
       setDraft(question)
-      setInputError(ipcMessage(e))
+      setInputError(ipcErrorMessage(e))
       refresh()
     })
   }
@@ -120,11 +120,11 @@ export function SideChatPanel({
 
   return (
     <aside className="side-chat" aria-label="Side chat" hidden={hidden}>
-      <div
+      <PanelResizer
         className="plan-panel__resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize side chat"
+        label="Resize side chat"
+        edge="left"
+        size={size}
         onMouseDown={onResizeMouseDown}
       />
       <header className="plan-panel__head">

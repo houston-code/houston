@@ -942,6 +942,30 @@ export class EvidenceLedger {
     return false
   }
 
+  /** The files the turn changed, as the receipt lists them. */
+  changedFiles(): string[] {
+    return [...this.files]
+  }
+
+  /** The test edits as of the last look (see setTestEdits). */
+  currentTestEdits(): TestEdit[] {
+    return this.testEdits.slice()
+  }
+
+  /**
+   * The turn's most recent test run: its label, whether it passed (undefined when the
+   * outcome is unknown, or it is still running in the background), and how many failed.
+   */
+  lastTest(): { label: string; ok: boolean | undefined; failed?: number } | undefined {
+    let last: CheckRecord | undefined
+    for (const { record } of this.checks.values()) {
+      if (record.kind === 'test' && (!last || record.seq > last.seq)) last = record
+    }
+    if (!last) return undefined
+    const ok = last.pending || last.unknown || last.ok === null ? undefined : last.ok
+    return { label: last.label, ok, ...(last.counts?.failed ? { failed: last.counts.failed } : {}) }
+  }
+
   private put(record: CheckRecord): void {
     const key = `${record.kind}\u0000${record.label}`
     const prior = this.checks.get(key)

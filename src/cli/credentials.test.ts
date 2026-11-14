@@ -81,7 +81,8 @@ describe('credentials file', () => {
     expect(cliGetKey('anthropic', deps)).toBeNull()
     expect(cliGetKey('openai', deps)).toBeNull() // a second read in the same process
     expect(warn).toHaveBeenCalledTimes(1) // once per process, not per read
-    expect(String(warn.mock.calls[0][0])).toContain('not valid JSON')
+    expect(String(warn.mock.calls[0][0])).toContain('not valid JSON, so it is ignored')
+    expect(String(warn.mock.calls[0][0])).not.toContain('\u2014')
 
     warn.mockClear()
     writeCreds({ anthropic: 42 }) // valid JSON, non-string value → absent, no warning
@@ -97,7 +98,7 @@ describe('credentials file', () => {
     expect(cliGetKey('anthropic', deps)).toBe('sk-x')
     expect(cliGetKey('anthropic', deps)).toBe('sk-x')
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(String(warn.mock.calls[0][0])).toContain('chmod 600')
+    expect(String(warn.mock.calls[0][0])).toContain('is readable by other users. Run: chmod 600')
   })
 
   it('does not warn for owner-only permissions', () => {

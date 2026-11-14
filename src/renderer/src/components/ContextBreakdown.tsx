@@ -30,7 +30,9 @@ export function ContextBreakdown({
     <>
       <p className="usage-panel__context">
         Context: {measured.toLocaleString()}
-        {contextWindow ? ` of ${contextWindow.toLocaleString()} tokens (${pct}%)` : ' tokens'}
+        {contextWindow
+          ? ` of ${contextWindow.toLocaleString()} tokens${pct !== null ? ` (${pct}%)` : ''}`
+          : ' tokens'}
       </p>
       {tier && <p className="usage-panel__note">{tier}</p>}
       {compactionNote && <p className="usage-panel__note">{compactionNote}</p>}

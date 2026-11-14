@@ -240,12 +240,16 @@ export function formatCost(cost: number, unknown?: boolean): string {
   return Number.isFinite(cost) && cost > 0 ? `${formatUsd(cost)} + unknown` : 'cost unknown'
 }
 
-/** Format a USD amount with precision that scales to the magnitude: `$0.0042`, `$0.071`, `$1.23`. */
+/**
+ * Format a USD amount with precision that scales to the magnitude: `$0.0042`, `$0.071`,
+ * `$1.23`, `$1,234.56` (thousands grouped, the same in every locale).
+ */
 export function formatUsd(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '$0.00'
   if (n < 0.01) return `$${n.toFixed(4)}`
   if (n < 1) return `$${n.toFixed(3)}`
-  return `$${n.toFixed(2)}`
+  const [whole, cents] = n.toFixed(2).split('.')
+  return `$${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${cents}`
 }
 
 /** What a model can do beyond plain text, matched by family. */
@@ -314,8 +318,9 @@ export function contextPercent(context: number, window: number | null): number |
  */
 export function formatTokens(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '0'
-  if (n < 1000) return String(Math.round(n))
-  if (n < 1_000_000) return `${trim(n / 1000)}k`
+  if (Math.round(n) < 1000) return String(Math.round(n))
+  // A count that rounds up to 1000k (999,950 and over) reads as 1M instead.
+  if (Number((n / 1000).toFixed(1)) < 1000) return `${trim(n / 1000)}k`
   return `${trim(n / 1_000_000)}M`
 }
 

@@ -25,6 +25,15 @@ describe('CostBreakdown', () => {
     expect(within(panel).getByText('claude')).toBeInTheDocument()
   })
 
+  it('leaves out the percent while nothing fills the context yet', () => {
+    render(<CostBreakdown usage={{ ...base, context: 0 }} contextWindow={200_000} meterPct={null} meterClass="" />)
+    const btn = screen.getByRole('button', { name: /Show breakdown/ })
+    expect(btn.getAttribute('title')).toContain('Context: 0 / 200,000 tokens\n')
+    fireEvent.click(btn)
+    expect(screen.getByText('Context: 0 of 200,000 tokens')).toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent('null%')
+  })
+
   it('shows output tokens instead of a cost for a model with no known price', () => {
     render(<CostBreakdown usage={{ ...base, cost: 0 }} contextWindow={null} meterPct={null} meterClass="" />)
     const btn = screen.getByRole('button', { name: /Show breakdown/ })
