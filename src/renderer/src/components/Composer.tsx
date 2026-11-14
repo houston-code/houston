@@ -38,6 +38,7 @@ import {
 } from '@shared/commands'
 import { commandTurn, type InvokedTurn } from '@shared/promptInvocation'
 import { parseMemoryCapture, type MemoryScope } from '@shared/memory'
+import { parseShellEscape } from '@shared/shellEscape'
 import {
   MAX_ATTACHMENTS,
   exceedsImageSizeLimit,
@@ -184,6 +185,7 @@ export function Composer({
   pr,
   onCommand,
   onSend,
+  onShellEscape,
   onInvoke,
   onSteer,
   answering = false,
@@ -232,6 +234,11 @@ export function Composer({
   pr?: PrStatus | null
   onCommand: (cmd: Command, args: string) => void
   onSend: (text: string, images?: ImageAttachment[]) => void
+  /**
+   * Run a `!cmd` line in a terminal tab and add its output to the chat. Without it,
+   * a `!` line is sent as an ordinary message.
+   */
+  onShellEscape?: (command: string) => void
   /**
    * Run a first-party template command (`/review`) as a turn. Separate from onSend
    * so the transcript shows the command the user ran, not the prompt it expands to.
@@ -841,6 +848,16 @@ export function Composer({
     // still queue for after the run.
     // Slash commands only when there are no attachments (a message with images
     // or context is always sent as a normal message).
+    // `!cmd` runs in a terminal tab, as if typed there, and its output joins the
+    // chat for the agent to read. Like a slash command, only with no attachments.
+    const shellCmd = !hasAttachments && onShellEscape ? parseShellEscape(trimmed) : null
+    if (shellCmd) {
+      appendPromptHistory(trimmed)
+      onShellEscape?.(shellCmd)
+      setText('')
+      resetMenus()
+      return
+    }
     const parsed = !hasAttachments ? parseSlashCommand(trimmed) : null
     if (parsed) {
       const cmd = resolveCommand(commands, parsed.name)

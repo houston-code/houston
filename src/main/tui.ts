@@ -76,6 +76,7 @@ import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { assertNever } from '@shared/assert'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
+import { parseShellEscape, renderShellEscapeRecord } from '@shared/shellEscape'
 import type { ConversationSettingsPatch, ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
@@ -2893,41 +2894,7 @@ export interface TuiDeps {
   highlightHtml?: (lang: string, code: string) => string | null
 }
 
-/**
- * A `!`-prefixed line: run it in the user's own shell, like the escape every
- * terminal REPL has (psql, gdb, python). Returns the command, or null when the
- * line isn't one.
- *
- * `!` alone is not a command, and neither is `! ` — those are a typo or the start
- * of a sentence, and running an empty shell is pointless.
- */
-export function parseShellEscape(line: string): string | null {
-  if (!line.startsWith('!')) return null
-  const cmd = line.slice(1).trim()
-  return cmd || null
-}
-
-/** How much `!cmd` output is handed to the model — enough to act on, not a flood. */
-export const SHELL_ESCAPE_MAX_LINES = 200
-
-/**
- * What the model is told about a command the user ran themselves.
- *
- * Written as a plain user turn because that is what it is: the user reporting
- * something they did. Without this the output would be on screen but invisible to
- * the agent, so "now fix those failures" would mean pasting it back — and pasting
- * it back is the thing the shell escape exists to avoid.
- */
-export function renderShellEscapeRecord(command: string, output: string, exitCode: number): string {
-  const lines = output.split('\n')
-  const clipped = lines.length > SHELL_ESCAPE_MAX_LINES
-  const body = (clipped ? lines.slice(-SHELL_ESCAPE_MAX_LINES) : lines).join('\n').trim()
-  const head = `I ran this in my shell${exitCode === 0 ? '' : ` (it exited ${exitCode})`}:`
-  const note = clipped ? `\n[earlier output trimmed; showing the last ${SHELL_ESCAPE_MAX_LINES} lines]` : ''
-  return body
-    ? `${head}\n\n$ ${command}${note}\n\n${body}`
-    : `${head}\n\n$ ${command}\n\n(no output)`
-}
+export { parseShellEscape, renderShellEscapeRecord, SHELL_ESCAPE_MAX_LINES } from '@shared/shellEscape'
 
 /**
  * The next approval mode, in the order they appear in APPROVAL_POLICIES: plan →

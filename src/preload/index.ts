@@ -20,6 +20,7 @@ import type {
   SandboxStatus
 } from '@shared/types'
 import type { ForkPoint } from '@shared/conversation-io'
+import type { RecordShellResult } from '@shared/shellEscape'
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
@@ -333,6 +334,9 @@ const api = {
   /** Fork a chat from one of its messages (see ForkPoint). Null when that message is gone. */
   forkConversationAt: (id: string, point: ForkPoint): Promise<Conversation | null> =>
     ipcRenderer.invoke(IPC.conversationForkAt, id, point),
+  /** Add a finished `!cmd` (command, output, exit code) to a chat as the user's turn. */
+  recordShellCommand: (id: string, command: string, output: string, exitCode: number): Promise<RecordShellResult> =>
+    ipcRenderer.invoke(IPC.conversationRecordShell, id, command, output, exitCode),
   compactConversation: (
     id: string,
     providerId: string,
@@ -609,7 +613,7 @@ const api = {
 
   // Integrated terminal (PTY-backed)
   /** Spawn a terminal; resolves with its id. Output arrives via onTerminalData. */
-  createTerminal: (opts: { cwd?: string; cols?: number; rows?: number }): Promise<string> =>
+  createTerminal: (opts: { cwd?: string; cols?: number; rows?: number; command?: string }): Promise<string> =>
     ipcRenderer.invoke(IPC.terminalCreate, opts),
   /** Send user input (keystrokes / pasted text) to a terminal. */
   writeTerminal: (id: string, data: string): Promise<void> =>
@@ -627,10 +631,10 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.terminalData, listener)
   },
   /** Subscribe to terminal-exit notifications. Returns an unsubscribe fn. */
-  onTerminalExit: (cb: (payload: { id: string; exitCode: number }) => void): (() => void) => {
+  onTerminalExit: (cb: (payload: { id: string; exitCode: number; output?: string }) => void): (() => void) => {
     const listener = (
       _event: IpcRendererEvent,
-      payload: { id: string; exitCode: number }
+      payload: { id: string; exitCode: number; output?: string }
     ): void => cb(payload)
     ipcRenderer.on(IPC.terminalExit, listener)
     return () => ipcRenderer.removeListener(IPC.terminalExit, listener)

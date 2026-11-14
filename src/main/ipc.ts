@@ -40,7 +40,9 @@ import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/que
 import { isForkPoint, parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments, exceedsImageSizeLimit, imageFileName, parseImageDataUrl } from '@shared/images'
-import { sanitizeInvocation } from '@shared/promptInvocation'
+import { sanitizeInvocation, shellEscapeTurn } from '@shared/promptInvocation'
+import { SHELL_ESCAPE_MAX_CHARS } from '@shared/shellEscape'
+import type { RecordShellResult } from '@shared/shellEscape'
 import { MAX_ATTACHMENT_FILES, type ClipboardContent, type PickedFile } from '@shared/composerContext'
 import { readPickedFile } from './pickedFiles'
 import { cancelDownload, checkForUpdates, installUpdate, takePendingWhatsNew } from './updater'
@@ -1274,6 +1276,31 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.conversationCompactCancel, (_event, id: unknown) =>
     typeof id === 'string' ? cancelCompaction(id) : false
   )
+
+  // A `!cmd` from the composer finished in its terminal tab: add the command and its
+  // output to the chat as the user's own turn, so the next message can act on it.
+  // Not mid-run or mid-rewind, when the log on disk is about to be rewritten.
+  handle(
+    IPC.conversationRecordShell,
+    (_event, id: string, command: unknown, output: unknown, exitCode: unknown): RecordShellResult => {
+      if (typeof command !== 'string' || !command.trim()) return { ok: false, reason: 'missing' }
+      const conv = getConversation(id)
+      if (!conv) return { ok: false, reason: 'missing' }
+      if (activeRunForConversation(conv.id) || rewindInProgress(conv.id)) return { ok: false, reason: 'busy' }
+      const text = typeof output === 'string' ? output.slice(-SHELL_ESCAPE_MAX_CHARS) : ''
+      const code = typeof exitCode === 'number' && Number.isFinite(exitCode) ? exitCode : 0
+      const turn = shellEscapeTurn(command.trim().slice(0, 4000), text, code)
+      const message: ChatMessage = {
+        role: 'user',
+        content: turn.text,
+        invokedAs: turn.invokedAs,
+        at: new Date().toISOString()
+      }
+      const messages = [...conv.messages, message]
+      setMessages(conv.id, messages)
+      return { ok: true, messages }
+    }
+  )
   // Delete a conversation, confirming first via a native dialog so the choice is
   // unambiguous. A chat that owns a Houston-created worktree with work in it gets a
   // three-way choice — the worktree can outlive the chat. A clean, fully merged
@@ -2036,9 +2063,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Spawn a terminal; output/exit are pushed back to the creating webContents.
   handle(
     IPC.terminalCreate,
-    (event, opts: { cwd?: string; cols?: number; rows?: number }): string => {
+    (event, opts: { cwd?: string; cols?: number; rows?: number; command?: string }): string => {
       watchTerminalHost(event.sender)
-      return createTerminal(event.sender, opts ?? {})
+      const command = typeof opts?.command === 'string' ? opts.command : undefined
+      return createTerminal(event.sender, { cwd: opts?.cwd, cols: opts?.cols, rows: opts?.rows, ...(command ? { command } : {}) })
     }
   )
   handle(IPC.terminalInput, (_event, id: string, data: string) => writeTerminal(id, data))

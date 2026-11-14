@@ -15,6 +15,7 @@
  */
 import { agentInvocationPrompt, expandTemplate, parseAgentInvocation, type Command } from './commands'
 import type { ShipAction } from './shipAction'
+import { renderShellEscapeRecord } from './shellEscape'
 
 export type PromptInvocationKind = 'command' | 'action' | 'spawned'
 
@@ -154,6 +155,24 @@ export function sideChatTurn(question: string, answer: string): InvokedTurn {
   return {
     text: sideChatExchangeText(question, answer),
     invokedAs: { kind: 'action', label: 'From side chat', ...(clip(question, MAX_DETAIL) ? { detail: clip(question, MAX_DETAIL) } : {}) }
+  }
+}
+
+/**
+ * A `!cmd` the user ran from the composer: the command and its output, recorded so
+ * the agent can act on it. The chip shows the command as typed and how it ended;
+ * the output is the prompt, one click away.
+ */
+export function shellEscapeTurn(command: string, output: string, exitCode: number): InvokedTurn {
+  const typed = `!${command}`
+  return {
+    text: renderShellEscapeRecord(command, output, exitCode),
+    invokedAs: {
+      kind: 'command',
+      label: clip(typed, MAX_LABEL) ?? '!',
+      detail: exitCode === 0 ? 'Ran in the terminal' : `Ran in the terminal, exited ${exitCode}`,
+      ...(clip(typed, MAX_TYPED) ? { typed: clip(typed, MAX_TYPED) } : {})
+    }
   }
 }
 

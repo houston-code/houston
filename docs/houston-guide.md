@@ -1465,7 +1465,8 @@ the environment, so it doesn't warn about them).
 ## Running your own commands (!)
 
 Type `!` and a command to run it in your own shell without leaving the session:
-`!git status`, `!npm test`. Output streams as it happens.
+`!git status`, `!npm test`. Output streams as it happens: inline in the terminal app,
+and in a new terminal tab below the chat in the desktop app.
 
 - **The agent sees it too.** What you ran and what it printed is added to the
   conversation, so you can follow up with "now fix those failures" with nothing to
@@ -1474,7 +1475,12 @@ Type `!` and a command to run it in your own shell without leaving the session:
   with your environment, exactly as if you'd typed it in another window. The sandbox
   exists to confine the agent, which can be steered by instructions hidden in what it
   reads; a command you typed yourself is your own decision.
-- `!` alone, or `!` in the middle of a line, is ordinary text.
+- **In the desktop app** the command gets a terminal tab of its own, which keeps its
+  output after the command ends. The chat shows the command you typed and how it ended;
+  click it to see exactly what the agent was given. A command that finishes while the
+  agent is working is not added, and a notice says so: run it again once the turn ends.
+- `!` alone, or `!` in the middle of a line, is ordinary text. So is a `!` line sent
+  with an image or attached context.
 
 ## Approval modes and permissions
 
