@@ -245,7 +245,8 @@ Lines arrive in this order:
 In the result line:
 
 - `status` is `success`, `limit`, `stalled`, `approval_denied`, `error`,
-  `schema_invalid`, `input_error`, or `verify_failed`.
+  `schema_invalid`, `input_error`, `verify_failed`, or `aborted` (stopped by a
+  signal).
 - `finalText` is the agent's closing answer (the text after its last tool call).
 - `receipt` is Houston's record of what the run actually ran (see "What actually
   ran"), present when it ran checks or changed files.
@@ -264,7 +265,7 @@ repository.
 | 3 | the run hit a budget before finishing (its step cap or the model's output limit) |
 | 4 | the final answer still didn't match `--output-schema` after the corrective round |
 | 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
-| 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `error`); a second signal exits at once |
+| 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `aborted`); a second signal exits at once |
 
 **Stopping Houston stops what the agent started.** When `-p`, `-i`, or `--acp` ends,
 normally or because the terminal closed or it was sent a signal, it stops the

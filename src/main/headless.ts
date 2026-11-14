@@ -104,6 +104,7 @@ export type HeadlessStatus =
   | 'schema_invalid'
   | 'input_error'
   | 'verify_failed'
+  | 'aborted'
 
 /**
  * The first line a `--json` run prints: what the run is about to do, so a harness
@@ -1524,6 +1525,9 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       status = fixStatus === 'success' || fixStatus === 'limit' ? (check.ok ? 'success' : 'schema_invalid') : fixStatus
       if (fix.limitReason) t.limitReason = fix.limitReason
     }
+    // Stopped by a signal before it finished: the run was cancelled, not failed, so a
+    // harness can tell a kill or a closed terminal from an error without parsing text.
+    if (stop.signal && status !== 'success') status = 'aborted'
     if (check && !check.ok && !opts.json) {
       deps.err(`· the final answer does not match --output-schema:\n${check.errors.map((e) => `·   ${e}`).join('\n')}\n`)
     }
@@ -1592,6 +1596,7 @@ export function headlessExitCode(status: HeadlessStatus): number {
     case 'stalled':
     case 'approval_denied':
     case 'error':
+    case 'aborted':
       return HEADLESS_EXIT.failed
     case 'schema_invalid':
       return HEADLESS_EXIT.schema
