@@ -48,6 +48,9 @@ import {
   backgroundsItself,
   BACKGROUND_AMPERSAND_ERROR,
   staleWriteRefusal,
+  rewriteStats,
+  isElisionPlaceholder,
+  elisionPlaceholders,
   type ToolContext
 } from './tools'
 import { FileReadTracker } from './readCache'
@@ -612,6 +615,91 @@ describe('write/read/edit', () => {
     writeFileSync(join(workspace, 'small.ts'), numbered(30, 'old'))
     const small = await run('write_file', { path: 'small.ts', content: numbered(30, 'fresh') })
     expect(small).not.toContain('edit_file keeps the rest intact')
+  })
+
+  it('counts changed and removed lines when write_file overwrites a file of 200+ lines', async () => {
+    writeFileSync(join(workspace, 'big.ts'), numbered(250, 'old'))
+    // Keep 230 lines, rewrite 10, drop 10.
+    const next = numbered(230, 'old') + numbered(10, 'fresh')
+    const out = await run('write_file', { path: 'big.ts', content: next })
+    expect(out).toContain('Compared with the 250-line file it replaced (blank lines not counted): 10 lines changed, 10 lines removed.')
+    expect(out).not.toContain('Warning')
+    expect(out).not.toContain('edit_file')
+  })
+
+  it('warns when write_file removes more than 30% of a large file', async () => {
+    writeFileSync(join(workspace, 'big.ts'), numbered(300, 'old'))
+    // Keep the first 150 lines and nothing else: half the file is gone.
+    const out = await run('write_file', { path: 'big.ts', content: numbered(150, 'old') })
+    expect(fileText('big.ts')).toBe(numbered(150, 'old')) // written, never refused
+    expect(out).toContain('0 lines changed, 150 lines removed.')
+    expect(out).toContain('Warning: this write removed 50% of the file.')
+    // One pointer to edit_file, not two.
+    expect(out.match(/edit_file/g)).toHaveLength(1)
+  })
+
+  it('refuses a write_file that puts an elision placeholder where existing code was', async () => {
+    const original = numbered(40, 'old')
+    writeFileSync(join(workspace, 'mod.ts'), original)
+    const lazy = numbered(5, 'old') + '// ... existing code ...\nexport const added = 1\n'
+    await expect(run('write_file', { path: 'mod.ts', content: lazy })).rejects.toThrow(
+      /write_file refused: the new content puts a placeholder where existing code was \(line 6: "\/\/ \.\.\. existing code \.\.\."\)/
+    )
+    expect(fileText('mod.ts')).toBe(original) // untouched
+  })
+
+  it('allows placeholders the file already had, in new files, and when every line is kept', async () => {
+    const tpl = 'function f() {\n  // ... rest unchanged\n}\nconst a = 1\nconst b = 2\n'
+    writeFileSync(join(workspace, 'tpl.ts'), tpl)
+    await run('write_file', { path: 'tpl.ts', content: 'function f() {\n  // ... rest unchanged\n}\nconst a = 1\n' })
+    // A brand-new file has no code to stand in for.
+    await run('write_file', { path: 'fresh.ts', content: '// ... existing code ...\n' })
+    writeFileSync(join(workspace, 'keep.ts'), 'const a = 1\n')
+    await run('write_file', { path: 'keep.ts', content: 'const a = 1\n// rest of the file unchanged\n' })
+    expect(fileText('keep.ts')).toContain('rest of the file unchanged')
+  })
+})
+
+describe('write_file rewrite helpers', () => {
+  it('splits dropped lines into changed and removed', () => {
+    expect(rewriteStats('a\nb\nc\nd\n', 'a\nB\n')).toEqual({ total: 4, kept: 1, changed: 1, removed: 2 })
+    expect(rewriteStats('a\n\n\nb\n', 'a\nb\nc\n')).toEqual({ total: 2, kept: 2, changed: 0, removed: 0 })
+  })
+
+  it.each([
+    '// ... existing code ...',
+    '// ...existing code...',
+    '  /* ... rest of the file unchanged ... */',
+    '# ... rest unchanged',
+    '# rest of the code remains the same',
+    '// (rest of implementation unchanged)',
+    '<!-- ... existing content ... -->',
+    '{/* ... existing code ... */}',
+    '... rest of file unchanged ...',
+    '// … other methods …',
+    '-- remaining code omitted',
+    '// keep existing code here'
+  ])('flags %j as a placeholder', (line) => {
+    expect(isElisionPlaceholder(line)).toBe(true)
+  })
+
+  it.each([
+    '// existing code paths call this',
+    '// Existing implementation',
+    '# Handle the rest of the args',
+    '// keep existing behaviour for old clients',
+    'const rest = args.slice(1) // rest unchanged by design, see #12',
+    'existing code',
+    '...args',
+    ''
+  ])('does not flag %j', (line) => {
+    expect(isElisionPlaceholder(line)).toBe(false)
+  })
+
+  it('reports only placeholders new to the file, with their line numbers', () => {
+    const before = 'one\ntwo\n// ... rest unchanged\nthree\n'
+    const after = 'one\n// ... rest unchanged\n// ... existing code ...\n'
+    expect(elisionPlaceholders(before, after)).toEqual([{ line: 3, text: '// ... existing code ...' }])
   })
 })
 

@@ -875,14 +875,21 @@ const writeFile: ToolDef = {
     if (redacted) {
       assertNoRedactedValues(current?.toString('utf8') ?? '', content)
     }
+    const previous = current === null ? null : current.toString('utf8')
+    if (previous !== null) {
+      const elided = elisionPlaceholders(previous, content)
+      if (elided.length) {
+        throw new Error(
+          `write_file refused: the new content puts a placeholder where existing code was (line ${elided[0].line}: "${elided[0].text}"). write_file replaces the whole file, so the code the placeholder stands for would be deleted. Write the complete file, or use edit_file to change only part of it.`
+        )
+      }
+    }
     await fs.mkdir(dirname(abs), { recursive: true })
     await fs.writeFile(abs, content, 'utf8')
     ctx.fileTracker?.noteWrite(abs, content)
     const done = `Wrote ${Buffer.byteLength(content)} bytes to ${rel}.`
-    const rewrite = current === null ? null : heavyRewrite(current.toString('utf8'), content)
-    return rewrite
-      ? `${done} This replaced ${rewrite.replaced} of ${rewrite.total} lines of the existing file; for a change to part of a file, edit_file keeps the rest intact.`
-      : done
+    const feedback = previous === null ? '' : rewriteFeedback(previous, content)
+    return feedback ? `${done} ${feedback}` : done
   }
 }
 
@@ -890,22 +897,33 @@ const writeFile: ToolDef = {
 const REWRITE_NOTE_MIN_LINES = 100
 /** ...when fewer than this share of their lines survive the write. */
 const REWRITE_NOTE_MAX_KEPT = 0.5
+/** Existing files at least this long (non-blank lines) get a changed/removed line count. */
+const REWRITE_STATS_MIN_LINES = 200
+/** ...and a warning when the write removes more than this share of their lines. */
+const REWRITE_WARN_REMOVED = 0.3
+
+/** Non-blank lines with trailing whitespace dropped: what the rewrite counts compare. */
+function contentLines(s: string): string[] {
+  return s
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim() !== '')
+}
 
 /**
- * Whether a whole-file write replaced most of a large existing file: counts the old
- * file's non-blank lines that do not appear in the new content (as a multiset, so a
- * line kept once is credited once). Null when the file is small or mostly kept. Pure.
+ * How a whole-file write compares with the file it replaced, over non-blank lines:
+ * `kept` old lines appear in the new content (as a multiset, so a line kept once is
+ * credited once); of the rest, `changed` were replaced by new lines and `removed` are
+ * gone with nothing in their place. Pure.
  */
-export function heavyRewrite(before: string, after: string): { replaced: number; total: number } | null {
-  const lines = (s: string): string[] =>
-    s
-      .split('\n')
-      .map((l) => l.trimEnd())
-      .filter((l) => l.trim() !== '')
-  const old = lines(before)
-  if (old.length < REWRITE_NOTE_MIN_LINES) return null
+export function rewriteStats(
+  before: string,
+  after: string
+): { total: number; kept: number; changed: number; removed: number } {
+  const old = contentLines(before)
+  const next = contentLines(after)
   const pool = new Map<string, number>()
-  for (const l of lines(after)) pool.set(l, (pool.get(l) ?? 0) + 1)
+  for (const l of next) pool.set(l, (pool.get(l) ?? 0) + 1)
   let kept = 0
   for (const l of old) {
     const n = pool.get(l) ?? 0
@@ -914,8 +932,114 @@ export function heavyRewrite(before: string, after: string): { replaced: number;
       pool.set(l, n - 1)
     }
   }
-  if (kept >= old.length * REWRITE_NOTE_MAX_KEPT) return null
-  return { replaced: old.length - kept, total: old.length }
+  const gone = old.length - kept
+  const changed = Math.min(gone, next.length - kept)
+  return { total: old.length, kept, changed, removed: gone - changed }
+}
+
+/**
+ * Whether a whole-file write replaced most of a large existing file: counts the old
+ * file's non-blank lines that do not appear in the new content. Null when the file is
+ * small or mostly kept. Pure.
+ */
+export function heavyRewrite(before: string, after: string): { replaced: number; total: number } | null {
+  const { total, kept } = rewriteStats(before, after)
+  if (total < REWRITE_NOTE_MIN_LINES) return null
+  if (kept >= total * REWRITE_NOTE_MAX_KEPT) return null
+  return { replaced: total - kept, total }
+}
+
+/**
+ * What write_file tells the model about a file it overwrote: for a large file, how
+ * many lines changed and how many were removed, with a warning when much of the file
+ * is gone; for a file most of which was replaced, a pointer to edit_file. '' when
+ * there is nothing worth saying. Pure.
+ */
+export function rewriteFeedback(before: string, after: string): string {
+  const stats = rewriteStats(before, after)
+  const lines = (n: number): string => `${n} line${n === 1 ? '' : 's'}`
+  const parts: string[] = []
+  let warned = false
+  if (stats.total >= REWRITE_STATS_MIN_LINES) {
+    parts.push(
+      `Compared with the ${stats.total}-line file it replaced (blank lines not counted): ${lines(stats.changed)} changed, ${lines(stats.removed)} removed.`
+    )
+    if (stats.removed > stats.total * REWRITE_WARN_REMOVED) {
+      warned = true
+      const pct = Math.round((stats.removed / stats.total) * 100)
+      parts.push(
+        `Warning: this write removed ${pct}% of the file. If that was not intended, restore the missing code; edit_file changes part of a file and keeps the rest intact.`
+      )
+    }
+  }
+  const heavy = heavyRewrite(before, after)
+  if (heavy && !warned) {
+    parts.push(
+      `This replaced ${heavy.replaced} of ${heavy.total} lines of the existing file; for a change to part of a file, edit_file keeps the rest intact.`
+    )
+  }
+  return parts.join(' ')
+}
+
+/** A comment opener a placeholder line may start with (JSX's `{/*` included). */
+const ELISION_OPEN = /^(?:\{\s*)?(?:\/\/+|#+|\/\*+|<!--|--|;+|\*)\s*/
+/** ...and the closer it may end with. */
+const ELISION_CLOSE = /\s*(?:\*+\/\s*\}?|-->)\s*$/
+/** What a placeholder stands for: "the rest of the file", "existing code", ... */
+const ELISION_SUBJECT =
+  /^(?:(?:the\s+)?(?:rest|remainder)(?:\s+of\s+(?:the\s+)?(?:file|code|function|class|module|component|implementation|methods?|tests?|content|body))?|(?:keep\s+)?(?:existing|previous|unchanged|other|remaining|original|same)\s+(?:code|content|implementation|methods?|functions?|imports?|tests?|logic|cases?|properties|fields|styles?|lines|body))/
+/** ...and how it says that code was left out. */
+const ELISION_TAIL =
+  /^(?:(?:is|are|remains?|stays?|kept|left)\s+)?(?:unchanged|the same|as (?:before|is)|omitted|here|goes here|elided|untouched)?$/
+const ELLIPSIS_EDGE = /^(?:\.\.\.|…)|(?:\.\.\.|…)$/
+
+/**
+ * Whether a line is a lazy-elision placeholder such as `// ... existing code ...`,
+ * `# rest unchanged`, or `{/* ... rest of the component ... *\/}`: a comment (or a
+ * bare ellipsis line) that only says code was left out. Pure.
+ */
+export function isElisionPlaceholder(line: string): boolean {
+  let t = line.trim()
+  if (t.length === 0 || t.length > 120) return false
+  const open = ELISION_OPEN.exec(t)
+  if (open) t = t.slice(open[0].length)
+  t = t.replace(ELISION_CLOSE, '').trim()
+  const dotted = ELLIPSIS_EDGE.test(t)
+  if (!open && !dotted) return false
+  t = t
+    .replace(/^[.…\s([]+|[.…\s)\]]+$/g, '')
+    .trim()
+    .toLowerCase()
+  const subject = ELISION_SUBJECT.exec(t)
+  if (!subject) return false
+  const tail = t.slice(subject[0].length).trim()
+  if (!ELISION_TAIL.test(tail)) return false
+  // "// existing code" with neither an ellipsis nor "unchanged" may be a real comment.
+  return dotted || tail !== ''
+}
+
+/**
+ * Placeholder lines a whole-file write puts where code was: lines of the new content
+ * that are {@link isElisionPlaceholder} and weren't in the old file, when the write
+ * also drops some of the old file's lines. A placeholder the file already had, or a
+ * write that keeps every old line, is not one. Pure.
+ */
+export function elisionPlaceholders(before: string, after: string): Array<{ line: number; text: string }> {
+  const { total, kept } = rewriteStats(before, after)
+  if (kept >= total) return []
+  const had = new Map<string, number>()
+  for (const l of before.split('\n')) had.set(l.trim(), (had.get(l.trim()) ?? 0) + 1)
+  const found: Array<{ line: number; text: string }> = []
+  after.split('\n').forEach((l, i) => {
+    const k = l.trim()
+    const n = had.get(k) ?? 0
+    if (n > 0) {
+      had.set(k, n - 1)
+      return
+    }
+    if (isElisionPlaceholder(l)) found.push({ line: i + 1, text: k.slice(0, 120) })
+  })
+  return found
 }
 
 const editFile: ToolDef = withShellCwdHint({
