@@ -147,6 +147,20 @@ describe('reduceEditor — editing keys', () => {
       text: 'draft'
     })
   })
+
+  it('hands Ctrl-O and Alt-T to the adapter with the draft untouched, and ignores paging keys', () => {
+    for (const [key, kind] of [
+      ['transcript', 'transcript'],
+      ['cycle-thoughts', 'cycle-thoughts']
+    ] as const) {
+      const r = run([type('draft'), { type: key }])
+      expect(r.outcome).toEqual({ kind })
+      expect(editorText(r.state)).toBe('draft')
+    }
+    const paged = run([type('draft'), { type: 'page-up' }, { type: 'page-down' }])
+    expect(paged.outcome).toBeUndefined()
+    expect(editorText(paged.state)).toBe('draft')
+  })
 })
 
 describe('reduceEditor — history', () => {
