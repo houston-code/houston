@@ -167,6 +167,8 @@ import {
 import { isAnyPopoverOpen } from './components/Popover'
 import { Icon } from './components/Icon'
 import { StatusBarInfo } from './components/StatusBarInfo'
+import { RateLimitChip } from './components/RateLimitChip'
+import { useRateLimits } from './hooks/useRateLimits'
 import { TurnErrorBar } from './components/TurnErrorBar'
 import type { TurnErrorAction } from '@shared/turnError'
 import { CommandPalette } from './components/CommandPalette'
@@ -950,6 +952,8 @@ export default function App(): JSX.Element {
   // Uncommitted-change counts for the titlebar Changes badge (refreshes on run
   // completion / window focus).
   const workingTreeStats = useWorkingTreeStats(workspace, chat.running)
+  // The last rate-limit state each provider reported, for the status bar.
+  const rateLimits = useRateLimits()
   // The branch's pull request for the composer chip; gh is asked only for a GitHub remote.
   const prStatus = usePrStatus(workspace, workingTreeStats.ship?.remote?.host === 'github', chat.running)
 
@@ -3711,6 +3715,7 @@ export default function App(): JSX.Element {
             branch={workspace ? workingTreeStats.branch : undefined}
             policy={canChat ? settings.approvalPolicy : null}
           />
+          <RateLimitChip state={rateLimits.find((s) => s.providerId === settings.selected?.providerId)} />
           {settings.selected && <span className="statusbar__model">{settings.selected.model}</span>}
         </footer>
       </main>
