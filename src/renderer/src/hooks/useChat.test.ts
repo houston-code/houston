@@ -439,7 +439,7 @@ describe('useChat', () => {
     const runId = await sendAndGetRunId(result, api)
     emit({ runId, type: 'tool_result', callId: 'a', name: 'write_file', ok: true, output: 'wrote' })
 
-    let restored = 0
+    let restored: number | null = 0
     await act(async () => {
       restored = await result.current.revertCheckpoint()
     })
@@ -447,7 +447,7 @@ describe('useChat', () => {
     expect(api.restoreCheckpoint).toHaveBeenCalledWith(runId)
     expect(result.current.checkpoint).toMatchObject({ runId, reverted: true })
 
-    let reapplied = 0
+    let reapplied: number | null = 0
     await act(async () => {
       reapplied = await result.current.reapplyCheckpoint()
     })
@@ -656,6 +656,92 @@ describe('useChat', () => {
     expect(result.current.running).toBe(false)
     expect(result.current.usage).toEqual({ context: 10, output: 5, cost: 0.01 })
     expect(result.current.checkpoint).toBeNull()
+  })
+
+  it('adopt handles the events that arrived while the reopen was still reading, last', () => {
+    installApi()
+    const { result } = renderHook(() => useChat('c1'))
+    act(() => result.current.reset([{ kind: 'user', id: 'u1', text: 'go' }]))
+    act(() =>
+      result.current.adopt(
+        'live-run',
+        [],
+        [{ runId: 'live-run', type: 'text', delta: 'hello ' }],
+        undefined,
+        [
+          { runId: 'live-run', type: 'text', delta: 'world' },
+          { runId: 'live-run', type: 'done', stopReason: 'end_turn' }
+        ]
+      )
+    )
+    const replies = result.current.items.filter((i) => i.kind === 'assistant')
+    expect(replies).toHaveLength(1)
+    expect((replies[0] as { text: string }).text).toBe('hello world')
+    // The run finished in that gap, so the view isn't left running with no run.
+    expect(result.current.running).toBe(false)
+  })
+
+  it('startDetached starts a turn in another chat without touching this view', async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useChat('c1'))
+    act(() => result.current.reset([{ kind: 'user', id: 'u1', text: 'mine' }]))
+    let ok = false
+    await act(async () => {
+      ok = await result.current.startDetached({ ...SEND, conversationId: 'c2', userText: 'theirs' })
+    })
+    expect(ok).toBe(true)
+    expect(api.startAgent.mock.calls[0][0]).toMatchObject({ conversationId: 'c2', userText: 'theirs' })
+    expect(result.current.items).toEqual([{ kind: 'user', id: 'u1', text: 'mine' }])
+    expect(result.current.running).toBe(false)
+
+    api.startAgent.mockRejectedValueOnce(new Error('bridge down'))
+    await act(async () => {
+      ok = await result.current.startDetached({ ...SEND, conversationId: 'c2' })
+    })
+    expect(ok).toBe(false)
+  })
+
+  it('a revert that finishes after switching chats leaves the new chat’s checkpoint alone', async () => {
+    const { api } = installApi()
+    let finish!: (n: number) => void
+    api.restoreCheckpoint.mockImplementationOnce(() => new Promise<number>((r) => (finish = r)))
+    const { result, rerender } = renderHook(({ id }) => useChat(id), { initialProps: { id: 'c1' } })
+    act(() => result.current.seedCheckpoint({ runId: 'r1', files: 1, reverted: false }))
+    let pending!: Promise<number | null>
+    act(() => {
+      pending = result.current.revertCheckpoint()
+    })
+    // The user opens c2, which has its own checkpoint.
+    rerender({ id: 'c2' })
+    act(() => result.current.seedCheckpoint({ runId: 'r2', files: 4, reverted: false }))
+    await act(async () => {
+      finish(1)
+      await pending
+    })
+    expect(result.current.checkpoint).toEqual({ runId: 'r2', files: 4, reverted: false })
+  })
+
+  it('a failed revert or redo says so in the chat instead of rejecting', async () => {
+    const { api } = installApi()
+    api.restoreCheckpoint.mockRejectedValueOnce(new Error('disk gone'))
+    api.reapplyCheckpoint.mockRejectedValueOnce(new Error('disk gone'))
+    const { result } = renderHook(() => useChat('c1'))
+    act(() => result.current.seedCheckpoint({ runId: 'r1', files: 1, reverted: false }))
+    let n: number | null = 0
+    await act(async () => {
+      n = await result.current.revertCheckpoint()
+    })
+    expect(n).toBeNull()
+    expect(result.current.checkpoint).toEqual({ runId: 'r1', files: 1, reverted: false })
+    await act(async () => {
+      n = await result.current.reapplyCheckpoint()
+    })
+    expect(n).toBeNull()
+    const notices = result.current.items.filter((i) => i.kind === 'notice').map((i) => (i as { text: string }).text)
+    expect(notices).toEqual([
+      "Couldn't revert this turn's changes: disk gone",
+      "Couldn't redo this turn's changes: disk gone"
+    ])
   })
 
   it('unsubscribes from agent events on unmount', () => {

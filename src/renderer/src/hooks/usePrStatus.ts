@@ -16,7 +16,7 @@ export function usePrStatus(workspace: string | null, enabled: boolean, running:
   const [pr, setPr] = useState<PrStatus | null>(null)
   const wsRef = useRef(workspace)
   wsRef.current = workspace
-  const inFlight = useRef(false)
+  const inFlight = useRef<string | null>(null)
 
   const refresh = useCallback(async () => {
     const ws = wsRef.current
@@ -24,8 +24,10 @@ export function usePrStatus(workspace: string | null, enabled: boolean, running:
       setPr(null)
       return
     }
-    if (inFlight.current) return
-    inFlight.current = true
+    // One lookup per folder at a time; a lookup for the folder the user just left must not
+    // block the one for the folder now open.
+    if (inFlight.current === ws) return
+    inFlight.current = ws
     try {
       const r = await window.api.gitPrStatus(ws)
       if (wsRef.current !== ws) return
@@ -33,7 +35,7 @@ export function usePrStatus(workspace: string | null, enabled: boolean, running:
     } catch {
       // Keep the last value: a failed refresh shouldn't flicker the chip away.
     } finally {
-      inFlight.current = false
+      if (inFlight.current === ws) inFlight.current = null
     }
   }, [enabled])
 

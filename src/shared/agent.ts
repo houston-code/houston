@@ -148,14 +148,21 @@ export interface ChatMessage {
    */
   steered?: boolean
   /**
-   * Present on the message a run started from when that run ended without a reply:
-   * it failed, or the user stopped it, before the model wrote anything. One entry
-   * per such run, oldest first (capped at {@link MAX_UNANSWERED_RUNS}), written by
-   * the loop so a turn that got no answer still says why after a reload. A resend of
-   * the same message carries them over (see `appendUserTurn`). Display-only;
-   * providers never see it.
+   * Records written before {@link ChatMessage.runEnds} existed: one per run that
+   * ended without a reply (failed or stopped). Still read (see `runEndRecords` in
+   * src/shared/runEnd.ts) so older chats keep saying why; no longer written.
+   * Display-only; providers never see it.
    */
   unanswered?: UnansweredRun[]
+  /**
+   * Present on the last message of a run that ended other than by finishing: it
+   * failed, the user stopped it, or it hit a limit (the step cap, the model's output
+   * limit, a stall). One entry per such run, oldest first (capped at
+   * {@link MAX_RUN_END_RECORDS}), written by the loop so every client can say why
+   * the run stopped after a reload or a resume. A resend of the same message carries
+   * them over (see `appendUserTurn`). Display-only; providers never see it.
+   */
+  runEnds?: RunEndRecord[]
   /**
    * When the message was written (ISO 8601): a user turn when it was sent, an
    * assistant turn when the model finished it. Absent on messages saved before it was
@@ -182,7 +189,22 @@ export interface MessageUsage {
   cost: number
 }
 
-/** Why one run ended without a reply (see {@link ChatMessage.unanswered}). */
+/** Why a run stopped short of finishing (the `limit` event's reason). */
+export type RunLimitReason = 'max-steps' | 'max-output' | 'stalled'
+
+/** Why one run ended other than by finishing (see {@link ChatMessage.runEnds}). */
+export interface RunEndRecord {
+  /** `error`: the run failed. `aborted`: the user stopped it. `limit`: it hit {@link RunEndRecord.limit}. */
+  reason: 'error' | 'aborted' | 'limit'
+  /** Which limit, when `reason` is `limit`. */
+  limit?: RunLimitReason
+  /** The error the run ended on, as shown to the user. Only for `error`. */
+  message?: string
+  /** When the run ended (ISO 8601). */
+  at: string
+}
+
+/** The older record of a run that ended without a reply (see {@link ChatMessage.unanswered}). */
 export interface UnansweredRun {
   /** `error`: the run failed. `aborted`: the user stopped it. */
   reason: 'error' | 'aborted'
@@ -192,8 +214,8 @@ export interface UnansweredRun {
   at: string
 }
 
-/** Most {@link UnansweredRun} records one message keeps; older ones are dropped. */
-export const MAX_UNANSWERED_RUNS = 5
+/** Most {@link RunEndRecord}s one message keeps; older ones are dropped. */
+export const MAX_RUN_END_RECORDS = 5
 
 /**
  * Prefix on the synthetic `user` message that stands in for a compacted head (see
@@ -252,7 +274,18 @@ export type ProviderStreamEvent =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; call: ToolCall }
-  | { type: 'done'; stopReason: StopReason; usage?: TokenUsage; reasoning?: ReasoningBlock[] }
+  | {
+      type: 'done'
+      stopReason: StopReason
+      usage?: TokenUsage
+      reasoning?: ReasoningBlock[]
+      /**
+       * Set when the provider ended the reply itself instead of the model finishing it:
+       * a refusal, a content or safety filter. The provider's own reason (`refusal`,
+       * `content_filter`, `SAFETY`, ...). The loop reports it rather than ending silently.
+       */
+      refusal?: string
+    }
   | {
       type: 'error'
       message: string
@@ -310,6 +343,13 @@ export interface ProviderWebSearchRequest {
   /** Most hits to return (already clamped to 1 to 10 by the caller). */
   maxResults: number
   signal?: AbortSignal
+  /**
+   * Called with what each search request billed, when the API reported it, before
+   * its reply is parsed: a search-tool error arrives inside a billed 200 reply, so
+   * the usage is reported even when the search then fails. The search runs a full
+   * model request on the run's model, so the loop folds this into the run's cost.
+   */
+  onUsage?: (usage: ProviderWebSearchUsage) => void
 }
 
 /** What a provider-run search found, normalized across providers. */
@@ -317,6 +357,17 @@ export interface ProviderWebSearchResult {
   /** The model's short summary of the results, when it wrote one. */
   answer?: string
   hits: Array<{ title?: string; url?: string; content?: string }>
+}
+
+/** Token usage of one provider-run search request. */
+export interface ProviderWebSearchUsage {
+  /** Total input tokens, cache reads and writes included (search results bill as input). */
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  /** Searches the provider ran, where its API reports the count. */
+  searches?: number
 }
 
 export interface Provider {
@@ -369,6 +420,12 @@ export interface RepoInfo {
   /** Local branch names, newest-committed first, for picking a base. */
   branches: string[]
   /**
+   * The repo's mainline as a local branch: the one `origin/HEAD` names, else `main`
+   * or `master`. Always one of `branches`; null when none of them exists locally.
+   * New worktrees start from it, not from whatever the main checkout has out.
+   */
+  defaultBranch: string | null
+  /**
    * True when the queried path is itself the root of a linked (non-main)
    * worktree — e.g. a per-chat checkout inherited from a previously-open chat.
    * False for the main root, for any subdirectory, and for non-repos, so the
@@ -383,6 +440,11 @@ export interface RepoInfo {
    * new-chat UI can drop the stale default instead of anchoring to a phantom.
    */
   exists: boolean
+  /**
+   * True (with `isRepo` false) when git can't open the path although a `.git` sits
+   * in it or a parent folder, so it isn't offered a fresh `git init`.
+   */
+  unreadable?: boolean
 }
 
 /** Outcome of tearing down a conversation's worktree, for reporting to the user. */
@@ -770,8 +832,13 @@ export interface ProposalState {
 export interface ChildReport {
   conversationId: string
   title: string
-  /** `error` when the child's last run failed. */
-  outcome: 'done' | 'error'
+  /**
+   * How the child's last run ended: `done` when it finished, `error` when it failed,
+   * `limit` when it hit {@link ChildReport.limit}, `stopped` when it was stopped.
+   */
+  outcome: 'done' | 'error' | 'limit' | 'stopped'
+  /** Which limit, when `outcome` is `limit`. */
+  limit?: RunLimitReason
   /** The start of the child's final answer (or its error), already truncated. */
   summary: string
   finishedAt: number
@@ -1405,7 +1472,7 @@ export type AgentEvent =
       to: string
       reason: string
     }
-  | { runId: string; type: 'limit'; reason: 'max-steps' | 'max-output' | 'stalled' }
+  | { runId: string; type: 'limit'; reason: RunLimitReason }
   | {
       // What Houston recorded running this turn (commands that test, build, install, or
       // serve, and the files the turn changed), emitted once, just before the event that

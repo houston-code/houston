@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { realpathSync, statSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +12,7 @@ import {
 } from '@shared/workingTree'
 import { classifyRemoteUrl, type RepoShipState } from '@shared/shipAction'
 import { runGitCapture, captureTry, uncommittedDiffBase } from './gitRead'
+import { findGitEntry, gitErrorLine } from './gitEntry'
 
 /** Cap how many untracked files we read so a junk-filled tree can't stall the UI. */
 const MAX_UNTRACKED_FILES = 200
@@ -62,8 +64,9 @@ function readUntracked(root: string, rel: string): FileDiff {
  * not just the current chat's edits.
  */
 export async function collectWorkingTreeChanges(workspace: string): Promise<WorkingTreeChanges> {
-  const root = await workTreeRoot(workspace)
-  if (!root) return NOT_A_REPO
+  const probe = await workTreeRoot(workspace)
+  if (typeof probe !== 'string') return probe ? { ...NOT_A_REPO, unreadable: probe.unreadable } : NOT_A_REPO
+  const root = probe
 
   const branch = await currentBranch(root)
 
@@ -96,8 +99,58 @@ export async function collectWorkingTreeChanges(workspace: string): Promise<Work
   }
 }
 
-/** The workspace's real path when it is inside a git work tree, else null. */
-async function workTreeRoot(workspace: string): Promise<string | null> {
+/** Cap on how many changed paths a fingerprint stats, so a huge dirty tree stays cheap. */
+const MAX_FINGERPRINT_PATHS = 5_000
+
+/**
+ * A cheap fingerprint of the working tree's uncommitted state: HEAD's commit, the
+ * `git status` listing (tracked changes and untracked, non-ignored files), and the
+ * size and modification time of every listed path. Two fingerprints differ when a
+ * command edited, created, deleted, staged, or committed a file between them,
+ * including a further edit to a file that was already dirty. Ignored files don't
+ * count. Null outside a git work tree or when git fails, so a caller can't mistake
+ * "unknown" for "unchanged".
+ *
+ * Read-only and hardened (see {@link runGitCapture}); never throws.
+ */
+export async function workingTreeFingerprint(workspace: string): Promise<string | null> {
+  const root = await workTreeRoot(workspace)
+  // Outside a repository, or one git can't open: unknown, never "unchanged".
+  if (typeof root !== 'string') return null
+  const [head, status] = await Promise.all([
+    runGitCapture(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], root),
+    runGitCapture(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root)
+  ])
+  if (!status.ok) return null
+  const hash = createHash('sha256')
+  hash.update(head.ok ? head.stdout.trim() : 'unborn')
+  hash.update('\0')
+  hash.update(status.stdout)
+  const parts = status.stdout.split('\0')
+  let statted = 0
+  for (let i = 0; i < parts.length && statted < MAX_FINGERPRINT_PATHS; i++) {
+    const entry = parts[i]
+    if (entry.length < 4) continue
+    // A rename or copy record is followed by its source path as one more field.
+    if (entry[0] === 'R' || entry[0] === 'C') i++
+    const rel = entry.slice(3)
+    statted++
+    try {
+      const st = statSync(join(root, rel))
+      hash.update(`\0${rel}\0${st.size}\0${st.mtimeMs}`)
+    } catch {
+      hash.update(`\0${rel}\0missing`)
+    }
+  }
+  return hash.digest('hex')
+}
+
+/**
+ * The workspace's real path when it is inside a git work tree. When git can't open
+ * it although a `.git` sits in it or a parent folder, git's reason; else null (a
+ * plain folder, or a path that is gone).
+ */
+async function workTreeRoot(workspace: string): Promise<string | { unreadable: string } | null> {
   if (!workspace) return null
   let root: string
   try {
@@ -106,7 +159,8 @@ async function workTreeRoot(workspace: string): Promise<string | null> {
     return null
   }
   const inside = await runGitCapture(['rev-parse', '--is-inside-work-tree'], root)
-  return inside.ok && inside.stdout.trim() === 'true' ? root : null
+  if (inside.ok) return inside.stdout.trim() === 'true' ? root : null
+  return findGitEntry(root) ? { unreadable: gitErrorLine(inside.stderr) } : null
 }
 
 /**
@@ -157,8 +211,12 @@ export function sumNumstat(out: string): { files: number; added: number; removed
  * exactly as the full path counts them, under the same file cap.
  */
 export async function collectWorkingTreeStats(workspace: string): Promise<WorkingTreeStats> {
-  const root = await workTreeRoot(workspace)
-  if (!root) return { isRepo: false, branch: null, fileCount: 0, added: 0, removed: 0 }
+  const probe = await workTreeRoot(workspace)
+  if (typeof probe !== 'string') {
+    const none: WorkingTreeStats = { isRepo: false, branch: null, fileCount: 0, added: 0, removed: 0 }
+    return probe ? { ...none, unreadable: probe.unreadable } : none
+  }
+  const root = probe
 
   const base = await uncommittedDiffBase(captureTry(root))
   const [branch, diff, untrackedPaths, ship] = await Promise.all([

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { clearAllDrafts, commentPlace, draftKey, getDrafts, newCommentId, setDrafts, sortComments, type DraftComment } from './diffComments'
+import { anchorComments, clearAllDrafts, commentPlace, draftKey, getDrafts, newCommentId, setDrafts, shownLines, sortComments, type DraftComment } from './diffComments'
 
 const c = (path: string, line: number, side: 'old' | 'new' = 'new'): DraftComment => ({
   id: newCommentId(),
@@ -33,4 +33,41 @@ describe('diffComments', () => {
     expect(commentPlace({ path: 'a', side: 'old', line: 3 })).not.toBe(commentPlace({ path: 'a', side: 'new', line: 3 }))
     expect(newCommentId()).not.toBe(newCommentId())
   })
+
+  it('anchors a comment only where its line still holds its code', () => {
+    const lines = shownLines(
+      [
+        {
+          path: 'a.ts',
+          status: 'modified',
+          added: 1,
+          removed: 1,
+          binary: false,
+          hunks: [
+            {
+              header: '@@ -10,2 +10,2 @@',
+              lines: [
+                { type: 'ctx', text: 'keep' },
+                { type: 'del', text: 'old' },
+                { type: 'add', text: 'new' }
+              ]
+            }
+          ]
+        }
+      ],
+      300
+    )
+    expect([...lines.entries()]).toEqual([
+      [commentPlace({ path: 'a.ts', side: 'new', line: 10 }), 'keep'],
+      [commentPlace({ path: 'a.ts', side: 'old', line: 11 }), 'old'],
+      [commentPlace({ path: 'a.ts', side: 'new', line: 11 }), 'new']
+    ])
+    const at = (side: 'old' | 'new', line: number, code: string): DraftComment => ({ ...c('a.ts', line, side), code })
+    const ok = [at('new', 10, 'keep'), at('old', 11, 'old')]
+    const stale = [at('new', 11, 'something else'), at('new', 99, 'gone'), { ...c('b.ts', 1), code: 'x' }]
+    const { anchored, outdated } = anchorComments([...ok, ...stale], lines)
+    expect(anchored).toEqual(ok)
+    expect(outdated).toEqual(stale)
+  })
 })
+

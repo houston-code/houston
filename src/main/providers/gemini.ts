@@ -9,7 +9,7 @@ import type {
 } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { geminiThinkingConfig, geminiUsesThinkingLevel } from './reasoning'
-import { idleTimeoutFetch } from './idle-fetch'
+import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS } from './idle-fetch'
 
 /** Output floor for models that always think (Gemini 4): Google's recommended minimum. */
 const GEMINI_THINKING_MIN_OUTPUT = 32_768
@@ -26,6 +26,27 @@ function callSignatures(m: ChatMessage, model: string): Map<string, string> {
   }
   return out
 }
+
+/** The parts of an assistant message as a Gemini `model` turn: its text, then its calls. */
+function modelParts(m: ChatMessage, model: string): Part[] {
+  const parts: Part[] = []
+  if (m.content) parts.push({ text: m.content })
+  // Thinking models (Gemini 3 and later) sign their function calls and reject a
+  // request whose current-turn calls come back without the signature, so each
+  // call is sent with the one it was issued with.
+  const signatures = callSignatures(m, model)
+  for (const tc of m.toolCalls ?? []) {
+    const thoughtSignature = signatures.get(tc.id)
+    parts.push({
+      functionCall: { name: tc.name, args: tc.arguments },
+      ...(thoughtSignature ? { thoughtSignature } : {})
+    })
+  }
+  return parts
+}
+
+/** Gemini finish reasons that mean a filter stopped the reply, not the model finishing it. */
+const GEMINI_BLOCKED = new Set(['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII', 'IMAGE_SAFETY'])
 
 export function toGeminiContents(messages: ChatMessage[], model = ''): Content[] {
   const out: Content[] = []
@@ -55,6 +76,28 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
   }
   for (const m of messages) {
     if (m.role !== 'tool') flushToolImages()
+    if (m.role === 'assistant') {
+      const parts = modelParts(m, model)
+      // An assistant turn with nothing to send (the model ended without text or calls:
+      // a MALFORMED_FUNCTION_CALL or SAFETY finish, or a thought-only reply). A model
+      // turn with no parts is a 400 ("contents.parts must not be empty"), and since it
+      // stays in the history every later request would fail too. Leave it out, and let
+      // the next user message fold onto the user turn before it, so two user turns
+      // can't end up in a row.
+      if (!parts.length) {
+        const last = out[out.length - 1]
+        if (last?.role === 'user') {
+          const toolResults = !!last.parts?.some((p) => 'functionResponse' in p)
+          mergingToolResults = toolResults
+          lastPlainUser = !toolResults
+        }
+        continue
+      }
+      lastPlainUser = false
+      mergingToolResults = false
+      out.push({ role: 'model', parts })
+      continue
+    }
     if (m.role !== 'user') lastPlainUser = false
     if (m.role === 'user') {
       const parts: Content['parts'] = []
@@ -92,22 +135,6 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
       if (!parts!.length) parts!.push({ text: '' }) // Gemini rejects an empty parts array
       out.push({ role: 'user', parts })
       lastPlainUser = true
-    } else if (m.role === 'assistant') {
-      mergingToolResults = false
-      const parts: Content['parts'] = []
-      if (m.content) parts!.push({ text: m.content })
-      // Thinking models (Gemini 3 and later) sign their function calls and reject a
-      // request whose current-turn calls come back without the signature, so each
-      // call is sent with the one it was issued with.
-      const signatures = callSignatures(m, model)
-      for (const tc of m.toolCalls ?? []) {
-        const thoughtSignature = signatures.get(tc.id)
-        parts!.push({
-          functionCall: { name: tc.name, args: tc.arguments },
-          ...(thoughtSignature ? { thoughtSignature } : {})
-        })
-      }
-      out.push({ role: 'model', parts })
     } else if (m.role === 'tool') {
       const fnPart = {
         functionResponse: {
@@ -134,6 +161,9 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
 export function createGeminiProvider(apiKey: string): Provider {
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
+  // No retry option to turn off: this SDK retries only when `httpOptions.retryOptions` is
+  // set, so the RetryBudget in agent/retry.ts is already the only layer (sdk-retries.test.ts
+  // fails if an upgrade changes that default).
   let aiPromise: Promise<GoogleGenAI> | undefined
   const getAi = (): Promise<GoogleGenAI> =>
     (aiPromise ??= import('@google/genai').then(
@@ -230,6 +260,7 @@ export function createGeminiProvider(apiKey: string): Provider {
         // seen. Otherwise a tool call means tool_use, and a plain finish is end_turn.
         stopReason:
           finishReason === 'MAX_TOKENS' ? 'max_tokens' : sawToolCall ? 'tool_use' : 'end_turn',
+        ...(finishReason && GEMINI_BLOCKED.has(finishReason) ? { refusal: finishReason } : {}),
         usage: {
           inputTokens,
           outputTokens,
@@ -263,12 +294,25 @@ export function modelOptionFromGeminiListing(m: {
 /** Fetch the live model list from the Gemini API. */
 export async function listGeminiModels(apiKey: string): Promise<ModelOption[]> {
   const { GoogleGenAI } = await import('@google/genai')
-  const ai = new GoogleGenAI({ apiKey })
+  // Without a fetch of its own the SDK turns off Node's fetch timeouts and sets no
+  // signal, so a request into a network that drops packets never settled. `timeout`
+  // aborts each page request at the deadline; the idle fetch bounds a body that stalls.
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: { fetch: idleTimeoutFetch(LIST_MODELS_TIMEOUT_MS), timeout: LIST_MODELS_TIMEOUT_MS }
+  })
   const out: ModelOption[] = []
-  const pager = await ai.models.list()
-  for await (const m of pager) {
-    const opt = modelOptionFromGeminiListing(m)
-    if (opt) out.push(opt)
+  try {
+    const pager = await ai.models.list()
+    for await (const m of pager) {
+      const opt = modelOptionFromGeminiListing(m)
+      if (opt) out.push(opt)
+    }
+  } catch (e) {
+    // The only abort here is that timeout: say so, as the other SDKs do, rather than
+    // "This operation was aborted".
+    if ((e as { name?: unknown } | null)?.name === 'AbortError') throw new Error('Request timed out.', { cause: e })
+    throw e
   }
   return out
 }

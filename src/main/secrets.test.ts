@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -477,6 +477,57 @@ describe('async persistence', () => {
     expect(getKey('openai')).toBe('sk-theirs')
     expect(getKey('gemini')).toBe('sk-gemini')
   })
+
+  it('keeps the bytes of a store that fails to parse before a write replaces it', async () => {
+    const path = join(state.userData, 'secrets.json')
+    // Truncated mid-write: the ciphertext of every stored credential is in here.
+    const original = '{"keys":{"anthropic":"' + Buffer.from('v1:sk-lost', 'utf8').toString('base64')
+    writeFileSync(path, original)
+    await initSecrets()
+    expect(getKey('anthropic')).toBeNull()
+    setKey('openai', 'sk-new')
+    await flushSecrets()
+    const copies = readdirSync(state.userData).filter((f) => f.startsWith('secrets.json.corrupt-'))
+    expect(copies).toHaveLength(1)
+    const copy = join(state.userData, copies[0])
+    expect(readFileSync(copy, 'utf8')).toBe(original)
+    if (process.platform !== 'win32') expect(statSync(copy).mode & 0o777).toBe(0o600)
+    expect(rawFile().keys.openai).toBeTruthy()
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'refuses to write over a store it cannot read',
+    async () => {
+      const path = join(state.userData, 'secrets.json')
+      setKey('anthropic', 'sk-keep')
+      await flushSecrets()
+      chmodSync(path, 0o000) // e.g. left owned by root after a sudo run
+      try {
+        setKey('openai', 'sk-new')
+        await expect(flushSecrets()).rejects.toThrow(/could not read/)
+      } finally {
+        chmodSync(path, 0o600)
+      }
+      // Before: the unreadable file read as empty and the write dropped every credential.
+      expect(Object.keys(rawFile().keys)).toEqual(['anthropic'])
+    }
+  )
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'keeps credentials in memory when a re-sync finds the store unreadable',
+    async () => {
+      const path = join(state.userData, 'secrets.json')
+      setKey('anthropic', 'sk-keep')
+      await flushSecrets()
+      chmodSync(path, 0o000)
+      try {
+        await refreshSecretsFromDisk()
+        expect(getKey('anthropic')).toBe('sk-keep')
+      } finally {
+        chmodSync(path, 0o600)
+      }
+    }
+  )
 
   it('deleting what was never stored writes nothing', async () => {
     deleteKey('anthropic')

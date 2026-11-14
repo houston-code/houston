@@ -313,3 +313,29 @@ describe('decodeInput — Shift-Enter', () => {
     expect(feed('\x1b[97;5u')).toEqual([])
   })
 })
+
+// A terminal's reply to the startup background-colour query can arrive after the
+// probe stopped waiting (a slow link, SSH) and land in the first read.
+describe('decodeInput: OSC replies', () => {
+  it('drops a whole OSC 11 reply, BEL- or ST-terminated', () => {
+    expect(feed('\x1b]11;rgb:ffff/ffff/ffff\x07')).toEqual([])
+    expect(feed('\x1b]11;rgb:0000/0000/0000\x1b\\')).toEqual([])
+  })
+
+  it('drops a reply split across reads, and keeps the keys around it', () => {
+    expect(feed('hi\x1b]1', '1;rgb:ff', 'ff/ffff/ffff\x1b', '\\there')).toEqual([
+      { type: 'char', value: 'hi' },
+      { type: 'char', value: 'there' }
+    ])
+  })
+
+  it('still reads Alt-] followed by a letter as Alt-] and the letter', () => {
+    expect(feed('\x1b]a')).toEqual([{ type: 'char', value: 'a' }])
+    expect(feed('\x1b]', 'a')).toEqual([{ type: 'char', value: 'a' }])
+  })
+
+  it('gives up on an unterminated reply that grows past the cap', () => {
+    const keys = feed('\x1b]11;', 'x'.repeat(2000))
+    expect(keys.some((k) => k.type === 'char')).toBe(true)
+  })
+})

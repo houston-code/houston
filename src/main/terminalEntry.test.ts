@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent, ElicitationResult, PlanDecision } from '@shared/agent'
-import { resolveBackgroundEvent, wireTerminalSessionBackends } from './terminalEntry'
+import { spawn } from 'node:child_process'
+import { guardTerminalExit, resolveBackgroundEvent, watchTerminationSignals, wireTerminalSessionBackends } from './terminalEntry'
+import { readShellOutput, registerShell } from './agent/shells'
+import type { SignalProcess } from './signalCleanup'
 import { setUserDataDir, resetUserDataDir } from './userData'
 import { resetSpawnBackend, isSpawnBackendConfigured, spawnSession } from './agent/spawn'
 import { resetSchedulerBackend, isSchedulerConfigured, scheduleCreate, scheduleList } from './agent/scheduler'
@@ -15,6 +19,34 @@ import { resetSchedulerBackend, isSchedulerConfigured, scheduleCreate, scheduleL
  * prompts. A blocking event this switch drops would hang a spawned session
  * forever.
  */
+describe('watchTerminationSignals', () => {
+  function fakeProcess() {
+    const emitter = new EventEmitter()
+    const exits: number[] = []
+    const proc = {
+      on: (e: string, h: () => void) => emitter.on(e, h),
+      off: (e: string, h: () => void) => emitter.off(e, h),
+      exit: (code?: number) => void exits.push(code ?? 0)
+    } as unknown as Pick<NodeJS.Process, 'on' | 'off' | 'exit'>
+    return { emitter, exits, proc }
+  }
+
+  it('hands the first signal over, force-exits 128+n on the second, and unsubscribes', () => {
+    const { emitter, exits, proc } = fakeProcess()
+    const seen: string[] = []
+    const stop = watchTerminationSignals((s) => void seen.push(s), proc)
+    for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) expect(emitter.listenerCount(s)).toBe(1)
+    emitter.emit('SIGTERM')
+    expect(seen).toEqual(['SIGTERM'])
+    expect(exits).toEqual([])
+    emitter.emit('SIGINT')
+    expect(seen).toEqual(['SIGTERM'])
+    expect(exits).toEqual([130])
+    stop()
+    for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) expect(emitter.listenerCount(s)).toBe(0)
+  })
+})
+
 describe('resolveBackgroundEvent', () => {
   function record() {
     const approvals: Array<[string, string, string]> = []
@@ -141,11 +173,18 @@ describe('wireTerminalSessionBackends', () => {
     expect(result.conversationId).toBeTruthy()
     expect(result.note).toContain('non-interactively')
     // The background run started (agent host unconfigured here, so it errors out
-    // quickly) — the wait must settle and the completion note must fire.
+    // quickly) — the wait must settle and the completion note must fire, saying it
+    // failed rather than that it finished.
     expect(handle.pendingBackgroundSessions()).toBe(1)
     await handle.waitForBackgroundSessions()
     expect(handle.pendingBackgroundSessions()).toBe(0)
-    expect(notes.some((n) => n.includes('finished'))).toBe(true)
+    const note = notes.find((n) => n.startsWith('background session'))
+    expect(note).toMatch(/^background session ".*" failed\. Resume it to see the result/)
+    expect(note).not.toContain('finished')
+    // The /sessions list says the same.
+    expect(handle.backgroundSessions()).toEqual([
+      expect.objectContaining({ id: result.conversationId, running: false, outcome: 'error' })
+    ])
   })
 
   it('persists schedules through the scheduler seam without starting timers', () => {
@@ -162,4 +201,46 @@ describe('wireTerminalSessionBackends', () => {
     expect(info.id).toMatch(/^sch-/)
     expect(scheduleList()).toHaveLength(1)
   })
+})
+
+describe('guardTerminalExit', () => {
+  // A closed terminal (SIGHUP) or a `kill` must not leave a dev server holding its
+  // port: background shells lead their own process group, so the hangup never reaches
+  // them and only Houston's cleanup can. POSIX only (process groups).
+  it.skipIf(process.platform === 'win32')(
+    'stops a running background shell on SIGHUP, then exits with 129',
+    async () => {
+      // Detached, as the sandbox backends spawn background shells: it leads its group,
+      // and the server it starts shares that group.
+      const child = spawn('/bin/sh', ['-c', 'sleep 30 & echo up; wait'], { detached: true })
+      const id = registerShell('sleep 30', child)
+      await vi.waitFor(() => expect(readShellOutput(id, { full: true }).stdout).toContain('up'))
+      const pgid = child.pid!
+      expect(() => process.kill(-pgid, 0)).not.toThrow()
+
+      const emitter = new EventEmitter()
+      let exited: (code: number) => void = () => {}
+      const exitCode = new Promise<number>((r) => (exited = r))
+      const proc: SignalProcess = {
+        on: (sig, fn) => emitter.on(sig, fn),
+        removeListener: (sig, fn) => emitter.removeListener(sig, fn),
+        exit: (code) => exited(code)
+      }
+      const flush = vi.fn(async () => {})
+      guardTerminalExit(['SIGHUP', 'SIGTERM'], { flush }, proc)
+      emitter.emit('SIGHUP')
+      expect(await exitCode).toBe(129)
+      expect(flush).toHaveBeenCalledTimes(1)
+      await vi.waitFor(() => {
+        let err: NodeJS.ErrnoException | undefined
+        try {
+          process.kill(-pgid, 0)
+        } catch (e) {
+          err = e as NodeJS.ErrnoException
+        }
+        expect(err?.code).toBe('ESRCH')
+      })
+    },
+    15_000
+  )
 })

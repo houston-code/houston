@@ -26,6 +26,13 @@ describe('appendUserTurn', () => {
     expect(appendUserTurn(history, user('use port 4000'))).toEqual([...history, user('use port 4000')])
   })
 
+  it('keeps both older and current run-end records on a resend', () => {
+    const failed = { reason: 'error' as const, message: 'overloaded', at: '2026-10-22T00:00:00.000Z' }
+    const stopped = { reason: 'aborted' as const, at: '2026-11-01T00:00:00.000Z' }
+    const history: ChatMessage[] = [user('go', { unanswered: [failed], runEnds: [stopped] })]
+    expect(appendUserTurn(history, user('go'))).toEqual([user('go', { unanswered: [failed], runEnds: [stopped] })])
+  })
+
   it('appends a different message after an unanswered one', () => {
     const history: ChatMessage[] = [user('start the dev server')]
     expect(appendUserTurn(history, user('use port 4000'))).toEqual([...history, user('use port 4000')])

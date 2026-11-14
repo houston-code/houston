@@ -92,6 +92,11 @@ The full GUI:
   that is sent as pasted; **Expand** puts it back in the box. Dropping a file attaches
   it like **+ Attach files**: a text file's contents go in the message, and a binary
   file such as a PDF by name only.
+- **Why a turn stopped, after a reload.** When a turn ends without finishing (an
+  error, your Stop, the step limit, the model's output limit, or a stall), the notice
+  that said so is saved with the chat, so reopening it shows the same notice in place.
+  The terminal (`/resume`, `--continue`, `--resume <id>`) and editors that load a
+  session say it too.
 - **Back where you were after a restart.** Houston reopens the chat that was open when
   you quit. If that chat was deleted, or its folder or worktree is gone, it opens a new
   chat in your last folder instead.
@@ -259,6 +264,16 @@ repository.
 | 3 | the run hit a budget before finishing (its step cap or the model's output limit) |
 | 4 | the final answer still didn't match `--output-schema` after the corrective round |
 | 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
+| 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `error`); a second signal exits at once |
+
+**Stopping Houston stops what the agent started.** When `-p`, `-i`, or `--acp` ends,
+normally or because the terminal closed or it was sent a signal, it stops the
+background commands the agent started, its MCP connections, and its language servers
+before exiting. Background commands get SIGTERM first, so a dev server or `docker
+compose up` can shut down cleanly (and stop its containers), and anything still
+running a moment later is killed. Stopping one background command, from the agent or
+the Background tasks list, works the same way, with a few seconds' grace. On Windows
+the stop is immediate.
 
 ### Standalone CLI
 
@@ -515,7 +530,9 @@ back to the model provider's own web search where the provider offers one:
 
 The search runs as a short extra request on the chat's current model, so it is billed
 to the model key you already set: the provider's per-search fee plus the tokens of the
-results. Each call runs one search. Other providers (Gemini, Bedrock, Vertex, Azure,
+results. Each call runs one search. Its tokens count toward the chat's usage and cost
+display and toward a cost ceiling (`--max-cost`); the per-search fee isn't included in
+Houston's estimate, so check the provider's billing for it. Other providers (Gemini, Bedrock, Vertex, Azure,
 Foundry, Ollama and other compatible servers) still need a search key. A search key,
 once set, is always used first. Approvals and the untrusted-content fence work the same
 either way.
@@ -582,7 +599,8 @@ the model.
 - `/permissions` lists your saved permission rules, numbered; `/permissions remove <n>`
   deletes one. Rules in a project's `.houston/settings.json` are edited in that file.
 - Resuming a chat (`/resume`, `--continue`, `--resume <id>`) replays its last three
-  exchanges, so you can see where you left off.
+  exchanges, so you can see where you left off, and says how its last turn ended when it
+  didn't finish (an error, a Stop, or a limit it hit).
 - Leaving prints the `houston --resume <id>` command that reopens the chat.
 
 ### Terminal themes
@@ -767,6 +785,16 @@ receipt.
   down from 12, 1 skipped, up from 0)") and the receipt is highlighted the way it is
   for a failure, since a deleted test or an added skip can make a failing suite look
   green.
+- **Test edits to review.** Edits the agent's file tools made that loosen a test: a
+  deleted test file, an added skip or focus marker (`.skip(`, `.only(`, `xit(`,
+  `@pytest.mark.skip`, `t.Skip(`, `#[ignore]`), fewer assertions in a test file, a
+  `package.json` test script that now always passes (`|| true`, `--passWithNoTests`), or
+  a test runner config (vitest, jest, pytest) that changed which tests run. Houston
+  compares each file with how it was before the turn, so a test moved to another file
+  with its assertions isn't listed, and neither are new tests. When the agent is about
+  to finish with one of these, it's asked once to restore the test or to explain in its
+  reply why the change is right, and the receipt is highlighted. Changes made only
+  through shell commands (`rm`, `sed -i`) aren't seen, and Plan mode is skipped.
 
 ### Todo items it can't back
 
@@ -1061,6 +1089,13 @@ turn ends: the agent gets one last step with tools off to tell you what it tried
 what keeps going wrong, and the transcript notes that it stopped for repeating
 itself.
 
+Separately, an agent that has made 20 rounds of tool calls without writing anything to
+you or changing a file is asked to stop and give you a short update: what it has
+found, what it thinks is going on, and what it will check next. If something in the
+project keeps getting in its way (a command that fails however it's run, a repository
+git can't open), it's asked to say so and ask you rather than keep trying variations.
+This never ends the turn; the agent carries on after the update.
+
 This continues up to a **hard limit** (200 steps by default), so a big job such as
 scaffolding a new project, or a long debugging session, finishes in one go. Stopping
 the run works as usual at any point.
@@ -1071,7 +1106,11 @@ your own step count, it stays a hard stop until you turn the switch on.
 
 **Checking the work when it finishes.** Loop control also has an opt-in verification
 command that runs when the agent stops after changing files, with a failure sent back
-for a bounded fix-up. With a project open, Houston suggests one from the project's
+for a bounded fix-up. Changes made through shell commands count too (a `sed -i`, a
+heredoc, `git apply`, a code generator): in a git repository, Houston compares the
+working tree at the end of the turn with how it was when the turn started, so a
+read-only command like `ls` or `git log` doesn't trigger a check. Outside a git
+repository, only the agent's own file edits do. With a project open, Houston suggests one from the project's
 files under the field: the `typecheck` and `test` scripts in `package.json` (run with
 npm, pnpm, yarn, or bun by lockfile), `cargo test`, `go test ./...`, or `pytest`.
 **Use this command** fills the field; it doesn't turn verification on.
@@ -1145,7 +1184,9 @@ picked.
 - **Comment on lines.** Click a line (or its line number) to leave a comment on it;
   `Cmd+Enter` (`Ctrl+Enter`) saves and `Esc` cancels. Comments wait under their lines,
   can be edited or deleted, and stay while you switch scope, close the view or open
-  another chat. **Send N comments to the agent** sends them all as one message naming
+  another chat. A comment whose line no longer holds the code it was left on (a
+  refresh moved or changed it), or that isn't in the current view, is listed below
+  the diff instead, where it can still be edited, deleted, or sent. **Send N comments to the agent** sends them all as one message naming
   each file, line and the code on it; the chat shows it as "N review comments", with
   the full text one click away. **Discard** asks before dropping them.
 
@@ -1172,9 +1213,15 @@ The Changes view also has a commit form, for when you'd rather not spend an agen
   default model in a new chat) to describe the uncommitted changes, the way a chat gets
   its title. The diff goes to that model's provider. Edit the suggestion as you like.
 - **Commit** stages every change and commits it (`Cmd+Enter` / `Ctrl+Enter` in the
-  message box). The repository's own git hooks do not run.
-- **Push** sends the branch's new commits to its upstream; on a first push it reads
-  **Publish branch** and sets the upstream on the repository's remote.
+  message box). The repository's own git hooks do not run. While a merge, rebase,
+  cherry-pick, or revert is in progress, Commit is refused: resolve the conflicts and
+  finish the operation in a terminal first.
+- **Push** sends the branch's new commits to the branch of the same name on its
+  remote; on a first push it reads **Publish branch** and sets the upstream on the
+  repository's remote. A branch made from another one (`git switch -c feat
+  origin/main`) is pushed as `feat`, never onto `main`, and its upstream becomes
+  `origin/feat`. If ssh would need to ask something (an unknown host key, a key
+  passphrase), the push fails instead of waiting.
 
 Houston refuses to commit or push when the repository's own git config names a program
 git would run for it (a signing program, an ssh command, a credential helper, or an
@@ -1576,7 +1623,9 @@ that exact command does (the "Always allow" choice on the prompt saves one).
 
 An existing install keeps the mode it last used. The desktop app and the terminal
 start in the same saved mode. `--approval` or `--full-auto` overrides it for one
-terminal session, and a headless run starts in plan unless told otherwise.
+terminal session (`--approval` takes `plan`, `ask`, `auto-edit`, or `full-auto`; any
+other value stops with a usage error), and a headless run starts in plan unless told
+otherwise.
 
 ### Approving a call
 
@@ -1891,6 +1940,9 @@ A subagent works under the same step budget as the main agent:
 - a custom agent's `max_turns` replaces all of this with a fixed limit
 - a review's agents keep the base budget without extending, since a review runs many
   at once
+- if its history grows too large for the model's context window, older tool output is
+  trimmed and the step retried; if it still doesn't fit (or the model fails partway),
+  it returns what it had found so far, marked as cut off, and can still be resumed
 
 ### Follow-ups and nesting
 
@@ -1940,9 +1992,11 @@ A subagent reports back into the current turn. `spawn_session` instead spins off
   worktree. It starts fresh with its prompt or, with context "fork", with a copy of
   the spawning chat so far.
 - **Never more permissive.** It inherits the current approval policy.
-- **When it finishes,** the chat that started it gets a short report (title, whether
-  it worked, the start of its answer) as a Houston note at the start of its next turn,
-  and you see a notice in the transcript.
+- **When it ends,** the chat that started it gets a short report (title, how it ended,
+  the start of its answer) as a Houston note at the start of its next turn, and you see
+  a notice in the transcript. The report says whether it finished, failed, was stopped,
+  or hit a limit (the step limit, the model's output limit, or a stall), so unfinished
+  work isn't reported as done.
 
 ### In the desktop app
 
@@ -1962,6 +2016,8 @@ Spawned sessions run here too:
   automatically
 - they're saved as ordinary conversations you can open later with `/resume` or
   `--resume <id>`
+- when one ends, a line says how (finished, failed, was stopped, or hit a limit), and
+  `/sessions` lists each one the same way
 - a one-shot headless run waits for its spawned sessions before exiting
 
 ## Proposed sessions
@@ -1991,7 +2047,8 @@ to it.
 
 - **Open it** from the titlebar (or the command palette). In the terminal,
   `/btw <question>` asks the same side chat (shared with the desktop panel), and
-  `/btw clear` starts it over.
+  `/btw clear` starts it over. Ctrl-C or Esc stops an answer you no longer want to
+  wait for.
 - **What it can do:** it sees the chat so far and can read the project, but it can't
   edit files, run commands, or reach the network.
 - **Works mid-turn.** You can use it while the main chat's turn is still running.
@@ -2093,7 +2150,12 @@ and quality.
 - **Click a finding** to see why it matters and the suggested fix.
 - **Options:** scope it to a `base` branch or specific `paths`; raise `effort` to
   `high` to verify each finding with several independent skeptics; pass `model` to run
-  the reviewers and verifiers on a cheaper sibling model.
+  the reviewers and verifiers on a cheaper sibling model; pass `context` to state
+  decisions you already settled, so the reviewers treat them as intentional.
+- **Repeat reviews.** A later review in the same run tells its reviewers what the
+  earlier ones confirmed or rejected, so they don't raise those again. After two
+  reviews, the same unchanged diff isn't reviewed a third time, and a run gets at most
+  four reviews.
 
 ### Showing images
 
@@ -2191,6 +2253,9 @@ project deny.
 ### How hooks run
 
 - **Several matches** run in order. Any block wins, and the last rewrite wins.
+- **Each hook gets 60 seconds.** One still running then is stopped and its output
+  ignored. A PreToolUse or UserPromptSubmit hook that times out still blocks, with a
+  message saying it timed out; a Stop hook that times out lets the turn end.
 - **Sandboxed:** hooks run in the same project sandbox as `run_shell`, with no
   network.
 - **Failing safe:** a hook that can't be started counts as failed, so a PreToolUse or
@@ -2226,6 +2291,10 @@ logging, metrics, or notifications:
 - **Observe only.** A plugin can't block or change a call; use a PreToolUse shell hook
   for that.
 - **Can't break a run.** A plugin that throws or runs slowly is caught and ignored.
+  Each hook call gets 1 second: synchronous code still running then (a busy loop, a
+  runaway regex) is stopped, so a stuck plugin can't freeze the app or the terminal.
+- **Failures are reported, not printed.** A plugin error is written to `houston.log`
+  and shown once as a notice in the chat.
 
 ## MCP servers
 
@@ -2268,7 +2337,9 @@ or **OAuth** for servers that need a sign-in:
   registers itself as an OAuth client automatically, and opens the browser to
   authorize.
 - **Tokens** are stored encrypted, sent as the bearer on every connection, and
-  refreshed automatically when they expire.
+  refreshed automatically when they expire. If the server rejects a token in the
+  middle of a session, Houston refreshes it and reconnects, and the agent retries the
+  call; when the refresh fails too, the server shows as needing sign-in.
 - **Sign out** (or `/mcp logout <n>`) forgets them.
 - An explicit Authorization header, when set, takes precedence over OAuth tokens.
 
@@ -2279,6 +2350,9 @@ or **OAuth** for servers that need a sign-in:
 - The spawned process gets a base environment with credentials stripped, so a token
   the server needs must be listed explicitly.
 - Environment values are treated as secrets and stored encrypted, like header values.
+- On Windows, a command such as `npx` that is installed as a `.cmd` script runs
+  through `cmd.exe`. Its arguments can't contain `"`, `%`, `!`, or a line break there;
+  a server whose arguments need one fails to start with an error saying so.
 
 ### Resources and prompts
 
@@ -2298,6 +2372,11 @@ Houston also:
   works; the names tell you what you just handed the agent.
 - `/mcp` in the terminal and the Settings panel show each server's live status:
   connected with a tool count, needs sign-in, or the connection error.
+- When a server is down at the start of a turn (it failed to start, timed out, or needs
+  sign-in), the chat shows a notice naming it, once per chat until its status changes.
+  The turn goes on without that server's tools.
+- Stop works during a slow MCP call: the call ends at once and the server is told the
+  request was cancelled.
 
 ### Server questions (elicitation)
 
@@ -2730,6 +2809,11 @@ window:
   to the model is compacted.
 - **Settings:** set a fixed token threshold, or turn compaction off, in Settings,
   *Agent Behavior*, *Context window*.
+- **`/compact` on demand.** It shows progress (including when it retries a slow or
+  overloaded model) and can be cancelled: **Cancel** in the desktop app, **Esc** or
+  **Ctrl-C** in the terminal. It gives up after 3 minutes. A cancelled or failed
+  compaction changes nothing, and it never overwrites the chat if a turn started or a
+  new message arrived while it was summarizing; run it again instead.
 
 ### Tools loaded on demand
 

@@ -586,6 +586,33 @@ describe('write/read/edit', () => {
     await run('edit_file', { path: 'x.txt', old_string: 'a', new_string: 'b', replace_all: true })
     expect(fileText('x.txt')).toBe('b b b')
   })
+
+  const numbered = (n: number, tag: string): string =>
+    Array.from({ length: n }, (_, i) => `const ${tag}${i} = ${i}`).join('\n') + '\n'
+
+  it('notes when write_file replaces most of a large existing file', async () => {
+    writeFileSync(join(workspace, 'big.ts'), numbered(120, 'old'))
+    // Keep 20 of the 120 lines, replace the rest.
+    const next = numbered(20, 'old') + numbered(100, 'fresh')
+    const out = await run('write_file', { path: 'big.ts', content: next })
+    expect(fileText('big.ts')).toBe(next) // still written, never refused
+    expect(out).toContain('replaced 100 of 120 lines')
+    expect(out).toContain('edit_file keeps the rest intact')
+  })
+
+  it('adds no note when write_file keeps most of a large file', async () => {
+    writeFileSync(join(workspace, 'big.ts'), numbered(120, 'old'))
+    const out = await run('write_file', { path: 'big.ts', content: numbered(120, 'old') + 'export {}\n' })
+    expect(out).not.toContain('edit_file keeps the rest intact')
+  })
+
+  it('adds no note when write_file creates a new file or replaces a small one', async () => {
+    const created = await run('write_file', { path: 'new.ts', content: numbered(200, 'n') })
+    expect(created).not.toContain('edit_file keeps the rest intact')
+    writeFileSync(join(workspace, 'small.ts'), numbered(30, 'old'))
+    const small = await run('write_file', { path: 'small.ts', content: numbered(30, 'fresh') })
+    expect(small).not.toContain('edit_file keeps the rest intact')
+  })
 })
 
 describe('read_file on binary', () => {

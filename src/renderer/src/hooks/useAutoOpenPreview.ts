@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { PreviewServer } from '@shared/preview'
+import { PREVIEW_SERVERS_UNSEEDED } from './usePreviewServers'
 
 /**
  * Which chat, if any, should have its Preview opened now: the open chat, when one of
@@ -36,6 +37,8 @@ export function useAutoOpenPreview(
   const seen = useRef<Set<string> | null>(null)
   const opened = useRef(new Set<string>())
   useEffect(() => {
+    // Main hasn't answered yet: an empty list here says nothing about what is running.
+    if (servers === PREVIEW_SERVERS_UNSEEDED) return
     if (seen.current === null) {
       seen.current = new Set(servers.filter((s) => s.running && s.url).map((s) => s.id))
       return

@@ -61,6 +61,7 @@ export interface RevertDeps {
 
 const fail = (error: string): ChangeRevertResult => ({ ok: false, error })
 const STALE = 'This file changed since the list was loaded. Refresh and try again.'
+const NOT_UTF8 = 'This file is not UTF-8 text, so its changes can only be reverted as a whole file.'
 
 /** Revert a whole file or one hunk, in the scope the view showed it. */
 export async function revertChange(req: ChangeRevertRequest, deps: RevertDeps): Promise<ChangeRevertResult> {
@@ -120,7 +121,12 @@ async function revertInTree(req: ChangeRevertRequest, deps: RevertDeps): Promise
     if (!hunk || !canRevertHunks(file)) return fail('That change can only be reverted as a whole file.')
     const st = await fs.lstat(abs)
     if (!st.isFile()) return fail(NOT_SHOWN)
-    const next = revertHunkText(await fs.readFile(abs, 'utf8'), hunk)
+    // Decoding is lossy: a byte that isn't UTF-8 (a Latin-1 accent, say) would come
+    // back as U+FFFD and be written back as one, all through the file.
+    const buf = await fs.readFile(abs)
+    const text = buf.toString('utf8')
+    if (!Buffer.from(text, 'utf8').equals(buf)) return fail(NOT_UTF8)
+    const next = revertHunkText(text, hunk)
     if (next === null) return fail(STALE)
     await writeFileAtomic(abs, next, st.mode & 0o777)
     return { ok: true }

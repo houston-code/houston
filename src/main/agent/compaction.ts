@@ -757,3 +757,69 @@ export function evictStaleToolResults(
   })
   return changed ? out : window
 }
+
+/** The compact stub that replaces a large tool-call argument (see {@link elideStaleToolArguments}). */
+export function argumentStub(toolName: string, key: string, bytes: number): string {
+  const what = key.trim() ? ` ${key.trim()}` : ' argument'
+  return `[earlier ${toolName}${what}, ${bytes} bytes elided]`
+}
+
+/** `value` with every string of at least `minBytes` bytes (nested ones too) replaced by a stub. */
+function elideValue(value: unknown, tool: string, key: string, minBytes: number): unknown {
+  if (typeof value === 'string') {
+    if (value.startsWith('[earlier ')) return value
+    const bytes = byteLength(value)
+    return bytes >= minBytes ? argumentStub(tool, key, bytes) : value
+  }
+  if (Array.isArray(value)) {
+    let changed = false
+    const out = value.map((v) => {
+      const e = elideValue(v, tool, key, minBytes)
+      if (e !== v) changed = true
+      return e
+    })
+    return changed ? out : value
+  }
+  if (value && typeof value === 'object') {
+    let changed = false
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value)) {
+      const e = elideValue(v, tool, k, minBytes)
+      if (e !== v) changed = true
+      out[k] = e
+    }
+    return changed ? out : value
+  }
+  return value
+}
+
+/**
+ * The tool-call counterpart of {@link evictStaleToolResults}: replace large string
+ * arguments (a write_file's content, an edit's strings, a patch) of the assistant
+ * tool calls before `keepFrom` with a compact stub. Only the argument's value changes,
+ * so the call keeps its id, name, and shape, and stays paired with its result.
+ *
+ * PURE: returns a NEW array (or the input itself when nothing qualifies); the input is
+ * never mutated.
+ */
+export function elideStaleToolArguments(
+  window: ChatMessage[],
+  params: { keepFrom: number; minBytes?: number }
+): ChatMessage[] {
+  const minBytes = params.minBytes ?? EVICT_MIN_BYTES
+  let changed = false
+  const out = window.map((m, i) => {
+    if (i >= params.keepFrom || m.role !== 'assistant' || !m.toolCalls?.length) return m
+    let callsChanged = false
+    const toolCalls = m.toolCalls.map((call) => {
+      const args = elideValue(call.arguments, call.name, '', minBytes) as Record<string, unknown>
+      if (args === call.arguments) return call
+      callsChanged = true
+      return { ...call, arguments: args }
+    })
+    if (!callsChanged) return m
+    changed = true
+    return { ...m, toolCalls }
+  })
+  return changed ? out : window
+}

@@ -1,7 +1,7 @@
 import { safeStorage } from 'electron'
 import { secureStorageUnavailableMessage, type SecureStorageStatus } from '@shared/secureStorage'
 import { readFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
-import { writeFileAtomicSync } from './atomic-write'
+import { preserveCorruptFile, writeFileAtomicSync } from './atomic-write'
 import { join, dirname } from 'node:path'
 import type { McpOAuthTokens } from './mcp/oauth'
 import { getUserDataDir } from './userData'
@@ -71,13 +71,40 @@ function secretsPath(): string {
   return join(getUserDataDir(), 'secrets.json')
 }
 
-function load(): SecretsFile {
+/** The stamp of the last unparseable store file kept aside, so it is copied only once. */
+let preservedStamp = ''
+
+/**
+ * Read the store file. A file that doesn't parse reads as empty, and the next write
+ * replaces it, so its bytes are first kept as `secrets.json.corrupt-<timestamp>` (0600)
+ * and the loss is logged. A file that exists but can't be read at all (a permission
+ * error, Windows reporting it busy) reads as empty too, but `forWrite` throws instead:
+ * writing the empty result back would drop every stored credential.
+ */
+function load(forWrite = false): SecretsFile {
   const path = secretsPath()
   if (!existsSync(path)) return { keys: {} }
+  let text: string
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<SecretsFile>
+    text = readFileSync(path, 'utf8')
+  } catch (e) {
+    if (forWrite) throw new Error(`could not read ${path}: ${(e as Error)?.message ?? e}`, { cause: e })
+    return { keys: {} }
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<SecretsFile>
     return { keys: parsed.keys ?? {}, headers: parsed.headers ?? {} }
   } catch {
+    // The parse error is not logged: its message quotes the file's text.
+    const stamp = fileStamp()
+    if (stamp !== preservedStamp) {
+      preservedStamp = stamp
+      const kept = preserveCorruptFile(path)
+      log.warn(
+        `credentials store ${path} is not valid JSON; stored credentials ` +
+          (kept ? `could not be loaded, kept a copy at ${kept}` : 'could not be loaded or copied')
+      )
+    }
     return { keys: {} }
   }
 }
@@ -264,7 +291,18 @@ export function refreshSecretsFromDisk(): Promise<void> {
   syncing ??= (async () => {
     try {
       seenStamp = fileStamp()
-      const data = load()
+      let data: SecretsFile
+      try {
+        data = load(true)
+      } catch {
+        // Unreadable for now (Windows reporting it busy): an empty read would drop every
+        // credential from memory. Keep what the vault has and look again next check.
+        seenStamp = ''
+        // Yield first: returning synchronously would run the `finally` below before
+        // `syncing` is assigned, leaving it pinned to this settled promise for good.
+        await Promise.resolve()
+        return
+      }
       const writesAtStart = writesQueued
       let changed = false
       const syncMap = async <T>(
@@ -341,7 +379,7 @@ function enqueueWrite(
   writeQueue = writeQueue.then(async () => {
     try {
       // Re-read so a write never clobbers entries another Houston process added.
-      const data = load()
+      const data = load(true)
       if (await apply(data)) persist(data)
       track?.onPersisted(data)
     } catch (e) {

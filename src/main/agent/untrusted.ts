@@ -27,7 +27,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import type { Provider } from '@shared/agent'
+import type { Provider, TokenUsage } from '@shared/agent'
 import { providerStreamError, withProviderRetry } from './retry'
 
 /** Score at or above which content is treated as an injection attempt and isolated. */
@@ -400,6 +400,12 @@ export async function runQuarantineExtraction(opts: {
   source: string
   query?: string
   signal?: AbortSignal
+  /**
+   * Called with each request's usage as the provider reports it (a retried attempt
+   * that got that far was billed too), so the caller can count the side request in
+   * the run's cost.
+   */
+  onUsage?: (usage: TokenUsage) => void
 }): Promise<string> {
   const abort = new AbortController()
   const onAbort = (): void => abort.abort()
@@ -429,6 +435,7 @@ export async function runQuarantineExtraction(opts: {
           signal: abort.signal
         })) {
           if (ev.type === 'text') acc += ev.text
+          else if (ev.type === 'done' && ev.usage) opts.onUsage?.(ev.usage)
           else if (ev.type === 'error') throw providerStreamError(ev)
         }
         return acc

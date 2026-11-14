@@ -134,4 +134,32 @@ describe('DiffView', () => {
     const { container: plain } = render(<DiffView diff={diffLines('a', 'b')} />)
     expect(plain.querySelector('button')).toBeNull()
   })
+
+  it('side by side, comments on an unchanged line from either half as the line its comments show under', () => {
+    const clicks: { side: string; line: number }[] = []
+    const { container } = render(
+      <DiffView
+        diff={diffLines('x\na\n', 'a\n')}
+        path="f.ts"
+        layout="split"
+        onLineClick={(t) => clicks.push(t)}
+        renderBelow={(key) => (key === 'new:1' ? <p>note under a</p> : null)}
+      />
+    )
+    const ctx = [...container.querySelectorAll('.diff__line--ctx')] as HTMLElement[]
+    expect(ctx).toHaveLength(2)
+    ctx[0].click()
+    ctx[1].click()
+    expect(clicks).toEqual([
+      { side: 'new', line: 1, text: 'a' },
+      { side: 'new', line: 1, text: 'a' }
+    ])
+    // One note under the row, and one keyboard button for the line, not a second "removed line" one.
+    expect(screen.getAllByText('note under a')).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: /Comment on .*line 1 of f.ts/ }).map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Comment on removed line 1 of f.ts',
+      'Comment on line 1 of f.ts'
+    ])
+  })
 })
+

@@ -24,6 +24,8 @@ import {
 } from './agent/loop'
 import { killAllShells } from './agent/shells'
 import { lspManager } from './agent/lsp/manager'
+import { flushRuleUsage } from './ruleUsage'
+import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type SignalProcess } from './signalCleanup'
 import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
@@ -34,7 +36,7 @@ import { createSpawnBackend } from './spawnSession'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { createWorktree, removeWorktree } from './agent/worktree'
 import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
-import { askSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
+import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
@@ -87,7 +89,13 @@ import { currentInstallMethod, upgradeHint } from './install-method'
 /** The interactive update check runs alongside the session, so it can wait longer than -p's. */
 const INTERACTIVE_UPDATE_TIMEOUT_MS = 10_000
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
-import { runHeadless, type HeadlessOptions } from './headless'
+import {
+  HEADLESS_SIGNAL_EXIT,
+  HEADLESS_SIGNALS,
+  runHeadless,
+  type HeadlessOptions,
+  type HeadlessSignal
+} from './headless'
 import { serveAcp } from './acp'
 import { createTerminalIo, resolveColor } from './tui-io'
 import {
@@ -99,6 +107,7 @@ import {
   type CommandSpec
 } from './tui-complete'
 import { mergeCommands } from '@shared/commands'
+import { runOutcome, runOutcomePhrase } from '@shared/runEnd'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
 import { highlightToHtml } from './syntax'
 import {
@@ -139,8 +148,52 @@ function withUnread(convs: { id: string; title: string; updatedAt: number }[]): 
  *
  * Both entries return the process exit code rather than exiting, since the two
  * hosts exit differently (`app.exit` vs `process.exit`), and both tear down the
- * agent's background shells and MCP connections before returning.
+ * agent's background shells, MCP connections, and language servers before returning
+ * (or, on a signal, before exiting: see {@link guardTerminalExit}).
  */
+
+/** What a terminal host hands its entry, beyond the shared wiring. */
+export interface TerminalHost {
+  version?: string
+  /**
+   * Anything the host must write before the process ends (the desktop app's pending
+   * credential writes). Run only on the signal path, which never returns to the host's
+   * own exit step; a normal exit leaves it to the host.
+   */
+  flush?: () => Promise<unknown>
+}
+
+/**
+ * Tear down what a terminal client started, once, on a normal exit or a signal
+ * (SIGHUP when the terminal closes, SIGTERM from `kill`, `timeout`, or an editor
+ * stopping `--acp`, SIGINT for the clients that don't read Ctrl-C themselves). Each
+ * entry's `finally` awaits `run()` and then disposes the listeners; a signal runs the
+ * same cleanup and exits with `128 + n`. Background shells lead their own process
+ * groups, so without this they never see the hangup and keep their ports.
+ */
+export function guardTerminalExit(
+  signals: CleanupSignal[],
+  host: Pick<TerminalHost, 'flush'> = {},
+  proc?: SignalProcess
+): SignalCleanup {
+  return installSignalCleanup(
+    async () => {
+      killAllShells()
+      disconnectAllMcp()
+      await lspManager.stopAll()
+    },
+    {
+      signals,
+      // What the host's own exit step does after the entry returns, which a signal skips.
+      beforeSignalExit: async () => {
+        flushRuleUsage()
+        await host.flush?.()
+      },
+      ...(proc ? { proc } : {}),
+      onSignal: (sig) => log.info(`received ${sig}; stopping background shells and servers before exiting`)
+    }
+  )
+}
 
 /**
  * True when stdin carries data piped or redirected in (a pipe, a socket, or a
@@ -316,8 +369,12 @@ export function wireTerminalSessionBackends(opts: {
         })
         .finally(() => {
           liveSpawnedRuns.delete(conversationId)
-          const title = getConversation(conversationId)?.title ?? conversationId
-          opts.notify?.(`background session "${title}" finished. Resume it to see the result (id ${conversationId})`)
+          const conv = getConversation(conversationId)
+          const title = conv?.title ?? conversationId
+          // How it ended, from the record its run left (a stall, a limit, a stop, an
+          // error): "finished" for every one of them hid that the work was not done.
+          const how = conv ? runOutcomePhrase(runOutcome(conv.messages, conv.lastError)) : 'ended'
+          opts.notify?.(`background session "${title}" ${how}. Resume it to see the result (id ${conversationId})`)
         })
       pending.add(run)
       void run.finally(() => pending.delete(run))
@@ -348,11 +405,14 @@ export function wireTerminalSessionBackends(opts: {
     backgroundSessions: () =>
       spawned.map((s) => {
         const conv = getConversation(s.id)
+        const running = liveSpawnedRuns.has(s.id)
+        const end = !running && conv ? runOutcome(conv.messages, conv.lastError) : undefined
         return {
           id: s.id,
           title: conv?.title ?? '(untitled)',
-          running: liveSpawnedRuns.has(s.id),
+          running,
           startedAt: s.startedAt,
+          ...(end ? { outcome: end.outcome, ...(end.limit ? { limit: end.limit } : {}) } : {}),
           // The worktree is the point of a fan-out: it says which branch this
           // session is actually working on.
           ...(conv?.worktree?.branch ? { branch: conv.worktree.branch } : {})
@@ -411,6 +471,22 @@ function runUserShell(
 const HOST_PROBE_MS = 2500
 
 /** Reject with a timeout when `p` takes longer than `ms`; a late result is dropped. */
+/**
+ * The terminal's side chat (`/btw`): ask, start over, and stop an answer in flight,
+ * which Ctrl-C or Esc does while one is pending (the answer is stored as stopped).
+ */
+export function terminalSideChat(): {
+  ask: (input: Parameters<typeof askSideChat>[0]) => ReturnType<typeof askSideChat>
+  clear: (conversationId: string) => void
+  cancel: (conversationId: string) => void
+} {
+  return {
+    ask: (input) => askSideChat(input, hostSideChatDeps()),
+    clear: (conversationId) => clearSideChat(conversationId, { saveSideChat }),
+    cancel: (conversationId) => cancelSideChat(conversationId)
+  }
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   p.catch(() => {}) // a late rejection after the timeout won the race is not an error
   return new Promise<T>((resolve, reject) => {
@@ -453,7 +529,7 @@ function probeDoctor(
  * the desktop app gets it from Electron), since this module is shared by both and
  * neither can read the other's source of truth.
  */
-export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = {}): Promise<number> {
+export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Promise<number> {
   // Interactive mode needs a real terminal for the composer and inline
   // approval prompts. In a pipe/CI there's no TTY to read from — point the
   // user at headless (`-p`) rather than hanging on a dead stdin.
@@ -546,6 +622,9 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
     startScheduler: true
   })
 
+  // Ctrl-C is the TUI's own key (clear the composer, stop a turn), read from the
+  // raw terminal, so only a closed terminal or a kill ends it from outside.
+  const exitGuard = guardTerminalExit(['SIGHUP', 'SIGTERM'], host)
   let code = 1
   try {
     code = await runTui(tui, {
@@ -619,10 +698,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
           decideProposal({ conversationId, callId, status }, hostProposalDeps())
         }
       },
-      sideChat: {
-        ask: (input) => askSideChat(input, hostSideChatDeps()),
-        clear: (conversationId) => clearSideChat(conversationId, { saveSideChat })
-      },
+      sideChat: terminalSideChat(),
       takeLegacyRulesNotice: () => takeLegacyRulesTerminalNotice(() => legacyRulesNoticeApplies()),
       checkUpdate: async () => {
         // The session never waits on this, so it can afford a slow network.
@@ -676,7 +752,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       // Custom slash commands from the workspace's .houston/commands (for /<name>).
       commands: () => loadCommands(tui.cwd),
       // On-demand context compaction for the /compact command.
-      compact: (id, providerId, model) => compactConversationNow(id, providerId, model),
+      compact: (id, providerId, model, opts) => compactConversationNow(id, providerId, model, opts),
       // Settings editing for /hooks and /mcp (writes the shared settings.json, 0600).
       updateSettings: (patch) => {
         updateSettings(patch)
@@ -765,15 +841,43 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
   } finally {
-    killAllShells()
-    disconnectAllMcp()
-    await lspManager.stopAll()
+    await exitGuard.run()
+    exitGuard.dispose()
   }
   return code
 }
 
+/**
+ * Hand the first SIGINT / SIGTERM / SIGHUP to `onFirst` so the client can stop its
+ * runs cleanly (Node's default would kill the process and skip every cleanup, while
+ * the agent's commands, each in its own process group, kept running). A second
+ * signal stops the commands and exits at once. Returns the unsubscribe.
+ */
+export function watchTerminationSignals(
+  onFirst: (signal: HeadlessSignal) => void,
+  proc: Pick<NodeJS.Process, 'on' | 'off' | 'exit'> = process
+): () => void {
+  let seen = false
+  const handlers = HEADLESS_SIGNALS.map((signal) => {
+    const handler = (): void => {
+      if (seen) {
+        killAllShells()
+        proc.exit(HEADLESS_SIGNAL_EXIT[signal])
+        return
+      }
+      seen = true
+      onFirst(signal)
+    }
+    proc.on(signal, handler)
+    return [signal, handler] as const
+  })
+  return () => {
+    for (const [signal, handler] of handlers) proc.off(signal, handler)
+  }
+}
+
 /** Run the one-shot headless client to completion. Returns the exit code. */
-export async function runHeadlessEntry(headless: HeadlessOptions, opts: { version?: string } = {}): Promise<number> {
+export async function runHeadlessEntry(headless: HeadlessOptions, opts: TerminalHost = {}): Promise<number> {
   // spawn_session works headless too: children run concurrently in this process
   // and are awaited below so the one-shot exit doesn't kill them mid-run. The
   // scheduler backend is wired without starting timers — a headless run can
@@ -799,6 +903,7 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
       })
   }
   let code = 1
+  let interrupted = false
   try {
     code = await runHeadless(headless, {
       getSettings,
@@ -807,6 +912,12 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
       resolveQuestion,
       resolvePlan,
       resolveElicitation,
+      cancelRun,
+      onSignal: (handler) =>
+        watchTerminationSignals((signal) => {
+          interrupted = true
+          handler(signal)
+        }),
       out: (s) => process.stdout.write(s),
       err: (s) => process.stderr.write(s),
       readStdin: readAllStdin,
@@ -842,8 +953,9 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
       }
     })
     // Don't let the one-shot exit tear down sessions the run spawned; their
-    // conversations persist, so a later --resume can pick each one up.
-    const outstanding = sessions.pendingBackgroundSessions()
+    // conversations persist, so a later --resume can pick each one up. An
+    // interrupted run doesn't wait on them: the signal asked Houston to stop.
+    const outstanding = interrupted ? 0 : sessions.pendingBackgroundSessions()
     if (outstanding > 0) {
       process.stderr.write(
         `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish…\n`
@@ -885,60 +997,74 @@ export function reserveStdoutForProtocol(): (frame: string) => void {
  * Run Houston as an Agent Client Protocol server on stdio (`--acp`) until the
  * editor closes the connection. Returns the exit code.
  */
-export async function runAcpEntry(host: { version?: string } = {}): Promise<number> {
+export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
   const writeFrame = reserveStdoutForProtocol()
-  // The editor went away mid-write: there is no one left to serve.
-  process.stdout.on('error', () => process.stdin.destroy())
+  // The editor went away mid-write: there is no one left to serve, so live prompts
+  // are cancelled rather than left editing files for a reader that is gone.
+  const outputClosed = new AbortController()
+  process.stdout.on('error', () => outputClosed.abort())
+  // Ctrl-C, a kill, or a closed terminal: cancel every live prompt and stop serving.
+  const shutdown = new AbortController()
+  let signalled: HeadlessSignal | undefined
+  const stopWatching = watchTerminationSignals((signal) => {
+    signalled = signal
+    shutdown.abort()
+  })
   const sessions = wireTerminalSessionBackends({
     notify: (m) => process.stderr.write(`· ${m}\n`),
     startScheduler: false
   })
   let code = 0
   try {
-    await serveAcp(process.stdin, {
-      getSettings,
-      startRun,
-      resolveApproval,
-      resolveQuestion,
-      resolvePlan,
-      resolveElicitation,
-      cancelRun,
-      setRunPolicy,
-      write: writeFrame,
-      log: (m) => {
-        log.info(m)
-        process.stderr.write(`${m}\n`)
-      },
-      version: host.version ?? 'dev',
-      store: {
-        create: ({ workspace, providerId, model }) => createConversation({ workspace, providerId, model }),
-        get: (id) => {
-          const conv = getConversation(id)
-          return conv
-            ? {
-                id: conv.id,
-                workspace: conv.workspace,
-                messages: conv.messages,
-                title: conv.title,
-                updatedAt: conv.updatedAt,
-                providerId: conv.providerId,
-                model: conv.model,
-                ...(conv.reasoningEffort ? { reasoningEffort: conv.reasoningEffort } : {})
-              }
-            : null
+    await serveAcp(
+      process.stdin,
+      {
+        getSettings,
+        startRun,
+        resolveApproval,
+        resolveQuestion,
+        resolvePlan,
+        resolveElicitation,
+        cancelRun,
+        setRunPolicy,
+        write: writeFrame,
+        log: (m) => {
+          log.info(m)
+          process.stderr.write(`${m}\n`)
         },
-        list: () =>
-          listConversations().map((c) => ({
-            id: c.id,
-            workspace: c.workspace,
-            title: c.title,
-            updatedAt: c.updatedAt
-          })),
-        setMessages,
-        setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model })
-      }
-    })
-    const outstanding = sessions.pendingBackgroundSessions()
+        version: host.version ?? 'dev',
+        store: {
+          create: ({ workspace, providerId, model }) => createConversation({ workspace, providerId, model }),
+          get: (id) => {
+            const conv = getConversation(id)
+            return conv
+              ? {
+                  id: conv.id,
+                  workspace: conv.workspace,
+                  messages: conv.messages,
+                  title: conv.title,
+                  updatedAt: conv.updatedAt,
+                  providerId: conv.providerId,
+                  model: conv.model,
+                  ...(conv.reasoningEffort ? { reasoningEffort: conv.reasoningEffort } : {})
+                }
+              : null
+          },
+          list: () =>
+            listConversations().map((c) => ({
+              id: c.id,
+              workspace: c.workspace,
+              title: c.title,
+              updatedAt: c.updatedAt
+            })),
+          setMessages,
+          setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model })
+        }
+      },
+      { shutdown: shutdown.signal, outputClosed: outputClosed.signal }
+    )
+    // Stopped by a signal or a broken pipe: nothing is left to wait for them.
+    const outstanding = signalled || outputClosed.signal.aborted ? 0 : sessions.pendingBackgroundSessions()
     if (outstanding > 0) {
       process.stderr.write(
         `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish…\n`
@@ -949,8 +1075,10 @@ export async function runAcpEntry(host: { version?: string } = {}): Promise<numb
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
     code = 1
   } finally {
+    stopWatching()
     killAllShells()
     disconnectAllMcp()
+    await lspManager.stopAll()
   }
-  return code
+  return signalled ? HEADLESS_SIGNAL_EXIT[signalled] : code
 }

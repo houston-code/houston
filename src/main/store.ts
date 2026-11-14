@@ -1,7 +1,8 @@
 import { readFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, isAbsolute } from 'node:path'
-import { writeFileAtomicSync } from './atomic-write'
+import { preserveCorruptFile, writeFileAtomicSync } from './atomic-write'
+import { log } from './logger'
 import { getUserDataDir } from './userData'
 import type {
   AppSettings,
@@ -326,11 +327,30 @@ function loadFromDisk(): { settings: AppSettings; upgraded: boolean; unreadable?
   // Only a missing file is a fresh install. An unreadable one belongs to an existing
   // install, which gets the plain defaults rather than the fresh-install mode.
   if (!existsSync(path)) return { settings: freshInstallSettings(), upgraded: false }
+  let text: string
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<AppSettings>
+    text = readFileSync(path, 'utf8')
+  } catch (e) {
+    const kept = preserveCorruptFile(path)
+    log.warn(
+      `settings: could not read ${path} (${(e as Error)?.message ?? e}); ` +
+        (kept ? `moved it to ${kept}` : 'could not move it aside')
+    )
+    return { settings: defaultSettings(), upgraded: false, unreadable: true }
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<AppSettings>
     const fromVersion = typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : 0
     return { settings: migrate(parsed), upgraded: fromVersion < SETTINGS_SCHEMA_VERSION }
   } catch {
+    // A hand edit with a stray comma, or a truncated file: the next save replaces it
+    // with defaults (or this process's copy), so keep the user's bytes first. The parse
+    // error is not logged: its message quotes the file's text.
+    const kept = preserveCorruptFile(path)
+    log.warn(
+      `settings: ${path} could not be loaded, using defaults; ` +
+        (kept ? `kept a copy at ${kept}` : 'could not keep a copy')
+    )
     return { settings: defaultSettings(), upgraded: false, unreadable: true }
   }
 }

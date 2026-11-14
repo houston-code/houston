@@ -1,16 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentEvent, AgentRunRequest, ChatMessage } from '@shared/agent'
-import type { TurnErrorCause } from '@shared/turnError'
 import { combineQueued, type QueuedInputMeta } from '@shared/queue'
 import { startRun } from './loop'
 import { maybeGenerateTitle } from './title'
 import { maybeSuggestNext } from './suggest'
 import { listQueue, removeFromQueue, settleSteers, takeQueue } from './queue'
-import {
-  getConversation,
-  setConversationError,
-  setMessages
-} from '../conversations'
+import { getConversation, setMessages } from '../conversations'
 
 /** How the run orchestrator talks back to the renderer (provided by the IPC layer). */
 export interface DrainIO {
@@ -50,14 +45,9 @@ export async function runAndDrain(
   owner?: number
 ): Promise<void> {
   let terminal: 'natural' | 'aborted' | 'error' = 'natural'
-  let errorMessage = ''
-  let errorCause: TurnErrorCause | undefined
   const send = (e: AgentEvent): void => {
-    if (e.type === 'error') {
-      terminal = 'error'
-      errorMessage = e.message
-      errorCause = e.cause
-    } else if (e.type === 'done') terminal = e.stopReason === 'aborted' ? 'aborted' : 'natural'
+    if (e.type === 'error') terminal = 'error'
+    else if (e.type === 'done') terminal = e.stopReason === 'aborted' ? 'aborted' : 'natural'
     io.emit(conversationId, e)
     // A steer has landed: the run is about to persist it into the log, so its queue
     // entry has done its job. Dropped on a microtask, after that persist: if the app
@@ -67,10 +57,8 @@ export async function runAndDrain(
       queueMicrotask(() => io.emitQueueChanged(conversationId, removeFromQueue(conversationId, id)))
     }
   }
-  // A new run supersedes any prior failure: clear the persisted "last turn failed"
-  // marker up front, so a reload mid-run doesn't resurrect a stale banner. It's
-  // re-set below only if this run itself ends in an error.
-  setConversationError(conversationId, null)
+  // The stored "last turn failed" marker (the Retry banner's record) is cleared and
+  // set by the run itself (startRun), so every client's runs keep it, not only these.
   // Title the chat in parallel with its first turn rather than after it: the user
   // message is already persisted, which is all a title needs, and a long agentic turn
   // would otherwise leave the truncated placeholder up for minutes. Fire-and-forget,
@@ -121,10 +109,6 @@ export async function runAndDrain(
       })
     }
     drainQueue(io, conversationId, owner)
-  } else if (terminal === 'error') {
-    // Persist the failure so the "last turn failed" Retry banner survives a reload.
-    // Aborts fall through untouched — a cancel isn't a failure worth re-running.
-    setConversationError(conversationId, { message: errorMessage, ...(errorCause ? { cause: errorCause } : {}) })
   }
 }
 

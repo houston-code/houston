@@ -31,6 +31,7 @@ import { throttleNotice } from '@shared/rateLimit'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
 import { invocationText } from '@shared/promptInvocation'
+import { limitNoticeText, runEndNoticeText, runEndRecords } from '@shared/runEnd'
 import { parseTodosSafe } from '@shared/todos'
 import { resolveContextWindow } from '@shared/usage'
 import { formatReceiptLines } from '@shared/evidence'
@@ -489,16 +490,35 @@ export function promptFromBlocks(blocks: unknown): { text: string; images: Image
  * the user's turns, the assistant's text and reasoning, and each tool call with its
  * result. Loop-injected notes and compaction summaries are left out (they were
  * never the user's words), and a turn Houston wrote shows as what the user did.
+ * A run that ended other than by finishing (an error, a Stop, a limit) replays as
+ * the notice saying so, as a `notice` update for an editor that presents them and
+ * on the thought stream otherwise, the same as live.
  */
-export function replayUpdates(messages: ChatMessage[], cwd: string): AcpSessionUpdate[] {
+export function replayUpdates(
+  messages: ChatMessage[],
+  cwd: string,
+  opts: { notices?: boolean } = {}
+): AcpSessionUpdate[] {
   const out: AcpSessionUpdate[] = []
   const text = (sessionUpdate: string, t: string): AcpSessionUpdate => ({
     sessionUpdate,
     content: { type: 'text', text: t }
   })
+  const notice = (message: string, severity: 'info' | 'warning' | 'error'): AcpSessionUpdate =>
+    opts.notices
+      ? { sessionUpdate: 'notice', severity, title: message }
+      : text('agent_thought_chunk', `\n${message}\n`)
   for (const m of messages) {
+    replayMessage(m)
+    for (const r of runEndRecords(m)) {
+      out.push(notice(runEndNoticeText(r), r.reason === 'error' ? 'error' : r.reason === 'limit' ? 'warning' : 'info'))
+    }
+  }
+  return out
+
+  function replayMessage(m: ChatMessage): void {
     if (m.role === 'user') {
-      if (m.content.startsWith(SYSTEM_NOTE_PREFIX) || m.content.startsWith(COMPACTION_SUMMARY_PREFIX)) continue
+      if (m.content.startsWith(SYSTEM_NOTE_PREFIX) || m.content.startsWith(COMPACTION_SUMMARY_PREFIX)) return
       const shown = m.invokedAs ? invocationText(m.invokedAs) : m.content
       if (shown) out.push(text('user_message_chunk', shown))
       for (const img of m.images ?? []) {
@@ -531,7 +551,6 @@ export function replayUpdates(messages: ChatMessage[], cwd: string): AcpSessionU
       })
     }
   }
-  return out
 }
 
 function planUpdate(args: Record<string, unknown>): AcpSessionUpdate {
@@ -590,6 +609,14 @@ export interface AcpServer {
   receive: (line: string) => void
   /** The input ended: fail requests to the client and wait for live prompts to finish. */
   close: () => Promise<void>
+  /**
+   * Stop serving now: cancel every live prompt instead of letting it finish. With
+   * `peerGone` (the client's end of the output broke) nothing more is written either.
+   * Then `close` as usual.
+   */
+  stop: (opts?: { peerGone?: boolean }) => void
+  /** Called once when a write to the client fails: there is no one left to serve. */
+  onPeerGone?: () => void
 }
 
 /**
@@ -613,8 +640,18 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   let nextRequestId = 1
   const outgoing = new Map<JsonRpcId, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 
+  let peerGone = false
   const frame = (m: JsonRpcMessage): void => {
-    deps.write(`${JSON.stringify({ jsonrpc: '2.0', ...m })}\n`)
+    if (peerGone) return
+    try {
+      deps.write(`${JSON.stringify({ jsonrpc: '2.0', ...m })}\n`)
+    } catch (e) {
+      // The client's end broke (EPIPE): a run left going would keep editing files
+      // for a reader that is gone.
+      log(`acp: write to the client failed: ${String(e)}`)
+      stop({ peerGone: true })
+      server.onPeerGone?.()
+    }
   }
   const notify = (method: string, params: unknown): void => frame({ method, params })
   const request = (method: string, params: unknown): Promise<unknown> => {
@@ -802,7 +839,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     }
     sessions.set(stored.id, session)
     touch(session)
-    for (const u of replayUpdates(stored.messages, cwd)) update(stored.id, u)
+    const notices = Boolean(clientCaps.session && typeof clientCaps.session === 'object' && clientCaps.session.notices)
+    for (const u of replayUpdates(stored.messages, cwd, { notices })) update(stored.id, u)
     return { modes: modeState(mode) }
   }
 
@@ -1269,14 +1307,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           break
         case 'limit':
           state.limit = e.reason
-          notice(
-            e.reason === 'stalled'
-              ? 'Stopped: the agent stalled without making progress.'
-              : e.reason === 'max-output'
-                ? 'Stopped: the model hit its output limit.'
-                : 'Stopped: reached the maximum number of steps for one prompt.',
-            'warning'
-          )
+          notice(limitNoticeText(e.reason), 'warning')
           break
         case 'receipt':
           notice(formatReceiptLines(e.receipt).join('\n'))
@@ -1381,6 +1412,18 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     )
   }
 
+  const stop = (opts: { peerGone?: boolean } = {}): void => {
+    if (opts.peerGone) peerGone = true
+    inputClosed = true
+    for (const p of outgoing.values()) p.reject(new Error('connection closed'))
+    outgoing.clear()
+    for (const s of sessions.values()) {
+      if (!s.runId) continue
+      s.cancelled = true
+      deps.cancelRun(s.runId)
+    }
+  }
+
   const close = async (): Promise<void> => {
     // The client can no longer answer, so every outstanding and future request to it
     // fails, and each blocking prompt resolves its safe way (deny, decline, reject).
@@ -1393,17 +1436,44 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     while (running.size) await Promise.allSettled([...running])
   }
 
-  return { receive, close }
+  const server: AcpServer = { receive, close, stop }
+  return server
 }
 
 /**
  * Serve ACP over a line stream until it ends. Every frame goes through
  * `deps.write`; the caller makes sure nothing else reaches stdout.
  */
-export async function serveAcp(input: Readable, deps: AcpDeps): Promise<void> {
+export async function serveAcp(input: Readable, deps: AcpDeps, opts: ServeAcpOptions = {}): Promise<void> {
   const server = createAcpServer(deps)
   const rl = createInterface({ input, crlfDelay: Infinity })
+  // Ending the session closes the reader explicitly: destroying the input stream
+  // emits 'close' on it but never 'end', which is all readline listens for.
+  const end = (peerGone: boolean): void => {
+    server.stop({ peerGone })
+    rl.close()
+  }
+  server.onPeerGone = () => rl.close()
+  const closed = new Promise<void>((done) => rl.once('close', done))
   rl.on('line', (line) => server.receive(line))
-  await new Promise<void>((done) => rl.once('close', done))
-  await server.close()
+  const onShutdown = (): void => end(false)
+  const onOutputClosed = (): void => end(true)
+  if (opts.shutdown?.aborted) onShutdown()
+  else opts.shutdown?.addEventListener('abort', onShutdown, { once: true })
+  if (opts.outputClosed?.aborted) onOutputClosed()
+  else opts.outputClosed?.addEventListener('abort', onOutputClosed, { once: true })
+  try {
+    await closed
+    await server.close()
+  } finally {
+    opts.shutdown?.removeEventListener('abort', onShutdown)
+    opts.outputClosed?.removeEventListener('abort', onOutputClosed)
+  }
+}
+
+export interface ServeAcpOptions {
+  /** Aborted to stop serving (a termination signal): live prompts are cancelled. */
+  shutdown?: AbortSignal
+  /** Aborted when the client's end of the output broke: cancel, and write nothing more. */
+  outputClosed?: AbortSignal
 }

@@ -196,4 +196,33 @@ describe('useInputQueue', () => {
     })
     expect(result.current.queued).toEqual([])
   })
+
+  it('hands the text back when queueing fails, instead of dropping it', async () => {
+    const { api } = installApi()
+    api.queueInput.mockRejectedValueOnce(new Error('bridge down'))
+    const onEnqueueFailed = vi.fn()
+    const { result } = renderHook(() => useInputQueue('c1', { onEnqueueFailed }))
+    const images = [{ mediaType: 'image/png', data: 'x' }] as never
+    act(() => result.current.enqueue({ text: 'keep me', images, ...ENQUEUE }))
+    await waitFor(() => expect(onEnqueueFailed).toHaveBeenCalledWith('c1', 'keep me', images))
+    expect(result.current.queued).toEqual([])
+  })
+
+  it('reports failed remove, clear, flush and list calls rather than rejecting unhandled', async () => {
+    const { api } = installApi()
+    api.listQueue.mockRejectedValueOnce(new Error('x'))
+    api.dequeueInput.mockRejectedValueOnce(new Error('x'))
+    api.clearQueue.mockRejectedValueOnce(new Error('x'))
+    api.flushQueue.mockRejectedValueOnce(new Error('x'))
+    const onError = vi.fn()
+    const { result } = renderHook(() => useInputQueue('c1', { onError }))
+    act(() => {
+      result.current.remove('q1')
+      result.current.clear()
+      result.current.flush()
+    })
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(3))
+    expect(onError.mock.calls.every(([cid]) => cid === 'c1')).toBe(true)
+    expect(result.current.queued).toEqual([])
+  })
 })

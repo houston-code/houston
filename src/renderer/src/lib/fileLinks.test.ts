@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { fileTargetFromHref, fileTargetFromPath, splitLine, toolFileTarget, workspaceRelative } from './fileLinks'
+import {
+  fileTargetFromHref,
+  fileTargetFromPath,
+  filesPanelKey,
+  splitLine,
+  toolFileTarget,
+  workspaceRelative
+} from './fileLinks'
 
 const WS = '/home/me/proj'
 
@@ -82,5 +89,17 @@ describe('tool and receipt paths', () => {
   it('ignores a line that is not a positive whole number', () => {
     expect(fileTargetFromPath('a.ts', WS, 0)).toEqual({ path: 'a.ts' })
     expect(fileTargetFromPath('a.ts', WS, 2.5)).toEqual({ path: 'a.ts' })
+  })
+})
+
+describe('filesPanelKey', () => {
+  it('changes on every reveal, even of the same file and line', () => {
+    // Opening a link, picking another file in the tree, then opening the same link
+    // again must remount the panel onto the link's file.
+    expect(filesPanelKey(WS, 'src/a.ts', 3, 1)).not.toBe(filesPanelKey(WS, 'src/a.ts', 3, 2))
+  })
+  it('changes with the target and workspace', () => {
+    expect(filesPanelKey(WS, 'src/a.ts', undefined, 1)).not.toBe(filesPanelKey(WS, 'src/b.ts', undefined, 1))
+    expect(filesPanelKey(WS, 'src/a.ts', undefined, 1)).not.toBe(filesPanelKey('/other', 'src/a.ts', undefined, 1))
   })
 })

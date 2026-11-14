@@ -130,3 +130,12 @@ export function toolFileTarget(
   const offset = name === 'read_file' && typeof args.offset === 'number' ? args.offset : undefined
   return fileTargetFromPath(args.path, workspace, offset)
 }
+
+/**
+ * The docked Files panel's React key. A reveal remounts the panel onto its file, and
+ * `seq` counts reveals, so opening the same link again (after picking another file in
+ * the tree) still remounts it rather than being an update that changes nothing.
+ */
+export function filesPanelKey(workspace: string, path: string | undefined, line: number | undefined, seq: number): string {
+  return `${workspace}:${path ?? ''}:${line ?? ''}:${seq}`
+}

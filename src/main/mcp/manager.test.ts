@@ -8,6 +8,9 @@ import { McpHttpClient, type FetchFn } from './http-client'
 import { McpSseClient, type SseConnectFn, type SseEvent } from './sse-client'
 import type { McpOAuthTokens } from './oauth'
 import type { ToolContext } from '../agent/tools'
+import type { PermissionRule } from '@shared/types'
+import { matchRule, permissionSubject } from '../agent/permissions'
+import { mcpCatalogEntries } from '../agent/lazy-mcp'
 
 // The manager resolves each server's secret headers and OAuth tokens through the
 // agent host. Back them with mutable maps so a test can rotate a stored header value
@@ -49,7 +52,8 @@ import {
   _setMcpSseClientFactory,
   disconnectAllMcp,
   getMcpStatuses,
-  getMcpToolDefs
+  getMcpToolDefs,
+  mcpUnavailableNotice
 } from './manager'
 
 /**
@@ -379,12 +383,17 @@ describe('mcp manager', () => {
 })
 
 /** An HTTP fake that 401s unless the request carries `Bearer <accepted>`. */
-function authHttpFetch(accepted: string): { fetch: FetchFn; auths: Array<string | undefined> } {
+function authHttpFetch(accepted: string): {
+  fetch: FetchFn
+  auths: Array<string | undefined>
+  accept: (token: string) => void
+} {
   const auths: Array<string | undefined> = []
   const fetch: FetchFn = async (_url, init) => {
     const headers = init.headers as Record<string, string>
     const auth = headers.authorization ?? headers.Authorization
     auths.push(auth)
+    if (init.method === 'GET') return new Response('', { status: 405 })
     if (auth !== `Bearer ${accepted}`) {
       return new Response('', { status: 401, headers: new Headers({ 'www-authenticate': 'Bearer' }) })
     }
@@ -393,7 +402,7 @@ function authHttpFetch(accepted: string): { fetch: FetchFn; auths: Array<string 
     const body = req.id === undefined ? '' : JSON.stringify({ jsonrpc: '2.0', id: req.id, result })
     return new Response(body, { status: 200, headers: new Headers({ 'content-type': 'application/json' }) })
   }
-  return { fetch, auths }
+  return { fetch, auths, accept: (token) => (accepted = token) }
 }
 
 const tok = (over: Partial<McpOAuthTokens> = {}): McpOAuthTokens => ({
@@ -528,6 +537,8 @@ describe('mcp manager: servers shared between live runs', () => {
 })
 
 describe('mcp manager OAuth', () => {
+  const noCtx = { workspace: '/tmp', allowNetwork: false } as ToolContext
+
   it('sends the stored bearer on connect', async () => {
     host.oauth.web = tok()
     const { fetch, auths } = authHttpFetch('live-token')
@@ -572,6 +583,46 @@ describe('mcp manager OAuth', () => {
     expect(oauthSeam.refreshCalls).toBe(1)
     expect(auths[0]).toBe('Bearer revoked-token')
     expect(auths.at(-1)).toBe('Bearer live-token')
+  })
+
+  it('refreshes and reconnects when a token is rejected mid-session, then the retry succeeds', async () => {
+    // No expiresAt, so nothing proactive sees the token go bad: only the 401 on the call.
+    host.oauth.web = tok({ access: 'first-token' })
+    const { fetch, auths, accept } = authHttpFetch('first-token')
+    _setMcpHttpClientFactory(() => new McpHttpClient(fetch))
+    const defs = await getMcpToolDefs([webCfg()])
+    const call = defs.find((d) => d.schema.name === mcpToolName('web', 'remote'))!
+    expect(getMcpStatuses()[0].state).toBe('connected')
+
+    // The server revokes the first token and now accepts only the refreshed one.
+    accept('second-token')
+    oauthSeam.refreshResult = tok({ access: 'second-token' })
+    const first = await call.execute({}, noCtx)
+    expect(first).toContain('401')
+    expect(first).toContain('The server has been reconnected; retry the call.')
+    expect(oauthSeam.refreshCalls).toBe(1)
+    expect(host.oauth.web.access).toBe('second-token')
+    expect(getMcpStatuses()[0].state).toBe('connected')
+
+    const retry = await call.execute({}, noCtx)
+    expect(retry).not.toContain('401')
+    expect(retry).not.toContain('connection was lost')
+    expect(auths.at(-1)).toBe('Bearer second-token')
+    expect(oauthSeam.refreshCalls).toBe(1)
+  })
+
+  it('reports needs-auth instead of connected when a mid-session 401 cannot be refreshed', async () => {
+    host.oauth.web = tok({ access: 'first-token' })
+    const { fetch, accept } = authHttpFetch('first-token')
+    _setMcpHttpClientFactory(() => new McpHttpClient(fetch))
+    const defs = await getMcpToolDefs([webCfg()])
+    const call = defs.find((d) => d.schema.name === mcpToolName('web', 'remote'))!
+    accept('never-issued')
+    // refreshResult stays null: the authorization server rejects the refresh.
+    const out = await call.execute({}, noCtx)
+    expect(out).toContain('connection was lost mid-call')
+    expect(out).not.toContain('retry the call')
+    expect(getMcpStatuses()[0].state).toBe('needs-auth')
   })
 
   it('refuses to send tokens bound to a different resource (URL repoint)', async () => {
@@ -871,5 +922,328 @@ describe('mcp manager statuses and hardening', () => {
     // The reconcile inside the failed call already brought up a replacement.
     expect(created).toHaveLength(2)
     expect(created[1].isClosed).toBe(false)
+  })
+})
+
+describe('mcp manager: a server that lists malformed tools', () => {
+  const noCtx = { workspace: '/tmp', allowNetwork: false } as ToolContext
+  const LONG = `long_${'x'.repeat(63)}` // 68 chars
+  const SAFE_NAME = /^[A-Za-z0-9_-]{1,64}$/
+
+  /** A fake stdio server listing `tools` as given, recording the name of every tools/call. */
+  function listingSpawn(tools: unknown[], called: string[]): SpawnFn {
+    return (() => {
+      const stdout = new EventEmitter()
+      const stdin = Object.assign(new EventEmitter(), {
+        write(line: string): boolean {
+          const msg = JSON.parse(line.trim()) as { id?: number; method: string; params?: { name?: string } }
+          if (msg.id === undefined) return true
+          let result: unknown = {}
+          if (msg.method === 'tools/list') result = { tools }
+          else if (msg.method === 'tools/call') {
+            called.push(String(msg.params?.name))
+            result = { content: [{ type: 'text', text: `ran ${msg.params?.name}` }] }
+          }
+          queueMicrotask(() =>
+            stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+          )
+          return true
+        }
+      })
+      return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    }) as unknown as SpawnFn
+  }
+
+  const badTools = [
+    null,
+    'not-a-tool',
+    { description: 'no name' },
+    { name: '' },
+    { name: 'files.read', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } },
+    { name: LONG },
+    { name: 'dup', description: 'first' },
+    { name: 'dup', description: 'second' },
+    { name: 'empty_schema', inputSchema: {} },
+    { name: 'object_desc', description: { text: 'not a string' } },
+    { name: 'number_desc', description: 42 },
+    { name: 'ok', description: 'A healthy tool.' }
+  ]
+
+  function useServers(called: string[]): void {
+    _setMcpClientFactory(() => new McpClient(listingSpawn(badTools, called)))
+    _setMcpHttpClientFactory(() => new McpHttpClient(okHttpFetch('echo')))
+  }
+  const servers = (): McpServerConfig[] => [
+    cfg({ id: 'bad' }),
+    cfg({ id: 'good', transport: 'http', command: '', url: 'https://x/mcp' })
+  ]
+
+  it('does not throw, keeps the healthy tools, and offers only provider-safe unique names and object schemas', async () => {
+    const called: string[] = []
+    useServers(called)
+    const defs = await getMcpToolDefs(servers())
+    // The reuse path reads the cached tool list again: it must not throw either.
+    const again = await getMcpToolDefs(servers())
+    expect(again.map((d) => d.schema.name)).toEqual(defs.map((d) => d.schema.name))
+
+    const names = defs.map((d) => d.schema.name)
+    expect(names).toContain('mcp__good__echo')
+    expect(names).toContain('mcp__bad__ok')
+    expect(names).toContain('mcp__bad__dup')
+    expect(names.filter((n) => n === 'mcp__bad__dup')).toHaveLength(1)
+    expect(new Set(names).size).toBe(names.length)
+    for (const n of names) expect(n).toMatch(SAFE_NAME)
+    // The four malformed entries are dropped and the duplicate counts once: 7 usable
+    // tools from `bad`, 1 from `good`.
+    expect(defs).toHaveLength(8)
+    for (const d of defs) {
+      const p = d.schema.parameters as { type?: unknown; properties?: unknown }
+      expect(p.type).toBe('object')
+      expect(p.properties && typeof p.properties === 'object' && !Array.isArray(p.properties)).toBe(true)
+      expect(typeof d.schema.description).toBe('string')
+    }
+    // A description that is not a string never reaches a provider as one.
+    expect(defs.find((d) => d.schema.name === 'mcp__bad__number_desc')?.schema.description).toBe('42')
+    // The lazy-loading catalog reads every description: it must not throw on them.
+    expect(() => mcpCatalogEntries(defs)).not.toThrow()
+
+    const status = getMcpStatuses().find((s) => s.id === 'bad')
+    expect(status?.state).toBe('connected')
+    expect(status?.toolNames).not.toContain(null)
+  })
+
+  it('sends the original MCP tool name when the sanitized or shortened name is called', async () => {
+    const called: string[] = []
+    useServers(called)
+    const defs = await getMcpToolDefs(servers())
+    const dotted = defs.find((d) => d.schema.name === 'mcp__bad__files_read')
+    expect(dotted).toBeDefined()
+    expect(await dotted!.execute({ path: 'a' }, noCtx)).toContain('ran files.read')
+    const long = defs.find((d) => d.summarize({}).endsWith(LONG))
+    expect(long).toBeDefined()
+    expect(long!.schema.name.length).toBeLessThanOrEqual(64)
+    await long!.execute({}, noCtx)
+    expect(called).toEqual(['files.read', LONG])
+  })
+
+  it('keeps an already-valid name unchanged when a sanitized one would take it', async () => {
+    const called: string[] = []
+    _setMcpClientFactory(
+      () => new McpClient(listingSpawn([{ name: 'files.read' }, { name: 'files_read' }, { name: 'files:read' }], called))
+    )
+    const defs = await getMcpToolDefs([cfg({ id: 'fs' })])
+    const names = defs.map((d) => d.schema.name)
+    expect(names).toHaveLength(3)
+    expect(new Set(names).size).toBe(3)
+    for (const n of names) expect(n).toMatch(SAFE_NAME)
+    await defs.find((d) => d.schema.name === 'mcp__fs__files_read')!.execute({}, noCtx)
+    expect(called).toEqual(['files_read'])
+  })
+
+  it("never lets a sanitized tool name match a rule written for another server's tool", async () => {
+    // Server `a` lists `.x`: a plain `.`→`_` would expose `mcp__a___x`, the very
+    // name server `a_`'s tool `x` has, so a rule allowing that tool would allow it.
+    const called: string[] = []
+    _setMcpClientFactory(() => new McpClient(listingSpawn([{ name: '.x' }, { name: 'a.b' }], called)))
+    const defs = await getMcpToolDefs([cfg({ id: 'a' })])
+    const rules: PermissionRule[] = [
+      { action: 'allow', tool: 'mcp__a___x', match: '*' },
+      { action: 'allow', tool: '*', match: 'mcp__a___*' }
+    ]
+    for (const d of defs) {
+      expect(d.schema.name.startsWith('mcp__a__')).toBe(true)
+      expect(d.schema.name.startsWith('mcp__a___')).toBe(false)
+      expect(matchRule(rules, d.schema.name, permissionSubject(d.schema.name, {}))).toBeNull()
+    }
+    // A rule for this server's own tools still covers them.
+    for (const d of defs) {
+      expect(
+        matchRule([{ action: 'allow', tool: '*', match: 'mcp__a__*' }], d.schema.name, permissionSubject(d.schema.name, {}))
+      ).toBe('allow')
+    }
+  })
+
+  it('replaces an absurdly large schema with a permissive object schema and says so', async () => {
+    const huge = {
+      type: 'object',
+      properties: Object.fromEntries(
+        Array.from({ length: 4000 }, (_, i) => [`field_${i}`, { type: 'string', description: 'x'.repeat(20) }])
+      )
+    }
+    _setMcpClientFactory(() => new McpClient(listingSpawn([{ name: 'big', inputSchema: huge, description: 'Big.' }], [])))
+    const defs = await getMcpToolDefs([cfg({ id: 'big' })])
+    expect(defs).toHaveLength(1)
+    expect(JSON.stringify(defs[0].schema.parameters).length).toBeLessThan(1000)
+    expect((defs[0].schema.parameters as { type?: string }).type).toBe('object')
+    expect(defs[0].schema.description).toMatch(/^Big\./)
+    expect(defs[0].schema.description).toMatch(/input schema was too large/)
+  })
+})
+
+/** How a promise settled within `ms`, or that it had not by then. */
+async function settlesWithin<T>(
+  p: Promise<T>,
+  ms: number
+): Promise<{ settled: boolean; value?: T; error?: unknown }> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<{ settled: boolean }>((resolve) => {
+    timer = setTimeout(() => resolve({ settled: false }), ms)
+  })
+  try {
+    return await Promise.race([
+      p.then(
+        (value) => ({ settled: true, value }),
+        (error: unknown) => ({ settled: true, error })
+      ),
+      late
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+describe('mcp manager: Stop', () => {
+  /**
+   * A stdio server that answers initialize after `initDelayMs`, lists one tool, and
+   * never answers a tools/call; records every message the client writes.
+   */
+  function hangingSpawn(written: Array<Record<string, unknown>>, initDelayMs = 0): SpawnFn {
+    return (() => {
+      const stdout = new EventEmitter()
+      const stdin = Object.assign(new EventEmitter(), {
+        write(line: string): boolean {
+          const msg = JSON.parse(line.trim()) as Record<string, unknown> & { id?: number; method?: string }
+          written.push(msg)
+          if (msg.id === undefined || msg.method === 'tools/call') return true
+          const result = msg.method === 'tools/list' ? { tools: [{ name: 'slow' }] } : {}
+          setTimeout(
+            () => stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`)),
+            msg.method === 'initialize' ? initDelayMs : 0
+          )
+          return true
+        }
+      })
+      return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    }) as unknown as SpawnFn
+  }
+
+  it('settles a hung tool call as soon as the run stops, and tells the server', async () => {
+    const written: Array<Record<string, unknown>> = []
+    useFactory(hangingSpawn(written))
+    const [tool] = await getMcpToolDefs([cfg()])
+    const stop = new AbortController()
+    const call = tool.execute({}, { workspace: '/tmp', allowNetwork: false, signal: stop.signal } as ToolContext)
+    await vi.waitFor(() => expect(written.some((m) => m.method === 'tools/call')).toBe(true))
+    const sent = written.find((m) => m.method === 'tools/call')!
+
+    const t0 = Date.now()
+    stop.abort()
+    const outcome = await settlesWithin(call, 1_000)
+    expect(outcome.settled).toBe(true)
+    expect(Date.now() - t0).toBeLessThan(100)
+    // A rejection, which the loop reports as the stopped call it is.
+    expect(outcome.error).toBeInstanceOf(Error)
+    expect(written.find((m) => m.method === 'notifications/cancelled')).toMatchObject({
+      params: { requestId: sent.id, reason: expect.any(String) }
+    })
+    // Not mistaken for a lost connection: nothing was reconnected.
+    expect(created).toHaveLength(1)
+    expect(created[0].isClosed).toBe(false)
+  })
+
+  it('stops waiting for a server that is slow to start when the run stops', async () => {
+    const written: Array<Record<string, unknown>> = []
+    useFactory(hangingSpawn(written, 400))
+    const stop = new AbortController()
+    const defs = getMcpToolDefs([cfg()], 'run-stop', { signal: stop.signal })
+    await new Promise((r) => setTimeout(r, 20))
+    const t0 = Date.now()
+    stop.abort()
+    const outcome = await settlesWithin(defs, 1_000)
+    expect(outcome.settled).toBe(true)
+    expect(Date.now() - t0).toBeLessThan(100)
+    expect(outcome.value).toEqual([])
+    releaseMcpRun('run-stop')
+    // The connect carries on for the next run, which finds the server ready.
+    const next = await getMcpToolDefs([cfg()])
+    expect(next.map((d) => d.schema.name)).toEqual([mcpToolName('srv', 'slow')])
+    expect(created).toHaveLength(1)
+  })
+})
+
+describe('mcp manager: notices for servers that are down', () => {
+  const server = (id: string, over: Partial<McpServerConfig> = {}): McpServerConfig =>
+    cfg({ id, name: id, command: id, ...over })
+
+  it('names a failed server once per conversation, not on every turn', async () => {
+    useFactory(failingSpawn())
+    const told: string[] = []
+    const onNotice = (m: string): number => told.push(m)
+    await getMcpToolDefs([server('broken')], 'run-1', { noticeKey: 'conv-a', onNotice })
+    expect(told).toEqual([`MCP server "broken" isn't available (failed to start: boom). Its tools are off for this turn.`])
+    await getMcpToolDefs([server('broken')], 'run-2', { noticeKey: 'conv-a', onNotice })
+    expect(told).toHaveLength(1)
+    // Another conversation hasn't been told yet.
+    await getMcpToolDefs([server('broken')], 'run-3', { noticeKey: 'conv-b', onNotice })
+    expect(told).toHaveLength(2)
+    expect(told.every((m) => !m.includes('—'))).toBe(true)
+  })
+
+  it('says nothing about healthy servers, or servers this run does not use', async () => {
+    created = []
+    const ok = okSpawn()
+    const bad = failingSpawn()
+    _setMcpClientFactory(() => {
+      const c = new McpClient(((command: string, ...rest: unknown[]) =>
+        (command === 'bad' ? (bad as (...a: unknown[]) => unknown) : (ok as (...a: unknown[]) => unknown))(
+          command,
+          ...rest
+        )) as unknown as SpawnFn)
+      created.push(c)
+      return c
+    })
+    const told: string[] = []
+    await getMcpToolDefs([server('good'), server('bad')], 'run-1', { noticeKey: 'c1', onNotice: (m) => told.push(m) })
+    expect(told).toHaveLength(1)
+    expect(told[0]).toContain('"bad"')
+    // A run in another folder that only uses the healthy server hears nothing.
+    const other: string[] = []
+    await getMcpToolDefs([server('good')], 'run-2', { noticeKey: 'c2', onNotice: (m) => other.push(m) })
+    expect(other).toEqual([])
+  })
+
+  it('tells again after the server recovered and then failed again', async () => {
+    const told: string[] = []
+    const onNotice = (m: string): number => told.push(m)
+    useFactory(failingSpawn())
+    await getMcpToolDefs([server('flaky')], undefined, { noticeKey: 'c', onNotice })
+    useFactory(okSpawn())
+    await getMcpToolDefs([server('flaky', { args: ['--fixed'] })], undefined, { noticeKey: 'c', onNotice })
+    expect(told).toHaveLength(1)
+    useFactory(failingSpawn())
+    await getMcpToolDefs([server('flaky', { args: ['--broken'] })], undefined, { noticeKey: 'c', onNotice })
+    expect(told).toHaveLength(2)
+  })
+
+  it('words a timeout and a long or unprintable error plainly', () => {
+    expect(mcpUnavailableNotice({ id: 'slow', state: 'error', error: 'MCP initialize timed out' })).toBe(
+      `MCP server "slow" isn't available (timed out starting). Its tools are off for this turn.`
+    )
+    const odd = mcpUnavailableNotice({ id: 'x', state: 'error', error: `MCP server process exited: a\u0007b ${'z'.repeat(400)}` })
+    expect(odd).toMatch(/^MCP server "x" isn't available \(process exited: a b z+…\)\. Its tools are off for this turn\.$/)
+    expect(odd.length).toBeLessThan(320)
+  })
+
+  it('says a remote server needing sign-in needs sign-in', async () => {
+    _setMcpHttpClientFactory(
+      () => new McpHttpClient(async () => new Response('', { status: 401 }))
+    )
+    const told: string[] = []
+    await getMcpToolDefs([cfg({ id: 'web', transport: 'http', command: '', url: 'https://x/mcp' })], undefined, {
+      noticeKey: 'c',
+      onNotice: (m) => told.push(m)
+    })
+    expect(told).toHaveLength(1)
+    expect(told[0]).toMatch(/^MCP server "web" needs you to sign in\. Its tools are off for this turn\./)
   })
 })

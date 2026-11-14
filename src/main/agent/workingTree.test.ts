@@ -9,7 +9,8 @@ import {
   collectWorkingTreeStats,
   ghHostsFile,
   knownGithubHosts,
-  sumNumstat
+  sumNumstat,
+  workingTreeFingerprint
 } from './workingTree'
 
 // Real git in a temp dir: the branch label and diff base depend on how git resolves
@@ -45,6 +46,45 @@ describe('collectWorkingTreeChanges (real git)', () => {
     git(repo, '-c', 'commit.gpgsign=false', 'commit', '-m', 'init')
     return repo
   }
+
+  maybe('fingerprints the working tree: stable when untouched, changed by any edit', async () => {
+    const repo = initRepo()
+    const outside = mkdtempSync(join(tmpdir(), 'wtf-'))
+    try {
+      const clean = await workingTreeFingerprint(repo)
+      expect(clean).not.toBeNull()
+      expect(await workingTreeFingerprint(repo)).toBe(clean)
+
+      // Editing a tracked file changes it.
+      writeFileSync(join(repo, 'README.md'), '# edited\n')
+      const dirty = await workingTreeFingerprint(repo)
+      expect(dirty).not.toBe(clean)
+
+      // A further edit to an already-dirty file changes it again, though the
+      // status listing stays the same.
+      writeFileSync(join(repo, 'README.md'), '# edited again, longer\n')
+      const dirtier = await workingTreeFingerprint(repo)
+      expect(dirtier).not.toBe(dirty)
+
+      // A new untracked file changes it; an ignored one doesn't.
+      writeFileSync(join(repo, '.gitignore'), 'ignored.txt\n')
+      const withIgnoreFile = await workingTreeFingerprint(repo)
+      expect(withIgnoreFile).not.toBe(dirtier)
+      writeFileSync(join(repo, 'ignored.txt'), 'x\n')
+      expect(await workingTreeFingerprint(repo)).toBe(withIgnoreFile)
+
+      // Committing everything changes it (HEAD moved, tree is clean again).
+      git(repo, 'add', '-A')
+      git(repo, '-c', 'commit.gpgsign=false', 'commit', '-m', 'more')
+      expect(await workingTreeFingerprint(repo)).not.toBe(withIgnoreFile)
+
+      // Outside a repo there is no fingerprint.
+      expect(await workingTreeFingerprint(outside)).toBeNull()
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  }, TIMEOUT)
 
   maybe('names the unborn branch of a repo with no commits', async () => {
     const repo = initUnborn('master')
@@ -325,4 +365,36 @@ describe.skipIf(!hasGit)('collectWorkingTreeStats', () => {
       removed: 0
     })
   }, GIT_TIMEOUT)
+})
+
+describe.skipIf(!hasGit)('a repository git cannot open', () => {
+  /** A linked worktree whose admin `commondir` file is gone, so git can't open it. */
+  function brokenWorktree(): string {
+    const dir = freshRepo()
+    commit(dir)
+    const wt = join(dir, 'wt')
+    git(dir, 'worktree', 'add', '-q', wt)
+    rmSync(join(dir, '.git', 'worktrees', 'wt', 'commondir'))
+    return wt
+  }
+
+  it('is reported with git\'s reason, in the full set and the badge counts', async () => {
+    const wt = brokenWorktree()
+    const changes = await collectWorkingTreeChanges(wt)
+    expect(changes.isRepo).toBe(false)
+    // git's wording varies by version ("not a git repository", "gitfile does not point to a
+    // valid repository"); either way it is git's reason, without the fatal: prefix.
+    expect(changes.unreadable).toMatch(/repositor/)
+    expect(changes.unreadable).not.toMatch(/^fatal:/)
+    const stats = await collectWorkingTreeStats(wt)
+    expect(stats).toMatchObject({ isRepo: false, unreadable: changes.unreadable })
+  })
+
+  it('is not claimed for a plain folder', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-plain-'))
+    dirs.push(dir)
+    const changes = await collectWorkingTreeChanges(dir)
+    expect(changes.isRepo).toBe(false)
+    expect(changes.unreadable).toBeUndefined()
+  })
 })

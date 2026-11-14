@@ -48,6 +48,16 @@ export interface InputQueue {
   flush: () => void
 }
 
+export interface InputQueueOptions {
+  /**
+   * The bridge call that would have queued a message failed, so nothing holds it: put
+   * the text back in the message box of `conversationId` (the chat it was typed in).
+   */
+  onEnqueueFailed?: (conversationId: string, text: string, images?: ImageAttachment[]) => void
+  /** Another queue call failed; `conversationId` is the chat it was made for. */
+  onError?: (conversationId: string, message: string) => void
+}
+
 /**
  * View of the open conversation's queued input. The queue itself lives in the
  * main process (so a follow-up still fires when its conversation's run finishes,
@@ -55,10 +65,12 @@ export interface InputQueue {
  * reflects changes — both the optimistic results of add/remove/clear and the
  * push the main process sends when an auto-flush empties the queue.
  */
-export function useInputQueue(conversationId: string | null): InputQueue {
+export function useInputQueue(conversationId: string | null, options: InputQueueOptions = {}): InputQueue {
   const [queued, setQueued] = useState<QueuedInputMeta[]>([])
   const convIdRef = useRef<string | null>(conversationId)
   convIdRef.current = conversationId
+  const optionsRef = useRef(options)
+  optionsRef.current = options
 
   // Load the queue for whichever conversation is open (and empty the bar when none).
   useEffect(() => {
@@ -67,9 +79,15 @@ export function useInputQueue(conversationId: string | null): InputQueue {
       return
     }
     let cancelled = false
-    void window.api.listQueue(conversationId).then((items) => {
-      if (!cancelled) setQueued(items)
-    })
+    window.api
+      .listQueue(conversationId)
+      .then((items) => {
+        if (!cancelled) setQueued(items)
+      })
+      // An unreadable queue shows as empty; main still flushes it when the run ends.
+      .catch(() => {
+        if (!cancelled) setQueued([])
+      })
     return () => {
       cancelled = true
     }
@@ -101,6 +119,7 @@ export function useInputQueue(conversationId: string | null): InputQueue {
       .then((items) => {
         if (convIdRef.current === cid) setQueued(items)
       })
+      .catch(() => optionsRef.current.onEnqueueFailed?.(cid, input.text, input.images))
   }, [])
 
   const steer = useCallback<InputQueue['steer']>(async (input) => {
@@ -119,17 +138,23 @@ export function useInputQueue(conversationId: string | null): InputQueue {
   const remove = useCallback((id: string) => {
     const cid = convIdRef.current
     if (!cid) return
-    void window.api.dequeueInput(cid, id).then((items) => {
-      if (convIdRef.current === cid) setQueued(items)
-    })
+    window.api
+      .dequeueInput(cid, id)
+      .then((items) => {
+        if (convIdRef.current === cid) setQueued(items)
+      })
+      .catch(() => optionsRef.current.onError?.(cid, "Couldn't remove that queued message."))
   }, [])
 
   const clear = useCallback(() => {
     const cid = convIdRef.current
     if (!cid) return
-    void window.api.clearQueue(cid).then((items) => {
-      if (convIdRef.current === cid) setQueued(items)
-    })
+    window.api
+      .clearQueue(cid)
+      .then((items) => {
+        if (convIdRef.current === cid) setQueued(items)
+      })
+      .catch(() => optionsRef.current.onError?.(cid, "Couldn't clear the queued messages."))
   }, [])
 
   // Dispatch now. Main clears the queue and pushes IPC.agentQueueChanged (which the
@@ -137,7 +162,9 @@ export function useInputQueue(conversationId: string | null): InputQueue {
   const flush = useCallback(() => {
     const cid = convIdRef.current
     if (!cid) return
-    void window.api.flushQueue(cid)
+    window.api
+      .flushQueue(cid)
+      .catch(() => optionsRef.current.onError?.(cid, "Couldn't send the queued messages."))
   }, [])
 
   return { queued, enqueue, steer, remove, clear, flush }

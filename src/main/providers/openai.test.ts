@@ -179,6 +179,33 @@ describe('openai usage reporting', () => {
 })
 
 describe('toOpenAIMessages', () => {
+  it('leaves out an assistant turn with neither text nor tool calls', () => {
+    // An empty end_turn is saved as content ''. Sent as `content: null` with no
+    // tool_calls, strict hosts reject it on every later request.
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'second' }
+    ]
+    expect(toOpenAIMessages(undefined, msgs)).toEqual([
+      { role: 'user', content: 'first' },
+      { role: 'user', content: 'second' }
+    ])
+  })
+
+  it('keeps an assistant turn that only made tool calls', () => {
+    const out = toOpenAIMessages(undefined, [
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: {} }] }
+    ])
+    expect(out).toEqual([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read_file', arguments: '{}' } }]
+      }
+    ])
+  })
+
   it('maps a plain user + tool result to text-only messages', () => {
     const msgs: ChatMessage[] = [
       { role: 'user', content: 'hi' },
@@ -588,6 +615,39 @@ describe('openai adapter: tool calls cut off at the output limit', () => {
     ])
     // A cut-off reply that carries calls used to read as `tool_use`, hiding the cut.
     expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'max_tokens' })
+  })
+
+  it('splits calls a host streams at the same index under different ids', async () => {
+    const events = await run([
+      callChunk(0, '{"path":"a.ts"}', 'call_1', 'read_file'),
+      callChunk(0, '{"path":"b.ts"}', 'call_2', 'read_file'),
+      stopChunk('tool_calls')
+    ])
+    expect(events.filter((e) => e.type === 'tool_call')).toEqual([
+      { type: 'tool_call', call: { id: 'call_1', name: 'read_file', arguments: { path: 'a.ts' } } },
+      { type: 'tool_call', call: { id: 'call_2', name: 'read_file', arguments: { path: 'b.ts' } } }
+    ])
+  })
+
+  it('still joins chunks of one call when a host repeats its id on each chunk', async () => {
+    const events = await run([
+      callChunk(0, '{"path":', 'call_1', 'read_file'),
+      callChunk(0, '"a.ts"}', 'call_1'),
+      stopChunk('tool_calls')
+    ])
+    expect(events.filter((e) => e.type === 'tool_call')).toEqual([
+      { type: 'tool_call', call: { id: 'call_1', name: 'read_file', arguments: { path: 'a.ts' } } }
+    ])
+  })
+
+  it('reports a content_filter finish and a refusal delta as a refusal', async () => {
+    const filtered = await run([{ choices: [{ delta: { content: '' } }] }, stopChunk('content_filter')])
+    expect(filtered.at(-1)).toMatchObject({ type: 'done', refusal: 'content_filter' })
+    const refused = await run([{ choices: [{ delta: { refusal: "I can't help with that." } }] }, stopChunk('stop')])
+    expect(refused).toContainEqual({ type: 'text', text: "I can't help with that." })
+    expect(refused.at(-1)).toMatchObject({ type: 'done', refusal: 'refusal' })
+    const plain = await run([{ choices: [{ delta: { content: 'hi' } }] }, stopChunk('stop')])
+    expect(plain.at(-1)).not.toHaveProperty('refusal')
   })
 
   it('marks the last call even when its JSON happens to parse', async () => {

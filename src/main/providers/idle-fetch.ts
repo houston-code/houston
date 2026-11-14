@@ -21,6 +21,15 @@
  */
 export const STREAM_IDLE_TIMEOUT_MS = 120_000
 
+/**
+ * Deadline for a model-listing request ("Fetch models", "Test key"): the response must
+ * start within it, and its body may not go quiet for longer. The SDKs' own default is ten
+ * minutes for the headers alone, and the Gemini SDK sets none at all, so on a network
+ * that drops packets the button just spun. A listing is one small JSON reply, so a host
+ * that hasn't answered in this long isn't going to.
+ */
+export const LIST_MODELS_TIMEOUT_MS = 15_000
+
 /** Error code {@link StreamIdleError} carries; the retry policy matches on it. */
 export const STREAM_IDLE_CODE = 'HOUSTON_STREAM_IDLE'
 
@@ -30,6 +39,20 @@ export class StreamIdleError extends Error {
   constructor(idleMs: number) {
     super(`Provider stream timed out: no data for ${Math.round(idleMs / 1000)}s`)
     this.name = 'StreamIdleError'
+  }
+}
+
+/**
+ * A response body ended cleanly but before the reply's terminal event (a proxy or a
+ * dropped connection closing the stream), so the reply was cut off somewhere unknown.
+ * Its message reads as a closed stream, which the retry policy treats as transient; it
+ * carries no network code, so it counts against the attempt budget rather than the
+ * outage window (a proxy that always cuts the stream must not retry for minutes).
+ */
+export class StreamClosedEarlyError extends Error {
+  constructor(cause?: unknown) {
+    super('Provider stream closed before the reply finished.', cause === undefined ? undefined : { cause })
+    this.name = 'StreamClosedEarlyError'
   }
 }
 

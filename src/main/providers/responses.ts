@@ -13,8 +13,9 @@ import type {
 import { imageDataUrl } from '@shared/images'
 import { openaiResponsesReasoning } from './reasoning'
 import { parseToolArguments } from './tool-args'
-import { idleTimeoutFetch } from './idle-fetch'
+import { idleTimeoutFetch, StreamClosedEarlyError } from './idle-fetch'
 import { responsesWebSearch, type ResponsesCreateClient } from './native-search'
+import { SDK_MAX_RETRIES } from '../agent/retry'
 
 /**
  * Adapter for OpenAI's **Responses API** (`client.responses.create`), the path
@@ -83,8 +84,11 @@ export function toResponsesInput(messages: ChatMessage[], replayReasoning = fals
       input.push({ role: 'user', content: content.length ? content : [{ type: 'input_text', text: '' }] })
     } else if (m.role === 'assistant') {
       // Reasoning leads the turn, mirroring the order the API emitted it: the
-      // reasoning item precedes the message and function calls it produced.
-      input.push(...reasoningItems(m, replayReasoning, model))
+      // reasoning item precedes the message and function calls it produced. A turn that
+      // ended on reasoning alone has no item to follow it, and a reasoning item sent
+      // without its following item is a 400 on every later request, so its reasoning
+      // is dropped with it.
+      if (m.content || m.toolCalls?.length) input.push(...reasoningItems(m, replayReasoning, model))
       if (m.content) {
         input.push({ role: 'assistant', content: [{ type: 'output_text', text: m.content }] })
       }
@@ -215,6 +219,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       (m) =>
         new m.default({
           fetch: idleTimeoutFetch(),
+          maxRetries: SDK_MAX_RETRIES,
           apiKey: apiKey || 'no-key',
           ...(baseURL ? { baseURL } : {})
         })
@@ -286,6 +291,9 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       let cacheReadTokens: number | undefined
       let cacheWriteTokens: number | undefined
       let stopReason: StopReason = 'end_turn'
+      // Whether the stream reached `response.completed` or `response.incomplete`.
+      let finished = false
+      let refusal: string | undefined
       const turnReasoning: ReasoningBlock[] = []
 
       for await (const event of stream) {
@@ -293,6 +301,11 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         switch (ev.type) {
           case 'response.output_text.delta':
             if (ev.delta) yield { type: 'text', text: ev.delta }
+            break
+          // A refusal arrives as its own content part; it is the model's answer, so show it.
+          case 'response.refusal.delta':
+            if (ev.delta) yield { type: 'text', text: ev.delta }
+            refusal = 'refusal'
             break
           case 'response.reasoning_summary_text.delta':
             if (ev.delta) yield { type: 'reasoning', text: ev.delta }
@@ -335,6 +348,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
           // end_turn with no token counts.
           case 'response.completed':
           case 'response.incomplete': {
+            finished = true
             const u = ev.response?.usage
             inputTokens = u?.input_tokens
             outputTokens = u?.output_tokens
@@ -343,6 +357,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
             cacheReadTokens = u?.input_tokens_details?.cached_tokens
             cacheWriteTokens = u?.input_tokens_details?.cache_write_tokens
             if (ev.response?.incomplete_details?.reason === 'max_output_tokens') stopReason = 'max_tokens'
+            if (ev.response?.incomplete_details?.reason === 'content_filter') refusal = 'content_filter'
             break
           }
           case 'response.failed':
@@ -364,6 +379,11 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         }
       }
 
+      // A stream that closed without its terminal event (a proxy or a dropped connection
+      // ending the body cleanly) was cut off somewhere unknown. Reporting it as a clean
+      // end_turn saved a truncated answer as final; fail it as a transient error instead,
+      // so the loop discards the partial turn and retries.
+      if (!finished) throw new StreamClosedEarlyError()
       for (const [id, { name }] of pending) calls.push({ id, name, arguments: {}, incomplete: true })
       // At the output limit, the reply's last item is what the model was still writing: if
       // that's a function call, its arguments are cut off whatever they parse to.
@@ -377,6 +397,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         type: 'done',
         // A cut-off reply keeps `max_tokens` even when it carries calls, so the loop knows.
         stopReason: stopReason === 'max_tokens' ? stopReason : calls.length ? 'tool_use' : stopReason,
+        ...(refusal ? { refusal } : {}),
         usage: {
           inputTokens,
           outputTokens,

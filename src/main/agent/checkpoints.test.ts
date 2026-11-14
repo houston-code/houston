@@ -24,7 +24,8 @@ import {
   flushCheckpoints,
   writeTargets,
   conversationForLatestRun,
-  _setCheckpointMemoryBudget
+  _setCheckpointMemoryBudget,
+  revertRunsGuarded
 } from './checkpoints'
 import { setUserDataDir, resetUserDataDir } from '../userData'
 
@@ -716,5 +717,47 @@ describe('checkpoint memory budget', () => {
     expect(readFileSync(a, 'utf8')).toBe('a'.repeat(20))
     expect(await restoreCheckpoint('run-b')).toBe(1)
     expect(readFileSync(b, 'utf8')).toBe('b'.repeat(20))
+  })
+
+  it('records the result of a run evicted mid-run, so its rewind still restores the file', async () => {
+    _setCheckpointMemoryBudget(40)
+    const a = join(ws, 'a.txt')
+    const b = join(ws, 'b.txt')
+    writeFileSync(a, 'a'.repeat(50))
+    writeFileSync(b, 'b')
+    await recordOriginal('run-a', [ws], 'a.txt')
+    await flushCheckpoints()
+    // Another run starts while run-a is still writing, and evicts it to make room.
+    await recordOriginal('run-b', [ws], 'b.txt')
+    expect(checkpointFileCount('run-a')).toBe(0)
+    writeFileSync(a, 'A'.repeat(50))
+    await recordResult('run-a', [ws], 'a.txt')
+    await flushCheckpoints()
+    expect(await revertRunsGuarded([{ runId: 'run-a', turn: 0, at: 0, files: true }])).toMatchObject({
+      restored: 1,
+      conflicts: []
+    })
+    expect(readFileSync(a, 'utf8')).toBe('a'.repeat(50))
+  })
+
+  it('never evicts a run while a record call for it is still in flight', async () => {
+    _setCheckpointMemoryBudget(40)
+    const a = join(ws, 'a.txt')
+    const b = join(ws, 'b.txt')
+    const c = join(ws, 'c.txt')
+    writeFileSync(a, 'a'.repeat(50))
+    writeFileSync(b, 'b')
+    writeFileSync(c, 'c')
+    await recordOriginal('run-a', [ws], 'a.txt')
+    await flushCheckpoints()
+    // run-a snapshots a second file while run-b's new checkpoint is being admitted:
+    // evicting run-a mid-call would drop c.txt's snapshot.
+    await Promise.all([recordOriginal('run-a', [ws], 'c.txt'), recordOriginal('run-b', [ws], 'b.txt')])
+    writeFileSync(c, 'C')
+    await recordResult('run-a', [ws], 'c.txt')
+    await flushCheckpoints()
+    const r = await revertRunsGuarded([{ runId: 'run-a', turn: 0, at: 0, files: true }])
+    expect(r).toMatchObject({ restored: 1, conflicts: [] })
+    expect(readFileSync(c, 'utf8')).toBe('c')
   })
 })

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { act, renderHook } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import type { AppSettings, ProviderConfig } from '@shared/types'
-import { settingsPatch } from './useAutosave'
+import { mergeList, settingsPatch, useAutosave } from './useAutosave'
 
 const provider: ProviderConfig = {
   id: 'anthropic',
@@ -47,3 +48,51 @@ describe('settingsPatch', () => {
     expect(settingsPatch(base, { ...base, permissionRules: rules })).toEqual({ permissionRules: rules })
   })
 })
+
+describe('mergeList', () => {
+  it("keeps the user's list as is when nothing else changed it", () => {
+    expect(mergeList(['a', 'b', 'c'], ['c', 'a'], ['a', 'b', 'c'])).toEqual(['c', 'a'])
+  })
+
+  it('keeps entries added elsewhere and drops ones removed elsewhere, alongside the user edit', () => {
+    // The user removed b and added d; meanwhile another writer added x and removed c.
+    expect(mergeList(['a', 'b', 'c'], ['a', 'c', 'd'], ['a', 'b', 'x'])).toEqual(['a', 'd', 'x'])
+    expect(mergeList(undefined, ['d'], ['x'])).toEqual(['d', 'x'])
+  })
+
+  it('matches providers without the derived key flag', () => {
+    const p = { ...provider, hasKey: false }
+    expect(mergeList([p], [{ ...p, label: 'Renamed' }], [{ ...p, hasKey: true }])).toEqual([{ ...p, label: 'Renamed' }])
+  })
+})
+
+describe('useAutosave', () => {
+  it('saves a rule edit without dropping a rule saved elsewhere meanwhile', async () => {
+    const keep = { action: 'allow' as const, tool: 'read_file', match: '*' }
+    const drop = { action: 'deny' as const, tool: 'run_shell', match: 'rm *' }
+    const added = { action: 'allow' as const, tool: 'run_shell', match: 'npm test' }
+    const opened = { ...base, permissionRules: [keep, drop] }
+    // While Settings is open, an approval prompt's "Always allow" stores another rule.
+    const getSettings = vi.fn().mockResolvedValue({ ...opened, permissionRules: [keep, drop, added] })
+    const saveSettings = vi.fn(async (s: AppSettings) => s)
+    window.api = { getSettings, saveSettings } as unknown as typeof window.api
+    const { result, rerender } = renderHook((p: { settings: AppSettings }) =>
+      useAutosave({
+        settings: p.settings,
+        setSettings: vi.fn(),
+        initial: opened,
+        containerRef: { current: null },
+        onSaved: vi.fn(),
+        onError: vi.fn(),
+        delayMs: 60_000
+      }),
+      { initialProps: { settings: opened } }
+    )
+    // The user deletes a rule from the (stale) list.
+    rerender({ settings: { ...opened, permissionRules: [keep] } })
+    await act(() => result.current.flush())
+    expect(saveSettings).toHaveBeenCalledTimes(1)
+    expect(saveSettings.mock.calls[0][0].permissionRules).toEqual([keep, added])
+  })
+})
+

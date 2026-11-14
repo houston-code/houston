@@ -42,6 +42,14 @@ export function CommitForm({
     void loadSync()
   }, [loadSync, hasChanges])
 
+  // A rejected call (the main process threw) still says what went wrong, rather than
+  // leaving an unhandled rejection and a form that looks like nothing happened.
+  const failed = (what: string, e: unknown): void => {
+    // Without Electron's "Error invoking remote method '<channel>':" wrapper.
+    const detail = (e instanceof Error ? e.message : String(e)).replace(/^Error invoking remote method '[^']*':\s*(?:\w*Error:\s*)?/, '')
+    setStatus({ text: `${what} failed: ${detail || 'unknown error'}`, error: true })
+  }
+
   const suggest = async (): Promise<void> => {
     setWorking('suggest')
     setStatus(null)
@@ -49,6 +57,8 @@ export function CommitForm({
       const r = await window.api.gitSuggestMessage(workspace, conversationId)
       if (r.ok && r.detail) setMessage(r.detail)
       else if (!r.ok) setStatus({ text: r.error, error: true })
+    } catch (e) {
+      failed('Suggesting a message', e)
     } finally {
       setWorking(null)
     }
@@ -64,6 +74,8 @@ export function CommitForm({
         onChanged()
         await loadSync()
       } else setStatus({ text: r.error, error: true })
+    } catch (e) {
+      failed('Commit', e)
     } finally {
       setWorking(null)
     }
@@ -78,6 +90,8 @@ export function CommitForm({
         onChanged()
         await loadSync()
       } else setStatus({ text: r.error, error: true })
+    } catch (e) {
+      failed('Push', e)
     } finally {
       setWorking(null)
     }

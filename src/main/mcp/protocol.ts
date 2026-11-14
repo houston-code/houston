@@ -109,7 +109,7 @@ export function handleServerMessage(msg: JsonRpcIncoming, hooks: ServerMessageHo
     const token = (msg.params as { progressToken?: unknown } | undefined)?.progressToken
     if (typeof token === 'number' || typeof token === 'string') hooks.touchProgress(token)
   }
-  // Other notifications (logging `notifications/message`, `notifications/cancelled`,
+  // Other notifications (logging `notifications/message`, a server's own `notifications/cancelled`,
   // `notifications/initialized` echoes, …) are deliberately ignored.
 }
 
@@ -152,6 +152,39 @@ export class ListRefresher {
  */
 export const MAX_REQUEST_TOTAL_MS = 15 * 60_000
 
+/**
+ * The error a request settles with when its caller's signal aborts (the user pressed
+ * Stop). The agent loop already ends a stopped run on any tool error, so this needs no
+ * special type; the message only has to say what happened.
+ */
+export function mcpCancelledError(method: string): Error {
+  return new Error(`MCP ${method} was cancelled`)
+}
+
+/** Why Houston cancelled a request, as told to the server in `notifications/cancelled`. */
+export const MCP_CANCEL_REASON = 'The user stopped the request.'
+
+/**
+ * The MCP cancellation notification for request `id` (spec: `notifications/cancelled`
+ * with the request's id and an optional reason). A server that already answered, or
+ * never saw the request, ignores it.
+ */
+export function cancelledNotification(id: number | string, reason = MCP_CANCEL_REASON): unknown {
+  return { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: id, reason } }
+}
+
+/** What a caller can attach to one pending request. */
+export interface WaitOptions {
+  /**
+   * The caller's Stop. When it aborts, the request settles at once with
+   * {@link mcpCancelledError} and `onCancel` runs (to tell the server), instead of
+   * waiting out the inactivity timeout or the absolute ceiling.
+   */
+  signal?: AbortSignal
+  /** Runs once when `signal` cancels a still-pending request. Must not throw. */
+  onCancel?: () => void
+}
+
 interface PendingEntry {
   method: string
   settle: (outcome: { value?: unknown; error?: Error }) => void
@@ -179,10 +212,22 @@ export class PendingRequests {
     id: number | string,
     method: string,
     inactivityMs: number,
-    maxTotalMs = MAX_REQUEST_TOTAL_MS
+    maxTotalMs = MAX_REQUEST_TOTAL_MS,
+    opts: WaitOptions = {}
   ): Promise<unknown> {
     return new Promise<unknown>((resolve, reject) => {
+      const { signal, onCancel } = opts
       let inactivity: ReturnType<typeof setTimeout> | undefined
+      // The run's signal outlives this request: the listener goes when it settles.
+      const onAbort = (): void => {
+        if (!this.entries.has(id)) return
+        settle({ error: mcpCancelledError(method) })
+        try {
+          onCancel?.()
+        } catch {
+          // Telling the server is best-effort.
+        }
+      }
       const deadline = setTimeout(
         () => settle({ error: new Error(`MCP ${method} exceeded the ${Math.round(maxTotalMs / 60000)} min ceiling`) }),
         maxTotalMs
@@ -192,6 +237,7 @@ export class PendingRequests {
         this.entries.delete(id)
         clearTimeout(inactivity)
         clearTimeout(deadline)
+        signal?.removeEventListener('abort', onAbort)
         if (outcome.error) reject(outcome.error)
         else resolve(outcome.value)
       }
@@ -201,6 +247,8 @@ export class PendingRequests {
       }
       restartInactivity()
       this.entries.set(id, { method, settle, restartInactivity })
+      if (signal?.aborted) settle({ error: mcpCancelledError(method) })
+      else signal?.addEventListener('abort', onAbort, { once: true })
     })
   }
 

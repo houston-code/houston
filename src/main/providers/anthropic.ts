@@ -13,8 +13,9 @@ import type {
 import { anthropicMaxTokens, anthropicThinking } from './reasoning'
 import { releaseDateFrom } from './release-date'
 import { parseToolArguments } from './tool-args'
-import { idleTimeoutFetch } from './idle-fetch'
+import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS, StreamClosedEarlyError } from './idle-fetch'
 import { anthropicWebSearch, isFirstPartyAnthropic, type AnthropicCreateClient } from './native-search'
+import { SDK_MAX_RETRIES } from '../agent/retry'
 
 /**
  * Beta header that turns on interleaved thinking for legacy budget-thinking
@@ -182,7 +183,11 @@ function mapStopReason(reason: string | null | undefined): StopReason {
   switch (reason) {
     case 'tool_use':
       return 'tool_use'
+    // A reply that filled the model's context window is cut off like an output-limit
+    // stop, so the loop continues it (and compacts if the next request no longer fits)
+    // instead of presenting a truncated answer as complete.
     case 'max_tokens':
+    case 'model_context_window_exceeded':
       return 'max_tokens'
     case 'end_turn':
     case 'stop_sequence':
@@ -399,7 +404,19 @@ export function createMessagesProvider(
         }
       }
 
-      const final = await stream.finalMessage()
+      let final: Anthropic.Message
+      try {
+        final = await stream.finalMessage()
+      } catch (err) {
+        // The SDK keeps a message only once `message_stop` arrives, so a body that ended
+        // cleanly before it (a proxy or a dropped connection closing the stream) rejects
+        // here with a plain error the retry policy reads as permanent. The reply was cut
+        // off, not refused: fail it as a transient error so the loop retries the turn.
+        if (/stream ended without producing a Message/i.test(String((err as Error | null)?.message ?? ''))) {
+          throw new StreamClosedEarlyError(err)
+        }
+        throw err
+      }
       const stopReason = mapStopReason(final.stop_reason)
       // A block the stream opened but never closed was cut off mid-call.
       for (const [index, buf] of toolBuffers) {
@@ -428,6 +445,8 @@ export function createMessagesProvider(
       yield {
         type: 'done',
         stopReason,
+        // Claude declining to continue ends with stop_reason `refusal`.
+        ...(final.stop_reason === 'refusal' ? { refusal: 'refusal' } : {}),
         usage: {
           inputTokens,
           outputTokens: final.usage?.output_tokens,
@@ -511,6 +530,7 @@ export function createAnthropicProvider(
       (m) =>
         new m.default({
           fetch: idleTimeoutFetch(),
+          maxRetries: SDK_MAX_RETRIES,
           apiKey,
           ...(baseURL ? { baseURL } : {}),
           ...withDefaultHeaders(anthropicDefaultHeaders(apiKey, baseURL, headers))
@@ -535,6 +555,9 @@ export async function listAnthropicModels(
 ): Promise<ModelOption[]> {
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
   const client = new Anthropic({
+    fetch: idleTimeoutFetch(LIST_MODELS_TIMEOUT_MS),
+    timeout: LIST_MODELS_TIMEOUT_MS,
+    maxRetries: SDK_MAX_RETRIES,
     apiKey,
     ...(baseURL ? { baseURL } : {}),
     ...withDefaultHeaders(anthropicDefaultHeaders(apiKey, baseURL, headers))

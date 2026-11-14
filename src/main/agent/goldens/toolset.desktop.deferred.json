@@ -665,7 +665,7 @@
   },
   {
     "name": "review_changes",
-    "description": "Run an adversarial, multi-agent review of the current uncommitted changes for correctness, security, and quality. It spawns an independent read-only reviewer per dimension (each in its own fresh context, so they don't inherit your blind spots), then a skeptical verifier that re-checks every candidate finding against the real code and drops false positives, and returns the confirmed findings. Use it to self-review after completing a substantial change, before telling the user you are done, then fix what it confirms and verify the fixes directly. One review plus targeted fixes is usually enough: re-run it only if you make further substantial changes, and pass paths to scope the re-review to what changed rather than re-reviewing the whole diff. Reviews uncommitted changes (vs HEAD) by default; pass base to review against another commit or branch, and paths to limit the review to specific files.",
+    "description": "Run an adversarial, multi-agent review of the current uncommitted changes for correctness, security, and quality. It spawns an independent read-only reviewer per dimension (each in its own fresh context, so they don't inherit your blind spots), then a skeptical verifier that re-checks every candidate finding against the real code and drops false positives, and returns the confirmed findings. Use it to self-review after completing a substantial change, before telling the user you are done, then fix what it confirms and verify the fixes directly. One review plus targeted fixes is usually enough: re-run it only if you make further substantial changes, and pass paths to scope the re-review to what changed rather than re-reviewing the whole diff. Each later round's reviewers are told what earlier rounds found; after two rounds an unchanged diff is not reviewed again, and a run gets at most four reviews. Reviews uncommitted changes (vs HEAD) by default; pass base to review against another commit or branch, and paths to limit the review to specific files.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -691,6 +691,10 @@
         "model": {
           "type": "string",
           "description": "Optional: run the reviewer and verifier subagents on a different model from the current provider (e.g. a cheaper sibling for a routine review). Must be one of the provider's configured model ids; omit to use the current model."
+        },
+        "context": {
+          "type": "string",
+          "description": "Optional: decisions the user already settled about this change (e.g. \"keep the old API on purpose\"), so the reviewers treat them as intentional rather than reporting them."
         }
       },
       "required": [],

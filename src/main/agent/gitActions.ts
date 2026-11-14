@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
+import { resolve as resolvePath } from 'node:path'
 import type { ChatMessage, Provider } from '@shared/agent'
 import {
   cleanCommitMessage,
@@ -67,7 +68,8 @@ export function riskyRepoConfig(output: string): string[] {
 function runGitWrite(
   args: string[],
   cwd: string,
-  timeoutMs: number
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv = GIT_ENV
 ): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   return hardenedGitArgs(cwd).then(
     (hardening) =>
@@ -75,7 +77,7 @@ function runGitWrite(
         execFile(
           'git',
           [...hardening, '--no-pager', ...args],
-          { cwd, env: GIT_ENV, timeout: timeoutMs, maxBuffer: 4_000_000, windowsHide: true },
+          { cwd, env, timeout: timeoutMs, maxBuffer: 4_000_000, windowsHide: true },
           (err, stdout, stderr) => resolve({ ok: !err, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
         )
       }),
@@ -124,13 +126,37 @@ async function guardRepoConfig(root: string): Promise<GitActionResult | null> {
   }
 }
 
+/** State files git leaves while a merge, rebase, cherry-pick, or revert is under way. */
+const IN_PROGRESS_PATHS = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply']
+
+/**
+ * Refuse a commit while the repository is mid-merge (or rebase, cherry-pick, revert).
+ * `git add --all` would stage conflicted files markers and all, past the unmerged-files
+ * check `git commit` relies on, and the commit would conclude the operation with them.
+ */
+async function guardInProgress(root: string): Promise<GitActionResult | null> {
+  const unmerged = await runGitCapture(['ls-files', '--unmerged', '-z'], root)
+  if (!unmerged.ok || unmerged.stdout.length > 0) {
+    return { ok: false, error: 'Resolve the merge conflicts first, then commit. Some files still have conflicts.' }
+  }
+  const paths = await runGitCapture(['rev-parse', ...IN_PROGRESS_PATHS.flatMap((p) => ['--git-path', p])], root)
+  const lines = paths.ok ? paths.stdout.split('\n').map((l) => l.trim()).filter(Boolean) : []
+  if (lines.length !== IN_PROGRESS_PATHS.length || lines.some((l) => existsSync(resolvePath(root, l)))) {
+    return {
+      ok: false,
+      error: 'A merge, rebase, cherry-pick, or revert is in progress. Finish or abort it in a terminal, then commit here.'
+    }
+  }
+  return null
+}
+
 /** Stage every change in the repository and commit it with `message`. */
 export async function commitAll(workspace: unknown, message: unknown, deps: GitActionDeps): Promise<GitActionResult> {
   const text = cleanCommitMessage(message)
   if (!text) return { ok: false, error: 'Write a commit message first.' }
   const root = await repoRoot(workspace, deps)
   if (typeof root !== 'string') return root
-  const blocked = await guardRepoConfig(root)
+  const blocked = (await guardRepoConfig(root)) ?? (await guardInProgress(root))
   if (blocked) return blocked
   const add = await runGitWrite(['add', '--all'], root, 60_000)
   if (!add.ok) return { ok: false, error: gitError(add.stderr, 'Could not stage the changes.') }
@@ -167,9 +193,32 @@ export async function branchSyncFor(workspace: unknown, deps: GitActionDeps): Pr
   return typeof root === 'string' ? branchSync(root) : null
 }
 
+/** A single git config value (any scope), or null when unset. */
+async function configValue(root: string, key: string): Promise<string | null> {
+  const r = await runGitCapture(['config', '--get', key], root)
+  return r.ok ? r.stdout.trim() || null : null
+}
+
 /**
- * Push the current branch: to its upstream, or for a first push to the repository's
- * remote (`origin` when there is one) as `HEAD`, setting the upstream.
+ * The environment for a push. GIT_TERMINAL_PROMPT=0 stops git's own prompts but not
+ * ssh's (an unknown host key, a key passphrase), which read the controlling terminal
+ * and would hang the push until its timeout. BatchMode makes ssh fail instead, unless
+ * the user chose their own ssh command (the env vars or their own core.sshCommand;
+ * a repository-level one is refused before this).
+ */
+export async function pushEnv(root: string): Promise<NodeJS.ProcessEnv> {
+  const env: NodeJS.ProcessEnv = GIT_ENV
+  if (env.GIT_SSH_COMMAND || env.GIT_SSH || (await configValue(root, 'core.sshCommand'))) return GIT_ENV
+  return { ...GIT_ENV, GIT_SSH_COMMAND: 'ssh -oBatchMode=yes' }
+}
+
+/**
+ * Push the current branch to the same-named branch on its remote: the branch's push
+ * remote or upstream remote, else the repository's remote (`origin` when there is
+ * one). The refspec is always explicit, so a branch tracking a differently named one
+ * (made with `git switch -c feat origin/main`) is published as `feat`, never pushed
+ * onto `main` (what a bare push does under push.default=upstream) or refused (under
+ * the default push.default=simple).
  */
 export async function pushBranch(workspace: unknown, deps: GitActionDeps): Promise<GitActionResult> {
   const root = await repoRoot(workspace, deps)
@@ -178,11 +227,28 @@ export async function pushBranch(workspace: unknown, deps: GitActionDeps): Promi
   if (blocked) return blocked
   const sync = await branchSync(root)
   if (!sync.branch) return { ok: false, error: 'Check out a branch before pushing.' }
-  if (!sync.upstream && !sync.remote) return { ok: false, error: 'This repository has no remote to push to.' }
-  const args = sync.upstream ? ['push', '--quiet'] : ['push', '--quiet', '--set-upstream', sync.remote!, 'HEAD']
-  const r = await runGitWrite(args, root, 120_000)
+  const branch = sync.branch
+  const remotes = await runGitCapture(['remote'], root)
+  const names = remotes.ok ? remotes.stdout.split('\n').map((l) => l.trim()).filter(Boolean) : []
+  // Only a configured remote's name, so a planted value can't pass as a push option.
+  const known = (v: string | null): string | null => (v && names.includes(v) && !v.startsWith('-') ? v : null)
+  const upstreamRemote = known(await configValue(root, `branch.${branch}.remote`))
+  const remote =
+    known(await configValue(root, `branch.${branch}.pushRemote`)) ??
+    known(await configValue(root, 'remote.pushDefault')) ??
+    upstreamRemote ??
+    (sync.remote && !sync.remote.startsWith('-') ? sync.remote : null)
+  if (!remote) return { ok: false, error: 'This repository has no remote to push to.' }
+  const target = `refs/heads/${branch}`
+  // Set the upstream when there is none, or when it is another branch on the remote
+  // pushed to; a separate push remote (a fork) leaves the upstream alone.
+  const setUpstream =
+    !upstreamRemote ||
+    (upstreamRemote === remote && (await configValue(root, `branch.${branch}.merge`)) !== target)
+  const args = ['push', '--quiet', ...(setUpstream ? ['--set-upstream'] : []), remote, `HEAD:${target}`]
+  const r = await runGitWrite(args, root, 120_000, await pushEnv(root))
   if (!r.ok) return { ok: false, error: gitError(r.stderr, 'The push failed.') }
-  return { ok: true, detail: sync.upstream ?? `${sync.remote}/${sync.branch}` }
+  return { ok: true, detail: `${remote}/${branch}` }
 }
 
 // ---- Suggest a commit message (a side request, like a chat title) ----
