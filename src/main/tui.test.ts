@@ -96,6 +96,7 @@ import {
   renderSessionRow,
   sessionFolder,
   sessionPickerHint,
+  screenReaderResumeNote,
   subagentGlyph,
   shortCwd,
   homeRelative,
@@ -4152,6 +4153,22 @@ describe('runTui — /login & keyless start', () => {
     })
   })
 
+  it('screen-reader mode is in force before first-run setup says or asks anything', async () => {
+    const { d } = wizardDeps([], { selected: null, providers: twoProviders })
+    const t = fakeIo(['', null])
+    const order: string[] = []
+    t.io.setAccessibility = (a) => order.push(`a11y:${a.screenReader}`)
+    const read = t.io.readLine
+    t.io.readLine = (p, o) => {
+      order.push('read')
+      return read(p, o)
+    }
+    d.io = t.io
+    await runTui({ ...opts, screenReader: true }, d)
+    expect(order[0]).toBe('a11y:true')
+    expect(t.out.length).toBeGreaterThan(0)
+  })
+
   it('skipping setup lands in a gated REPL, not the shell', async () => {
     const { d, rec } = wizardDeps([], { selected: null, providers: twoProviders })
     // Enter to skip, then try a prompt (blocked), then EOF.
@@ -4868,6 +4885,48 @@ describe('attention signals', () => {
     await runTui(opts, d)
     expect(t.signals.some((s) => s.alert)).toBe(false)
     expect(t.signals.some((s) => s.title)).toBe(true)
+  })
+
+  it('arms one idle reminder when a turn finishes, in the chosen mode', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { tuiNotify: 'bell' })
+    const t = signalIo(['go', null])
+    const reminders: Array<[string, string]> = []
+    t.io.remindIfIdle = (spec, mode) => reminders.push([spec.body, mode])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(reminders).toEqual([['Houston is waiting for your next message', 'bell']])
+    expect(t.signals.filter((s) => s.alert).every((s) => (s as { mode?: string }).mode === 'bell')).toBe(true)
+  })
+
+  it('/notify off silences alerts and the reminder, but the title still updates', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = signalIo(['/notify off', 'go', null])
+    const reminders: string[] = []
+    t.io.remindIfIdle = (spec) => reminders.push(spec.body)
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui(opts, d)
+    expect(patches).toContainEqual({ tuiNotify: 'off' })
+    expect(t.text()).toContain('window title still updates')
+    expect(t.signals.some((s) => s.alert)).toBe(false)
+    expect(t.signals.some((s) => s.title)).toBe(true)
+    expect(reminders).toEqual([])
+  })
+
+  it('/notify shows the mode, rejects an unknown one, and /settings lists it', async () => {
+    const s = {} as AppSettings
+    expect(parseSlashCommand('/notify', s)).toEqual({ kind: 'notify' })
+    expect(parseSlashCommand('/notify OSC', s)).toEqual({ kind: 'notify', mode: 'osc' })
+    expect(parseSlashCommand('/notify loud', s)).toEqual({ kind: 'notify', invalid: 'loud' })
+    const { d } = deps([], { desktopNotifications: false })
+    const t = signalIo(['/notify', '/notify loud', '/settings', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // The shared notify-me switch being off makes the terminal default to off.
+    expect(t.text()).toContain('notifications: off')
+    expect(t.text()).toContain('unknown notification mode "loud"')
+    expect(t.text()).toContain('notifications:  off')
   })
 
   it('does not signal for ordinary streaming', async () => {
@@ -6144,6 +6203,206 @@ describe('/vim', () => {
     d.updateSettings = undefined
     await runTui(opts, d)
     expect(t.text()).toContain('unavailable')
+  })
+})
+
+describe('screen-reader mode', () => {
+  const ESC = String.fromCharCode(27)
+  const srOpts = { ...opts, color: true, screenReader: true }
+
+  it('is turned on by --screen-reader', () => {
+    expect(parseTuiArgs(['-i', '--screen-reader'], '/p')?.screenReader).toBe(true)
+    expect(parseTuiArgs(['-i'], '/p')?.screenReader).toBeUndefined()
+  })
+
+  it('labels speakers, says tool calls as sentences, and prints no escapes even with color on', async () => {
+    const { d } = deps(
+      [
+        { runId: 'x', type: 'reasoning', delta: 'hmm' },
+        { runId: 'x', type: 'text', delta: 'Looking.\n\n' },
+        { runId: 'x', type: 'tool_start', callId: 'c', name: 'read_file', args: { path: 'src/a.ts' } },
+        { runId: 'x', type: 'tool_result', callId: 'c', name: 'read_file', ok: true, output: 'x' },
+        { runId: 'x', type: 'text', delta: 'Done.\n\n' },
+        { runId: 'x', type: 'done', stopReason: 'end_turn' }
+      ],
+      { reasoningDisplay: 'show' }
+    )
+    const t = fakeIo(['go', null])
+    const applied: Array<{ screenReader?: boolean; reduceMotion?: boolean }> = []
+    t.io.setAccessibility = (a) => applied.push(a)
+    d.io = t.io
+    await runTui(srOpts, d)
+    // Screen-reader mode implies reduced motion at the adapter.
+    expect(applied[0]).toEqual({ screenReader: true, reduceMotion: true })
+    expect(t.reads[0].prompt).toBe('you: ')
+    const text = t.text()
+    expect(text).not.toContain(ESC)
+    expect(text).toContain('houston, thinking:\nhmm')
+    expect(text).toContain('Using tool Read: src/a.ts')
+    // Each stretch of reply gets its own label, after the tool line between them.
+    expect(text.split('houston:\n').length).toBe(3)
+    expect(text).toMatch(/done in \d+s/)
+    // The tool verb is not also announced as a spinner label.
+    expect(t.spinner).toEqual(['start:Working', 'stop'])
+  })
+
+  it('follows /thoughts: summary says the one line under the label, hide says nothing', async () => {
+    const events: AgentEvent[] = [
+      { runId: 'x', type: 'reasoning', delta: 'Weighing the loader against the cache.' },
+      { runId: 'x', type: 'text', delta: 'Answer.\n\n' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ]
+    const summary = deps(events)
+    const t1 = fakeIo(['go', null])
+    summary.d.io = t1.io
+    await runTui(srOpts, summary.d)
+    const s1 = t1.text()
+    expect(s1).not.toContain(ESC)
+    expect(s1).toMatch(/houston, thinking:\n[^\n]*thought for \d+s[^\n]*Weighing the loader/)
+    expect(s1.indexOf('houston, thinking:')).toBeLessThan(s1.indexOf('houston:\n'))
+
+    const hide = deps(events, { reasoningDisplay: 'hide' })
+    const t2 = fakeIo(['go', null])
+    hide.d.io = t2.io
+    await runTui(srOpts, hide.d)
+    expect(t2.text()).not.toContain('houston, thinking:')
+    expect(t2.text()).not.toContain('Weighing')
+    expect(t2.text()).toContain('houston:\nAnswer.')
+  })
+
+  it('/transcript and Ctrl-O print the transcript as plain lines, never the full-screen viewer', async () => {
+    const done: AgentEvent = { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    const { d } = deps([done], {}, (req) => [...req.messages, { role: 'assistant', content: 'Looked at it.' }])
+    const t = fakeIo(['go', '/transcript', null])
+    let ctrlO: ((during: 'composer' | 'run') => Promise<void>) | null = null
+    let pagerCalls = 0
+    d.io = {
+      ...t.io,
+      pager: async () => {
+        pagerCalls++
+        return true
+      },
+      onTranscript: (h) => (ctrlO = h)
+    }
+    await runTui(srOpts, d)
+    await ctrlO!('composer')
+    expect(pagerCalls).toBe(0)
+    const text = t.text()
+    expect(text.split('end of transcript').length).toBe(3)
+    expect(text).toContain('Looked at it.')
+    // No cursor movement, erase, or alternate screen: only lines.
+    expect(text).not.toMatch(new RegExp(`${ESC}\\[[0-9;?]*[ABCDEFGHJKSTfhlsu]|${ESC}[78]`))
+    expect(text).not.toContain(ESC)
+  })
+
+  it('says it is waiting, shows a write as a plain +/- diff, and takes a typed answer from the picker', async () => {
+    const { d, rec } = deps([
+      {
+        runId: 'x',
+        type: 'tool_approval',
+        callId: 'c1',
+        name: 'edit_file',
+        kind: 'write',
+        summary: 'Edit src/a.ts',
+        args: {},
+        preview: [{ path: 'src/a.ts', diff: [{ type: 'del', text: 'old' }, { type: 'add', text: 'new' }] }]
+      } as AgentEvent,
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    const specs: string[] = []
+    t.io.select = async (spec) => {
+      specs.push(spec.title)
+      return { kind: 'type', text: 'n use the helper instead' }
+    }
+    d.io = t.io
+    await runTui(srOpts, d)
+    const text = t.text()
+    expect(text).toContain('waiting for approval')
+    expect(text).toContain('  -old\n  +new')
+    expect(text).not.toContain('│')
+    expect(specs).toEqual(['Choose:'])
+    // The typed answer was used as is: denied with its reason, no second prompt.
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'deny']])
+    expect(t.reads.map((r) => r.prompt)).toEqual(['you: ', 'you: '])
+  })
+
+  it('a question answered with typed text at the picker resolves without asking again', async () => {
+    const { d, rec } = deps([
+      {
+        runId: 'x',
+        type: 'tool_question',
+        callId: 'q1',
+        question: 'Which one?',
+        options: [{ label: 'A' }, { label: 'B' }]
+      } as AgentEvent,
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    t.io.select = async () => ({ kind: 'type', text: 'neither, use C' })
+    d.io = t.io
+    await runTui(srOpts, d)
+    expect(t.text()).toContain('waiting for your answer')
+    expect(rec.questions).toEqual([['run-1', 'q1', 'neither, use C']])
+  })
+
+  it('/screen-reader toggles it, saves it, and drops color while on', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/screen-reader on', '/cwd', '/settings', '/screen-reader off', null])
+    const applied: Array<{ screenReader?: boolean; reduceMotion?: boolean }> = []
+    t.io.setAccessibility = (a) => applied.push(a)
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui({ ...opts, color: true }, d)
+    expect(applied.map((a) => a.screenReader)).toEqual([false, true, false])
+    expect(patches).toEqual([{ tuiScreenReader: true }, { tuiScreenReader: false }])
+    expect(t.text()).toContain('screen-reader mode on')
+    expect(t.text()).toContain('screen reader:  on')
+    expect(t.text()).toContain('reduced motion: on (with screen-reader mode)')
+    // The prompt follows the mode: "you: " only while it is on.
+    expect(t.reads.map((r) => r.prompt.includes('you: '))).toEqual([false, true, true, true, false])
+  })
+
+  it('parses /screen-reader', () => {
+    const s = {} as AppSettings
+    expect(parseSlashCommand('/screen-reader', s)).toEqual({ kind: 'screen-reader' })
+    expect(parseSlashCommand('/screen-reader on', s)).toEqual({ kind: 'screen-reader', on: true })
+    expect(parseSlashCommand('/screen-reader off', s)).toEqual({ kind: 'screen-reader', on: false })
+  })
+})
+
+describe('/reduce-motion', () => {
+  it('parses the toggle and its explicit forms', () => {
+    const s = {} as AppSettings
+    expect(parseSlashCommand('/reduce-motion', s)).toEqual({ kind: 'reduce-motion' })
+    expect(parseSlashCommand('/reduce-motion on', s)).toEqual({ kind: 'reduce-motion', on: true })
+    expect(parseSlashCommand('/reduce-motion OFF', s)).toEqual({ kind: 'reduce-motion', on: false })
+  })
+
+  it('hands the launch value to the adapter, then toggles, saves and applies it', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/reduce-motion', '/settings', '/reduce-motion off', null])
+    const applied: Array<{ reduceMotion?: boolean }> = []
+    t.io.setAccessibility = (a) => applied.push(a)
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui({ ...opts, reduceMotion: false }, d)
+    expect(applied.map((a) => a.reduceMotion)).toEqual([false, true, false])
+    expect(patches).toEqual([{ reduceMotion: true }, { reduceMotion: false }])
+    expect(t.text()).toContain('reduced motion on')
+    expect(t.text()).toContain('reduced motion: on')
+  })
+
+  it('starts on when the saved setting says so', async () => {
+    const { d } = deps([], { reduceMotion: true })
+    const t = fakeIo([null])
+    const applied: Array<{ reduceMotion?: boolean }> = []
+    t.io.setAccessibility = (a) => applied.push(a)
+    d.io = t.io
+    await runTui(opts, d)
+    expect(applied[0]).toEqual({ screenReader: false, reduceMotion: true })
   })
 })
 
@@ -7772,6 +8031,41 @@ describe('/resume arrow-key picker', () => {
     expect(first).toContain('ctrl-r rename · ctrl-d or x delete\nctrl-a all folders · esc cancel')
     expect(t.text()).toContain('resumed: 1 message')
     expect(rec.runs[0].messages[0]).toEqual({ role: 'user', content: 'make the button blue' })
+  })
+
+  it('in screen-reader mode opens a session from the numbered list and says what it leaves out', async () => {
+    const { d, rec } = deps(finished, {}, (req) => req.messages)
+    const st = pickerStore(seed())
+    d.persist = st.persist
+    d.now = () => 60_000
+    const t = fakeIo(['/resume', '2', 'go on', null])
+    let selects = 0
+    t.io.select = async () => {
+      selects++
+      return { kind: 'cancel' }
+    }
+    d.io = t.io
+    await runTui({ ...opts, screenReader: true }, d)
+    // The arrow-key picker (filter, preview, actions) is never opened; the plain
+    // numbered list is, with no doubled numbers and no escapes.
+    expect(selects).toBe(0)
+    const out = t.text()
+    expect(out).toContain('1. Auth refactor')
+    expect(out).toContain('2. CSS tweaks')
+    expect(out).not.toContain('1. 1.')
+    expect(out).not.toContain('\x1b')
+    expect(out).toContain(
+      'To search, type /resume followed by words. The arrow-key picker also offers renaming, deleting and sessions in other folders; turn off /screen-reader to use it.'
+    )
+    expect(rec.runs[0].messages[0]).toEqual({ role: 'user', content: 'make the button blue' })
+    expect(st.renamed).toEqual([])
+    expect(st.removed).toEqual([])
+  })
+
+  it('the screen-reader /resume note names only what this store can do', () => {
+    expect(screenReaderResumeNote({}, false)).toBe('To search, type /resume followed by words.')
+    expect(screenReaderResumeNote({ remove: () => {} }, false)).toContain('also offers deleting;')
+    expect(screenReaderResumeNote({ rename: () => {} }, true)).toContain('also offers renaming and sessions in other folders;')
   })
 
   it('typing filters live by content, and Esc clears the filter before it cancels', async () => {

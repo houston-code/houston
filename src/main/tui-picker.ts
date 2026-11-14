@@ -180,7 +180,9 @@ export interface PickerState {
 
 export type PickerOutcome =
   | { kind: 'commit'; value: string }
-  | { kind: 'type' } // fall back to a typed answer
+  // Fall back to a typed answer. `text` is the answer already typed, when the picker
+  // took one (the numbered list a screen reader answers), so the caller asks no again.
+  | { kind: 'type'; text?: string }
   | { kind: 'cancel' }
   // An action ran in a picker without `onAction` (the caller performs it).
   | { kind: 'action'; id: string; value: string | null; text?: string }
@@ -380,6 +382,40 @@ export function reducePicker(s: PickerState, key: PickerKey): PickerStep {
     default:
       return { state: s } // text / backspace / ctrl come only from the rich mapping
   }
+}
+
+/**
+ * The picker as a numbered list, for screen-reader mode: no pointer, no redraw, just
+ * lines to read and a number to type. The footer says what each answer does.
+ */
+export function renderNumberedPicker(spec: PickerSpec): string[] {
+  const lines = spec.title ? [spec.title] : []
+  spec.options.forEach((o, i) => {
+    lines.push(`${i + 1}. ${o.label}${o.description ? ` (${o.description})` : ''}`)
+  })
+  const how = spec.multiSelect
+    ? 'Type the numbers you choose, separated by spaces or commas, then press Enter.'
+    : 'Type a number and press Enter.'
+  lines.push(`${how} Or type your own answer. Enter on its own: ${spec.escLabel ?? 'cancel'}.`)
+  return lines
+}
+
+/** What a typed answer to the numbered list means: a pick, a custom answer, or a retry. */
+export type NumberedPickResult = PickerOutcome | { kind: 'invalid'; message: string }
+
+export function parseNumberedPick(spec: PickerSpec, answer: string): NumberedPickResult {
+  const a = answer.trim()
+  if (!a) return { kind: 'cancel' }
+  const tokens = a.split(/[\s,]+/).filter(Boolean)
+  // Not all numbers: the user typed their own answer (a reason, `y`, free text).
+  const n = spec.options.length
+  if (n === 0 || !tokens.every((t) => /^\d+$/.test(t))) return { kind: 'type', text: a }
+  const range = n === 1 ? 'Type 1' : `Choose 1 to ${n}`
+  const bad = tokens.find((t) => Number(t) < 1 || Number(t) > n)
+  if (bad !== undefined) return { kind: 'invalid', message: `There is no option ${bad}. ${range}.` }
+  if (!spec.multiSelect && tokens.length > 1) return { kind: 'invalid', message: `Choose one option. ${range}.` }
+  const picked = [...new Set(tokens.map(Number))].sort((x, y) => x - y)
+  return { kind: 'commit', value: picked.map((i) => spec.options[i - 1].value).join(', ') }
 }
 
 /**

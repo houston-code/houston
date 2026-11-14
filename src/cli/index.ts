@@ -101,6 +101,9 @@ Options:
                         line per turn from stdin until end of input
   --continue            reopen the folder's most recent session
   --resume <id>         reopen a specific session
+  --screen-reader       interactive: plain lines for a screen reader (no spinner,
+                        redraws or color; numbered choices). Also
+                        HOUSTON_SCREEN_READER=1, or /screen-reader on to keep it
   -h, --help            this help
   -v, --version         print the version
 
@@ -168,6 +171,7 @@ const SWITCH_FLAGS = new Set([
   '--acp',
   '--full-auto',
   '--continue',
+  '--screen-reader',
   '--json',
   '--allow-shell-network',
   '--no-memory',

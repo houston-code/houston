@@ -943,6 +943,28 @@ export interface AppSettings {
    * 'summary'.
    */
   reasoningDisplay?: 'show' | 'summary' | 'hide'
+  /**
+   * The terminal's reduced motion (/reduce-motion): the activity line shows a still
+   * mark instead of an animated spinner and refreshes its timer only every few
+   * seconds. Also on with HOUSTON_REDUCE_MOTION=1, and implied by screen-reader mode.
+   * Absent = off.
+   */
+  reduceMotion?: boolean
+  /**
+   * The terminal's screen-reader mode (/screen-reader): plain lines only, with no
+   * spinner, no in-place redraws, no color or decorative glyphs, speaker labels on
+   * messages, and pickers as numbered lists. Also on with --screen-reader or
+   * HOUSTON_SCREEN_READER=1. Absent = off.
+   */
+  tuiScreenReader?: boolean
+  /**
+   * Which attention signals the terminal sends when a run needs you or finishes while
+   * you are away (/notify): 'auto' the bell plus the terminal's notification (OSC 9 and
+   * OSC 777), 'osc' the notification only, 'bell' the bell only, 'off' neither. The
+   * window title updates in every mode. Absent = 'auto', or 'off' when
+   * `desktopNotifications` is false.
+   */
+  tuiNotify?: 'auto' | 'osc' | 'bell' | 'off'
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /** User-defined chat labels, in display order. */

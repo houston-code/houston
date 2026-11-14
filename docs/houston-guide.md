@@ -157,6 +157,8 @@ the terminal. Only three kinds do anything:
 - Slash commands switch settings mid-session.
 - `--continue` reopens this folder's most recent chat at launch; `--resume <id>`
   reopens a specific one.
+- `--screen-reader` starts in screen-reader mode: plain lines, no redraws, and
+  numbered choices. See "Screen-reader mode".
 - **First run.** With no model ready, it lists the providers that take a key, then
   the hosts that need none: Ollama and LM Studio on their usual ports, and any
   endpoint added with `houston providers add`. It asks each host for its models
@@ -710,9 +712,10 @@ safe subset in place. In the desktop app:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/add-dir`, `/vim`, `/verbose`, `/output`, `/copy`, `/thoughts`,
-`/transcript`, `/spawned`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`,
-`/permissions`, and `/exit`. Typed in the
+**Terminal-only commands.** `/add-dir`, `/vim`, `/notify`, `/screen-reader`,
+`/reduce-motion`, `/verbose`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
+`/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`.
+Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
 
@@ -891,6 +894,58 @@ one, marks, macros, and `.` repeat.
 
 Everything else in the composer (Enter to send, `Ctrl-R` history search,
 `Ctrl-X Ctrl-E`, pasting) works the same in both modes.
+
+### Screen-reader mode
+
+`/screen-reader` switches the interactive terminal to plain lines that a screen reader
+can follow, and remembers it; `/screen-reader off` switches back. `houston
+--screen-reader` (or `HOUSTON_SCREEN_READER=1` in the environment) turns it on for one
+launch. In this mode:
+
+- **Nothing is redrawn in place.** There is no spinner. What Houston is doing is
+  printed once as a line ("working", "retrying", "waiting for approval", "done in 12s").
+- **Messages say who is speaking.** Your prompt is `you:`, and each stretch of reply
+  starts with `houston:` (`houston, thinking:` for its reasoning). Reasoning follows
+  `/thoughts`: `show` reads it as it arrives, `summary` (the default) reads one line
+  per thought under that label, and `hide` reads nothing.
+- **Tool calls are sentences**, such as `Using tool Read: src/app.ts`.
+- **Diffs are plain lines** marked `+` and `-`, with no color or line-number gutter.
+- **No color or decorative marks.** Meter bars, box lines and bullets are replaced
+  with words or dropped (the context meter reads `context 40%`).
+- **Choices are numbered lists.** An approval, a question, a plan or `/model` lists its
+  options as `1.`, `2.` and so on: type the number and press Enter. Typing anything
+  else answers in your own words (`n` and a reason at an approval, a custom answer to a
+  question), and Enter on its own takes the safe choice (deny, at an approval).
+- **`/resume` lists this folder's sessions by number**: type one to open it. Search
+  with `/resume` and some words. Its live filter, preview, renaming, deleting and
+  the all-folders view need the arrow-key picker, so they are off in this mode.
+- **The composer only appends.** Typed text is echoed once and Backspace erases one
+  character. Pasting several lines still lands as one message. Up and Down, `Shift-Tab`
+  and `Ctrl-U` print the prompt again on a new line with the text as it now stands.
+  Ctrl-R search and in-line cursor movement are off in this mode.
+- **Composer keys that work here:** `Ctrl-V`/`Alt-V` and pasting or dropping image
+  files attach images and say so in one line, then print the prompt again with your
+  text. `Ctrl-G` (or `Ctrl-X Ctrl-E`) opens the draft in your editor. `Ctrl-Z`
+  suspends to the shell, and `fg` prints the prompt again with the draft. `Esc Esc`
+  clears the draft (Up brings it back), or opens `/rewind` on an empty prompt.
+  `Ctrl-C` discards the draft into history too. Invisible characters are removed
+  from what you send, as in the full composer.
+- **Composer keys that are off here:** undo and redo (`Ctrl-_`, `Ctrl-^`) and the
+  `Ctrl-S` stash, since they rewrite the line in place. Pressing them does nothing.
+- **`Ctrl-O` and `/transcript` print the whole session** as plain lines, ending with
+  `end of transcript`, instead of opening the full-screen viewer.
+- **Typing while it works** is not drawn on screen; Enter says whether the line went to
+  the running turn or was queued for after it.
+
+It also turns on reduced motion (below). `/settings` shows whether it is on.
+
+### Reduced motion
+
+`/reduce-motion` holds the activity line still while a turn runs: a fixed mark instead
+of the spinning one, with the elapsed time updated every few seconds instead of ten
+times a second. It is remembered; `/reduce-motion off` turns the animation back on.
+Setting `HOUSTON_REDUCE_MOTION=1` in the environment turns it on for that launch.
+`/settings` shows whether it is on. Nothing else in the terminal animates.
 
 ## Seeing what the tools did
 
@@ -1603,10 +1658,25 @@ waiting. The interactive terminal tells you, two ways:
 error, a finished turn, and a pull request opened or merged. Ordinary progress is
 quiet, and stopping a run yourself never pings you (you're obviously there).
 
-- Turning off notifications in Settings turns off the bell and notification here too.
-  The title still updates.
+- **One reminder.** If a turn finishes while you're away and you still haven't typed
+  anything a minute later, it sends one more: "Houston is waiting for your next
+  message". Typing or coming back to the window cancels it, and it fires at most once
+  per turn.
 - Notifications use the terminal's own channel, so they need no extra tools. Not every
   terminal supports them; the bell works everywhere.
+
+**Choosing the signals.** `/notify` shows the current mode, and `/notify <mode>`
+changes it and remembers it. `/settings` shows it too.
+
+| Mode | Sends |
+| --- | --- |
+| `auto` | the bell and the terminal's notification (the default) |
+| `osc` | the terminal's notification only, no bell |
+| `bell` | the bell only |
+| `off` | neither; the window title still updates |
+
+Until you pick a mode, turning off notifications in the desktop app's Settings means
+`off` here too.
 
 **In the desktop app**, a native notification fires for the same events while
 Houston isn't the focused window, and clicking it opens that chat. Settings >

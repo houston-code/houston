@@ -272,6 +272,62 @@ function spinnerHarness() {
   }
 }
 
+describe('createTerminalIo spinner, reduced motion', () => {
+  function harness() {
+    const writes: string[] = []
+    const intervals: number[] = []
+    let ticks: Array<() => void> = []
+    let nowMs = 1000
+    const io = createTerminalIo({
+      createInterface: () => fakeRl().rl,
+      write: (s) => writes.push(s),
+      drainInput: () => {},
+      now: () => nowMs,
+      schedule: (fn, ms) => {
+        intervals.push(ms)
+        ticks.push(fn)
+        return () => {
+          ticks = ticks.filter((t) => t !== fn)
+        }
+      }
+    })
+    return {
+      io,
+      intervals,
+      text: () => writes.join(''),
+      tick: () => ticks.forEach((fn) => fn()),
+      advance: (ms: number) => {
+        nowMs += ms
+      }
+    }
+  }
+
+  it('draws a still mark at once and refreshes only every few seconds', () => {
+    const h = harness()
+    h.io.setAccessibility!({ reduceMotion: true })
+    h.io.startSpinner!('Working')
+    expect(h.intervals).toEqual([5000])
+    expect(h.text()).toContain('• Working 0s')
+    h.advance(5000)
+    h.tick()
+    h.advance(5000)
+    h.tick()
+    // Every frame is the same mark: no braille animation frames at all.
+    expect(h.text()).toContain('• Working 10s')
+    expect(h.text()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
+  })
+
+  it('switching it mid-run restarts the timer at the new pace', () => {
+    const h = harness()
+    h.io.startSpinner!('Working')
+    expect(h.intervals).toEqual([100])
+    h.io.setAccessibility!({ reduceMotion: true })
+    expect(h.intervals).toEqual([100, 5000])
+    h.io.setAccessibility!({ reduceMotion: false })
+    expect(h.intervals).toEqual([100, 5000, 100])
+  })
+})
+
 describe('createTerminalIo spinner', () => {
   it('schedules a redraw on start and draws the label + elapsed', () => {
     const h = spinnerHarness()
@@ -1469,6 +1525,19 @@ describe('synchronized output (DEC 2026)', () => {
     t.io.stopSpinner!()
   })
 
+  it('paints the reduced-motion spinner atomically too: the still mark, at the slow pace', () => {
+    const t = harness(true)
+    t.io.setAccessibility!({ reduceMotion: true })
+    t.io.startSpinner!('Working')
+    t.tick()
+    const out = t.text()
+    expect(out).toContain(`${SYNC_BEGIN}\r\x1b[2K`)
+    expect(out).toContain('• Working')
+    expect(out).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
+    expect(count(out, SYNC_BEGIN)).toBe(count(out, SYNC_END))
+    t.io.stopSpinner!()
+  })
+
   it('is off when the output is not the terminal', async () => {
     const t = harness()
     const read = t.io.readComposer!('> ')
@@ -1749,5 +1818,458 @@ describe('composer: drafts, images, rewind and suspend', () => {
     t.stdin.push('\x1a')
     expect(suspends).toBe(0)
     t.io.stopSpinner!()
+  })
+})
+
+/**
+ * Screen-reader mode: a screen reader follows text as it is written, so a redraw
+ * (cursor up, erase, reprint) reads as noise on every key. Nothing in this mode may
+ * move the cursor, erase, or rewind a line.
+ */
+describe('screen-reader mode', () => {
+  const ESC = String.fromCharCode(27)
+  /** Cursor movement and erase: CSI A-H, J, K, S, T, plus save/restore, and a bare CR. */
+  const REDRAW = new RegExp(`${ESC}\\[[0-9;]*[ABCDEFGHJKSTfsu]|${ESC}[78]|\\r(?!\\n)`)
+
+  function harness(over: Parameters<typeof createTerminalIo>[0] = {}) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let ticks: Array<() => void> = []
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => clock,
+      schedule: (fn) => {
+        ticks.push(fn)
+        return () => {
+          ticks = ticks.filter((t) => t !== fn)
+        }
+      },
+      paint: (s) => `${ESC}[36m${s}${ESC}[0m`,
+      ...over
+    })
+    io.setAccessibility!({ screenReader: true, reduceMotion: true })
+    return {
+      io,
+      stdin,
+      text: () => written.join(''),
+      scheduled: () => ticks.length,
+      tick: (ms = 500) => {
+        clock += ms
+      }
+    }
+  }
+
+  it('reads the composer append-only, a multi-line paste included, with no redraw escapes', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('fix ')
+    t.stdin.push('thx')
+    t.stdin.push('\x7f') // Backspace
+    t.stdin.push('is:')
+    t.stdin.push(`${ESC}[200~line one\nline two${ESC}[201~`)
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('fix this:line one\nline two')
+    const text = t.text()
+    expect(text).not.toMatch(REDRAW)
+    expect(text).toContain('you: fix thx\b \bis:line one\nline two\n')
+    // Bracketed paste is on while it reads, and off again after.
+    expect(text).toContain('[?2004h')
+    expect(text.lastIndexOf('[?2004l')).toBeGreaterThan(text.lastIndexOf('[?2004h'))
+  })
+
+  it('restates the prompt on a new line for history, instead of rewriting the line', async () => {
+    const t = harness({ history: () => ['older message'] })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push(`${ESC}[A`) // Up
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('older message')
+    expect(t.text()).toContain('you: \nyou: older message\n')
+    expect(t.text()).not.toMatch(REDRAW)
+  })
+
+  it('prints spinner states once as lines, and never animates or erases', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.io.setSpinnerLabel!('Retrying 1 of 3')
+    t.io.setSpinnerLabel!('Retrying 1 of 3') // a repeat says nothing
+    t.io.setStatus!('model · main')
+    t.io.out(`${ESC}[2mresult${ESC}[0m\n`)
+    t.io.stopSpinner!()
+    expect(t.scheduled()).toBe(0)
+    expect(t.text()).not.toMatch(REDRAW)
+    expect(t.text().split('retrying').length).toBe(2)
+    expect(t.text()).toContain('working\n')
+    // Output loses its color codes.
+    expect(t.text()).toContain('result\n')
+    expect(t.text()).not.toContain(`${ESC}[2m`)
+  })
+
+  it('answers a picker by number, re-asking on a number not on the list', async () => {
+    const t = harness()
+    const picked = t.io.select!({
+      title: 'Choose:',
+      escLabel: 'deny',
+      options: [
+        { label: 'Allow', value: 'allow' },
+        { label: 'Deny', value: 'deny' }
+      ]
+    })
+    t.stdin.push('5\r')
+    await new Promise((r) => setImmediate(r))
+    t.stdin.push('2\r')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: 'deny' })
+    const text = t.text()
+    expect(text).toContain('1. Allow\n2. Deny\n')
+    expect(text).toContain('There is no option 5. Choose 1 to 2.')
+    expect(text).not.toMatch(REDRAW)
+    expect(text).not.toContain('↑')
+  })
+
+  it('hands a typed answer at a picker back as text', async () => {
+    const t = harness()
+    const picked = t.io.select!({ title: '', options: [{ label: 'Allow', value: 'allow' }] })
+    t.stdin.push('n, use the other file')
+    t.tick() // a burst of text is treated like a paste; a human pauses before Enter
+    t.stdin.push('\r')
+    await expect(picked).resolves.toEqual({ kind: 'type', text: 'n, use the other file' })
+  })
+
+  it('reads a sub-prompt append-only, and Ctrl-C cancels it', async () => {
+    const t = harness()
+    let interrupted = 0
+    t.io.onInterrupt!(() => interrupted++)
+    const answer = t.io.readLine('Trust this folder? [y/N/never] ', { discardPending: true })
+    t.stdin.push('y\x03')
+    await expect(answer).resolves.toBeNull()
+    expect(interrupted).toBe(1)
+    expect(t.text()).not.toMatch(REDRAW)
+  })
+
+  it('mid-run typing is not drawn, and Enter says where the line went', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('also check docs\r')
+    expect(t.io.takeQueued!()).toEqual(['also check docs'])
+    expect(t.text()).toContain('queued for after this turn (1 waiting)')
+    expect(t.text()).not.toContain('also check docs')
+    expect(t.text()).not.toMatch(REDRAW)
+    t.io.stopSpinner!()
+  })
+
+  it('prints the transcript as plain lines instead of opening the full-screen viewer', async () => {
+    const t = harness()
+    const source: PagerSource = {
+      title: 'My chat',
+      render: () => ({ lines: ['\x1b[1mdoc line\x1b[0m'], prompts: [0] }),
+      plain: () => 'My chat\n\nyou: go\nhouston: done\n'
+    }
+    await expect(t.io.pager!(source)).resolves.toBe(true)
+    const text = t.text()
+    expect(text).toContain('you: go\nhouston: done\n\nend of transcript\n')
+    expect(text).not.toContain('[?1049h')
+    expect(text).not.toMatch(REDRAW)
+  })
+
+  it('Ctrl-O at the composer hands off to the driver, then states the prompt again with the draft', async () => {
+    const t = harness()
+    let opened = 0
+    t.io.onTranscript!(async (during) => {
+      expect(during).toBe('composer')
+      opened++
+      t.io.out('the transcript\n')
+    })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('half')
+    t.tick()
+    t.stdin.push('\x0f')
+    await new Promise((r) => setImmediate(r))
+    expect(opened).toBe(1)
+    t.stdin.push(' done')
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('half done')
+    const text = t.text()
+    // Bracketed paste and modified keys go off for the handoff and back on after.
+    const modes = new RegExp(`${ESC}\\[[?>][0-9;]*[hlm]`, 'g')
+    expect(text.replace(modes, '')).toContain('you: half\nthe transcript\nyou: half done\n')
+    expect(text).not.toMatch(REDRAW)
+    expect(text).not.toContain('[?1049h')
+  })
+
+  it('clearLine writes nothing', () => {
+    const t = harness()
+    t.io.clearLine!()
+    expect(t.text()).toBe('')
+  })
+
+  it('turning it on takes a running spinner down first, then never draws again', () => {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let ticks: Array<() => void> = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => 1000,
+      schedule: (fn) => {
+        ticks.push(fn)
+        return () => {
+          ticks = ticks.filter((t) => t !== fn)
+        }
+      }
+    })
+    io.startSpinner!('Working')
+    expect(ticks.length).toBe(1)
+    io.setAccessibility!({ screenReader: true })
+    expect(ticks.length).toBe(0)
+    const before = written.length
+    io.setStatus!('x')
+    io.setMode!('ask')
+    expect(written.length).toBe(before)
+    io.stopSpinner!()
+  })
+
+  it('attaches a clipboard image and a pasted image path as plain lines, with no redraw escapes', async () => {
+    const t = harness()
+    const reqs: unknown[] = []
+    t.io.onImagePaste!((req) => {
+      reqs.push(req)
+      return {
+        handled: true,
+        notes: [req.kind === 'clipboard' ? '· attached the image from your clipboard (1 staged)' : '· attached shot.png (2 staged)']
+      }
+    })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('what is')
+    t.stdin.push('\x16') // Ctrl-V
+    t.stdin.push(`${ESC}[200~'/tmp/shot.png'${ESC}[201~`)
+    t.tick()
+    t.stdin.push(' this\r')
+    // The draft is untouched: the path was not inserted as text.
+    await expect(read).resolves.toBe('what is this')
+    expect(reqs).toEqual([{ kind: 'clipboard' }, { kind: 'files', paths: ['/tmp/shot.png'] }])
+    const text = t.text()
+    expect(text).toContain('you: what is\nattached the image from your clipboard (1 staged)\nyou: what is\n')
+    expect(text).toContain('\nattached shot.png (2 staged)\nyou: what is this\n')
+    expect(text).not.toMatch(REDRAW)
+    expect(text).not.toContain('[?1049h')
+  })
+
+  it('Ctrl-Z suspends and resumes with the prompt and draft restated, with no redraw escapes', async () => {
+    let resume: (() => void) | null = null
+    const t = harness({ platform: 'darwin', suspendProcess: (cb) => (resume = cb) })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('half')
+    const before = t.text().length
+    t.stdin.push('\x1a')
+    expect(resume).not.toBeNull()
+    expect(t.stdin.rawModes.at(-1)).toBe(false) // cooked for the shell
+    expect(t.text().slice(before)).toContain('[?2004l')
+    resume!()
+    expect(t.stdin.rawModes.at(-1)).toBe(true)
+    // Keys arrive exactly once after resuming.
+    t.stdin.push(' done\r')
+    await expect(read).resolves.toBe('half done')
+    const text = t.text()
+    expect(text).toContain('you: half\n')
+    // The prompt is stated again after resuming, the draft with it.
+    expect(text).toMatch(new RegExp(`you: half\\n(${ESC}\\[[^a-z]*[a-z])*you: half done\\n`))
+    expect(text).not.toMatch(REDRAW)
+    expect(text).not.toContain('[?1049h')
+  })
+
+  it('Ctrl-Z on Windows says it is unavailable as a plain line', async () => {
+    let suspends = 0
+    const t = harness({ platform: 'win32', suspendProcess: () => suspends++ })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('x\x1a')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('x')
+    expect(suspends).toBe(0)
+    expect(t.text()).toContain('not available on Windows')
+    expect(t.text()).not.toMatch(REDRAW)
+  })
+
+  it('Esc Esc clears the draft into history, and on an empty composer asks for rewind', async () => {
+    const remembered: string[] = []
+    const t = harness({ remember: (s) => remembered.push(s) })
+    let rewinds = 0
+    t.io.onRewindKey!(() => rewinds++)
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('oops')
+    t.tick()
+    t.stdin.push(ESC)
+    t.tick(100)
+    t.stdin.push(ESC)
+    expect(remembered).toEqual(['oops'])
+    t.tick(100)
+    t.stdin.push(ESC)
+    t.tick(100)
+    t.stdin.push(ESC)
+    await expect(read).resolves.toBeNull()
+    expect(rewinds).toBe(1)
+    const text = t.text()
+    expect(text).toContain('(cleared)')
+    expect(text).not.toMatch(REDRAW)
+  })
+
+  it('Ctrl-G opens the draft in the editor and states the edited text on a new line', async () => {
+    const seen: string[] = []
+    const t = harness({
+      editText: async (initial) => {
+        seen.push(initial)
+        return 'edited text\n'
+      }
+    })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('draft')
+    t.stdin.push('\x07') // Ctrl-G
+    await new Promise((r) => setImmediate(r))
+    expect(seen).toEqual(['draft'])
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('edited text')
+    expect(t.text()).toContain('\nyou: edited text\n')
+    expect(t.text()).not.toMatch(REDRAW)
+  })
+
+  it('ignores undo, redo and the stash without writing anything', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('abc')
+    const before = t.text().length
+    t.stdin.push('\x1f') // Ctrl-_ undo
+    t.stdin.push('\x1e') // Ctrl-^ redo
+    t.stdin.push('\x13') // Ctrl-S stash
+    expect(t.text().length).toBe(before)
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('abc')
+  })
+
+  it('Ctrl-C keeps the discarded draft in history', async () => {
+    const remembered: string[] = []
+    const t = harness({ remember: (s) => remembered.push(s) })
+    t.io.onInterrupt!(() => {})
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('a draft')
+    t.stdin.push('\x03')
+    await expect(read).resolves.toBeNull()
+    expect(remembered).toEqual(['a draft'])
+  })
+})
+
+describe('notification modes and the idle reminder', () => {
+  const alert = { title: 'Houston', body: 'Finished' }
+  const reminder = { title: 'Houston', body: 'Houston is waiting for your next message' }
+
+  function harness() {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let timers: Array<{ fn: () => void; ms: number }> = []
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => clock,
+      schedule: () => () => {},
+      timeout: (fn, ms) => {
+        const t = { fn, ms }
+        timers.push(t)
+        return () => {
+          timers = timers.filter((x) => x !== t)
+        }
+      }
+    })
+    return {
+      io,
+      stdin,
+      text: () => written.join(''),
+      clear: () => (written.length = 0),
+      pending: () => timers.map((t) => t.ms),
+      fire: () => {
+        const due = timers
+        timers = []
+        due.forEach((t) => t.fn())
+      },
+      tick: (ms = 500) => {
+        clock += ms
+      }
+    }
+  }
+
+  it('sends only what the mode asks for', () => {
+    const t = harness()
+    t.io.signal!({ alert, mode: 'bell' })
+    expect(t.text()).toBe('\x07')
+    t.clear()
+    t.io.signal!({ alert, mode: 'osc' })
+    // No bell in front: the only BELs are the OSC terminators.
+    expect(t.text().startsWith('\x1b]9;Houston: Finished')).toBe(true)
+    expect(t.text()).toContain(']777;notify;')
+  })
+
+  it('reminds once, about a minute after a turn ends unwatched', () => {
+    const t = harness()
+    t.io.remindIfIdle!(reminder, 'auto')
+    expect(t.pending()).toEqual([60_000])
+    // It asks for focus reports, so coming back can cancel it.
+    expect(t.text()).toContain('[?1004h')
+    t.clear()
+    t.fire()
+    expect(t.text()).toContain('\x07')
+    expect(t.text()).toContain('Houston is waiting for your next message')
+    expect(t.text()).toContain('[?1004l')
+    expect(t.pending()).toEqual([])
+  })
+
+  it('a keystroke at the composer cancels it', async () => {
+    const t = harness()
+    t.io.remindIfIdle!(reminder, 'bell')
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('h')
+    expect(t.pending()).toEqual([])
+    t.clear()
+    t.fire()
+    expect(t.text()).not.toContain('\x07')
+    t.tick()
+    t.stdin.push('\r')
+    await read
+  })
+
+  it('coming back to the window cancels it, and a focused window never arms it', async () => {
+    const t = harness()
+    t.io.remindIfIdle!(reminder, 'auto')
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x1b[I') // focus in
+    expect(t.pending()).toEqual([])
+    t.io.remindIfIdle!(reminder, 'auto')
+    expect(t.pending()).toEqual([])
+    t.tick()
+    t.stdin.push('\r')
+    await read
+  })
+
+  it('a new turn cancels it, and off never arms it', () => {
+    const t = harness()
+    t.io.remindIfIdle!(reminder, 'osc')
+    t.io.startSpinner!('Working')
+    expect(t.pending()).toEqual([])
+    t.io.stopSpinner!()
+    t.io.remindIfIdle!(reminder, 'off')
+    expect(t.pending()).toEqual([])
+  })
+
+  it('arming again replaces the earlier reminder rather than stacking', () => {
+    const t = harness()
+    t.io.remindIfIdle!(reminder, 'auto')
+    t.io.remindIfIdle!(reminder, 'auto', 1000)
+    expect(t.pending()).toEqual([1000])
   })
 })

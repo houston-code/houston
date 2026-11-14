@@ -1,11 +1,14 @@
 import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import { spinnerFrame, type TuiIo, type Painter, type ImagePasteRequest, type ImagePasteResult } from './tui'
-import { visibleWidth } from './tui-wrap'
+import { visibleWidth, stripControlChars } from './tui-wrap'
+import type { NotifySpec } from '@shared/notify'
 import { findUltrathink, ultrathinkHint, type KeywordRange, type UltrathinkEffect } from '@shared/ultrathink'
 import {
   createPickerSession,
   pickerKeyFor,
+  renderNumberedPicker,
+  parseNumberedPick,
   type PickerSpec,
   type PickerOutcome
 } from './tui-picker'
@@ -21,7 +24,8 @@ import {
   DISABLE_MODIFIED_KEYS,
   type DecoderState
 } from './tui-keys'
-import { bellSequence, notifySequence, titleSequence, type TerminalSignal } from './tui-notify'
+import { alertSequence, IDLE_REMINDER_MS, titleSequence, type NotifyMode, type TerminalSignal } from './tui-notify'
+import { REDUCED_MOTION_REFRESH_MS, STATIC_SPINNER_GLYPH, plainText } from './tui-a11y'
 import {
   initialPagerState,
   maxTop,
@@ -143,6 +147,8 @@ export interface TerminalIoDeps {
   paint?: Painter
   /** Schedule a repeating tick; returns a canceller. Injectable for tests. */
   schedule?: (fn: () => void, ms: number) => () => void
+  /** Schedule a one-shot callback; returns a canceller. Injectable for tests. */
+  timeout?: (fn: () => void, ms: number) => () => void
   /** Clock for the elapsed timer. Defaults to Date.now. */
   now?: () => number
   /** readline Tab-completer (slash commands + @-files). Wired at the entry point. */
@@ -341,6 +347,41 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   const noteFocus = (on: boolean): void => {
     sawFocusEvent = true
     focused = on
+    // Back at the window: whatever we would have reminded them of is in front of them.
+    if (on) disarmReminder()
+  }
+  const timeout =
+    deps.timeout ??
+    ((fn: () => void, ms: number): (() => void) => {
+      const id = setTimeout(fn, ms)
+      // A pending reminder must never be what keeps the process alive.
+      id.unref?.()
+      return () => clearTimeout(id)
+    })
+
+  // --- Idle reminder: a turn finished while the user was away, and they still have
+  // not come back. One more nudge, once, after IDLE_REMINDER_MS; any keystroke or a
+  // focus-in cancels it. Focus reporting stays on while it is armed, so coming back
+  // to the window can cancel it even at an idle composer.
+  let cancelReminder: (() => void) | null = null
+  const reminderReportsFocus = (): boolean => stdin.isTTY === true
+  function disarmReminder(): void {
+    if (!cancelReminder) return
+    cancelReminder()
+    cancelReminder = null
+    // The streaming watcher owns focus reporting while a turn runs.
+    if (reminderReportsFocus() && !watching) rawWrite(DISABLE_FOCUS_REPORTING)
+  }
+  const armReminder = (spec: NotifySpec, mode: NotifyMode, ms: number): void => {
+    disarmReminder()
+    if (mode === 'off' || !userIsAway()) return
+    if (reminderReportsFocus() && !watching) rawWrite(ENABLE_FOCUS_REPORTING)
+    const cancel = timeout(() => {
+      if (cancelReminder !== cancel) return
+      if (userIsAway()) rawWrite(alertSequence(spec, mode))
+      disarmReminder()
+    }, ms)
+    cancelReminder = cancel
   }
 
   let pending: ((line: string | null) => void) | null = null
@@ -373,10 +414,24 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   let spinnerStart = 0
   let tick = 0
   let cancelTimer: (() => void) | null = null
+  // Reduced motion: a still mark instead of the frames, and the timer refreshed every
+  // few seconds rather than ten times a second. Set by the driver (setAccessibility).
+  let reduceMotion = false
+  // Screen-reader mode: nothing is ever redrawn in place. The spinner never draws (its
+  // label changes are printed once, as lines), reads use the append-only line reader
+  // below, pickers are numbered lists, and every write goes through plainText.
+  let screenReader = false
+  // The last status line printed in screen-reader mode, so a repeat says nothing.
+  let announced: string | null = null
+  const announce = (s: string): void => {
+    rawWrite(`${plainText(s)}\n`)
+  }
+  const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1)
   const drawSpinner = (): void => {
-    if (spinnerLabel === null) return
+    if (spinnerLabel === null || screenReader) return
     const frame = (status: string): string =>
       spinnerFrame(tick, spinnerLabel ?? '', Math.floor((now() - spinnerStart) / 1000), paint, {
+        ...(reduceMotion ? { glyph: STATIC_SPINNER_GLYPH } : {}),
         ...(modeLabel ? { mode: modeLabel } : {}),
         ...(status ? { status } : {}),
         ...(draft ? { draft } : {}),
@@ -393,14 +448,19 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     repaint(CLEAR_LINE + line)
   }
   const startTimer = (): void => {
-    if (!cancelTimer && spinnerLabel !== null) cancelTimer = schedule(drawSpinner, 100)
+    if (screenReader) return
+    if (!cancelTimer && spinnerLabel !== null) {
+      cancelTimer = schedule(drawSpinner, reduceMotion ? REDUCED_MOTION_REFRESH_MS : 100)
+      // At the slow pace the first tick is seconds away: draw the line now.
+      if (reduceMotion) drawSpinner()
+    }
   }
   const stopTimer = (erase: boolean): void => {
     if (cancelTimer) {
       cancelTimer()
       cancelTimer = null
     }
-    if (erase && !pagerOpen) rawWrite(CLEAR_LINE)
+    if (erase && !pagerOpen && !screenReader) rawWrite(CLEAR_LINE)
   }
   const out = (s: string): void => {
     // Nothing to print: leave the spinner alone. The streaming renderer holds a block
@@ -411,6 +471,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     // once the viewer closes, so nothing lands on the alternate screen and is lost.
     if (pagerOpen) {
       heldOutput.push(s)
+      return
+    }
+    if (screenReader) {
+      const plain = plainText(s)
+      if (plain) rawWrite(plain)
       return
     }
     // Clear the spinner line before real output so streamed text never lands on a
@@ -485,6 +550,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     const chunk = decodeChunk(data)
     const r = decodeInput(chunk, watchDec)
     watchDec = r.state
+    if (r.keys.some((k) => k.type !== 'focus')) disarmReminder()
     // A paste here is as untrusted as one in the composer: its tail must not be
     // able to submit or fire actions.
     const g = sanitizePastedKeys(r.keys, lastPasteAt, now())
@@ -498,6 +564,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           // Both are "undo the thing in front of me", scaled to what is in front.
           if (draft) {
             draft = ''
+            if (screenReader) announce('cleared what you typed')
             drawSpinner()
             return
           }
@@ -520,6 +587,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           // Ctrl-Z mid-run: hand the terminal back and stop. The run is not
           // cancelled; it carries on from where it was once `fg` resumes us.
           if (platform === 'win32') {
+            if (screenReader) {
+              announce(NO_SUSPEND_NOTE)
+              break
+            }
             atomically(() => {
               rawWrite(`${CLEAR_LINE}${paint(NO_SUSPEND_NOTE, 'dim')}\n`)
               drawSpinner()
@@ -555,7 +626,14 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           // Steer the turn that is running if it can still take the line; a turn
           // that has already finished cannot, and then this is a follow-up for the
           // next one, exactly as before. Never dropped either way.
-          if (line && !steerHandler?.(line)) queued.push(line)
+          if (line) {
+            if (steerHandler?.(line)) {
+              if (screenReader) announce('sent to the running turn')
+            } else {
+              queued.push(line)
+              if (screenReader) announce(`queued for after this turn (${queued.length} waiting)`)
+            }
+          }
           draft = ''
           drawSpinner()
           break
@@ -593,7 +671,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     if (!watching) return
     watching = false
     try {
-      rawWrite(DISABLE_FOCUS_REPORTING)
+      // An armed idle reminder still wants focus reports (see armReminder).
+      if (!cancelReminder) rawWrite(DISABLE_FOCUS_REPORTING)
       stdin.removeListener('data', onWatchData)
       stdin.pause()
     } catch {
@@ -748,6 +827,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         str: string,
         key: { name?: string; ctrl?: boolean } | undefined
       ): void => {
+        disarmReminder()
         const k = key ?? {}
         if (k.ctrl && k.name === 'c') return finish(null) // cancel
         if (k.ctrl && k.name === 'd') return finish(buf.length ? buf : null) // EOF: submit or cancel
@@ -765,7 +845,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           const printable = [...str].filter((c) => c >= ' ' && c !== '\x7f')
           if (printable.length) {
             buf += printable.join('')
-            rawWrite('•'.repeat(printable.length))
+            // A screen reader would read each bullet aloud; an asterisk is quieter.
+            rawWrite((screenReader ? '*' : '•').repeat(printable.length))
           }
         }
       }
@@ -778,6 +859,348 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         finish(null) // raw mode unavailable — treat as cancel (TTY is guaranteed in practice)
       }
     })
+  }
+
+  /**
+   * The screen-reader line reader: append-only, in raw mode with bracketed paste.
+   *
+   * Every read in screen-reader mode goes through here, the composer included. A
+   * screen reader follows text as it is written, so a redraw (cursor up, erase,
+   * reprint) reads as a burst of noise on every keystroke. Here a typed character is
+   * echoed once, Backspace is `\b \b`, and anything that changes more than the end
+   * of the line (history, Shift-Tab, Ctrl-U, a completion list) starts a new line
+   * with the prompt and the text again. readline would do for single lines, but it
+   * repaints the line on edits and has no bracketed paste, so a multi-line paste
+   * would submit its first line. Off a TTY it falls back to plainRead.
+   */
+  const readLinear = (
+    prompt: string | (() => string),
+    opts: { composer?: boolean; discardPending?: boolean; initial?: string } = {}
+  ): Promise<string | null> => {
+    const promptNow = (): string => plainText(typeof prompt === 'string' ? prompt : prompt())
+    if (closed) return Promise.resolve(null)
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return plainRead(promptNow(), opts)
+    return new Promise<string | null>((resolve) => {
+      stopTimer(false)
+      stopInterruptWatch()
+      if (opts.discardPending) drainInput()
+      rl.pause()
+      const composer = opts.composer === true
+      const history = composer ? (deps.history?.() ?? []) : []
+      let histIdx = history.length
+      let buf = opts.initial ?? ''
+      let dec: DecoderState = initialDecoderState()
+      let done = false
+      // When the last Esc came, so a second one inside DOUBLE_ESC_MS is Esc Esc.
+      let lastEscAt = -Infinity
+      const priorKeypress = stdin.listeners('keypress') as Array<(...args: unknown[]) => void>
+      // The user's own text, echoed as lines: control characters never reach the
+      // terminal (a paste can carry anything).
+      const echo = (text: string): void => {
+        rawWrite(text.split('\n').map(stripControlChars).join('\n'))
+      }
+      /** Start over on a new line: the prompt, then the text as it now stands. */
+      const restate = (): void => {
+        rawWrite(`\n${promptNow()}`)
+        echo(buf)
+      }
+      const teardown = (): void => {
+        try {
+          stdin.removeListener('data', onData)
+          rawWrite(DISABLE_BRACKETED_PASTE)
+          if (composer) rawWrite(DISABLE_MODIFIED_KEYS)
+          for (const l of priorKeypress) if (!stdin.listeners('keypress').includes(l)) stdin.on('keypress', l)
+          stdin.setRawMode(false)
+          rl.resume()
+          rl.pause()
+        } catch {
+          /* best-effort restore */
+        }
+      }
+      const setup = (): void => {
+        emitKeypressEvents(stdin)
+        for (const l of priorKeypress) stdin.removeListener('keypress', l)
+        stdin.setRawMode(true)
+        stdin.resume()
+        rawWrite(ENABLE_BRACKETED_PASTE)
+        if (composer) rawWrite(ENABLE_MODIFIED_KEYS)
+        stdin.on('data', onData)
+      }
+      const finish = (value: string | null): void => {
+        if (done) return
+        done = true
+        pending = null
+        if (composer) openComposer = null
+        teardown()
+        startTimer()
+        if (spinnerLabel !== null) startInterruptWatch()
+        resolve(value)
+      }
+      pending = (line) => finish(line)
+      if (composer) {
+        openComposer = {
+          empty: () => buf.length === 0,
+          close: () => {
+            rawWrite('\n')
+            finish(null)
+          }
+        }
+      }
+      const complete = async (): Promise<void> => {
+        const completer = deps.completer
+        if (!completer) return
+        const line = buf.slice(buf.lastIndexOf('\n') + 1)
+        const [hits, sub] = await new Promise<[string[], string]>((res) => {
+          try {
+            completer(line, (_e, result) => res(result))
+          } catch {
+            res([[], line])
+          }
+        })
+        if (done || !hits.length) return
+        const insert = hits.length === 1 ? hits[0] : commonPrefix(hits)
+        if (insert.length > sub.length && insert.startsWith(sub)) {
+          const more = insert.slice(sub.length)
+          buf += more
+          echo(more)
+        } else if (hits.length > 1) {
+          rawWrite(`\n${plainText(`${hits.length} matches: ${hits.map((h) => h.trim()).join(', ')}`)}`)
+          restate()
+        }
+      }
+      const externalEdit = async (): Promise<void> => {
+        if (!deps.editText) return
+        teardown()
+        let edited: string | null
+        try {
+          edited = await deps.editText(buf)
+        } catch {
+          edited = null
+        }
+        if (done) return
+        setup()
+        if (edited !== null) buf = edited.replace(/\n$/, '')
+        restate()
+      }
+      const showTranscript = async (): Promise<void> => {
+        teardown()
+        rawWrite('\n')
+        try {
+          await transcriptHandler?.('composer')
+        } catch {
+          /* the driver reports its own failures */
+        }
+        if (done) return
+        setup()
+        rawWrite(promptNow())
+        echo(buf)
+      }
+      /** Notes about the draft (an attached image, say), each a line, then the prompt again. */
+      const noteLines = (lines: string[]): void => {
+        rawWrite('\n')
+        for (const l of lines) announce(l)
+        rawWrite(promptNow())
+        echo(buf)
+      }
+      /**
+       * Ctrl-Z: hand the terminal back cooked and stop; on `fg`, take it again and
+       * state the prompt with the draft on a fresh line (the shell printed its own).
+       */
+      const suspendLinear = (): void => {
+        if (platform === 'win32') return noteLines([NO_SUSPEND_NOTE])
+        rawWrite('\n')
+        teardown()
+        suspendProcess(() => {
+          if (done) return
+          try {
+            setup()
+          } catch {
+            /* best-effort: the read still settles through close/cancel */
+          }
+          rawWrite(promptNow())
+          echo(buf)
+        })
+      }
+      function onData(data: Buffer | string): void {
+        const r = decodeInput(decodeChunk(data), dec)
+        dec = r.state
+        if (r.keys.some((k) => k.type !== 'focus')) disarmReminder()
+        // A paste body can end paste mode early with its own end marker; keys after it
+        // must not submit or act (see sanitizePastedKeys).
+        const guarded = sanitizePastedKeys(r.keys, lastPasteAt, now())
+        lastPasteAt = guarded.lastPasteAt
+        for (const key of guarded.keys) {
+          if (done) return
+          if (key.type !== 'escape' && key.type !== 'focus') lastEscAt = -Infinity
+          switch (key.type) {
+            case 'focus':
+              noteFocus(key.on)
+              break
+            case 'char':
+              buf += key.value
+              echo(key.value)
+              break
+            case 'paste': {
+              // A paste that is only image files attaches them, as in the full composer.
+              if (composer && imagePasteHandler) {
+                const paths = parseImagePaths(key.value, { windows: platform === 'win32' })
+                const r = paths ? imagePasteHandler({ kind: 'files', paths }) : null
+                if (r?.handled) {
+                  noteLines(r.notes)
+                  break
+                }
+              }
+              // A sub-prompt answer is one line; only the composer keeps line breaks.
+              const text = composer ? key.value.replace(/\r\n?/g, '\n') : key.value.replace(/\r\n|\r|\n/g, ' ')
+              buf += text
+              echo(text)
+              break
+            }
+            case 'newline':
+              if (composer) {
+                buf += '\n'
+                rawWrite('\n')
+              }
+              break
+            case 'backspace': {
+              const chars = [...buf]
+              const last = chars.pop()
+              if (last === undefined) break
+              buf = chars.join('')
+              // A deleted line break can't be taken back on screen without moving the
+              // cursor up; the text is what counts, and the next restate shows it.
+              if (last !== '\n') rawWrite('\b \b')
+              break
+            }
+            case 'kill-line':
+            case 'kill-to-start':
+              if (buf) {
+                buf = ''
+                rawWrite('\n(cleared)')
+                restate()
+              }
+              break
+            case 'escape': {
+              // Esc Esc: clear the draft (kept in history for Up), or on an empty
+              // composer open /rewind. A lone Esc does nothing here.
+              if (!composer) break
+              const t = now()
+              const double = t - lastEscAt < DOUBLE_ESC_MS
+              lastEscAt = double ? -Infinity : t
+              if (!double) break
+              if (buf.trim()) {
+                deps.remember?.(buf)
+                buf = ''
+                rawWrite('\n(cleared)')
+                restate()
+              } else if (rewindHandler) {
+                rawWrite('\n')
+                rewindHandler()
+                finish(null)
+                return
+              }
+              break
+            }
+            case 'paste-image':
+              if (!composer) break
+              noteLines(
+                imagePasteHandler
+                  ? imagePasteHandler({ kind: 'clipboard' }).notes
+                  : ['· pasting images is unavailable here; use /image <path>']
+              )
+              break
+            case 'suspend':
+              if (!composer) break
+              suspendLinear()
+              return
+            case 'up':
+            case 'down':
+              if (!composer || !history.length) break
+              histIdx = key.type === 'up' ? Math.max(0, histIdx - 1) : Math.min(history.length, histIdx + 1)
+              buf = history[histIdx] ?? ''
+              restate()
+              break
+            case 'cycle-mode':
+              if (!composer) break
+              rawWrite('\n')
+              cycleModeHandler?.()
+              rawWrite(promptNow())
+              echo(buf)
+              break
+            case 'tab':
+              if (!composer) break
+              stdin.removeListener('data', onData)
+              void complete().finally(() => {
+                if (!done) stdin.on('data', onData)
+              })
+              return
+            case 'external-edit':
+              if (!composer) break
+              void externalEdit()
+              return
+            case 'transcript':
+              // Ctrl-O: the driver prints the transcript as lines, then the prompt
+              // is stated again under it with the draft as it was.
+              if (!composer || !transcriptHandler) break
+              void showTranscript()
+              return
+            case 'cycle-thoughts':
+              if (!composer) break
+              rawWrite('\n')
+              cycleThoughtsHandler?.()
+              rawWrite(promptNow())
+              echo(buf)
+              break
+            case 'enter':
+              rawWrite('\n')
+              finish(buf)
+              return
+            case 'eof':
+              if (buf) break
+              rawWrite('\n')
+              finish(null)
+              return
+            case 'interrupt':
+              rawWrite('\n')
+              // The discarded draft goes to history first, so Up brings it back.
+              if (composer && buf.trim()) deps.remember?.(buf)
+              // The shared handler owns what Ctrl-C means here (discard, exit, stop
+              // the run); it settles this read through cancelRead, or we do.
+              interruptHandler?.()
+              finish(null)
+              return
+            default:
+              // Cursor movement, Ctrl-R search, Ctrl-L repaint, undo/redo and the
+              // Ctrl-S stash all need a redraw; in this mode the line is only ever
+              // appended to.
+              break
+          }
+        }
+      }
+      try {
+        setup()
+        rawWrite(promptNow())
+        echo(buf)
+      } catch {
+        teardown()
+        done = true
+        pending = null
+        if (composer) openComposer = null
+        void plainRead(promptNow(), opts).then(resolve)
+      }
+    })
+  }
+
+  /** A picker as a numbered list, answered by typing the number (screen-reader mode). */
+  const selectNumbered = async (spec: PickerSpec): Promise<PickerOutcome> => {
+    rawWrite(`${plainText(renderNumberedPicker(spec).join('\n'))}\n`)
+    for (;;) {
+      const answer = await readLinear('Your choice: ', { discardPending: true })
+      if (answer === null) return { kind: 'cancel' }
+      const r = parseNumberedPick(spec, answer)
+      if (r.kind !== 'invalid') return r
+      announce(r.message)
+    }
   }
 
   /**
@@ -807,6 +1230,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     initial?: string,
     opts?: ComposerReadOptions
   ): Promise<string | null> => {
+    if (screenReader) return readLinear(prompt, { composer: true, ...(initial ? { initial } : {}) })
     const promptNow = (): string => (typeof prompt === 'string' ? prompt : prompt())
     if (closed) return Promise.resolve(null)
     // No TTY / no raw mode → the readline path still works (tests, pipes). It can't
@@ -1083,6 +1507,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         const chunk = decodeChunk(data)
         const r = decodeInput(chunk, dec)
         dec = r.state
+        if (r.keys.some((k) => k.type !== 'focus')) disarmReminder()
         // A paste body is attacker-controlled and can end paste mode early with its
         // own ESC[201~; without this, the bytes it puts after that marker would run
         // as real keys (submitting the turn, quitting, spawning $EDITOR).
@@ -1248,7 +1673,14 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
    * closes. Resolves false when there is no terminal to open it on.
    */
   const pager = (source: PagerSource): Promise<boolean> => {
-    if (closed || pagerOpen || !stdin.isTTY || typeof stdin.setRawMode !== 'function') return Promise.resolve(false)
+    if (closed || pagerOpen) return Promise.resolve(false)
+    // Screen-reader mode: no alternate screen and no cursor positioning. The whole
+    // transcript is printed as plain lines, in order, for the reader to follow.
+    if (screenReader) {
+      out(`\n${source.plain().replace(/\n*$/, '')}\n\nend of transcript\n`)
+      return Promise.resolve(true)
+    }
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return Promise.resolve(false)
     return new Promise<boolean>((resolve) => {
       stopTimer(true)
       stopInterruptWatch()
@@ -1370,8 +1802,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     // Erase the current terminal line (e.g. the composer's typed-but-abandoned input
     // on Ctrl-C) so the next prompt redraws clean.
-    clearLine: () => rawWrite(CLEAR_LINE),
-    readLine: plainRead,
+    clearLine: () => {
+      if (!screenReader) rawWrite(CLEAR_LINE)
+    },
+    readLine: (prompt, opts) => (screenReader ? readLinear(prompt, opts) : plainRead(prompt, opts)),
     readComposer,
     readSecret,
     yieldComposer: () => {
@@ -1410,6 +1844,23 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     onSteer: (handler) => {
       steerHandler = handler
     },
+    setAccessibility: (a) => {
+      if (a.screenReader !== undefined && a.screenReader !== screenReader) {
+        // Take the spinner line down while it can still be erased, then stop drawing.
+        if (a.screenReader && cancelTimer) stopTimer(true)
+        screenReader = a.screenReader
+        announced = null
+        if (!screenReader) startTimer()
+      }
+      if (a.reduceMotion !== undefined && a.reduceMotion !== reduceMotion) {
+        reduceMotion = a.reduceMotion
+        // A running timer keeps its old pace otherwise; restart it at the new one.
+        if (cancelTimer) {
+          stopTimer(false)
+          startTimer()
+        }
+      }
+    },
     setMode: (label) => {
       modeLabel = label
       if (spinnerLabel !== null) drawSpinner()
@@ -1420,8 +1871,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     signal: (sig: TerminalSignal) => {
       if (sig.title) rawWrite(titleSequence(sig.title))
-      if (sig.alert && userIsAway()) rawWrite(bellSequence() + notifySequence(sig.alert))
+      if (sig.alert && userIsAway()) rawWrite(alertSequence(sig.alert, sig.mode ?? 'auto'))
     },
+    remindIfIdle: (spec, mode, ms = IDLE_REMINDER_MS) => armReminder(spec, mode, ms),
     onInterrupt: (handler) => {
       // Debounce: a single Ctrl-C can surface via more than one path (the streaming
       // watcher vs. readline's own 'SIGINT'); collapse those near-simultaneous fires
@@ -1446,19 +1898,32 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       rl.pause()
     },
     startSpinner: (label) => {
+      // A turn is running again, so nothing is waiting on the user any more.
+      disarmReminder()
       spinnerLabel = label
       spinnerStart = now()
       tick = 0
+      // Said once, as a line: what it is doing now.
+      if (screenReader) {
+        announced = label
+        announce(lowerFirst(label))
+      }
       startTimer()
       // A turn is now running with no prompt up — watch for Ctrl-C so it can be
       // interrupted while it streams.
       startInterruptWatch()
     },
     setSpinnerLabel: (label) => {
-      if (spinnerLabel !== null) spinnerLabel = label
+      if (spinnerLabel === null) return
+      spinnerLabel = label
+      if (screenReader && label !== announced) {
+        announced = label
+        announce(lowerFirst(label))
+      }
     },
     stopSpinner: () => {
       spinnerLabel = null
+      announced = null
       stopTimer(true)
       stopInterruptWatch()
     },
@@ -1467,6 +1932,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // 100ms redraw would otherwise paint frames into the picker's multi-line
       // region and fight its cursor-up redraw, tearing it. The picker also owns
       // stdin (its own raw keypress + Ctrl-C cancel), so release the watcher first.
+      if (screenReader) return selectNumbered(spec)
       stopTimer(true)
       stopInterruptWatch()
       try {
