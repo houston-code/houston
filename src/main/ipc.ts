@@ -154,7 +154,7 @@ import {
 import { cancelCompaction, compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
-import { loadCommands } from './agent/commands'
+import { loadSlashCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
 import { registerCustomizeIpc } from './customizeIpc'
@@ -1030,7 +1030,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.commandsList, async (_event, workspace: string) => {
     if (!workspace) return []
     try {
-      return await loadCommands(realpathSync(workspace))
+      return await loadSlashCommands(realpathSync(workspace))
     } catch {
       return []
     }

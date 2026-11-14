@@ -325,7 +325,7 @@ and cost as usage.
 - **Slash commands** the editor can offer: `/review`, `/init`, `/compact`,
   `/agent <name> <task>`, `/plan`, `/ask`, `/auto`, `/full`, `/approval [mode]`,
   `/model [name]`, `/reasoning [level]`, `/skills`, `/agents` and `/help`, plus the
-  workspace's own `.houston/commands`. A prompt that starts with another `/word` is
+  workspace's own `.houston/commands` and `/<skill-name>` for each skill. A prompt that starts with another `/word` is
   sent as written.
 - **Titles**: the chat's title is shown to the editor when a session opens and once
   a turn gives it one.
@@ -650,7 +650,7 @@ Both clients accept the same names, so a command learned in one works in the oth
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
 | `/rewind` | go back to an earlier message: the conversation, the code, or both |
 | `/changes` (or `/diff`) | what's different in the working tree |
-| `/skills`, `/agents` | list the workspace's skills and custom agents |
+| `/skills`, `/agents` | list the workspace's skills and custom agents (run a skill with `/<skill-name>`) |
 | `/help` | list the available commands (in the desktop app, opens the command palette on them) |
 
 Also: `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`, `/cost`, `/context`, `/cwd`, `/share`,
@@ -1950,7 +1950,42 @@ it.
 
 **Create one** at `.houston/skills/<name>/SKILL.md`, with frontmatter `name` and
 `description`, and a body of instructions. Put it in `~/.houston/skills/<name>/` to
-have it in every project; a project's skill wins if both use the same name.
+have it in every project.
+
+**The Agent Skills format.** Houston also reads skills written to the open Agent
+Skills format (agentskills.io) from `.agents/skills/<name>/SKILL.md` in the project
+and from `~/.agents/skills/`. When two skills share a name, a project's wins over
+yours, and `.houston/skills` wins over `.agents/skills` in the same place. Skills
+in `.claude/skills` aren't read directly; import them in Settings instead.
+
+| Frontmatter | Effect |
+| --- | --- |
+| `name` | up to 64 lowercase letters, digits and single hyphens, matching the folder name |
+| `description` | what the skill does and when to use it (required, up to 1024 characters) |
+| `license` | the skill's license, shown in Settings |
+| `compatibility` | what the skill needs (tools, network, a platform), up to 500 characters; shown with the instructions |
+| `metadata` | a map of extra keys and values, kept as written |
+| `allowed-tools` | space-separated tools; once the agent loads the skill, only these run for the rest of that turn |
+| `paths` | file globs (a list, or comma-separated); when the agent works on a matching file, it is told about the skill once |
+| `disabled: true` | switches it off without deleting it |
+
+- **Checked against the format.** A skill in `.agents/skills` whose name breaks the
+  rules, doesn't match its folder, or has no description isn't loaded. Older skills
+  in `.houston/skills` keep loading, and Settings > Customize shows what to fix.
+- **`allowed-tools` only narrows.** It can never give the agent a tool or a permission
+  it doesn't already have, and with two such skills loaded a tool must be on both
+  lists. Houston tool names work (`read_file`, `run_shell`), as do the format's
+  generic names (`Read`, `Bash`, `Grep`) and a trailing `*` (`mcp__github__*`). A
+  scope like `Bash(git:*)` covers the whole tool. Asking you, the task list, plan
+  presentation and loading another skill are always allowed.
+- **`paths` triggers.** `paths: ["**/*.pdf", "docs/*.md"]` names the skill to the
+  agent the first time it reads or edits a matching file in the conversation. A
+  pattern without a `/` matches the file name in any folder.
+
+**Run one yourself** with `/<skill-name>` in the desktop app or the terminal, followed
+by anything you want to add (`/pdf-tools split report.pdf`). Skills are listed under
+their own heading in the slash menu. A custom command or a built-in with the same
+name wins.
 
 **How it's loaded (progressive disclosure):**
 
