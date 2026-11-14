@@ -788,6 +788,13 @@ body.is-resizing {
 .section + .section {
   margin-top: 8px;
 }
+/* A section's rows, and one row with the spawned chats under it. */
+.section__rows,
+.conv-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
 /* The insertion line marking where a dragged chat will land within a section. */
 .conv-drop-line {
   height: 2px;
@@ -817,6 +824,19 @@ body.is-resizing {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+.section-head__toggle:disabled {
+  cursor: default;
+}
+/* A group's name being renamed, in the toggle's place. */
+.section-head__rename {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px;
+  color: var(--text-dim);
 }
 .section-head__chevron {
   font-size: 9px;
@@ -885,12 +905,14 @@ body.is-resizing {
   cursor: pointer;
   text-decoration: underline;
 }
-/* A section header's label filter: shown on hover or focus, and always while on. */
+/* A section header's label filter: shown on hover or focus, and always while on.
+   Transparent rather than hidden, so it stays in the tab order and its menu can
+   hand focus back to it. */
 .section-head__labels {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  visibility: hidden;
+  opacity: 0;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -904,7 +926,7 @@ body.is-resizing {
 .section-head:focus-within .section-head__labels,
 .section-head__labels--on,
 .section-head__labels[aria-expanded='true'] {
-  visibility: visible;
+  opacity: 1;
 }
 .section-head__labels:hover {
   color: var(--text);
@@ -1190,6 +1212,30 @@ body.is-resizing {
 [data-color='pink'] {
   --label: var(--label-pink);
 }
+/* The row's open button: no button chrome of its own, the row draws the surface
+   and its focus ring. */
+button.conv__main {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: inherit;
+}
+button.conv__main:focus-visible {
+  outline: none;
+}
+.conv:has(> button.conv__main:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.conv__title,
+.conv__meta {
+  display: block;
+}
 .conv__title {
   font-size: 13px;
   line-height: 1.3;
@@ -1215,8 +1261,11 @@ body.is-resizing {
   position: relative;
   flex-shrink: 0;
 }
+/* The row and group ⋯ buttons show on hover, while keyboard focus is in the row or
+   header, and while their own menu is open. Transparent rather than hidden, so they
+   stay in the tab order and a closing menu can hand focus back to them. */
 .conv__action {
-  visibility: hidden;
+  opacity: 0;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -1227,8 +1276,15 @@ body.is-resizing {
   border-radius: 5px;
 }
 .conv:hover .conv__action,
-.section-head:hover .conv__action {
-  visibility: visible;
+.conv:focus-within .conv__action,
+.section-head:hover .conv__action,
+.section-head:focus-within .conv__action,
+.conv__action[aria-expanded='true'] {
+  opacity: 1;
+}
+.conv__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .conv__action:hover {
   color: var(--text);
