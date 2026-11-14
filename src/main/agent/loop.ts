@@ -267,7 +267,7 @@ import {
 import { autoBranchFor, getRepoInfo, houstonWorktreeHome } from './worktree'
 import { matchingHooks, notificationFor, runHooks, type HookOutcome, type HookSession } from './hooks'
 import { loadAgents, type CustomAgent } from './agents'
-import { findSkill, loadSkills, pathTriggeredSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
+import { findSkill, loadSkills, pathTriggeredSkills, resolveSkillFile, resolveSkillInstructions, withBuiltinSkills } from './skills'
 import {
   blockingRestriction,
   notedSkillNames,
@@ -3482,7 +3482,9 @@ export async function startRun(
         : {}),
       // Back the `skill` tool: resolve a skill name to its full instructions (or a
       // note listing what's available) from the skills loaded for this run.
-      useSkill: async (name) => {
+      useSkill: async (name, file) => {
+        // A bundled file is read on its own; only loading the instructions activates the skill.
+        if (file) return resolveSkillFile(workspace, skills, name, file)
         const text = await resolveSkillInstructions(workspace, skills, name)
         const skill = findSkill(skills, name)
         if (skill?.allowedTools?.length && !skillRestrictions.some((r) => r.skill === skill.name)) {

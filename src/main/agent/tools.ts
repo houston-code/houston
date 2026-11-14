@@ -371,9 +371,10 @@ export interface ToolContext {
   getHistory?: () => ChatMessage[]
   /**
    * Load a project skill's full instructions by name (injected by the loop). Backs
-   * the `skill` tool; returns the SKILL.md body, or an "unknown skill" note.
+   * the `skill` tool; returns the SKILL.md body, or an "unknown skill" note. With `file`,
+   * returns that bundled file of the skill instead, read inside the skill's own folder.
    */
-  useSkill?: (name: string) => Promise<string>
+  useSkill?: (name: string, file?: string) => Promise<string>
   /**
    * Wait for a background shell or a spawned session of this chat to finish, up to
    * `seconds` (injected by the loop). Backs `wait_for`; resolves with what to tell the
@@ -3467,16 +3468,20 @@ const webSearch: ToolDef = {
 
 const skillTool: ToolDef = {
   kind: 'read', // returns instructions only — no side effects, no approval
-  summarize: (a) => `Skill: ${str(a, 'name') || '?'}`,
+  summarize: (a) => `Skill: ${str(a, 'name') || '?'}${str(a, 'file') ? ` (${str(a, 'file')})` : ''}`,
   schema: {
     name: 'skill',
     description:
-      "Load a skill's full instructions (its SKILL.md) by name, then follow them. Skills are listed in your context when any exist. Returns the instructions, or the list of available skills if the name is unknown.",
+      "Load a skill's full instructions (its SKILL.md) by name, then follow them. Returns the instructions, or the available skills if the name is unknown.",
     parameters: objectSchema(
       {
         name: {
           type: 'string',
           description: 'The exact name of the skill to load, as listed in your context.'
+        },
+        file: {
+          type: 'string',
+          description: 'Optional: a bundled file to read instead, as listed.'
         }
       },
       ['name']
@@ -3486,7 +3491,8 @@ const skillTool: ToolDef = {
     const name = str(args, 'name')
     if (!name) throw new Error('name is required.')
     if (!ctx.useSkill) throw new Error('Skills are not available in this context.')
-    return ctx.useSkill(name)
+    const file = str(args, 'file')
+    return file ? ctx.useSkill(name, file) : ctx.useSkill(name)
   }
 }
 
