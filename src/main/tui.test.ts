@@ -4568,7 +4568,8 @@ describe('status line: branch and the running turn', () => {
   it('shows the branch above the composer, re-read before each prompt', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const branches = ['main', 'feature/y']
-    d.gitBranch = async () => branches.shift() ?? null
+    // The host reads HEAD synchronously (headBranch.ts).
+    d.gitBranch = () => branches.shift() ?? null
     const t = fakeIo(['go', null])
     d.io = t.io
     await runTui(opts, d)
@@ -4584,6 +4585,39 @@ describe('status line: branch and the running turn', () => {
     const t = fakeIo([null])
     d.io = t.io
     await expect(runTui(opts, d)).resolves.toBe(0)
+  })
+
+  it('a lookup that throws outright just leaves the branch out too', async () => {
+    const { d } = deps([])
+    d.gitBranch = () => {
+      throw new Error('unreadable')
+    }
+    const t = fakeIo([null])
+    d.io = t.io
+    await expect(runTui(opts, d)).resolves.toBe(0)
+    expect(t.reads).toHaveLength(1)
+  })
+
+  // A lookup that has to ask git is never waited for: the prompt (and the request of a
+  // turn queued behind it) must not sit behind a git process.
+  it('never waits for a branch lookup that is still running', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.gitBranch = () => new Promise<string | null>(() => {})
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await expect(runTui(opts, d)).resolves.toBe(0)
+    expect(t.reads).toHaveLength(2)
+    expect(t.text()).not.toContain(' · main · ')
+  })
+
+  it('shows the branch from a slow lookup on the status line after it settles', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.gitBranch = async () => 'main'
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // Two status lines: the first is drawn before the lookup settles, the second shows it.
+    expect(t.text().split(' · main · ')).toHaveLength(2)
   })
 
   it('hands the status to the spinner line while a turn runs, and updates its context', async () => {

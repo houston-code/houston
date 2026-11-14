@@ -3034,8 +3034,12 @@ export interface TuiDeps {
    * not answer. Absent ⇒ hosts are listed without a probe.
    */
   listModels?: (provider: ProviderConfig) => Promise<ModelOption[]>
-  /** The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch shown. */
-  gitBranch?: () => Promise<string | null>
+  /**
+   * The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch
+   * shown. Read before every status line and never waited for: a value shows at once, a
+   * promise shows on the status line after it settles.
+   */
+  gitBranch?: () => string | null | Promise<string | null>
   /**
    * Write an export (`/export`) to `path`, relative to the working folder, without
    * replacing an existing file. Returns the full path written; throws on failure.
@@ -3489,12 +3493,27 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // This session's landed edits (newest last), for `/diff last [n]`.
   let recentEdits: FileDiffPreview[][] = []
   // The checked-out branch, re-read before each status line (a turn or `!git`
-  // may switch it).
+  // may switch it). Never waited for: the prompt, and a queued turn's request behind
+  // it, must not sit behind a git process. A slow answer shows on the next status line.
   let branch: string | null = null
-  const refreshBranch = async (): Promise<void> => {
+  let branchReads = 0
+  const refreshBranch = (): void => {
     if (!deps.gitBranch) return
+    const read = ++branchReads
     try {
-      branch = await deps.gitBranch()
+      const got = deps.gitBranch()
+      if (got === null || typeof got === 'string') {
+        branch = got
+        return
+      }
+      got.then(
+        (b) => {
+          if (read === branchReads) branch = b
+        },
+        () => {
+          if (read === branchReads) branch = null
+        }
+      )
     } catch {
       branch = null
     }
@@ -3876,7 +3895,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // A persistent status line above the composer: model, policy, cwd, cost, and
     // context-window fill — so live session state is always visible. Before a
     // provider is set up it shows a "no model" prompt pointing at /login instead.
-    await refreshBranch()
+    refreshBranch()
     deps.io.out(
       `${
         providerId && model

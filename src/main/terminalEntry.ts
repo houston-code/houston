@@ -55,6 +55,7 @@ import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
 import { listModels } from './providers'
 import { runGitCapture } from './agent/gitRead'
+import { readHeadBranch } from './headBranch'
 import { writeExportFile } from './tui-sessions'
 import {
   canPersistHeaderSecrets,
@@ -698,11 +699,16 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // doesn't answer quickly is reported as not running rather than holding up
       // the menu (the SDK's own retries can take far longer).
       listModels: (provider) => withTimeout(listModels(provider), HOST_PROBE_MS),
-      // symbolic-ref names the branch (even an unborn one) and fails on a detached
-      // HEAD or outside a repository, where the status line shows no branch.
-      gitBranch: async () => {
-        const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], tui.cwd)
-        return head.ok ? head.stdout.trim() || null : null
+      // Read from the repository's HEAD file, so drawing the status line runs no git.
+      // Only a HEAD the file can't answer for asks git: symbolic-ref names the branch
+      // (even an unborn one) and fails on a detached HEAD or outside a repository,
+      // where the status line shows no branch.
+      gitBranch: () => {
+        const fromFile = readHeadBranch(tui.cwd)
+        if (fromFile !== undefined) return fromFile
+        return runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], tui.cwd).then((head) =>
+          head.ok ? head.stdout.trim() || null : null
+        )
       },
       writeExport: (path, content) => writeExportFile(tui.cwd, path, content),
       workingTree: async () => {
