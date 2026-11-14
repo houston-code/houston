@@ -7,9 +7,12 @@ import { fileURLToPath } from 'node:url'
  * `houston -i` launches the interactive terminal the way `houston -p` scripts a
  * one-shot run — no `node out/cli/houston-cli.cjs …` prefix.
  *
- * This symlinks the already-built bundle (out/cli/houston-cli.cjs, produced by
- * scripts/build-cli.mjs) into a bin directory rather than copying it, so a later
- * `npm run build:cli` is picked up with no reinstall. It deliberately does NOT
+ * This symlinks the launcher scripts/build-cli.mjs writes beside the bundle
+ * (out/cli/houston.cjs, a copy of the npm package's packaging/npm/houston.cjs) into a
+ * bin directory rather than copying anything, so a later `npm run build:cli` is picked
+ * up with no reinstall. The launcher turns on Node's compile cache and then starts
+ * out/cli/houston-cli.cjs, so the bundle isn't recompiled on every start, as with the
+ * npm, Homebrew and AUR installs. It deliberately does NOT
  * go through `npm link`/`npm i -g .`: that would install the whole Electron app
  * globally and fire its `postinstall` (electron-rebuild) — heavy and pointless
  * for a headless box. `npm link` still works via the package `bin` field for
@@ -21,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const CLI_ARTIFACT = resolve(root, 'out/cli/houston-cli.cjs')
+const LAUNCHER_ARTIFACT = resolve(root, 'out/cli/houston.cjs')
 const LINK_NAME = 'houston'
 
 /** Expand a leading `~` to `home`, then resolve to an absolute path. */
@@ -76,8 +80,9 @@ function main(argv) {
       `Install the Houston CLI as \`${LINK_NAME}\` on your PATH.\n\n` +
         `Usage: node scripts/install-cli.mjs [--dir <bin-dir>]\n\n` +
         `Prefer \`npm run install:cli\`, which builds the bundle first. Symlinks\n` +
-        `out/cli/houston-cli.cjs into a bin directory (default: ~/.local/bin) so you\n` +
-        `can run \`${LINK_NAME} -i\`. Re-run any time; it replaces the existing link.`
+        `out/cli/houston.cjs (which starts out/cli/houston-cli.cjs with Node's compile\n` +
+        `cache on) into a bin directory (default: ~/.local/bin) so you can run\n` +
+        `\`${LINK_NAME} -i\`. Re-run any time; it replaces the existing link.`
     )
     return
   }
@@ -90,10 +95,13 @@ function main(argv) {
     )
   }
 
-  if (!existsSync(CLI_ARTIFACT)) {
+  // Both files come from one `npm run build:cli`; the launcher is missing from a build
+  // made before it was added, so ask for a fresh build either way.
+  const missing = [CLI_ARTIFACT, LAUNCHER_ARTIFACT].find((p) => !existsSync(p))
+  if (missing) {
     fail(
       `CLI not built yet. Run \`npm run install:cli\` (which builds first), or ` +
-        `\`npm run build:cli\` then re-run this.\nExpected: ${CLI_ARTIFACT}`
+        `\`npm run build:cli\` then re-run this.\nExpected: ${missing}`
     )
   }
 
@@ -110,10 +118,10 @@ function main(argv) {
   const link = join(dir, LINK_NAME)
   // Idempotent: drop any existing link/file (incl. a dangling symlink) first.
   if (isSymlink(link) || existsSync(link)) rmSync(link, { force: true })
-  symlinkSync(CLI_ARTIFACT, link)
-  chmodSync(CLI_ARTIFACT, 0o755)
+  symlinkSync(LAUNCHER_ARTIFACT, link)
+  chmodSync(LAUNCHER_ARTIFACT, 0o755)
 
-  console.log(`Linked ${link} -> ${CLI_ARTIFACT}`)
+  console.log(`Linked ${link} -> ${LAUNCHER_ARTIFACT}`)
   if (onPath) {
     console.log(`\nRun it:  ${LINK_NAME}`)
   } else {

@@ -1078,8 +1078,10 @@ A bare `houston` starts interactive only when it has a real terminal. With a
 prompt piped in (`echo "fix the build" | houston --json`) it runs it one-shot, as
 `-p` would; in CI with nothing piped (no TTY) it prints usage instead of hanging,
 so use `-p "<prompt>"` there.
-`npm run install:cli` symlinks the built bundle (a rebuild is picked up with no
-reinstall) and, if the target dir isn't on your PATH yet, prints the line to add.
+`npm run install:cli` symlinks the built CLI (a rebuild is picked up with no
+reinstall) through a small launcher that turns on Node's compile cache, so it
+starts faster after the first run. If the target dir isn't on your PATH yet, it
+prints the line to add.
 Prefer npm's own linking? The package exposes a `houston` `bin`, so
 `npm run build:cli && npm link` works too. On Windows use `npm link` (npm writes
 a `houston.cmd` shim) or invoke the bundle directly.

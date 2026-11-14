@@ -32,7 +32,9 @@ export function detectInstallMethod(scriptPath: string | undefined, isDesktop: b
   if (p.includes('/node_modules/@houston-code/cli/')) return 'npm'
   if (p.includes('/Cellar/houston/')) return 'homebrew'
   if (p === '/usr/lib/houston/houston-cli.cjs') return 'aur'
-  if (p.endsWith('/out/cli/houston-cli.cjs')) return 'source'
+  // A source checkout's `houston` (scripts/install-cli.mjs) links to the launcher beside
+  // the bundle; running the bundle itself is a source run too.
+  if (p.endsWith('/out/cli/houston-cli.cjs') || p.endsWith('/out/cli/houston.cjs')) return 'source'
   // install.sh installs the bundle itself as a file named `houston`; every other channel
   // runs a file named houston-cli.cjs.
   if (p.endsWith('/houston')) return 'install-script'
