@@ -197,76 +197,95 @@ export function createGeminiProvider(apiKey: string): Provider {
       }
       if (req.signal) config.abortSignal = req.signal
 
-      const stream = await ai.models.generateContentStream({
-        model: req.model,
-        contents: toGeminiContents(req.messages, req.model),
-        config
-      })
+      // Tokens billed by an attempt that was retried (see MALFORMED_FUNCTION_CALL below).
+      let carriedInput = 0
+      let carriedOutput = 0
+      for (let attempt = 0; ; attempt++) {
+        const stream = await ai.models.generateContentStream({
+          model: req.model,
+          contents: toGeminiContents(req.messages, req.model),
+          config
+        })
 
-      let sawToolCall = false
-      let inputTokens: number | undefined
-      let outputTokens: number | undefined
-      let cacheReadTokens: number | undefined
-      let finishReason: string | undefined
-      // Function-call thought signatures, carried on the turn as reasoning blocks keyed
-      // by call id so the next request can return each one (see toGeminiContents).
-      const signatures: ReasoningBlock[] = []
-      for await (const chunk of stream) {
-        // usageMetadata is cumulative across the stream; keep the latest seen.
-        const usage = chunk.usageMetadata
-        if (usage) {
-          inputTokens = usage.promptTokenCount
-          // candidatesTokenCount EXCLUDES the model's "thoughts" (reasoning) tokens,
-          // which Gemini bills at the output rate; add them so the output count and
-          // cost aren't understated on 2.5 thinking requests (parity with the other
-          // adapters, whose output_tokens already include reasoning).
-          outputTokens = (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0)
-          // Implicit-cache hits (Gemini 2.5+ caches automatically). A subset of
-          // promptTokenCount, billed below the input rate; implicit writes are free.
-          cacheReadTokens = usage.cachedContentTokenCount
-        }
-        const cand = chunk.candidates?.[0]
-        // Keep the latest finishReason so a truncated response is reported as such
-        // instead of a clean end_turn (the loop's max-output handling depends on it).
-        if (cand?.finishReason) finishReason = cand.finishReason
-        // Iterate parts so we can separate "thought" parts (reasoning) from the
-        // answer text — chunk.text would merge them.
-        const parts = cand?.content?.parts ?? []
-        for (const part of parts) {
-          if (part.functionCall) {
-            sawToolCall = true
-            const id = part.functionCall.id || randomUUID()
-            if (part.thoughtSignature) {
-              signatures.push({ text: '', model: req.model, id, signature: part.thoughtSignature })
-            }
-            yield {
-              type: 'tool_call',
-              call: {
-                id,
-                name: part.functionCall.name ?? '',
-                arguments: (part.functionCall.args as Record<string, unknown>) ?? {}
+        let sawToolCall = false
+        // Whether this attempt has yielded anything: only an empty reply can be retried.
+        let yielded = false
+        let inputTokens: number | undefined
+        let outputTokens: number | undefined
+        let cacheReadTokens: number | undefined
+        let finishReason: string | undefined
+        // Function-call thought signatures, carried on the turn as reasoning blocks keyed
+        // by call id so the next request can return each one (see toGeminiContents).
+        const signatures: ReasoningBlock[] = []
+        for await (const chunk of stream) {
+          // usageMetadata is cumulative across the stream; keep the latest seen.
+          const usage = chunk.usageMetadata
+          if (usage) {
+            inputTokens = usage.promptTokenCount
+            // candidatesTokenCount EXCLUDES the model's "thoughts" (reasoning) tokens,
+            // which Gemini bills at the output rate; add them so the output count and
+            // cost aren't understated on 2.5 thinking requests (parity with the other
+            // adapters, whose output_tokens already include reasoning).
+            outputTokens = (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0)
+            // Implicit-cache hits (Gemini 2.5+ caches automatically). A subset of
+            // promptTokenCount, billed below the input rate; implicit writes are free.
+            cacheReadTokens = usage.cachedContentTokenCount
+          }
+          const cand = chunk.candidates?.[0]
+          // Keep the latest finishReason so a truncated response is reported as such
+          // instead of a clean end_turn (the loop's max-output handling depends on it).
+          if (cand?.finishReason) finishReason = cand.finishReason
+          // Iterate parts so we can separate "thought" parts (reasoning) from the
+          // answer text — chunk.text would merge them.
+          const parts = cand?.content?.parts ?? []
+          for (const part of parts) {
+            if (part.functionCall) {
+              sawToolCall = true
+              const id = part.functionCall.id || randomUUID()
+              if (part.thoughtSignature) {
+                signatures.push({ text: '', model: req.model, id, signature: part.thoughtSignature })
               }
+              yielded = true
+              yield {
+                type: 'tool_call',
+                call: {
+                  id,
+                  name: part.functionCall.name ?? '',
+                  arguments: (part.functionCall.args as Record<string, unknown>) ?? {}
+                }
+              }
+            } else if (part.text) {
+              yielded = true
+              yield part.thought ? { type: 'reasoning', text: part.text } : { type: 'text', text: part.text }
             }
-          } else if (part.text) {
-            yield part.thought ? { type: 'reasoning', text: part.text } : { type: 'text', text: part.text }
           }
         }
-      }
 
-      yield {
-        type: 'done',
-        // A MAX_TOKENS cutoff means the reply was truncated at the output limit, which
-        // the loop surfaces specially; report it even when a (partial) tool call was
-        // seen. Otherwise a tool call means tool_use, and a plain finish is end_turn.
-        stopReason:
-          finishReason === 'MAX_TOKENS' ? 'max_tokens' : sawToolCall ? 'tool_use' : 'end_turn',
-        ...(finishReason && GEMINI_BLOCKED.has(finishReason) ? { refusal: finishReason } : {}),
-        usage: {
-          inputTokens,
-          outputTokens,
-          ...(cacheReadTokens ? { cacheReadTokens } : {})
-        },
-        ...(signatures.length ? { reasoning: signatures } : {})
+        // MALFORMED_FUNCTION_CALL: the model wrote a call Gemini could not parse, and the
+        // reply is empty. It is usually a one-off, so ask once more before giving up;
+        // the discarded attempt's tokens were still billed, so they are carried over.
+        if (finishReason === 'MALFORMED_FUNCTION_CALL' && !yielded && attempt === 0) {
+          carriedInput += inputTokens ?? 0
+          carriedOutput += outputTokens ?? 0
+          continue
+        }
+
+        yield {
+          type: 'done',
+          // A MAX_TOKENS cutoff means the reply was truncated at the output limit, which
+          // the loop surfaces specially; report it even when a (partial) tool call was
+          // seen. Otherwise a tool call means tool_use, and a plain finish is end_turn.
+          stopReason:
+            finishReason === 'MAX_TOKENS' ? 'max_tokens' : sawToolCall ? 'tool_use' : 'end_turn',
+          ...(finishReason && GEMINI_BLOCKED.has(finishReason) ? { refusal: finishReason } : {}),
+          usage: {
+            inputTokens: carriedInput ? (inputTokens ?? 0) + carriedInput : inputTokens,
+            outputTokens: carriedOutput ? (outputTokens ?? 0) + carriedOutput : outputTokens,
+            ...(cacheReadTokens ? { cacheReadTokens } : {})
+          },
+          ...(signatures.length ? { reasoning: signatures } : {})
+        }
+        return
       }
     }
   }

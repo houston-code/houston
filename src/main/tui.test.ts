@@ -1052,6 +1052,15 @@ describe('status line & progress', () => {
     expect(renderStatusLine({ ...base, branch: null }, 120, paint)).toBe(renderStatusLine(base, 120, paint))
   })
 
+  it("shows the provider's rate-limit quota when it reported one", () => {
+    const base = { providerId: 'p', model: 'claude-opus-4-8', policy: 'ask' as const, cwd: '/p', cost: { inputTokens: 0, outputTokens: 0, cost: 0 }, contextTokens: 0 }
+    const at = '2026-11-14T00:00:00Z'
+    expect(renderStatusLine({ ...base, quota: { remainingRequests: 45, remainingTokens: 12_000, at } }, 160, paint)).toContain(
+      'rate 45 req · 12k tok left'
+    )
+    expect(renderStatusLine({ ...base, quota: { at } }, 160, paint)).toBe(renderStatusLine(base, 160, paint))
+  })
+
   it('shows context use as a token count when the model window is unknown', () => {
     expect(renderContextUsage(12_300, 'some-unknown-model-xyz', paint)).toBe('12.3k tok context')
     expect(renderContextUsage(0, 'some-unknown-model-xyz', paint)).toBe('')

@@ -410,6 +410,65 @@ describe('gemini stop reason', () => {
     expect(await doneFor({ finishReason: 'STOP', content: { parts: [{ text: 'ok' }] } })).not.toHaveProperty('refusal')
   })
 
+  it('asks once more after an empty MALFORMED_FUNCTION_CALL reply, carrying its billed tokens', async () => {
+    const malformed = (async function* () {
+      yield { candidates: [{ finishReason: 'MALFORMED_FUNCTION_CALL' }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 5 } }
+    })()
+    const good = (async function* () {
+      yield {
+        candidates: [{ finishReason: 'STOP', content: { parts: [{ functionCall: { id: 'c1', name: 'read_file', args: { path: 'a' } } }] } }],
+        usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10 }
+      }
+    })()
+    h.stream.mockReset()
+    h.stream.mockResolvedValueOnce(malformed).mockResolvedValueOnce(good)
+    const events: ProviderStreamEvent[] = []
+    for await (const ev of createGeminiProvider('k').streamChat({
+      model: 'gemini-2.5-flash',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      events.push(ev)
+    }
+    expect(h.stream).toHaveBeenCalledTimes(2)
+    expect(events.filter((e) => e.type === 'tool_call')).toHaveLength(1)
+    expect(events.filter((e) => e.type === 'done')).toEqual([
+      { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 200, outputTokens: 15 } }
+    ])
+  })
+
+  it('retries a malformed call only once, and never after something was shown', async () => {
+    const malformed = (): AsyncGenerator<unknown> =>
+      (async function* () {
+        yield { candidates: [{ finishReason: 'MALFORMED_FUNCTION_CALL' }] }
+      })()
+    h.stream.mockReset()
+    h.stream.mockImplementation(async () => malformed())
+    expect(await drainStopReason({ finishReason: 'MALFORMED_FUNCTION_CALL' })).toBe('end_turn')
+    h.stream.mockReset()
+    h.stream.mockImplementation(async () => malformed())
+    let n = 0
+    for await (const ev of createGeminiProvider('k').streamChat({
+      model: 'gemini-2.5-flash',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      if (ev.type === 'done') n++
+    }
+    expect(h.stream).toHaveBeenCalledTimes(2)
+    expect(n).toBe(1)
+
+    h.stream.mockReset()
+    h.stream.mockResolvedValue(
+      (async function* () {
+        yield { candidates: [{ finishReason: 'MALFORMED_FUNCTION_CALL', content: { parts: [{ text: 'Let me' }] } }] }
+      })()
+    )
+    for await (const ev of createGeminiProvider('k').streamChat({
+      model: 'gemini-2.5-flash',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) void ev
+    expect(h.stream).toHaveBeenCalledTimes(1)
+  })
+
   it('reports a normal STOP finish as end_turn', async () => {
     expect(await drainStopReason({ finishReason: 'STOP', content: { parts: [{ text: 'done' }] } })).toBe(
       'end_turn'
