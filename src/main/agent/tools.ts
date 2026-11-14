@@ -102,6 +102,16 @@ import {
   type CaptureInput,
   type LocalhostCapture
 } from './viewlocalhost'
+import {
+  BROWSER_UNAVAILABLE,
+  DEFAULT_LOG_LIMIT,
+  logLimit,
+  MAX_LOG_LIMIT,
+  MAX_SNAPSHOT_CHARS,
+  parseSessionSteps,
+  type BrowserSession,
+  type PageState
+} from './browserSession'
 import { clampSearchResults, formatHits, getSearchAdapter, NO_RESULTS } from './websearch'
 import { resolveRipgrep, searchContents } from './search'
 import { FALLBACK_SKIP_DIRS, gitListFiles, gitTrackedHidden, globTester, hasHiddenSegment } from './fileScope'
@@ -261,6 +271,11 @@ export interface ToolContext {
   attachDocument?: (doc: DocumentAttachment) => void
   /** Screenshot + console-capture a loopback URL (injected by the loop; Electron-backed). */
   captureLocalhost?: (input: CaptureInput) => Promise<LocalhostCapture>
+  /**
+   * The run's persistent loopback browser page (injected by the loop; Electron-backed,
+   * closed when the run ends). Backs browser_session; absent on clients without the backend.
+   */
+  browserSession?: BrowserSession
   /** Render a project HTML mockup offscreen with no network (injected by the loop; Electron-backed). */
   renderMockup?: RenderMockup
   /**
@@ -2704,6 +2719,244 @@ const viewLocalhost: ToolDef = {
       // The title and a failed step's error can carry the page's own words, and both
       // render outside the fence.
       alsoScore: [cap.title, ...(cap.steps ?? []).map((r) => r.error ?? '')].join('\n')
+    })
+  }
+}
+
+/** Tool name for the persistent loopback browser, shared so the loop can gate and key it. */
+export const BROWSER_SESSION_NAME = 'browser_session'
+
+/** The browser_session actions, in the order the schema lists them. */
+export const BROWSER_ACTIONS = ['open', 'act', 'snapshot', 'console', 'network', 'close'] as const
+
+const browserPreamble = (what: string): string =>
+  untrustedPreamble(
+    what,
+    'A local dev server can serve text from anywhere (stored user input, fetched data, third-party scripts)'
+  )
+
+/** The page's visible text as a fenced part, or a trusted "(none)" line when it has none. */
+function pageTextPart(state: PageState, lines: string[]): UntrustedPart[] {
+  if (state.pageText) {
+    return [
+      {
+        label: state.pageTextTruncated
+          ? `Visible page text (first ${MAX_PAGE_TEXT_CHARS} characters):`
+          : 'Visible page text:',
+        text: state.pageText,
+        source: `${state.finalUrl} (page text)`
+      }
+    ]
+  }
+  if (state.pageText === undefined) lines.push('', 'Visible page text: (could not be read)')
+  else lines.push('', 'Visible page text: (none)')
+  return []
+}
+
+const browserSessionTool: ToolDef = {
+  kind: 'network',
+  summarize: (a) => {
+    const action = typeof a.action === 'string' ? a.action : ''
+    if (action === 'open') return `Browser: open ${str(a, 'url')}`
+    if (action === 'act') {
+      // The approval card lists what will be clicked and typed into, never the values.
+      let steps: string[]
+      try {
+        steps = parseSessionSteps(a.steps).map(describeStep)
+      } catch {
+        steps = Array.isArray(a.steps) ? [`${a.steps.length} step(s), invalid`] : []
+      }
+      return `Browser: ${steps.length ? steps.join(', ') : 'act'}`
+    }
+    if (action === 'snapshot') return 'Browser: snapshot the page'
+    if (action === 'console') return 'Browser: read console messages'
+    if (action === 'network') return 'Browser: read network requests'
+    if (action === 'close') return 'Browser: close the session'
+    return `Browser: ${action || 'unknown action'}`
+  },
+  schema: {
+    name: BROWSER_SESSION_NAME,
+    description:
+      'A persistent headless browser page for testing a localhost/loopback dev server you started with run_shell. Unlike view_localhost, the page stays open across calls for the rest of this run, so cookies, storage, and in-page state (a login, a half-filled form) carry over. Actions: open loads a loopback URL (in the open page when there is one); act runs steps on the current page (the same steps as view_localhost, each targeting a CSS selector or a ref from the last snapshot) and reports each result and the visible page text; snapshot returns the accessibility tree (roles, names, states, and a ref like e12 for each element) plus a screenshot; console returns recent console messages; network returns recent requests with method, URL, status, and timing; close ends the session. Prefer refs from a fresh snapshot over guessed selectors. Use test data, not the user\'s real credentials. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed. Each call needs approval like view_localhost: per host, with act approved separately from reading the page.',
+    parameters: objectSchema(
+      {
+        action: { type: 'string', enum: [...BROWSER_ACTIONS], description: 'What to do.' },
+        url: { type: 'string', description: 'open: a loopback URL to load, e.g. "http://localhost:3000/login".' },
+        steps: {
+          type: 'array',
+          description:
+            'act: steps run in order on the current page (at most 20), stopping at the first failure. Same actions as view_localhost: fill, click, dblclick, press, wait_for, expect_text, wait. Give each step a ref from the latest snapshot or a selector, not both.',
+          items: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: [...STEP_ACTIONS] },
+              ref: { type: 'string', description: 'An element ref from the latest snapshot, e.g. "e12".' },
+              selector: {
+                type: 'string',
+                description: 'Standard CSS selector, no :contains() or :has-text(), when there is no ref.'
+              },
+              value: { type: 'string', description: 'Text to enter (fill), or the text to look for (expect_text).' },
+              key: { type: 'string', enum: [...PRESS_KEYS], description: 'Key to press (press).' },
+              absent: { type: 'boolean', description: 'expect_text: pass only when the text is not visible.' },
+              timeout_ms: { type: 'number', description: 'How long wait_for or expect_text waits.' },
+              ms: { type: 'number', description: 'How long wait pauses.' }
+            },
+            required: ['action'],
+            additionalProperties: false
+          }
+        },
+        limit: {
+          type: 'number',
+          description: `console and network: how many of the most recent entries to return (default ${DEFAULT_LOG_LIMIT}, max ${MAX_LOG_LIMIT}).`
+        }
+      },
+      ['action']
+    )
+  },
+  async execute(args, ctx) {
+    const action = typeof args.action === 'string' ? args.action : ''
+    if (!(BROWSER_ACTIONS as readonly string[]).includes(action)) {
+      throw new Error(`action must be one of ${BROWSER_ACTIONS.join(', ')}.`)
+    }
+    const browser = ctx.browserSession
+    if (!browser) return BROWSER_UNAVAILABLE
+
+    if (action === 'close') {
+      return browser.close() ? 'Closed the browser session.' : 'No browser session was open.'
+    }
+
+    if (action === 'open') {
+      const url = str(args, 'url')
+      if (!url) throw new Error('url is required for "open".')
+      const port = urlPort(url)
+      const ownerNote =
+        port !== null && ctx.portListeners
+          ? ctx.portListeners(port).then(
+              (listeners) =>
+                foreignListenerNote(port, listeners, ctx.roots ?? [ctx.workspace], backgroundShellGroups()),
+              () => null
+            )
+          : Promise.resolve(null)
+      const res = await browser.open(url, ctx.signal)
+      ctx.recordEvidence?.({
+        kind: 'browser',
+        url: res.finalUrl || url,
+        ...(res.loadError ? { loadError: res.loadError } : {}),
+        steps: [],
+        planned: 0
+      })
+      const lines = [
+        `${res.reused ? 'Loaded in the open browser session' : 'Opened a browser session at'} ${res.finalUrl}`
+      ]
+      const note = await ownerNote
+      if (note) lines.push(note)
+      if (res.loadError) {
+        lines.push(`[load warning: ${res.loadError}]`)
+        const hint = sandboxedLoopbackHint(res.loadError, activeBackendId(), {
+          allowNetwork: ctx.allowNetwork === true,
+          proxied: ctx.egressProxy !== undefined
+        })
+        if (hint) lines.push(hint)
+      }
+      lines.push('[take a snapshot to see the page and get element refs]')
+      const parts: UntrustedPart[] = [
+        ...(res.title ? [{ label: 'Page title:', text: res.title, source: `${res.finalUrl} (title)` }] : []),
+        ...pageTextPart(res, lines)
+      ]
+      if (!parts.length) return lines.join('\n')
+      return presentUntrustedInline({
+        envelope: lines.join('\n'),
+        parts,
+        preamble: browserPreamble("the loaded page's title and visible text"),
+        subject: 'page',
+        toolNames: builtinToolNames()
+      })
+    }
+
+    if (action === 'act') {
+      const steps = parseSessionSteps(args.steps)
+      if (!steps.length) throw new Error('steps is required for "act".')
+      const res = await browser.act(steps, ctx.signal)
+      ctx.recordEvidence?.({
+        kind: 'browser',
+        url: res.finalUrl,
+        steps: res.steps.map((r, i) => ({ step: r.step, ok: r.ok, action: steps[i]?.action ?? 'wait' })),
+        planned: steps.length
+      })
+      const lines = ['Steps:']
+      for (const r of res.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step}: ${r.error}`)
+      const notRun = steps.length - res.steps.length
+      if (notRun > 0) lines.push(`  (${notRun} later step${notRun === 1 ? '' : 's'} not run)`)
+      lines.push(`Now at ${res.finalUrl}`)
+      const parts = pageTextPart(res, lines)
+      if (!parts.length) return lines.join('\n')
+      return presentUntrustedInline({
+        envelope: lines.join('\n'),
+        parts,
+        preamble: browserPreamble("the page's visible text after the steps"),
+        subject: 'page',
+        toolNames: builtinToolNames(),
+        // A failed step's error can carry the page's own words, outside the fence.
+        alsoScore: res.steps.map((r) => r.error ?? '').join('\n')
+      })
+    }
+
+    if (action === 'snapshot') {
+      const snap = await browser.snapshot(ctx.signal)
+      const lines = [`Snapshot of ${snap.finalUrl} (${snap.width}×${snap.height})`]
+      const bytes = snap.png.byteLength
+      if (bytes > MAX_ATTACH_IMAGE_BYTES) {
+        lines.push(`[screenshot ${humanSize(bytes)} exceeds the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} attach limit, so it is not shown]`)
+      } else if (!ctx.attachImage) {
+        lines.push(`[screenshot ${humanSize(bytes)} captured; it cannot be displayed in this context]`)
+      } else {
+        ctx.attachImage({ mediaType: 'image/png', data: snap.png.toString('base64') })
+        lines.push(`[screenshot (${humanSize(bytes)}) attached below for viewing]`)
+      }
+      lines.push('Act on an element by passing its ref (e.g. "e12") in an act step. Refs last until the page navigates.')
+      const parts: UntrustedPart[] = [
+        ...(snap.title ? [{ label: 'Page title:', text: snap.title, source: `${snap.finalUrl} (title)` }] : [])
+      ]
+      if (snap.tree) {
+        parts.push({
+          label: snap.treeTruncated
+            ? `Accessibility tree (first ${MAX_SNAPSHOT_CHARS} characters):`
+            : 'Accessibility tree:',
+          text: snap.tree,
+          source: `${snap.finalUrl} (accessibility tree)`
+        })
+      } else {
+        lines.push('', 'Accessibility tree: (empty)')
+      }
+      if (!parts.length) return lines.join('\n')
+      return presentUntrustedInline({
+        envelope: lines.join('\n'),
+        parts,
+        preamble: browserPreamble("the page's title and accessibility tree"),
+        subject: 'page',
+        toolNames: builtinToolNames()
+      })
+    }
+
+    // console / network: the page's own log, fenced like everything else it wrote.
+    const limit = logLimit(args.limit)
+    const log = action === 'console' ? browser.console(limit) : browser.network(limit)
+    const noun = action === 'console' ? 'console message' : 'request'
+    if (!log.lines.length) return `No ${noun}s recorded for ${log.finalUrl} yet.`
+    const shown = Math.min(limit, log.total)
+    const envelope = `${shown === log.total ? `All ${log.total}` : `Last ${shown} of ${log.total}`} ${noun}${log.total === 1 ? '' : 's'} in the browser session (now at ${log.finalUrl}), oldest first.`
+    return presentUntrustedInline({
+      envelope,
+      parts: [
+        {
+          label: action === 'console' ? 'Console output:' : 'Network requests:',
+          text: log.lines.join('\n'),
+          source: `${log.finalUrl} (${action})`
+        }
+      ],
+      preamble: browserPreamble(action === 'console' ? "the page's console output" : "the page's network requests"),
+      subject: 'page',
+      toolNames: builtinToolNames()
     })
   }
 }
@@ -5578,6 +5831,7 @@ export const TOOLS: ToolDef[] = [
   killShellTool,
   webFetch,
   viewLocalhost,
+  browserSessionTool,
   showImages,
   renderMockup,
   webSearch,
@@ -5632,6 +5886,11 @@ export function getTool(name: string): ToolDef | undefined {
 export interface BuiltinToolsetOptions {
   /** A localhost capture backend is wired (desktop only); backs view_localhost. */
   localhostCapture: boolean
+  /**
+   * A persistent browser backend is wired (desktop only); backs browser_session.
+   * Absent counts as false.
+   */
+  browserSession?: boolean
   /** The client draws show_images as a gallery (the desktop app); backs show_images. */
   imageGallery: boolean
   /** The client lists show_images as clickable file links (the terminal app). Absent counts as false. */
@@ -5683,6 +5942,7 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
   return TOOLS.filter((t) => {
     const name = t.schema.name
     if (name === VIEW_LOCALHOST_NAME) return opts.localhostCapture
+    if (name === BROWSER_SESSION_NAME) return opts.browserSession === true
     if (name === SHOW_IMAGES_NAME) return opts.imageGallery || opts.imageLinks === true
     if (name === RENDER_MOCKUP_NAME) return opts.imageGallery && opts.mockupRender === true
     if (name === SPAWN_SESSION_NAME) return opts.spawn

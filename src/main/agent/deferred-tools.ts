@@ -43,6 +43,7 @@ export const DEFERRED_TOOL_CATALOG: Readonly<Record<string, string>> = {
   // UI verification and presentation: only when a task has a web UI or the user asks to see something.
   view_localhost:
     'Load a localhost URL (a dev server you started) in a headless browser: screenshot, page text, console output, and scripted steps to exercise a flow.',
+  browser_session: 'Test a localhost flow across calls: act, snapshot, console, network.',
   show_images: 'Show image files (screenshots, renders) to the user as a gallery or file links.',
   render_mockup:
     "Render a self-contained HTML mockup from the project into screenshots, to show a UI that doesn't exist yet.",

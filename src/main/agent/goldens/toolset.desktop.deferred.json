@@ -199,6 +199,108 @@
     }
   },
   {
+    "name": "browser_session",
+    "description": "A persistent headless browser page for testing a localhost/loopback dev server you started with run_shell. Unlike view_localhost, the page stays open across calls for the rest of this run, so cookies, storage, and in-page state (a login, a half-filled form) carry over. Actions: open loads a loopback URL (in the open page when there is one); act runs steps on the current page (the same steps as view_localhost, each targeting a CSS selector or a ref from the last snapshot) and reports each result and the visible page text; snapshot returns the accessibility tree (roles, names, states, and a ref like e12 for each element) plus a screenshot; console returns recent console messages; network returns recent requests with method, URL, status, and timing; close ends the session. Prefer refs from a fresh snapshot over guessed selectors. Use test data, not the user's real credentials. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed. Each call needs approval like view_localhost: per host, with act approved separately from reading the page.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "open",
+            "act",
+            "snapshot",
+            "console",
+            "network",
+            "close"
+          ],
+          "description": "What to do."
+        },
+        "url": {
+          "type": "string",
+          "description": "open: a loopback URL to load, e.g. \"http://localhost:3000/login\"."
+        },
+        "steps": {
+          "type": "array",
+          "description": "act: steps run in order on the current page (at most 20), stopping at the first failure. Same actions as view_localhost: fill, click, dblclick, press, wait_for, expect_text, wait. Give each step a ref from the latest snapshot or a selector, not both.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "fill",
+                  "click",
+                  "dblclick",
+                  "press",
+                  "wait_for",
+                  "expect_text",
+                  "wait"
+                ]
+              },
+              "ref": {
+                "type": "string",
+                "description": "An element ref from the latest snapshot, e.g. \"e12\"."
+              },
+              "selector": {
+                "type": "string",
+                "description": "Standard CSS selector, no :contains() or :has-text(), when there is no ref."
+              },
+              "value": {
+                "type": "string",
+                "description": "Text to enter (fill), or the text to look for (expect_text)."
+              },
+              "key": {
+                "type": "string",
+                "enum": [
+                  "Enter",
+                  "Escape",
+                  "Tab",
+                  "Backspace",
+                  "Delete",
+                  "Space",
+                  "ArrowUp",
+                  "ArrowDown",
+                  "ArrowLeft",
+                  "ArrowRight",
+                  "Home",
+                  "End",
+                  "PageUp",
+                  "PageDown"
+                ],
+                "description": "Key to press (press)."
+              },
+              "absent": {
+                "type": "boolean",
+                "description": "expect_text: pass only when the text is not visible."
+              },
+              "timeout_ms": {
+                "type": "number",
+                "description": "How long wait_for or expect_text waits."
+              },
+              "ms": {
+                "type": "number",
+                "description": "How long wait pauses."
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "limit": {
+          "type": "number",
+          "description": "console and network: how many of the most recent entries to return (default 50, max 200)."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "show_images",
     "description": "Show image files to the user, each with a short label and an optional caption: as a gallery they can open full size in the desktop app, or as clickable file links in the terminal. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.",
     "parameters": {
