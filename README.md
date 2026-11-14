@@ -1381,7 +1381,9 @@ the agent loop and UI never depend on a specific provider.
   Settings. Windows has no equivalent, so shell commands there run unconfined and
   always ask (see [docs/sandboxing.md](docs/sandboxing.md)).
 - **File tools are contained** to the workspace in code: any path that resolves
-  outside the project roots, including through a symlink, is rejected.
+  outside the project roots, including through a symlink, is rejected, and the check
+  is repeated at the write itself, so a symlink a running shell swaps onto the path
+  can't redirect it.
 - **Human in the loop.** Writes and shell commands require approval unless you
   opt into a more autonomous policy. A new install starts in *full auto* only where
   the OS sandbox confines shell commands (macOS, Linux with bubblewrap), and in *ask*
