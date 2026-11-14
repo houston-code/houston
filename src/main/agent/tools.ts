@@ -257,6 +257,12 @@ export interface ToolContext {
   }
   /** Attach an image read by the agent to the tool result (injected by the loop). */
   attachImage?: (img: ImageAttachment) => void
+  /**
+   * Whether the model serving the run right now accepts images (injected by the loop,
+   * read at call time so a fallback hop counts). MCP results show an image only when it
+   * does, and say why not otherwise; absent means unknown, and the image is attached.
+   */
+  modelSeesImages?: () => boolean
   /** Attach a document (e.g. PDF) read by the agent to the tool result. */
   attachDocument?: (doc: DocumentAttachment) => void
   /** Screenshot + console-capture a loopback URL (injected by the loop; Electron-backed). */

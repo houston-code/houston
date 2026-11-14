@@ -1,5 +1,10 @@
 import { outboundFetch } from '../outbound-proxy'
-import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
+import {
+  flattenMcpContent,
+  flattenMcpPromptMessages,
+  flattenMcpResourceContents,
+  type McpImageOptions
+} from '@shared/mcp'
 import {
   McpUnauthorizedError,
   mcpCapable,
@@ -309,7 +314,7 @@ export class McpSseClient implements McpConnection {
     }
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, images?: McpImageOptions): Promise<string> {
     const res = (await this.rpc('tools/call', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, {
       progress: true,
       signal
@@ -317,7 +322,7 @@ export class McpSseClient implements McpConnection {
       content?: unknown
       isError?: boolean
     }
-    const text = flattenMcpContent(res?.content)
+    const text = flattenMcpContent(res?.content, images)
     return res?.isError ? `${text}\n[the MCP tool reported an error]`.trim() : text || '[no output]'
   }
 
