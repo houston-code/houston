@@ -12,7 +12,7 @@ import { endedShort, isSubagentTool, statusLabel } from '@shared/subagents'
 import { formatElapsed } from '@shared/elapsed'
 import { useTick } from '../hooks/useTick'
 import type { ToolItem } from '../lib/items'
-import { describeTool, foldReadRuns } from '../lib/toolDisplay'
+import { approvalRequestText, describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
 import { toolRowStartsOpen, useTranscriptPrefs, type TranscriptPrefs } from './transcriptPrefs'
 import { FileLink, useFileLinks } from './FileLink'
@@ -141,7 +141,9 @@ const GLYPH: Record<Exclude<ToolItem['status'], 'running'>, string> = {
   'awaiting-approval': '●',
   done: '✓',
   error: '✕',
-  denied: '⊘'
+  denied: '⊘',
+  // Never ran because the run was stopped first: the same mark, in a quiet colour.
+  stopped: '⊘'
 }
 
 function StatusGlyph({ status, short }: { status: ToolItem['status']; short?: string }): JSX.Element {
@@ -377,6 +379,10 @@ const ToolRow = memo(function ToolRow({
   // which read as someone else talking about the user. Say what happened instead,
   // and for an approval the run was stopped in front of, that it was stopped.
   const output = stoppedPromptText(item.output) ?? deniedPromptText(item.output) ?? item.output
+  // What a waiting approval asks, in full, when the one-line header can't say it all.
+  const request = awaiting ? approvalRequestText(item, { hasDiff: allLines.length > 0 }) : null
+  // Otherwise the header itself is the whole request, so it wraps rather than clipping.
+  const targetClass = `tool-row__target${mono ? ' tool-row__target--mono' : ''}${awaiting && !request ? ' tool-row__target--whole' : ''}`
 
   // A dispatched subagent's row: its steps stream in while it runs, and it collapses to
   // its summary chips once it finishes.
@@ -434,15 +440,11 @@ const ToolRow = memo(function ToolRow({
         <span className="tool-row__verb">{verb}</span>
         {target &&
           (fileTarget && files ? (
-            <FileLink
-              target={fileTarget}
-              links={files}
-              className={`tool-row__target${mono ? ' tool-row__target--mono' : ''}`}
-            >
+            <FileLink target={fileTarget} links={files} className={targetClass}>
               {target}
             </FileLink>
           ) : (
-            <span className={`tool-row__target${mono ? ' tool-row__target--mono' : ''}`} title={target}>
+            <span className={targetClass} title={target}>
               {target}
             </span>
           ))}
@@ -591,7 +593,7 @@ const ToolRow = memo(function ToolRow({
         </div>
       )}
 
-      {awaiting && <ApprovalPrompt item={item} onApprove={onApprove} />}
+      {awaiting && <ApprovalPrompt item={item} request={request} onApprove={onApprove} />}
     </div>
   )
 })
@@ -599,9 +601,12 @@ const ToolRow = memo(function ToolRow({
 /** The waiting approval's verdict buttons, with Y / A / N keys (see useApprovalKeys). */
 function ApprovalPrompt({
   item,
+  request,
   onApprove
 }: {
   item: ToolItem
+  /** The request in full when the row's header can't show all of it (see approvalRequestText). */
+  request: string | null
   onApprove: (callId: string, decision: ToolApprovalDecision, note?: string) => void
 }): JSX.Element {
   // Guidance to send with a denial ("no, use staging instead").
@@ -623,9 +628,16 @@ function ApprovalPrompt({
     title: keysTitle,
     'data-approval-keys': ''
   } as const
+  // Plain text in a scrolling block: the exact command, post or arguments being approved.
+  const requestBlock = request ? (
+    <pre className="tool-row__approval-request" tabIndex={0} aria-label="What this asks to do">
+      {request}
+    </pre>
+  ) : null
   if (item.egressHost) {
     return (
       <div {...shared}>
+        {requestBlock}
         <p className="tool-row__approval-note">
           A command tried to reach <strong>{item.egressHost}</strong>, which isn't on the sandbox's
           list of allowed domains, so it was blocked. Allowing it applies to shell commands in
@@ -643,6 +655,7 @@ function ApprovalPrompt({
   if (item.shellNetwork) {
     return (
       <div {...shared}>
+        {requestBlock}
         <p className="tool-row__approval-note">
           This command could not reach the network. Shell commands in this chat run offline
           until you allow it. Allowing applies to the rest of this chat, not just this
@@ -659,6 +672,7 @@ function ApprovalPrompt({
   }
   return (
     <div {...shared}>
+      {requestBlock}
       {item.sensitiveRead && (
         <p className="tool-row__approval-note">
           This reads a credential or secret file. Reads normally run without asking, so
@@ -745,6 +759,7 @@ function combinedStatus(items: ToolItem[]): ToolItem['status'] {
   if (items.some((it) => it.status === 'awaiting-approval')) return 'awaiting-approval'
   if (items.some((it) => it.status === 'error')) return 'error'
   if (items.some((it) => it.status === 'denied')) return 'denied'
+  if (items.some((it) => it.status === 'stopped')) return 'stopped'
   return 'done'
 }
 
