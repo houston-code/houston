@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { memo, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { numberDiff, replacementPairs, tokenize, wordDiff, type DiffLine, type NumberedLine } from '@shared/diff'
 import { diffLanguage, highlightLine, markRuns } from '../lib/diffHighlight'
 
@@ -26,9 +26,18 @@ export function shownCount(total: number, chunks: number, need = 0): number {
 
 /**
  * One line's text, with the tokens that actually changed wrapped for emphasis and,
- * when the file's language is known, syntax colour.
+ * when the file's language is known, syntax colour. Memoized (its `mark` comes from the
+ * diff's memo below), so a diff that renders again unchanged doesn't re-highlight.
  */
-function LineText({ text, mark, lang }: { text: string; mark?: boolean[]; lang: string | null }): JSX.Element {
+const LineText = memo(function LineText({
+  text,
+  mark,
+  lang
+}: {
+  text: string
+  mark?: boolean[]
+  lang: string | null
+}): JSX.Element {
   const runs = highlightLine(lang, text)
   if (runs) {
     return (
@@ -66,7 +75,7 @@ function LineText({ text, mark, lang }: { text: string; mark?: boolean[]; lang: 
       )}
     </span>
   )
-}
+})
 
 function sign(type: NumberedLine['type']): string {
   return type === 'add' ? '+' : type === 'del' ? '−' : ' '
@@ -132,15 +141,7 @@ function clickOpens(): boolean {
   return !sel || sel.isCollapsed || sel.toString() === ''
 }
 
-export function DiffView({
-  diff,
-  path,
-  start,
-  layout = 'unified',
-  onLineClick,
-  renderBelow,
-  reveal
-}: {
+export interface DiffViewProps {
   diff: DiffLine[]
   /** The file's path, to pick a syntax-highlighting language from its extension. */
   path?: string
@@ -156,39 +157,82 @@ export function DiffView({
    * ones holding comments, so nothing attached to a line is out of sight.
    */
   reveal?: ReadonlySet<string>
-}): JSX.Element {
+}
+
+/** The lines and the marks within them, which hold for as long as the diff does. */
+interface DiffRows {
+  lines: NumberedLine[]
+  /** The changed words of each line of a replacement, by index into `lines`. */
+  marks: (boolean[] | undefined)[]
+  /** Gutter width from the largest number in the whole diff, so it doesn't jitter. */
+  width: number
+}
+
+function diffRows(diff: DiffLine[], startOld: number | undefined, startNew: number | undefined): DiffRows {
+  const numbered = numberDiff(diff)
+  const lines =
+    startOld === undefined || startNew === undefined
+      ? numbered
+      : numbered.map((l) => ({
+          ...l,
+          ...(l.oldNo !== undefined ? { oldNo: l.oldNo + startOld - 1 } : {}),
+          ...(l.newNo !== undefined ? { newNo: l.newNo + startNew - 1 } : {})
+        }))
+  // A del followed by its add is a replacement, so the changed words can be marked
+  // inside both. Computed over the whole diff before slicing, so the pairing does
+  // not change with where the cap happens to fall.
+  const marks: (boolean[] | undefined)[] = new Array(lines.length)
+  for (const [del, add] of replacementPairs(lines)) {
+    const words = wordDiff(lines[del].text, lines[add].text)
+    marks[del] = words.del
+    marks[add] = words.add
+  }
+  const width = Math.max(2, ...lines.map((l) => String(Math.max(l.oldNo ?? 0, l.newNo ?? 0)).length))
+  return { lines, marks, width }
+}
+
+/**
+ * Re-render only for a change that shows: `start` and `reveal` are rebuilt by callers
+ * on every render, so they compare by value.
+ */
+function sameDiffProps(a: DiffViewProps, b: DiffViewProps): boolean {
+  return (
+    a.diff === b.diff &&
+    a.path === b.path &&
+    a.start?.old === b.start?.old &&
+    a.start?.new === b.start?.new &&
+    a.layout === b.layout &&
+    a.onLineClick === b.onLineClick &&
+    a.renderBelow === b.renderBelow &&
+    sameKeys(a.reveal, b.reveal)
+  )
+}
+
+function sameKeys(a: ReadonlySet<string> | undefined, b: ReadonlySet<string> | undefined): boolean {
+  if (a === b) return true
+  if ((a?.size ?? 0) !== (b?.size ?? 0)) return false
+  for (const k of a ?? []) if (!b?.has(k)) return false
+  return true
+}
+
+export const DiffView = memo(function DiffView({
+  diff,
+  path,
+  start,
+  layout = 'unified',
+  onLineClick,
+  renderBelow,
+  reveal
+}: DiffViewProps): JSX.Element {
   const [chunks, setChunks] = useState(1)
   // With comments on, the line numbers are buttons: one Tab stop for the whole view
   // (the one used last, else the first), and ArrowUp/ArrowDown move between them.
   const [focusKey, setFocusKey] = useState<string | null>(null)
   const preRef = useRef<HTMLPreElement>(null)
-  const lines = useMemo(() => {
-    const numbered = numberDiff(diff)
-    if (!start) return numbered
-    return numbered.map((l) => ({
-      ...l,
-      ...(l.oldNo !== undefined ? { oldNo: l.oldNo + start.old - 1 } : {}),
-      ...(l.newNo !== undefined ? { newNo: l.newNo + start.new - 1 } : {})
-    }))
-  }, [diff, start])
+  const { lines, marks, width } = useMemo(() => diffRows(diff, start?.old, start?.new), [diff, start?.old, start?.new])
   const lang = diffLanguage(path)
-  // A del followed by its add is a replacement, so the changed words can be marked
-  // inside both. Computed over the whole diff before slicing, so the pairing does
-  // not change with where the cap happens to fall.
-  const pairs = replacementPairs(lines)
-  const partnerOf = new Map<number, number>()
-  for (const [del, add] of pairs) partnerOf.set(add, del)
+  const marksFor = (i: number): boolean[] | undefined => marks[i]
 
-  const marksFor = (i: number, l: NumberedLine): boolean[] | undefined => {
-    const addIdx = pairs.get(i)
-    if (addIdx !== undefined) return wordDiff(l.text, lines[addIdx].text).del
-    const delIdx = partnerOf.get(i)
-    if (delIdx !== undefined) return wordDiff(lines[delIdx].text, l.text).add
-    return undefined
-  }
-
-  // Gutter width from the largest number in the whole diff, so it doesn't jitter.
-  const width = Math.max(2, ...lines.map((l) => String(Math.max(l.oldNo ?? 0, l.newNo ?? 0)).length))
   // The last line something attached to must stay visible: reveal through it.
   let need = 0
   if (reveal && reveal.size > 0) {
@@ -298,7 +342,7 @@ export function DiffView({
         <div className={`diff__line diff__line--${type}${onLineClick ? ' diff__line--commentable' : ''}`} {...lineClick(t)}>
           {gutterNo(l.type === 'ctx' && side === 'old' ? null : t, side === 'old' ? l.oldNo : l.newNo)}
           <span className="diff__sign">{sign(type)}</span>
-          <LineText text={l.text} mark={marksFor(i, l)} lang={lang} />
+          <LineText text={l.text} mark={marksFor(i)} lang={lang} />
         </div>
       )
     }
@@ -337,7 +381,7 @@ export function DiffView({
                   what happened), unless it is the button that comments on the line. */}
               {gutterNo(targetOf(l), l.type === 'del' ? l.oldNo : l.newNo)}
               <span className="diff__sign">{sign(l.type)}</span>
-              <LineText text={l.text} mark={marksFor(i, l)} lang={lang} />
+              <LineText text={l.text} mark={marksFor(i)} lang={lang} />
             </div>
             {below(targetOf(l))}
           </div>
@@ -346,4 +390,4 @@ export function DiffView({
       {more}
     </pre>
   )
-}
+}, sameDiffProps)

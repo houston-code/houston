@@ -82,7 +82,7 @@ function renderBlock(
           <VisualBlock kind={kind} block={block} streaming={streaming} />
         </ItemBoundary>
       ) : (
-        <CodeBlock key={key} lang={block.lang} value={block.value} />
+        <CodeBlock key={key} lang={block.lang} value={block.value} open={!block.closed} />
       )
     }
     case 'hr':

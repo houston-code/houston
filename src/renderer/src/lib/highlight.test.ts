@@ -97,6 +97,17 @@ describe('highlightCode cache', () => {
     expect(spy).toHaveBeenCalledTimes(2)
   })
 
+  it('leaves text that is not final out of the cache when asked to', () => {
+    const html = highlightCode('ts', 'const partial =', { remember: false })
+    expect(html).toContain('hljs-keyword')
+    expect(highlightCacheStats()).toEqual({ entries: 0, chars: 0 })
+    // A cached entry is still served to such a call.
+    const spy = vi.spyOn(hljs, 'highlight')
+    highlightCode('ts', 'const done = 1')
+    expect(highlightCode('ts', 'const done = 1', { remember: false })).toBe(highlightCode('ts', 'const done = 1'))
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
   it('still returns null for an unknown language or oversized block, and caches neither', () => {
     expect(highlightCode('nope-lang', 'x')).toBeNull()
     expect(highlightCode('ts', 'a'.repeat(MAX_HIGHLIGHT_BYTES + 1))).toBeNull()

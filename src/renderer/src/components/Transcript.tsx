@@ -44,6 +44,7 @@ import { ProposalCard, type ProposalHandlers } from './ProposalCard'
 import { ElicitationCard } from './ElicitationCard'
 import { Receipt } from './Receipt'
 import { Markdown } from './Markdown'
+import { StreamingTextContext } from './CodeBlock'
 import { Icon, type IconName } from './Icon'
 import { TranscriptPrefsContext, useTranscriptPrefs, type TranscriptPrefs } from './transcriptPrefs'
 import { ContextMenu, selectionWithin, useContextMenu, type ContextMenuItem } from './ContextMenu'
@@ -477,7 +478,9 @@ const AssistantMessage = memo(function AssistantMessage({
       )}
       {(text || !reasoning) && (
         <div className="msg__body">
-          <Markdown text={text} visuals streaming={streaming} />
+          <StreamingTextContext.Provider value={streaming === true}>
+            <Markdown text={text} visuals streaming={streaming} />
+          </StreamingTextContext.Provider>
           {streaming && <span className="md-cursor" />}
         </div>
       )}
