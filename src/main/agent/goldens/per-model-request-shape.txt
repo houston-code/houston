@@ -9,7 +9,7 @@ host caps: {"reasoning":true}
 reasoning: effort=medium capable=true summary=- verbosity=-
 explicitCacheControl: false
 tools: 20
-usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":4997},"cost":0.003,"inputTokens":1000,"model":"claude-sonnet-5","outputTokens":100}
+usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":5006},"cost":0.003,"inputTokens":1000,"model":"claude-sonnet-5","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
 (baseline)
 
@@ -18,7 +18,7 @@ host caps: -
 reasoning: effort=medium capable=- summary=- verbosity=-
 explicitCacheControl: false
 tools: 20
-usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":4997},"cost":0.00315,"inputTokens":1000,"model":"gpt-5.2","outputTokens":100}
+usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":5006},"cost":0.00315,"inputTokens":1000,"model":"gpt-5.2","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
 + 
 + apply_patch is available for multi-file edits: prefer it when a single change spans several files. When the user asks for a change, carry it through to a verified result in this turn rather than stopping to propose a plan or ask whether to continue.
@@ -28,7 +28,7 @@ host caps: -
 reasoning: effort=medium capable=- summary=- verbosity=-
 explicitCacheControl: false
 tools: 20
-usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":4997},"cost":0,"inputTokens":1000,"model":"llama3.3","outputTokens":100}
+usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":5006},"cost":0,"inputTokens":1000,"model":"llama3.3","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
 + 
 + You are running on a local model: prefer concise, deliberate tool use, one focused call at a time over many speculative ones.

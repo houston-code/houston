@@ -189,7 +189,7 @@ export function UsagePanel({
                       {data.projects.map((p) => (
                         <tr key={p.path}>
                           <th scope="row" title={p.path} className="usage-view__project">
-                            {p.name}
+                            <span className="usage-view__project-name">{p.name}</span>
                           </th>
                           <td className="usage-view__barcell" aria-hidden="true">
                             <span className="usage-view__bar">

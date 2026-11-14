@@ -2,7 +2,12 @@ import { spawn as nodeSpawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import { MAX_MCP_MESSAGE_CHARS } from './sse-client'
-import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
+import {
+  flattenMcpContent,
+  flattenMcpPromptMessages,
+  flattenMcpResourceContents,
+  type McpImageOptions
+} from '@shared/mcp'
 import { sanitizeChildEnv } from '../childEnv'
 import { planStdioLaunch, type StdioLaunchDeps } from './stdio-launch'
 import { signalProcessTree } from '../sandbox/shared'
@@ -94,9 +99,10 @@ export interface McpConnection {
   readonly isClosed: boolean
   /**
    * Call a tool. An aborted `signal` (the run's Stop) rejects at once and sends the
-   * server `notifications/cancelled`; the same holds for the two calls below.
+   * server `notifications/cancelled`; the same holds for the two calls below. Image blocks in
+   * the result go to `images.attachImage` when given (see flattenMcpContent).
    */
-  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>
+  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, images?: McpImageOptions): Promise<string>
   /** Read a resource's contents by uri (flattened to text). */
   readResource(uri: string, signal?: AbortSignal): Promise<string>
   /** Fetch a prompt template by name (flattened to text). */
@@ -450,14 +456,14 @@ export class McpClient {
   }
 
   /** Call a tool and return its flattened text result. */
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, images?: McpImageOptions): Promise<string> {
     const res = (await this.request(
       'tools/call',
       { name, arguments: args ?? {} },
       CALL_TIMEOUT_MS,
       { progress: true, signal }
     )) as { content?: unknown; isError?: boolean }
-    const text = flattenMcpContent(res?.content)
+    const text = flattenMcpContent(res?.content, images)
     return res?.isError ? `${text}\n[the MCP tool reported an error]`.trim() : text || '[no output]'
   }
 
