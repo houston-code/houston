@@ -28,3 +28,12 @@ export function cycleChatId(
   const next = (idx + dir + list.length) % list.length
   return list[next].id
 }
+
+/**
+ * The window's title: the open chat's, then the app's, so the Window menu, Mission
+ * Control and the taskbar tell several windows apart. Just the app's with no chat.
+ */
+export function windowTitle(chatTitle: string | null | undefined): string {
+  const t = chatTitle?.trim()
+  return t ? `${t} - Houston` : 'Houston'
+}

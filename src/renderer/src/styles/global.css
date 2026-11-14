@@ -370,6 +370,18 @@ textarea {
   color: var(--text-dim);
 }
 
+/* The top strip of a screen without the titlebar (loading, the crash fallback): the
+   window has no native title bar (hiddenInset), so this is what moves it. */
+.window-drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  z-index: 1;
+  -webkit-app-region: drag;
+}
+
 /* ---- Crash fallback (error boundary) ---- */
 .crash {
   height: 100%;
@@ -475,7 +487,9 @@ textarea {
 /* Horizontal gutter shared by the chat surfaces (transcript, composer, control
    bar, checkpoint/queue bars). Liberal on wide windows, eased back on narrower
    ones so the content column never gets crushed — but kept generous throughout.
-   Breakpoints account for the ~248px sidebar eating into the window width. */
+   Breakpoints account for the ~248px sidebar eating into the window width. On the
+   chat column itself the app sets it from the column's own width, so an open side
+   panel narrows the gutters too (lib/chatGap.ts, same steps). */
 :root {
   --chat-gap: 128px;
 }
@@ -1385,28 +1399,41 @@ body.is-resizing {
   position: relative;
 }
 /* ---- Titlebar (slim, draggable) ---- */
+/* Three columns: an empty lead, the title, the actions. The lead and the actions
+   share the room left over, so the title sits centered while it fits; the actions
+   never go below their own width, so a long title shifts left and is cut short
+   instead of sliding under them. The lead keeps a strip to drag the window by. */
 .titlebar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(24px, 1fr) minmax(0, max-content) minmax(max-content, 1fr);
   align-items: center;
-  justify-content: center;
+  column-gap: 12px;
   height: 38px;
   flex-shrink: 0;
-  padding: 0 14px;
+  padding: 0 12px 0 14px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elevated);
   -webkit-app-region: drag;
+  container-type: inline-size;
 }
 .titlebar__title {
+  min-width: 0;
   font-size: 13px;
   font-weight: 550;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* Reserve room on both sides for the absolutely-positioned action strip so a
-     long, centered title truncates with an ellipsis instead of sliding under
-     the buttons. ~230px each side clears the full six-icon row. */
-  max-width: calc(100% - 460px);
+}
+/* Cut short, the title takes pointer events so hovering it shows the whole title. */
+.titlebar__title--cut {
+  -webkit-app-region: no-drag;
+}
+/* With little room (side panels open), the Commands button drops its key hint. */
+@container (max-width: 520px) {
+  .titlebar__kbd {
+    display: none;
+  }
 }
 
 /* ---- Integrated terminal panel ---- */
@@ -2458,14 +2485,26 @@ body.is-resizing {
 }
 
 /* ---- Welcome ---- */
+/* Scrolls on a short window rather than pushing the message box off-screen; `safe`
+   keeps its top reachable once it no longer fits. */
 .welcome {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;
   gap: 8px;
   text-align: center;
+}
+/* The first-run notices above the message box: at most a share of the column, then
+   they scroll, so the conversation and the box above it always keep their room. */
+.notices {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 40%;
+  overflow-y: auto;
 }
 .welcome h1 {
   margin: 0;
@@ -3634,17 +3673,32 @@ h6.md-h {
 }
 
 /* ---- Scroll-to-bottom ---- */
-/* Confirms an action that moved the user away (marking the open chat unread). */
-.undo-toast {
-  position: fixed;
+/* The toasts' place: a zero-height strip just above the terminal and the message
+   box, which the stack rises from, one toast above another. */
+.toast-anchor {
+  position: relative;
+  height: 0;
+  flex-shrink: 0;
+}
+.toast-stack {
+  position: absolute;
   left: 50%;
-  bottom: 28px;
+  bottom: 10px;
   transform: translateX(-50%);
   z-index: 60;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100% - 32px);
+}
+/* Confirms an action that moved the user away (marking the open chat unread). */
+.undo-toast {
+  display: flex;
   align-items: center;
   gap: 12px;
-  max-width: min(520px, calc(100vw - 32px));
+  max-width: min(520px, 100%);
   padding: 8px 10px 8px 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -4751,17 +4805,14 @@ pre.diff {
   margin: 2px 14px;
 }
 
-/* ---- Titlebar "Changes" action ---- */
+/* ---- Titlebar actions ---- */
 .titlebar {
   position: relative;
 }
 .titlebar__actions {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
 }
 /* Icon-only square buttons: labels moved to native tooltips (`title`) so the
@@ -4839,9 +4890,9 @@ pre.diff {
   color: var(--text);
   border-color: var(--accent);
 }
-/* Accent outline = a docked panel this button toggles is currently open
-   (Preview, Terminal). Pending activity and counts are carried by the corner
-   badge, not the border, so Tasks and Changes deliberately don't use this. */
+/* Accent outline = the docked panel this button toggles is currently open
+   (Preview, Files, Changes, Tasks, Terminal, Side chat). Pending activity and
+   counts are carried by the corner badge, never the border. */
 .titlebar__action--active {
   color: var(--text);
   border-color: var(--accent);
@@ -8033,11 +8084,16 @@ body:has(.coachmark) .get-started {
 }
 
 /* ---- Find in conversation (⌘F) ---- */
+/* A zero-height strip after the titlebar and the update banner: the find bar hangs
+   from it, so it never covers either one's buttons. */
+.find-anchor {
+  position: relative;
+  height: 0;
+  flex-shrink: 0;
+}
 .find-bar {
   position: absolute;
-  /* Sit just below the 38px titlebar so it never covers the titlebar's action
-     buttons (Files / Changes / Scorecard / Terminal). */
-  top: 46px;
+  top: 8px;
   right: 16px;
   z-index: 50;
   display: flex;

@@ -121,6 +121,34 @@ describe('FindBar focus', () => {
     expect(document.activeElement).toBe(composer)
   })
 
+  it('searches the query again in the chat switched to, instead of keeping stale results', () => {
+    let root = transcript('<p>alpha alpha alpha</p>')
+    const { rerender } = render(<FindBar getRoots={() => [root]} onClose={() => {}} searchKey="a" />)
+    const input = screen.getByLabelText('Find in conversation')
+    typeQuery(input, 'alpha')
+    expect(screen.getByText('1/3')).toBeInTheDocument()
+    // The other chat's transcript replaces this one.
+    root.remove()
+    root = transcript('<p>alpha once</p>')
+    rerender(<FindBar getRoots={() => [root]} onClose={() => {}} searchKey="b" />)
+    act(() => {
+      vi.advanceTimersByTime(FIND_DEBOUNCE_MS)
+    })
+    expect(screen.getByText('1/1')).toBeInTheDocument()
+  })
+
+  it('re-searches on Enter right after a chat switch, before the pause has passed', () => {
+    let root = transcript('<p>x x x</p>')
+    const { rerender } = render(<FindBar getRoots={() => [root]} onClose={() => {}} searchKey="a" />)
+    const input = screen.getByLabelText('Find in conversation')
+    typeQuery(input, 'x')
+    root.remove()
+    root = transcript('<p>x x</p>')
+    rerender(<FindBar getRoots={() => [root]} onClose={() => {}} searchKey="b" />)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByText('2/2')).toBeInTheDocument()
+  })
+
   it('searches once typing pauses, not on every keystroke', () => {
     const root = transcript('<p>alpha beta</p>')
     render(<FindBar getRoots={() => [root]} onClose={() => {}} />)

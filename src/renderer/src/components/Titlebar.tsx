@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react'
 import { BackgroundTasks } from './BackgroundTasks'
 import type { BackgroundTask } from '../hooks/useBackgroundTasks'
 import { Icon } from './Icon'
@@ -80,10 +81,27 @@ export function Titlebar({
   shortcutsShortcut?: string
 }): JSX.Element {
   const hasChanges = !!changes && changes.fileCount > 0
+  // Whether the title is cut short. Only then does it leave the window's drag region,
+  // so hovering it can show the whole title (a drag region gets no pointer events);
+  // a title that fits stays a handle for moving the window.
+  const titleRef = useRef<HTMLSpanElement>(null)
+  const [cut, setCut] = useState(false)
+  useLayoutEffect(() => {
+    const el = titleRef.current
+    if (!el) return
+    const check = (): void => setCut(el.scrollWidth > el.clientWidth)
+    check()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [title])
   return (
     <header className="titlebar">
-      {/* Centered between the action strips, a long title is cut short: hover shows it whole. */}
-      <span className="titlebar__title" title={title}>
+      {/* Title and actions are siblings: the title centers while there is room, then
+          gives way to the actions and is cut short (hover shows it whole). */}
+      <span className="titlebar__lead" aria-hidden="true" />
+      <span ref={titleRef} className={`titlebar__title${cut ? ' titlebar__title--cut' : ''}`} title={title}>
         {title}
       </span>
       <div className="titlebar__actions">
@@ -137,7 +155,9 @@ export function Titlebar({
                 type="button"
                 className={`titlebar__action${previewOpen ? ' titlebar__action--active' : ''}`}
                 onClick={onTogglePreview}
-                aria-label="Preview"
+                aria-label={
+                  previewCount ? `Preview, ${previewCount} server${previewCount === 1 ? '' : 's'} running` : 'Preview'
+                }
                 aria-pressed={previewOpen}
               >
                 <Icon name="eye" size={15} />
@@ -151,7 +171,7 @@ export function Titlebar({
             <Tooltip label="Files: browse the project's files">
               <button
                 type="button"
-                className="titlebar__action"
+                className={`titlebar__action${filesOpen ? ' titlebar__action--active' : ''}`}
                 onClick={onShowFiles}
                 aria-label="Files"
                 {...(filesOpen !== undefined ? { 'aria-pressed': filesOpen } : {})}
@@ -170,9 +190,11 @@ export function Titlebar({
             >
               <button
                 type="button"
-                className="titlebar__action"
+                className={`titlebar__action${changesOpen ? ' titlebar__action--active' : ''}`}
                 onClick={onShowChanges}
-                aria-label="Changes"
+                aria-label={
+                  hasChanges ? `Changes, ${changes.fileCount} file${changes.fileCount === 1 ? '' : 's'}` : 'Changes'
+                }
                 {...(changesOpen !== undefined ? { 'aria-pressed': changesOpen } : {})}
                 data-tour="changes"
               >

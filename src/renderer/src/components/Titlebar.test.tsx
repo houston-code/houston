@@ -101,13 +101,27 @@ describe('Titlebar icon-only actions', () => {
         changes={{ fileCount: 3, added: 12, removed: 4 }}
       />
     )
-    const btn = screen.getByRole('button', { name: 'Changes' })
+    // The badge's count is part of the button's name, not left to the picture.
+    const btn = screen.getByRole('button', { name: 'Changes, 3 files' })
     expect(within(btn).getByText('3')).toBeInTheDocument()
     fireEvent.mouseEnter(btn)
     expect(screen.getByRole('tooltip')).toHaveTextContent('+12 −4')
     // Dirty state is signalled by the badge alone — no accent outline (that's
     // reserved for open docked panels like Preview and Terminal).
     expect(btn.className).toBe('titlebar__action')
+  })
+
+  it('outlines Files and Changes while their panel is open, like the other panel toggles', () => {
+    render(
+      <Titlebar title="Houston" onShowFiles={vi.fn()} filesOpen={true} onShowChanges={vi.fn()} changesOpen={false} />
+    )
+    expect(screen.getByRole('button', { name: 'Files' })).toHaveClass('titlebar__action--active')
+    expect(screen.getByRole('button', { name: 'Changes' })).not.toHaveClass('titlebar__action--active')
+  })
+
+  it('names the running preview servers in the Preview button', () => {
+    render(<Titlebar title="Houston" onTogglePreview={vi.fn()} previewCount={2} />)
+    expect(screen.getByRole('button', { name: 'Preview, 2 servers running' })).toBeInTheDocument()
   })
 
   it('omits the changes badge when the working tree is clean', () => {
@@ -160,6 +174,17 @@ describe('Titlebar title', () => {
     const long = 'Investigate why the background dev server keeps restarting after every save'
     render(<Titlebar title={long} />)
     expect(screen.getByText(long)).toHaveAttribute('title', long)
+  })
+
+  it('leaves the drag region only when cut short, so a title that fits still moves the window', () => {
+    const widths = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(100)
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100)
+    const { rerender } = render(<Titlebar title="Short" />)
+    expect(screen.getByText('Short')).not.toHaveClass('titlebar__title--cut')
+    widths.mockReturnValue(400)
+    rerender(<Titlebar title="A much longer title" />)
+    expect(screen.getByText('A much longer title')).toHaveClass('titlebar__title--cut')
+    vi.restoreAllMocks()
   })
 })
 
