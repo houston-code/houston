@@ -569,14 +569,15 @@ export function LoopControlSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
         <span>
           When the model finishes after changing files, run the verification command below.
           If it fails, the output is fed back so the model can self-correct for a bounded
-          number of passes. Off by default, and inert unless you set a command.
+          number of passes. Off by default. With no command set, Full auto uses the one
+          suggested below; other modes run nothing.
         </span>
       </label>
       <label className="field">
         <span>
           Verification command (e.g. <code>npm run typecheck</code> or <code>npm test</code>
           ). Runs in the project folder through the same sandbox as shell commands. Leave
-          empty to disable; nothing runs unless you set this.
+          empty to use the suggested command in Full auto, and nothing in other modes.
         </span>
         <input
           type="text"
