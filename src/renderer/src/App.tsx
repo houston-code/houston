@@ -62,11 +62,12 @@ import {
   shiftTabCyclesMode,
   escapeStopsRun
 } from './lib/shortcuts'
-import { chatAtIndex, cycleChatId } from './lib/sessionNav'
+import { chatAtIndex, cycleChatId, windowTitle } from './lib/sessionNav'
 import { coalesced } from './lib/coalesce'
 import { nextApprovalPolicy } from './lib/policyCycle'
 import { resolveShortcuts } from './lib/keybindingOverrides'
-import { modelPaletteItems, type PaletteItem } from './lib/palette'
+import { chatPlace, modelPaletteItems, type PaletteItem } from './lib/palette'
+import { useChatGap } from './lib/chatGap'
 import { statusText } from './lib/statusLine'
 import { playAttentionSound } from './lib/attentionSound'
 import { RunMeterText } from './components/RunMeterText'
@@ -135,6 +136,7 @@ import { ImportNotice } from './components/ImportNotice'
 import { EnvKeyNotice } from './components/EnvKeyNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
+import { Toast, ToastStack } from './components/Toasts'
 import { UpdateBanner } from './components/UpdateBanner'
 import { useUpdateBanner } from './hooks/useUpdateBanner'
 import { GetStarted } from './components/GetStarted'
@@ -378,6 +380,9 @@ export default function App(): JSX.Element {
   // true only when the user dismisses it (×), hiding it without discarding the plan.
   const [planClosed, setPlanClosed] = useState(false)
   const appRef = useRef<HTMLDivElement>(null)
+  // The chat column: its gutter follows its own width, not the window's (see chatGap.ts).
+  const mainRef = useRef<HTMLElement>(null)
+  useChatGap(mainRef, settings !== null)
   // True while the first message of a new chat is creating its conversation/worktree,
   // to reject a concurrent second send (see sendNow).
   const creatingConvRef = useRef(false)
@@ -572,11 +577,8 @@ export default function App(): JSX.Element {
     link?: { label: string; open: () => void }
     ms?: number
   } | null>(null)
-  useEffect(() => {
-    if (!undoToast) return
-    const t = setTimeout(() => setUndoToast(null), undoToast.ms ?? 6000)
-    return () => clearTimeout(t)
-  }, [undoToast])
+  // It leaves on its own after `ms` (6s by default): see Toast, which holds it while
+  // hovered or focused.
 
   // Answer an approval. After "Always allow / deny", name the rule that was saved, with
   // Undo and a way to the Permissions page.
@@ -675,6 +677,11 @@ export default function App(): JSX.Element {
     () => conversations.find((c) => c.id === currentId) ?? null,
     [conversations, currentId]
   )
+  // Name the window after its chat (the native window title follows the document's).
+  const currentTitle = currentConv?.title
+  useEffect(() => {
+    document.title = windowTitle(currentTitle)
+  }, [currentTitle])
   const workspace = currentConv?.workspace ?? lastWorkspace
   // File paths in the transcript (tool rows, the receipt, relative links in replies)
   // open in the Files tab's preview, at the line when one is known. The tab is opened
@@ -1114,12 +1121,8 @@ export default function App(): JSX.Element {
   }, [enterNewChat, refreshRecentFolders])
 
   // A short note for a folder that could not be opened (a vanished recent, a dropped file).
+  // Shown for 4s as a toast.
   const [folderNotice, setFolderNotice] = useState<string | null>(null)
-  useEffect(() => {
-    if (!folderNotice) return
-    const t = setTimeout(() => setFolderNotice(null), 4000)
-    return () => clearTimeout(t)
-  }, [folderNotice])
 
   // Open a folder by path: a recent from the welcome screen or folder menu, or the
   // paths of a drop on the window (the first that is a folder wins). Main checks each.
@@ -2688,10 +2691,10 @@ export default function App(): JSX.Element {
       },
       {
         id: 'act-toggle-terminal',
-        title: 'Toggle the integrated terminal',
+        title: terminalOpen ? 'Hide terminal' : 'Show terminal',
         section: 'Actions',
         hint: shortcutHint('toggle-terminal', mac, shortcuts),
-        keywords: 'shell console',
+        keywords: 'toggle integrated shell console',
         run: toggleTerminal
       },
       {
@@ -2880,7 +2883,7 @@ export default function App(): JSX.Element {
       items.push({
         id: `chat-${c.id}`,
         title: c.title || 'Untitled chat',
-        subtitle: baseName(c.workspace),
+        subtitle: chatPlace(c),
         section: 'Switch chat',
         run: () => void selectConversation(c.id)
       })
@@ -2895,6 +2898,7 @@ export default function App(): JSX.Element {
     workspace,
     currentId,
     sidebarCollapsed,
+    terminalOpen,
     previewOpen,
     dockTab,
     sideChatOpen,
@@ -3131,7 +3135,12 @@ export default function App(): JSX.Element {
   ])
 
   if (!settings) {
-    return <div className="loading">Loading…</div>
+    return (
+      <div className="loading">
+        <div className="window-drag" aria-hidden="true" />
+        Loading…
+      </div>
+    )
   }
 
   // The composer is usable only when the *selected* provider is actually ready —
@@ -3272,7 +3281,7 @@ export default function App(): JSX.Element {
         />
       )}
 
-      <main className="main">
+      <main className="main" ref={mainRef}>
         <Titlebar
           title={currentConv?.title ?? 'Houston'}
           tasks={backgroundTasks}
@@ -3310,8 +3319,17 @@ export default function App(): JSX.Element {
           onDismiss={updateBanner.dismiss}
         />
 
+        {/* Anchored under the titlebar and the update banner (when one shows), so the
+            find bar never covers the banner's buttons. */}
         {findOpen && (
-          <FindBar getRoots={getFindRoots} onClose={() => setFindOpen(false)} focusRequest={findRequest} />
+          <div className="find-anchor">
+            <FindBar
+              getRoots={getFindRoots}
+              onClose={() => setFindOpen(false)}
+              focusRequest={findRequest}
+              searchKey={currentId}
+            />
+          </div>
         )}
 
         {!launchSettled ? (
@@ -3401,6 +3419,10 @@ export default function App(): JSX.Element {
           </FileLinkContext.Provider>
         )}
 
+        {/* The first-run notices share a capped, scrolling strip, so on a short window
+            a stack of them never pushes the message box off-screen or squeezes the
+            conversation to nothing. */}
+        <div className="notices">
         <TrustFolderBanner
           // Re-evaluate cleanly per workspace: a new folder gets its own banner state.
           key={`trust-${workspace ?? 'none'}`}
@@ -3441,6 +3463,7 @@ export default function App(): JSX.Element {
           onDismissed={setSettings}
           recheckSignal={gitInitRecheck}
         />
+        </div>
 
         {chat.errored && !chat.running && currentId && (
           <TurnErrorBar failure={chat.failure} onAction={onTurnErrorAction} />
@@ -3520,6 +3543,58 @@ export default function App(): JSX.Element {
             </button>
           </div>
         )}
+
+        {/* Toasts float just above the terminal and the message box, never over them. */}
+        <ToastStack>
+          {folderNotice && (
+            <Toast ms={4000} resetKey={folderNotice} onDone={() => setFolderNotice(null)}>
+              <span>{folderNotice}</span>
+            </Toast>
+          )}
+          {undoToast && (
+            <Toast
+              ms={undoToast.ms ?? 6000}
+              resetKey={undoToast}
+              onDone={() => setUndoToast(null)}
+              className={undoToast.rules?.length ? 'undo-toast--rules' : ''}
+            >
+              <span className="undo-toast__text">{undoToast.text}</span>
+              {undoToast.rules && undoToast.rules.length > 0 && (
+                <ul className="undo-toast__rules">
+                  {undoToast.rules.map((r, i) => (
+                    <li key={i}>
+                      <code title={r}>{r}</code>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {undoToast.undo && (
+                <button
+                  type="button"
+                  className="undo-toast__btn"
+                  onClick={() => {
+                    undoToast.undo?.()
+                    setUndoToast(null)
+                  }}
+                >
+                  Undo
+                </button>
+              )}
+              {undoToast.link && (
+                <button
+                  type="button"
+                  className="undo-toast__btn"
+                  onClick={() => {
+                    undoToast.link?.open()
+                    setUndoToast(null)
+                  }}
+                >
+                  {undoToast.link.label}
+                </button>
+              )}
+            </Toast>
+          )}
+        </ToastStack>
 
         {terminalMounted && (
           <Suspense fallback={null}>
@@ -3793,49 +3868,6 @@ export default function App(): JSX.Element {
       {folderDragOver && (
         <div className="folder-drop" aria-hidden="true">
           <span className="folder-drop__label">Drop a folder to open it as the project</span>
-        </div>
-      )}
-      {folderNotice && (
-        <div className="undo-toast" role="status">
-          <span>{folderNotice}</span>
-        </div>
-      )}
-      {undoToast && (
-        <div className={`undo-toast${undoToast.rules?.length ? ' undo-toast--rules' : ''}`} role="status">
-          <span className="undo-toast__text">{undoToast.text}</span>
-          {undoToast.rules && undoToast.rules.length > 0 && (
-            <ul className="undo-toast__rules">
-              {undoToast.rules.map((r, i) => (
-                <li key={i}>
-                  <code title={r}>{r}</code>
-                </li>
-              ))}
-            </ul>
-          )}
-          {undoToast.undo && (
-            <button
-              type="button"
-              className="undo-toast__btn"
-              onClick={() => {
-                undoToast.undo?.()
-                setUndoToast(null)
-              }}
-            >
-              Undo
-            </button>
-          )}
-          {undoToast.link && (
-            <button
-              type="button"
-              className="undo-toast__btn"
-              onClick={() => {
-                undoToast.link?.open()
-                setUndoToast(null)
-              }}
-            >
-              {undoToast.link.label}
-            </button>
-          )}
         </div>
       )}
       <TipHost

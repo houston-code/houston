@@ -17,7 +17,8 @@ export const FIND_DEBOUNCE_MS = 120
 export function FindBar({
   getRoots,
   onClose,
-  focusRequest = 0
+  focusRequest = 0,
+  searchKey = null
 }: {
   getRoots: () => HTMLElement[]
   onClose: () => void
@@ -26,6 +27,11 @@ export function FindBar({
    * field and select its query, ready to type a new one.
    */
   focusRequest?: number
+  /**
+   * What is being searched (the open chat's id). When it changes the old matches
+   * point into a transcript that is gone, so the query is searched again.
+   */
+  searchKey?: string | null
 }): JSX.Element {
   const [query, setQuery] = useState('')
   const [count, setCount] = useState(0)
@@ -36,6 +42,10 @@ export function FindBar({
   /** The query the current matches are for: behind `query` while a search is waiting. */
   const searchedRef = useRef('')
   const [searched, setSearched] = useState('')
+  /** The chat the current matches were found in, and the one open now. */
+  const keyRef = useRef(searchKey)
+  keyRef.current = searchKey
+  const searchedKeyRef = useRef(searchKey)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -63,6 +73,7 @@ export function FindBar({
       const found = findMatches(getRoots(), q)
       rangesRef.current = found.ranges
       searchedRef.current = q
+      searchedKeyRef.current = keyRef.current
       setSearched(q)
       activeRef.current = 0
       setCount(found.ranges.length)
@@ -74,7 +85,8 @@ export function FindBar({
     [getRoots]
   )
 
-  // Recompute and repaint matches once typing pauses. Emptying the box clears at once.
+  // Recompute and repaint matches once typing pauses, and after switching chats (once
+  // the new transcript has had a moment to render). Emptying the box clears at once.
   useEffect(() => {
     if (!query) {
       search('')
@@ -85,7 +97,7 @@ export function FindBar({
       if (timerRef.current) clearTimeout(timerRef.current)
       timerRef.current = null
     }
-  }, [query, search])
+  }, [query, search, searchKey])
 
   // Clear the highlights when the bar unmounts.
   useEffect(() => () => clearFindHighlights(), [])
@@ -93,7 +105,8 @@ export function FindBar({
   const go = (dir: 1 | -1): void => {
     // Typed and pressed Enter before the pause ran the search: run it now, then step,
     // as if the results had already been there.
-    if (searchedRef.current !== query) search(query)
+    // So did a switch to another chat: the old matches point into a transcript that's gone.
+    if (searchedRef.current !== query || searchedKeyRef.current !== searchKey) search(query)
     const ranges = rangesRef.current
     if (ranges.length === 0) return
     const next = (activeRef.current + dir + ranges.length) % ranges.length

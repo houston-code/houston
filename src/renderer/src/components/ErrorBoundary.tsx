@@ -28,6 +28,8 @@ export class ErrorBoundary extends Component<Props, State> {
     if (!error) return this.props.children
     return (
       <div className="crash" role="alert">
+        {/* The window has no title bar of its own (hiddenInset): keep a strip to move it by. */}
+        <div className="window-drag" aria-hidden="true" />
         <h1 className="crash__title">Something went wrong</h1>
         <p className="crash__msg">{error.message || 'The interface hit an unexpected error.'}</p>
         <div className="crash__actions">

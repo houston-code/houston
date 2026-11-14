@@ -5,6 +5,16 @@
  */
 import type { ProviderConfig, SelectedModel } from '@shared/types'
 import { modelDisplayName, sortedModels } from '@shared/models'
+import { baseName } from './paths'
+
+/**
+ * Where a chat lives, for its "Switch chat" row: its project folder, and its branch
+ * for a worktree chat (whose own folder is a checkout under .houston/worktrees), as
+ * the sidebar shows it.
+ */
+export function chatPlace(c: { workspace: string; worktree?: { repoRoot: string; branch: string } }): string {
+  return c.worktree ? `${baseName(c.worktree.repoRoot)} · ${c.worktree.branch}` : baseName(c.workspace)
+}
 
 export interface PaletteItem {
   /** Stable id, unique within the list. */

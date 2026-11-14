@@ -20,7 +20,9 @@ export function EnvKeyNotice({
   onImported: (settings: AppSettings, providerId: string) => void
 }): JSX.Element | null {
   const [offers, setOffers] = useState<EnvKeyOffer[]>([])
-  const [busy, setBusy] = useState(false)
+  // Which answer is being carried out: only Use it checks the key, so only it says so.
+  const [pending, setPending] = useState<'accept' | 'dismiss' | null>(null)
+  const busy = pending !== null
   const [error, setError] = useState<string | null>(null)
   const [storageBlocked, setStorageBlocked] = useState<string | null>(null)
 
@@ -50,7 +52,7 @@ export function EnvKeyNotice({
   }
 
   const accept = async (): Promise<void> => {
-    setBusy(true)
+    setPending('accept')
     setError(null)
     try {
       const fresh = await window.api.importEnvKey(offer.providerId)
@@ -61,18 +63,18 @@ export function EnvKeyNotice({
       if (platform) setStorageBlocked(platform)
       else setError(`Couldn't use that key: ${ipcErrorMessage(e)}`)
     } finally {
-      setBusy(false)
+      setPending(null)
     }
   }
 
   const notNow = async (): Promise<void> => {
-    setBusy(true)
+    setPending('dismiss')
     try {
       await window.api.dismissEnvKeyOffers([offer.providerId])
     } catch {
       // Still hide it for this session; it may ask again next launch.
     } finally {
-      setBusy(false)
+      setPending(null)
       next()
     }
   }
@@ -99,7 +101,7 @@ export function EnvKeyNotice({
         {storageBlocked && <SecureStorageNotice platform={storageBlocked} />}
         <div className="rules-notice__actions">
           <button type="button" className="btn btn--sm btn--accent" onClick={() => void accept()} disabled={busy}>
-            {busy ? 'Checking…' : 'Use it'}
+            {pending === 'accept' ? 'Checking…' : 'Use it'}
           </button>
           <button type="button" className="btn btn--sm" onClick={() => void notNow()} disabled={busy}>
             Not now

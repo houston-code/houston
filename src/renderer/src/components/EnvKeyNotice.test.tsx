@@ -51,6 +51,26 @@ describe('EnvKeyNotice', () => {
     expect(await screen.findByText('Use the OpenAI (GPT) key from your environment?')).toBeInTheDocument()
   })
 
+  it('says Checking only on the answer being carried out', async () => {
+    let finish = (): void => {}
+    installApi({
+      dismissEnvKeyOffers: vi.fn(() => new Promise<void>((r) => (finish = r))),
+      importEnvKey: vi.fn(() => new Promise(() => {}))
+    })
+    const { unmount } = render(<EnvKeyNotice onImported={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Not now' }))
+    // Both wait, but Use it isn't checking anything.
+    expect(screen.getByRole('button', { name: 'Use it' })).toBeDisabled()
+    expect(screen.queryByText('Checking…')).not.toBeInTheDocument()
+    finish()
+    unmount()
+
+    installApi({ importEnvKey: vi.fn(() => new Promise(() => {})) })
+    render(<EnvKeyNotice onImported={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Use it' }))
+    expect(await screen.findByRole('button', { name: 'Checking…' })).toBeDisabled()
+  })
+
   it('records Not now and stores nothing', async () => {
     const { api } = installApi({ getEnvKeyOffers: vi.fn(() => Promise.resolve(OFFERS.slice(0, 1))) })
     const onImported = vi.fn()
