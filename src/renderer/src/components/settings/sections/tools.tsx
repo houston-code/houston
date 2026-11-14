@@ -5,8 +5,10 @@ import type { SettingsCtx } from '../context'
 
 /** The events that run around a tool call; their matcher globs the tool name. */
 const TOOL_HOOK_EVENTS: ReadonlySet<Hook['event']> = new Set(['PreToolUse', 'PostToolUse'])
-/** Events with a subject a matcher applies to: a tool, or (Notification) a wait type. */
-const SUBJECT_HOOK_EVENTS: ReadonlySet<Hook['event']> = new Set([...TOOL_HOOK_EVENTS, 'Notification'])
+/** The events that run around a dispatched subagent; their matcher globs the agent's name. */
+const AGENT_HOOK_EVENTS: ReadonlySet<Hook['event']> = new Set(['SubagentStart', 'SubagentStop'])
+/** Events with a subject a matcher applies to: a tool, an agent, or (Notification) a wait type. */
+const SUBJECT_HOOK_EVENTS: ReadonlySet<Hook['event']> = new Set([...TOOL_HOOK_EVENTS, ...AGENT_HOOK_EVENTS, 'Notification'])
 /** The tool a new tool hook matches, and the one a hook gets back when it becomes one. */
 const DEFAULT_HOOK_MATCHER = 'edit_file'
 /** A matcher a turn-level hook still runs with: none, or every tool. */
@@ -23,8 +25,8 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
     setHooks(hooks.map((h, idx) => (idx === i ? { ...h, ...patch } : h)))
   const removeHook = (i: number): void => setHooks(hooks.filter((_, idx) => idx !== i))
   // A turn-level event has no subject, so it runs only with no matcher: switching to
-  // one clears the tool, switching to Notification starts on every wait, and switching
-  // back to a tool event starts from the default tool.
+  // one clears the tool, switching to Notification or a subagent event starts on every
+  // wait or agent, and switching back to a tool event starts from the default tool.
   const setEvent = (i: number, event: Hook['event']): void => {
     const h = hooks[i]
     const fromTool = TOOL_HOOK_EVENTS.has(h.event)
@@ -32,7 +34,8 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
       ? fromTool || (h.event !== 'Notification' && h.matcher.trim())
         ? h.matcher
         : DEFAULT_HOOK_MATCHER
-      : event === 'Notification' && h.event === 'Notification'
+      : (event === 'Notification' && h.event === 'Notification') ||
+          (AGENT_HOOK_EVENTS.has(event) && AGENT_HOOK_EVENTS.has(h.event))
         ? h.matcher
         : ''
     patchHook(i, { event, matcher })
@@ -51,7 +54,10 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           hook that exits non-zero makes the agent keep working).{' '}
           <strong>Notification</strong> runs when the agent waits for you (match a wait
           type such as <code>tool_approval</code>) and <strong>SessionEnd</strong> when
-          a run ends; both only observe. Context is in{' '}
+          a run ends; both only observe. <strong>SubagentStart</strong> /{' '}
+          <strong>SubagentStop</strong> run around a dispatched agent (match its name) and{' '}
+          <strong>PostCompact</strong> after a compaction; they can add context but never
+          block or approve. Context is in{' '}
           <code>$HOUSTON_TOOL_NAME</code> / <code>$HOUSTON_TOOL_INPUT</code> /{' '}
           <code>$HOUSTON_USER_PROMPT</code> (a value over 16 KB is in a temp file named
           by the same variable with <code>_FILE</code> added), and as one JSON object on
@@ -84,13 +90,22 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                 <option value="PreCompact">PreCompact</option>
                 <option value="Notification">Notification</option>
                 <option value="SessionEnd">SessionEnd</option>
+                <option value="SubagentStart">SubagentStart</option>
+                <option value="SubagentStop">SubagentStop</option>
+                <option value="PostCompact">PostCompact</option>
               </select>
               {(subjectEvent || strandedMatcher) && (
                 <input
                   list="tool-names"
                   className="rule__tool"
-                  aria-label={`Hook ${i + 1} ${h.event === 'Notification' ? 'wait type' : 'tool'}`}
-                  placeholder={h.event === 'Notification' ? 'wait type (or *)' : 'tool (or *)'}
+                  aria-label={`Hook ${i + 1} ${h.event === 'Notification' ? 'wait type' : AGENT_HOOK_EVENTS.has(h.event) ? 'agent' : 'tool'}`}
+                  placeholder={
+                    h.event === 'Notification'
+                      ? 'wait type (or *)'
+                      : AGENT_HOOK_EVENTS.has(h.event)
+                        ? 'agent name (or *)'
+                        : 'tool (or *)'
+                  }
                   value={h.matcher}
                   onChange={(e) => patchHook(i, { matcher: e.target.value.trim() })}
                 />
