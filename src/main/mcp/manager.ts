@@ -2,7 +2,7 @@ import type { McpServerConfig, McpServerStatus } from '@shared/types'
 import { mcpEnvScope, mcpHeaderScope } from '@shared/types'
 
 export type { McpServerStatus }
-import { mcpToolName, parseElicitationFields } from '@shared/mcp'
+import { parseElicitationFields } from '@shared/mcp'
 import { builtinToolNames, type ToolContext, type ToolDef } from '../agent/tools'
 import { presentUntrusted, untrustedPreamble } from '../agent/untrusted'
 import { getMcpOAuth, getSecretHeaders, setMcpOAuth } from '../agentHost'
@@ -11,6 +11,7 @@ import { McpHttpClient } from './http-client'
 import { McpSseClient } from './sse-client'
 import { canonicalResourceUri, refreshMcpOAuth, tokensNeedRefresh } from './oauth'
 import { capMcpOutput, type ElicitationWireResult } from './protocol'
+import { exposeMcpTools } from './tool-exposure'
 import { log } from '../logger'
 
 /**
@@ -145,6 +146,13 @@ function boundResourceMatches(url: string | undefined, resource: string | undefi
   } catch {
     return false
   }
+}
+
+/** Force an OAuth refresh for a server whose live call just got a 401 (no-op without stored tokens). */
+async function refreshAfterUnauthorized(serverId: string): Promise<void> {
+  const c = lastConfigs.find((x) => x.id === serverId)
+  if (!c || transportOf(c) === 'stdio' || hasAuthorizationHeader(resolveHeaders(c))) return
+  await oauthBearer(c, true).catch(() => {})
 }
 
 /**
@@ -369,20 +377,24 @@ export async function getMcpToolDefs(
   // Only this run's servers: another live run's may be connected too, and are not
   // this run's to call.
   const own = [...connections].filter(([id]) => mine.has(id))
+  const exposed = exposeMcpTools(
+    own.map(([serverId, conn]) => ({ serverId, tools: conn.client.tools })),
+    warnOnce
+  )
   for (const [serverId, conn] of own) {
-    for (const t of conn.client.tools) {
-      const fullName = mcpToolName(serverId, t.name)
-      const original = t.name
+    for (const reason of conn.client.droppedTools ?? []) warnOnce(serverId, `listed a tool it can't offer: ${reason}; it was skipped`)
+  }
+  for (const { serverId, tools } of exposed) {
+    for (const t of tools) {
+      const fullName = t.name
+      const original = t.original
       defs.push({
         kind: 'mcp',
         summarize: () => `${serverId}: ${original}`,
         schema: {
           name: fullName,
-          description: t.description ?? `MCP tool "${original}" from server "${serverId}".`,
-          parameters:
-            t.inputSchema && typeof t.inputSchema === 'object'
-              ? t.inputSchema
-              : { type: 'object', properties: {} }
+          description: t.description,
+          parameters: t.parameters
         },
         // Resolve the live connection at call time so a reconnect (or removal)
         // between building the tool list and the call doesn't hit a stale client.
@@ -437,6 +449,10 @@ async function callLive(
     out = capMcpOutput(await fn(live.client))
   } catch (e) {
     if (!live.client.isClosed) throw e
+    // A 401 mid-session means the access token went bad without the manager seeing
+    // it expire (revoked, or issued with no expiry): re-mint it before reconnecting,
+    // since the reconnect would otherwise send the same token.
+    if (e instanceof McpUnauthorizedError) await refreshAfterUnauthorized(serverId)
     await ensureConnections(lastConfigs).catch(() => {})
     const revived = connections.get(serverId)
     const hint =
@@ -487,14 +503,21 @@ function presentMcpResult(
  * the warning outside the fence, so only names shaped like identifiers are used.
  */
 function liveMcpToolNames(): string[] {
-  const names: string[] = []
-  for (const [id, conn] of connections) {
-    for (const t of conn.client.tools) {
-      const name = mcpToolName(id, t.name)
-      if (/^[\w-]{1,128}$/.test(name)) names.push(name)
-    }
-  }
-  return names
+  const exposed = exposeMcpTools([...connections].map(([serverId, conn]) => ({ serverId, tools: conn.client.tools })))
+  return exposed.flatMap((s) => s.tools.map((t) => t.name))
+}
+
+/** Problems already logged for a server's tool list, so a reused list doesn't log them every run. */
+const warnedToolProblems = new Set<string>()
+const MAX_WARNED_TOOL_PROBLEMS = 500
+
+/** Log a problem with a server's tool list once per server and problem. */
+function warnOnce(serverId: string, problem: string): void {
+  const key = `${serverId}\u0000${problem}`
+  if (warnedToolProblems.has(key)) return
+  if (warnedToolProblems.size >= MAX_WARNED_TOOL_PROBLEMS) warnedToolProblems.clear()
+  warnedToolProblems.add(key)
+  log.warn(`MCP server "${serverId}" ${problem}`)
 }
 
 /** The `mcp_list_resources` / `mcp_read_resource` meta-tools (added only when some server has resources). */

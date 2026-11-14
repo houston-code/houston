@@ -1046,3 +1046,90 @@ describe('marksByLine', () => {
     expect(marksByLine(['a', 'b'], [])).toEqual([[], []])
   })
 })
+
+describe('sub-prompts and the picker after the composer', () => {
+  it('readLine puts the terminal back in raw mode before asking', async () => {
+    // The composer turns raw mode off on its way out, and readline only sets it in
+    // its constructor: a cooked [y/N] prompt echoed every key twice, and Ctrl-C was
+    // a real SIGINT that killed the process.
+    const stdin = fakeTty()
+    const f = fakeRl()
+    const setRaw = stdin.setRawMode.bind(stdin)
+    stdin.setRawMode = ((on: boolean) => {
+      f.calls.push(`raw:${on}`)
+      return setRaw(on)
+    }) as typeof stdin.setRawMode
+    const io = createTerminalIo({ stdin, createInterface: () => f.rl, write: () => {}, columns: () => 80, now: () => 1000 })
+    const composed = io.readComposer!('> ')
+    stdin.push('/delete\r')
+    await expect(composed).resolves.toBe('/delete')
+    expect(f.calls.filter((c) => c.startsWith('raw:')).at(-1)).toBe('raw:false') // the composer handed it back cooked
+    const answer = io.readLine('Delete? [y/N] ')
+    const before = f.calls.slice(0, f.calls.lastIndexOf('question'))
+    expect(before.length).toBeGreaterThan(0)
+    expect(before.lastIndexOf('raw:true')).toBeGreaterThan(before.lastIndexOf('raw:false'))
+    f.submit('y')
+    await expect(answer).resolves.toBe('y')
+  })
+
+  it('the picker keeps readline from walking its history on Up/Down', async () => {
+    const stdin = fakeTty()
+    const rlOut = new PassThrough()
+    const echoed: string[] = []
+    rlOut.on('data', (c: Buffer) => echoed.push(c.toString()))
+    const written: string[] = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () =>
+        createInterface({
+          input: stdin,
+          output: rlOut,
+          terminal: true,
+          history: ['an old message from history']
+        }) as unknown as ReadlineLike,
+      write: (s) => written.push(s),
+      columns: () => 80
+    })
+    const picked = io.select!({
+      title: 'Pick',
+      options: [
+        { label: 'One', value: 'a' },
+        { label: 'Two', value: 'b' }
+      ]
+    })
+    // Up then Down twice lands on the second option whether the cursor clamps or wraps.
+    stdin.push('\x1b[A')
+    stdin.push('\x1b[B')
+    stdin.push('\x1b[B')
+    stdin.push('\r')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: 'b' })
+    expect(echoed.join('')).not.toContain('an old message from history')
+    // Each redraw starts from column 0, wherever the cursor was left.
+    expect(written.join('')).toMatch(new RegExp(`\r${String.fromCharCode(27)}\\[\\d+A`))
+    // readline's own listener is back for the next read.
+    expect(stdin.listenerCount('keypress')).toBeGreaterThan(0)
+  })
+
+  it('the composer joins a character split across two reads', async () => {
+    const stdin = fakeTty()
+    const io = createTerminalIo({ stdin, createInterface: () => fakeRl().rl, write: () => {}, columns: () => 80, now: () => 1000 })
+    const read = io.readComposer!('> ')
+    const bytes = Buffer.from('café')
+    stdin.push(bytes.subarray(0, bytes.length - 1))
+    stdin.push(bytes.subarray(bytes.length - 1))
+    stdin.push('\r')
+    await expect(read).resolves.toBe('café')
+  })
+
+  it('the mid-run watcher joins a character split across two reads', () => {
+    const stdin = fakeTty()
+    const io = createTerminalIo({ stdin, createInterface: () => fakeRl().rl, write: () => {}, columns: () => 80, now: () => 1000 })
+    io.startSpinner!('Working')
+    const bytes = Buffer.from('é')
+    stdin.push(bytes.subarray(0, 1))
+    stdin.push(bytes.subarray(1))
+    stdin.push('\r')
+    expect(io.takeQueued!()).toEqual(['é'])
+    io.stopSpinner!()
+  })
+})

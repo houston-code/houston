@@ -9,6 +9,8 @@ interface RepoState {
   exists: boolean
   /** Whether it's inside a git repo already. */
   isRepo: boolean
+  /** Whether it has a `.git` git can't open (repair it, don't init over it). */
+  unreadable?: boolean
 }
 
 /**
@@ -85,7 +87,7 @@ export function GitInitBanner({
         window.api.isGitInitDismissed(ws)
       ])
       if (wsRef.current !== ws) return
-      setRepo({ exists: info.exists, isRepo: info.isRepo })
+      setRepo({ exists: info.exists, isRepo: info.isRepo, unreadable: info.unreadable })
       setSuppressed(dismissed)
     } catch {
       // Non-fatal — leave the banner hidden rather than risk prompting on bad data.
@@ -140,9 +142,10 @@ export function GitInitBanner({
     void window.api.dismissGitInit(workspace).then((next) => onDismissed?.(next))
   }, [workspace, onDismissed])
 
-  // Gate: an existing non-repo, after a write, not dismissed this session, and not
-  // opted out. `suppressed !== false` covers both still-loading (null) and opted-out.
-  if (!active || suppressed !== false || !repo || !repo.exists || repo.isRepo) {
+  // Gate: an existing non-repo (not a broken one), after a write, not dismissed this
+  // session, and not opted out. `suppressed !== false` covers both still-loading (null)
+  // and opted-out.
+  if (!active || suppressed !== false || !repo || !repo.exists || repo.isRepo || repo.unreadable) {
     return null
   }
 

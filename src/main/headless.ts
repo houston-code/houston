@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fsp, realpathSync } from 'node:fs'
-import { resolve as resolvePath } from 'node:path'
+import { isAbsolute, resolve as resolvePath } from 'node:path'
 import {
+  APPROVAL_POLICIES,
   folderTrustState,
   isApprovalPolicy,
   type AppSettings,
@@ -73,6 +74,13 @@ export const HEADLESS_EXIT = {
   /** The agent finished, but the last `--verify` (or verifyOnStop) check it ran failed. */
   verify: 5
 } as const
+
+/** The termination signals a headless run stops cleanly on. */
+export type HeadlessSignal = 'SIGINT' | 'SIGTERM' | 'SIGHUP'
+export const HEADLESS_SIGNALS: readonly HeadlessSignal[] = ['SIGINT', 'SIGTERM', 'SIGHUP']
+
+/** The shell convention for a process stopped by a signal: 128 plus its number. */
+export const HEADLESS_SIGNAL_EXIT: Record<HeadlessSignal, number> = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }
 
 /**
  * The version of the `--json` output contract: the `system`/`init` line, the
@@ -437,7 +445,8 @@ export function parseHeadlessArgs(
       i = next
     } else if (name === '-C' || name === '--cwd') {
       const { value, next } = flagValue(argv, i)
-      if (value) cwd = value
+      // Relative to the folder Houston was started in, like every other path flag.
+      if (value) cwd = isAbsolute(value) ? value : resolvePath(defaultCwd, value)
       i = next
     } else if (name === '--model') {
       const { value, next } = flagValue(argv, i)
@@ -449,7 +458,9 @@ export function parseHeadlessArgs(
       i = next
     } else if (name === '--approval') {
       const { value, next } = flagValue(argv, i)
+      // A typo must not silently run in the default (plan) policy and exit 0.
       if (isApprovalPolicy(value)) approvalPolicy = value
+      else bad(`--approval must be one of ${APPROVAL_POLICIES.join(', ')} (got ${quoted(value)})`)
       i = next
     } else if (name === '--full-auto') {
       approvalPolicy = 'full-auto'
@@ -644,6 +655,14 @@ export interface HeadlessDeps {
   version?: string
   /** Milliseconds clock for the result's `durationMs`; injected so tests are exact. */
   now?: () => number
+  /** Stop a live run (abort it, kill its commands); it then ends on `done: aborted`. */
+  cancelRun?: (runId: string) => void
+  /**
+   * Subscribe to the process's termination signals (Ctrl-C, a CI timeout, a closed
+   * terminal); returns the unsubscribe. On one, the live run is cancelled, its result
+   * line is written, and runHeadless returns HEADLESS_SIGNAL_EXIT for the signal.
+   */
+  onSignal?: (handler: (signal: HeadlessSignal) => void) => () => void
   /**
    * Session persistence (shared with the TUI/GUI). When present, a headless run is
    * saved as a conversation — so `--continue`/`--resume` can pick it up later and
@@ -942,6 +961,33 @@ function tallyStatus(t: TurnTally): HeadlessStatus {
  * by default, approved under full-auto or an explicit `--on-approval allow`.
  */
 export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps): Promise<number> {
+  let markStopped!: () => void
+  const stop: StopState = { stopped: new Promise<void>((r) => (markStopped = r)) }
+  const unsubscribe = deps.onSignal?.((signal) => {
+    // Once is enough: a repeat signal is the host's cue to force the exit.
+    if (stop.signal) return
+    stop.signal = signal
+    deps.err(`· interrupted (${signal}), stopping the run\n`)
+    if (stop.runId) deps.cancelRun?.(stop.runId)
+    markStopped()
+  })
+  try {
+    const code = await runHeadlessSession(inputOpts, deps, stop)
+    return stop.signal ? HEADLESS_SIGNAL_EXIT[stop.signal] : code
+  } finally {
+    unsubscribe?.()
+  }
+}
+
+/** What a termination signal has to reach: the signal itself, and the live run to cancel. */
+interface StopState {
+  signal?: HeadlessSignal
+  runId?: string
+  /** Settles on the signal, so a wait for the next stdin turn ends with it. */
+  stopped: Promise<void>
+}
+
+async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps, stop: StopState): Promise<number> {
   // A bad flag value stops here, before any model call, so a typo in a budget
   // can't run with no budget at all.
   if (inputOpts.usageError) {
@@ -1154,6 +1200,8 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
    */
   const runOnce = async (messages: ChatMessage[], stepCap?: number): Promise<TurnTally> => {
     const t = emptyTally()
+    // Interrupted before this run began: it never starts, and ends as an aborted one.
+    if (stop.signal) return { ...t, errored: true, stopReason: 'aborted' }
     const runOverrides = stepCap !== undefined ? { ...(overrides ?? {}), maxIterations: stepCap } : overrides
     const req: AgentRunRequest = {
       runId: (deps.newId ?? randomUUID)(),
@@ -1427,10 +1475,17 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
     }
 
     let latest: ChatMessage[] | undefined
-    await deps.startRun(req, send, (m) => {
-      latest = m
-      if (deps.session && conversationId) deps.session.setMessages(conversationId, m)
-    })
+    // startRun registers the run before its first await, so a signal from here on
+    // can cancel it.
+    stop.runId = req.runId
+    try {
+      await deps.startRun(req, send, (m) => {
+        latest = m
+        if (deps.session && conversationId) deps.session.setMessages(conversationId, m)
+      })
+    } finally {
+      stop.runId = undefined
+    }
     // A run always ends on `done` or `error`, which releases the last round; this only
     // guarantees held text can't be lost if one never comes.
     if (!opts.json) releaseRound()
@@ -1485,7 +1540,8 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
       durationMs: Math.max(0, now() - startedAt),
       finalText: t.finalText,
       ...(t.receipt ? { receipt: t.receipt } : {}),
-      ...(check ? (check.ok ? { structured_output: check.value } : { schemaErrors: check.errors }) : {})
+      ...(check ? (check.ok ? { structured_output: check.value } : { schemaErrors: check.errors }) : {}),
+      ...(stop.signal && status !== 'success' ? { error: `interrupted by ${stop.signal}` } : {})
     })
     return headlessExitCode(status)
   }
@@ -1498,18 +1554,28 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
   // meant could run a task it never asked for.
   let code: number = HEADLESS_EXIT.ok
   let lineNo = 0
-  for await (const line of deps.readStdinLines!()) {
-    lineNo++
-    if (!line.trim()) continue
-    const parsed = parseStreamJsonLine(line)
-    if ('error' in parsed) {
-      const message = `stdin line ${lineNo}: ${parsed.error}`
-      deps.err(`${message}\n`)
-      writeEarlyResult('input_error', message)
-      return code === HEADLESS_EXIT.ok ? HEADLESS_EXIT.usage : code
+  const lines = deps.readStdinLines!()[Symbol.asyncIterator]()
+  try {
+    // An interrupted session takes no further turns, and stops waiting for one.
+    while (!stop.signal) {
+      const next = await Promise.race([lines.next(), stop.stopped.then(() => null)])
+      if (!next || next.done) break
+      const line = next.value
+      lineNo++
+      if (!line.trim()) continue
+      const parsed = parseStreamJsonLine(line)
+      if ('error' in parsed) {
+        const message = `stdin line ${lineNo}: ${parsed.error}`
+        deps.err(`${message}\n`)
+        writeEarlyResult('input_error', message)
+        return code === HEADLESS_EXIT.ok ? HEADLESS_EXIT.usage : code
+      }
+      const turnCode = await runTurn(parsed.prompt)
+      if (code === HEADLESS_EXIT.ok) code = turnCode
     }
-    const turnCode = await runTurn(parsed.prompt)
-    if (code === HEADLESS_EXIT.ok) code = turnCode
+  } finally {
+    // Let the reader go (a pending read stays pending; the process is exiting).
+    void lines.return?.()?.catch(() => {})
   }
   // A session that never got a turn still says how it ended.
   if (!initSent) sendInit()

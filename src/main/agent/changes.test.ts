@@ -77,6 +77,29 @@ describe('revertChange, working tree', () => {
   )
 
   maybe(
+    'refuses a hunk revert in a file that is not UTF-8, rather than rewriting its other characters',
+    async () => {
+      const ws = repo()
+      const f = join(ws, 'latin1.txt')
+      // 'café' in Latin-1: é is the single byte 0xE9.
+      const lines = Array.from({ length: 12 }, (_, i) => `caf\xe9 ${i + 1}\n`)
+      const original = Buffer.from(lines.join(''), 'latin1')
+      writeFileSync(f, original)
+      git(ws, 'add', 'latin1.txt')
+      git(ws, 'commit', '-qm', 'latin1')
+      const edited = Buffer.from(lines.join('').replace('caf\xe9 6\n', 'changed\n'), 'latin1')
+      writeFileSync(f, edited)
+      const res = await revertChange(await treeReq(ws, 'latin1.txt', 0), deps([ws]))
+      expect(res).toMatchObject({ ok: false, error: expect.stringMatching(/not UTF-8/) })
+      expect(readFileSync(f).equals(edited)).toBe(true)
+      // The whole-file revert (git's own bytes) still works.
+      expect(await revertChange(await treeReq(ws, 'latin1.txt'), deps([ws]))).toEqual({ ok: true })
+      expect(readFileSync(f).equals(original)).toBe(true)
+    },
+    TIMEOUT
+  )
+
+  maybe(
     'discards a whole edited file, a deleted file, and deletes an untracked one',
     async () => {
       const ws = repo()

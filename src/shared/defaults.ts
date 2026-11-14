@@ -285,10 +285,13 @@ export function reconcileSelectedModel(
   if (!selected) return null
   const provider = providers.find((p) => p.id === selected.providerId)
   if (!provider || provider.models.length === 0) return null
-  if (provider.models.some((m) => m.id === selected.model)) return selected
+  if (typeof selected.model === 'string' && selected.model && provider.models.some((m) => m.id === selected.model)) {
+    return selected
+  }
   // The selected model was removed. Re-point within the same provider, guarding against
   // a `defaultModel` that pointed at the just-removed id.
-  return { providerId: provider.id, model: pickDefaultModel(provider) ?? provider.models[0].id }
+  const model = pickDefaultModel(provider) ?? provider.models[0].id
+  return typeof model === 'string' && model ? { providerId: provider.id, model } : null
 }
 
 /**

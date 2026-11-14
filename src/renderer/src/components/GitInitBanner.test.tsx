@@ -7,7 +7,7 @@ const TITLE = /isn.t a git repository/
 
 /** A RepoInfo with the two fields the banner reads (exists / isRepo) set. */
 function repoInfo(exists: boolean, isRepo: boolean): RepoInfo {
-  return { isRepo, root: '', currentBranch: null, unborn: false, branches: [], isLinkedWorktreeRoot: false, exists }
+  return { isRepo, root: '', currentBranch: null, unborn: false, branches: [], defaultBranch: null, isLinkedWorktreeRoot: false, exists }
 }
 
 /**
@@ -59,6 +59,14 @@ describe('GitInitBanner', () => {
 
   it('stays hidden when the workspace is already a repo', async () => {
     const { getRepoInfo } = installApi({ exists: true, isRepo: true })
+    render(<GitInitBanner {...props()} />)
+    await waitFor(() => expect(getRepoInfo).toHaveBeenCalled())
+    expect(screen.queryByText(TITLE)).not.toBeInTheDocument()
+  })
+
+  it('stays hidden for a repository git cannot open (repair it, not init over it)', async () => {
+    const { getRepoInfo } = installApi({ exists: true, isRepo: false })
+    getRepoInfo.mockResolvedValue({ ...repoInfo(true, false), unreadable: true })
     render(<GitInitBanner {...props()} />)
     await waitFor(() => expect(getRepoInfo).toHaveBeenCalled())
     expect(screen.queryByText(TITLE)).not.toBeInTheDocument()

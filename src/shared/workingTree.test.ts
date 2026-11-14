@@ -8,6 +8,42 @@ import {
 } from './workingTree'
 
 describe('parseUnifiedDiff', () => {
+  it('counts removed and added lines whose text looks like a file header', () => {
+    // A removed "-- comment" is "--- comment" in the diff; an added "++ x" is "+++ x".
+    const diff = [
+      'diff --git a/q.sql b/q.sql',
+      'index 1111111..2222222 100644',
+      '--- a/q.sql',
+      '+++ b/q.sql',
+      '@@ -1,3 +1,3 @@',
+      ' select 1;',
+      '--- old comment',
+      '+-- new comment',
+      '+++ incremented',
+      '-++ gone',
+      ' select 2;',
+      'diff --git a/next.txt b/next.txt',
+      '--- a/next.txt',
+      '+++ b/next.txt',
+      '@@ -1 +1 @@',
+      '-a',
+      '+b',
+      ''
+    ].join('\n')
+    const [sql, next] = parseUnifiedDiff(diff)
+    expect(sql).toMatchObject({ path: 'q.sql', oldPath: 'q.sql', status: 'modified', added: 2, removed: 2 })
+    expect(sql.hunks[0].lines.map((l) => `${l.type}:${l.text}`)).toEqual([
+      'ctx:select 1;',
+      'del:-- old comment',
+      'add:-- new comment',
+      'add:++ incremented',
+      'del:++ gone',
+      'ctx:select 2;'
+    ])
+    // The next file's real headers are still read as headers.
+    expect(next).toMatchObject({ path: 'next.txt', status: 'modified', added: 1, removed: 1 })
+  })
+
   it('returns [] for empty input', () => {
     expect(parseUnifiedDiff('')).toEqual([])
   })

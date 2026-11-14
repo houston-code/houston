@@ -3,6 +3,7 @@ import type { ModelOption } from '@shared/types'
 import { DEFAULT_AZURE_API_VERSION } from '@shared/provider-catalog'
 import { createChatCompletionsProvider, type ChatCompletionsClient } from './openai'
 import { idleTimeoutFetch } from './idle-fetch'
+import { SDK_MAX_RETRIES } from '../agent/retry'
 
 /**
  * GPT models on Azure OpenAI.
@@ -73,6 +74,7 @@ export function createAzureOpenAIProvider(opts: AzureOpenAIOptions = {}): Provid
       (m) =>
         new m.AzureOpenAI({
           fetch: idleTimeoutFetch(),
+          maxRetries: SDK_MAX_RETRIES,
           apiKey: opts.apiKey,
           apiVersion: opts.apiVersion || DEFAULT_AZURE_API_VERSION,
           // Always explicit (see azureBaseUrl); `endpoint` is deliberately not passed.

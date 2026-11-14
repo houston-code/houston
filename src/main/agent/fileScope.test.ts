@@ -13,7 +13,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { rgPath as vscodeRg } from '@vscode/ripgrep'
-import { gitListFiles, hasHiddenSegment, inGitScope, planRuns, runPathArgs } from './fileScope'
+import { minimatch } from 'minimatch'
+import { gitListFiles, globTester, hasHiddenSegment, inGitScope, planRuns, runPathArgs } from './fileScope'
 import { resolveRipgrep, searchContents } from './search'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { clearMentionCache, findFiles } from './mentions'
@@ -321,5 +322,33 @@ describe('helpers', () => {
     expect(runPathArgs('')).toEqual(['.'])
     expect(runPathArgs('src', ['b/x'])).toEqual(['src', 'b/x'])
     expect(runPathArgs('', ['b/x'])).toEqual(['b/x'])
+  })
+
+  it('globTester answers exactly as minimatch() does, with and without options', () => {
+    const paths = [
+      'a.ts', 'src/a.ts', 'src/deep/b.tsx', '.hidden/c.ts', 'src/.d.ts', 'README.md',
+      'src/x.test.ts', 'a b/c.ts', 'src\\win.ts', ''
+    ]
+    const patterns = [
+      '*.ts', '**/*.ts', 'src/**', 'src/*.{ts,tsx}', '!*.md', '#comment', '**/.*', '[ab]*', '?.ts', '**'
+    ]
+    for (const pattern of patterns) {
+      for (const options of [undefined, { matchBase: true }]) {
+        const test = globTester(pattern, options)
+        for (const p of paths) expect([pattern, options, p, test(p)]).toEqual([pattern, options, p, minimatch(p, pattern, options)])
+      }
+    }
+  })
+
+  it('globTester compiles lazily, so a pattern minimatch rejects throws on the first test', () => {
+    const tooLong = 'a'.repeat(70_000)
+    const test = globTester(tooLong) // no throw yet: nothing has been tested
+    let thrown: unknown
+    try {
+      minimatch('a', tooLong)
+    } catch (e) {
+      thrown = e
+    }
+    expect(() => test('a')).toThrow((thrown as Error).message)
   })
 })

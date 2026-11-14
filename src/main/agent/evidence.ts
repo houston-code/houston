@@ -4,12 +4,14 @@ import {
   RECEIPT_MAX_CHECKS,
   RECEIPT_MAX_DELEGATED,
   RECEIPT_MAX_FILES,
+  RECEIPT_MAX_TEST_EDITS,
   type BlockedReason,
   type DelegatedCommand,
   type CheckKind,
   type ReceiptCheck,
   type StepCounts,
   type TestCounts,
+  type TestEdit,
   type TurnReceipt,
   type UnknownReason
 } from '@shared/evidence'
@@ -787,6 +789,8 @@ export class EvidenceLedger {
   /** Who changed a file, when it was a subagent. */
   private readonly filesBy = new Map<string, string>()
   private lastWriteSeq = -1
+  /** What the turn's edits did to its tests, as of the last look (see testTampering.ts). */
+  private testEdits: TestEdit[] = []
 
   /** Record what a tool reported. Commands must already be redacted. `by` names a subagent. */
   record(e: EvidenceDraft, by?: string): void {
@@ -884,6 +888,15 @@ export class EvidenceLedger {
     if (any) this.lastWriteSeq = this.seq++
   }
 
+  /** Replace the turn's test edits with the latest reading of its files. Details must already be redacted. */
+  setTestEdits(edits: TestEdit[]): void {
+    this.testEdits = edits.map((e) => ({
+      path: e.path.replace(CONTROL_CHARS, ''),
+      kind: e.kind,
+      detail: displayLabel(e.detail, 120)
+    }))
+  }
+
   /**
    * Whether a check of `kind` passed this turn ('any': a check of the code of any kind).
    * An HTTP request whose status wasn't checked counts: it was made, which is what a
@@ -929,7 +942,8 @@ export class EvidenceLedger {
       this.files.size === 0 &&
       todoGaps.length === 0 &&
       todoStale.length === 0 &&
-      this.delegated.length === 0
+      this.delegated.length === 0 &&
+      this.testEdits.length === 0
     ) {
       return null
     }
@@ -959,6 +973,10 @@ export class EvidenceLedger {
               [...this.filesBy].filter(([f]) => files.indexOf(f) < RECEIPT_MAX_FILES)
             )
           }
+        : {}),
+      ...(this.testEdits.length ? { testEdits: this.testEdits.slice(0, RECEIPT_MAX_TEST_EDITS) } : {}),
+      ...(this.testEdits.length > RECEIPT_MAX_TEST_EDITS
+        ? { testEditsOmitted: this.testEdits.length - RECEIPT_MAX_TEST_EDITS }
         : {}),
       ...(todoGaps.length ? { todoGaps } : {}),
       ...(todoStale.length ? { todoStale } : {})

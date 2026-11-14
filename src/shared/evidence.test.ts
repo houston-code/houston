@@ -288,6 +288,40 @@ describe('todo gaps in the receipt', () => {
   })
 })
 
+describe('test edits in the receipt', () => {
+  const edits = receipt({
+    filesChanged: ['src/a.test.ts', 'package.json'],
+    filesChangedCount: 2,
+    testEdits: [
+      { path: 'src/a.test.ts', kind: 'skip', detail: "added it.skip('rejects bad input'" },
+      { path: 'package.json', kind: 'script', detail: '"test" gained an exit status that is always 0: vitest || true' }
+    ]
+  })
+
+  it('counts them in the summary, lists them, and treats them as a failure', () => {
+    expect(receiptSummary(edits)).toBe('No tests ran · 2 files changed · 2 test edits to review')
+    expect(formatReceiptLines(edits)).toEqual([
+      'What ran: No tests ran · 2 files changed · 2 test edits to review',
+      "  ! test skipped: src/a.test.ts (added it.skip('rejects bad input')",
+      '  ! test script loosened: package.json ("test" gained an exit status that is always 0: vitest || true)'
+    ])
+    expect(receiptHasFailure(edits)).toBe(true)
+  })
+
+  it('counts the ones past the cap', () => {
+    const r = receipt({
+      testEdits: [{ path: 'a_test.go', kind: 'deleted', detail: 'deleted, with 3 assertions' }],
+      testEditsOmitted: 2
+    })
+    expect(receiptSummary(r)).toBe('3 test edits to review')
+    expect(formatReceiptLines(r).at(-1)).toBe('  plus 2 more test edits')
+  })
+
+  it('is not a failure without them', () => {
+    expect(receiptHasFailure(receipt({ testEdits: [] }))).toBe(false)
+  })
+})
+
 describe('plan progress in the receipt', () => {
   const plan = {
     title: 'Todo app',

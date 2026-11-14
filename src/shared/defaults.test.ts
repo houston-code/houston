@@ -215,6 +215,17 @@ describe('reconcileSelectedModel', () => {
     provider({ id: 'openai', kind: 'openai', models: [{ id: 'gpt-5.6-sol' }] })
   ]
 
+  it('re-points a selection that has no model id instead of keeping it', () => {
+    const sel = { providerId: 'anthropic' } as unknown as { providerId: string; model: string }
+    expect(reconcileSelectedModel(providers, sel)).toEqual({ providerId: 'anthropic', model: 'claude-opus-4-8' })
+  })
+
+  it('does not keep or re-point to a listed model that has no id', () => {
+    const broken = [provider({ id: 'odd', kind: 'openai-compatible', models: [{} as { id: string }] })]
+    const sel = { providerId: 'odd' } as unknown as { providerId: string; model: string }
+    expect(reconcileSelectedModel(broken, sel)).toBeNull()
+  })
+
   it('leaves a null selection null (initial default is the caller’s job)', () => {
     expect(reconcileSelectedModel(providers, null)).toBeNull()
   })

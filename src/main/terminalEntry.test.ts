@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent, ElicitationResult, PlanDecision } from '@shared/agent'
-import { EventEmitter } from 'node:events'
 import { spawn } from 'node:child_process'
-import { guardTerminalExit, resolveBackgroundEvent, wireTerminalSessionBackends } from './terminalEntry'
+import { guardTerminalExit, resolveBackgroundEvent, watchTerminationSignals, wireTerminalSessionBackends } from './terminalEntry'
 import { readShellOutput, registerShell } from './agent/shells'
 import type { SignalProcess } from './signalCleanup'
 import { setUserDataDir, resetUserDataDir } from './userData'
@@ -19,6 +19,34 @@ import { resetSchedulerBackend, isSchedulerConfigured, scheduleCreate, scheduleL
  * prompts. A blocking event this switch drops would hang a spawned session
  * forever.
  */
+describe('watchTerminationSignals', () => {
+  function fakeProcess() {
+    const emitter = new EventEmitter()
+    const exits: number[] = []
+    const proc = {
+      on: (e: string, h: () => void) => emitter.on(e, h),
+      off: (e: string, h: () => void) => emitter.off(e, h),
+      exit: (code?: number) => void exits.push(code ?? 0)
+    } as unknown as Pick<NodeJS.Process, 'on' | 'off' | 'exit'>
+    return { emitter, exits, proc }
+  }
+
+  it('hands the first signal over, force-exits 128+n on the second, and unsubscribes', () => {
+    const { emitter, exits, proc } = fakeProcess()
+    const seen: string[] = []
+    const stop = watchTerminationSignals((s) => void seen.push(s), proc)
+    for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) expect(emitter.listenerCount(s)).toBe(1)
+    emitter.emit('SIGTERM')
+    expect(seen).toEqual(['SIGTERM'])
+    expect(exits).toEqual([])
+    emitter.emit('SIGINT')
+    expect(seen).toEqual(['SIGTERM'])
+    expect(exits).toEqual([130])
+    stop()
+    for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) expect(emitter.listenerCount(s)).toBe(0)
+  })
+})
+
 describe('resolveBackgroundEvent', () => {
   function record() {
     const approvals: Array<[string, string, string]> = []

@@ -1,6 +1,7 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { copyText } from '../lib/clipboard'
 import { highlightCode } from '../lib/highlight'
+import { useTransientFlag } from '../hooks/useTransientFlag'
 
 /**
  * A fenced code block: language label, Copy, and highlighted source. `label`
@@ -21,12 +22,10 @@ export function CodeBlock({
   actions?: ReactNode
   children?: ReactNode
 }): JSX.Element {
-  const [copied, setCopied] = useState(false)
+  const [copied, showCopied] = useTransientFlag(1200)
   const copy = (): void => {
     void copyText(value).then((ok) => {
-      if (!ok) return
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1200)
+      if (ok) showCopied()
     })
   }
   // hljs escapes its input, so the returned token HTML is safe to inject; a null

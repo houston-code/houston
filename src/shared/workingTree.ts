@@ -41,6 +41,12 @@ export interface FileDiff {
 export interface WorkingTreeChanges {
   /** False when the workspace is not a git repository. */
   isRepo: boolean
+  /**
+   * Set (with `isRepo` false) when the workspace has a `.git`, in it or a parent
+   * folder, that git can't open: git's own reason. Such a folder is not offered
+   * `git init`, which would start a second repository inside the broken one.
+   */
+  unreadable?: string
   /** Current branch, or null (detached / unborn / non-repo). */
   branch: string | null
   files: FileDiff[]
@@ -63,6 +69,8 @@ export interface WorkingTreeChanges {
  */
 export interface WorkingTreeStats {
   isRepo: boolean
+  /** As in the full set: why git can't open the workspace's repository. */
+  unreadable?: string
   /** Current branch, or null (detached / unborn / non-repo), as in the full set. */
   branch: string | null
   /** Changed files, tracked plus untracked (the full set's `files.length`). */
@@ -176,14 +184,17 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
     } else if (line.startsWith('Binary files') || line.startsWith('GIT binary patch')) {
       cur.binary = true
       cur.note = 'Binary file'
-    } else if (line.startsWith('--- ')) {
+    } else if (!hunk && line.startsWith('--- ')) {
+      // A file's `---`/`+++` headers come before its first hunk. Inside a hunk the
+      // same text is a change: a removed `-- comment` (SQL, Lua) arrives as `--- comment`
+      // and an added `++ x` as `+++ x`, and reading those as headers dropped them.
       const p = sidePath(line.slice(4))
       if (p === null) {
         if (cur.status !== 'renamed') cur.status = 'added'
       } else if (!cur.oldPath) {
         cur.oldPath = p
       }
-    } else if (line.startsWith('+++ ')) {
+    } else if (!hunk && line.startsWith('+++ ')) {
       const p = sidePath(line.slice(4))
       if (p === null) {
         if (cur.status !== 'renamed') cur.status = 'deleted'
