@@ -2873,8 +2873,8 @@ window:
    of one long request
 
 - **Your current request is always kept word for word.**
-- **Key facts are kept beside the summary:** your original request, the task list, the
-  files in play, and, as they stood when it last compacted, the git branch, the
+- **Key facts are kept beside the summary:** your original request, each message you
+  sent after it (shortened if long), the task list, the files in play, and, as they stood when it last compacted, the git branch, the
   shell's folder, and the background shells still running.
 - **Sized to the model.** The threshold is set automatically from the selected model's
   context window: a large-window model compacts later, a small local model sooner.

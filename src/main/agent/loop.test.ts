@@ -2982,6 +2982,27 @@ describe('compaction persistence across runs', () => {
     expect(history[stored.cut].role).toBe('user') // always lands on a turn boundary
   })
 
+  it("pins the user's own words from the summarized turns, and none from the kept tail", async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const history = historyOf(5) // user turns at 0,2,4,6,8; current question at 10
+    setMessages(conv.id, history)
+    setCompaction(conv.id, { cut: 6, summary: 'PRIOR SUMMARY' })
+    const sends: ChatMessage[][] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        sends.push(req.messages)
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    await run({ provider, messages: history, conversationId: conv.id })
+    const pinned = sends[0].find((m) => m.content.startsWith(PINNED_MEMORY_PREFIX))!
+    expect(pinned.content).toContain('Original task:\nquestion 0')
+    expect(pinned.content).toContain("The user's later messages, in order (clipped):\n- question 1\n- question 2")
+    // question 3 onward is still in the window verbatim.
+    expect(pinned.content).not.toContain('question 3')
+  })
+
   it('resumes from persisted state instead of re-summarizing the head again', async () => {
     const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
     const history = historyOf(5) // user turns at 0,2,4,6,8; current question at 10
