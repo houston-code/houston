@@ -235,7 +235,7 @@ describe('session worktree (real git)', () => {
           const f = await finish(wt, answers)
           expect(f.result).toBe('kept')
           expect(f.text).toContain('has uncommitted changes')
-          expect(f.text).toContain(`come back with: houston --resume conv-9 -C ${wt.path}`)
+          expect(f.text).toContain(`come back with: ${comeBackCommand(wt.path, 'conv-9')}`)
           expect(f.detached).toEqual([])
         }
         expect(existsSync(join(wt.path, 'new.txt'))).toBe(true)
