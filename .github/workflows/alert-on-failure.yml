@@ -2,7 +2,7 @@ name: Alert on failure
 
 # Reusable alert: file one GitHub issue per unattended-workflow outage, assigned to the
 # ALERT_ASSIGNEE repo variable, and close it when that workflow next goes green. Called from the scheduled workflows
-# (eval-live, provider-canary, native-vuln-scan, dependabot-digest) and from ci.yml's
+# (eval-live, provider-canary, native-vuln-scan, dependabot-digest, memory-soak) and from ci.yml's
 # post-merge run on main, whose push is made by github-merge-queue[bot].
 #
 # WHY THIS EXISTS AT ALL — a scheduled run notifies nobody reliably. GitHub sends Actions
