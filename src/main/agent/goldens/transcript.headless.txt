@@ -10,5 +10,5 @@ messages (1):
 1. user: "Fix the failing test"
 --- events ---
 text {"delta":"Done."}
-usage {"context":{"conversation":9,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":4546},"cost":0.00272,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}
+usage {"context":{"conversation":9,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":4569},"cost":0.00272,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}
 done {"stopReason":"end_turn"}

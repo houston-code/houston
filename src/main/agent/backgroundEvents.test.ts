@@ -14,6 +14,7 @@ import {
   noteChildReport,
   noteRunEnded,
   noteRunStarted,
+  onChildReport,
   pushBackgroundEvent,
   requestWake,
   resetBackgroundEventsForTest,
@@ -258,6 +259,33 @@ describe('waking idle chats', () => {
     noteChildReport('p')
     vi.advanceTimersByTime(WAKE_DEBOUNCE_MS)
     expect(h.start).toHaveBeenCalledWith('p')
+  })
+
+  it('tells report listeners first; one that takes the report (a wait_for) leaves nothing to wake for', () => {
+    vi.useFakeTimers()
+    const h = host()
+    const seen: string[] = []
+    const off = onChildReport((id) => {
+      seen.push(id)
+      clearChildReportFlag(id)
+    })
+    const boom = onChildReport(() => {
+      throw new Error('listener failed')
+    })
+    try {
+      expect(() => noteChildReport('p')).not.toThrow()
+      vi.advanceTimersByTime(WAKE_DEBOUNCE_MS * 2)
+      expect(seen).toEqual(['p'])
+      expect(h.start).not.toHaveBeenCalled()
+    } finally {
+      off()
+      boom()
+    }
+    // Unsubscribed: the next report wakes as before.
+    noteChildReport('q')
+    vi.advanceTimersByTime(WAKE_DEBOUNCE_MS)
+    expect(seen).toEqual(['p'])
+    expect(h.start).toHaveBeenCalledWith('q')
   })
 })
 

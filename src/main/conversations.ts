@@ -990,6 +990,22 @@ export function setQueuedInput(id: string, queue: StoredQueue | null): void {
   write(conv)
 }
 
+/**
+ * Take one pending finished-child report (the one from `childId`), leaving the others
+ * queued. Null when that child has no report waiting.
+ */
+export function takeChildReport(id: string, childId: string): ChildReport | null {
+  const conv = read(id)
+  const reports = conv?.childReports ?? []
+  const report = reports.find((r) => r.conversationId === childId)
+  if (!conv || !report) return null
+  const rest = reports.filter((r) => r !== report)
+  if (rest.length) conv.childReports = rest
+  else delete conv.childReports
+  write(conv)
+  return report
+}
+
 /** Take (and clear) a chat's pending finished-child reports. */
 export function takeChildReports(id: string): ChildReport[] {
   const conv = read(id)

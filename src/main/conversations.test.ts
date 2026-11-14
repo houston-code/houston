@@ -31,6 +31,7 @@ import {
   setAnnouncedPolicy,
   saveSideChat,
   setProposalState,
+  takeChildReport,
   takeChildReports,
   deriveTitle,
   getConversation,
@@ -421,6 +422,21 @@ describe('proposals and child reports (persisted)', () => {
     expect(taken[0]).toMatchObject({ conversationId: child.id, summary: 'second answer' })
     expect(takeChildReports(parent.id)).toEqual([])
     expect(getConversation(parent.id)!.childReports).toBeUndefined()
+  })
+
+  it('takes one child report, leaving the others queued', () => {
+    const parent = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const a = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const b = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    reportChildToParent(parent.id, a.id)
+    reportChildToParent(parent.id, b.id)
+    expect(takeChildReport(parent.id, 'not-a-child')).toBeNull()
+    expect(takeChildReport(parent.id, a.id)).toMatchObject({ conversationId: a.id })
+    expect(takeChildReport(parent.id, a.id)).toBeNull()
+    expect(getConversation(parent.id)!.childReports?.map((r) => r.conversationId)).toEqual([b.id])
+    expect(takeChildReport(parent.id, b.id)).toMatchObject({ conversationId: b.id })
+    expect(getConversation(parent.id)!.childReports).toBeUndefined()
+    expect(takeChildReport('missing-parent', a.id)).toBeNull()
   })
 
   it('caps the pending reports, dropping the oldest', () => {
