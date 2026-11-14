@@ -42,10 +42,9 @@ export function highlightTerms(root: HTMLElement, query: string): () => void {
   const registry = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights
   const HighlightCtor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight
   if (!registry || !HighlightCtor) return () => {}
-  const words = query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((w) => w.length > 0)
+  // The words the matcher looked for, so "api-key" or "web_search" highlights the
+  // "api" and "key" it found rather than the raw string the page never contains.
+  const words = queryTerms(query)
   if (words.length === 0) {
     registry.delete('settings-search')
     return () => {}

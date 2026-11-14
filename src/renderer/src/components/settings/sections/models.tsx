@@ -48,6 +48,14 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const removeProvider = (id: string): void => {
     setSettings((s) => ({ ...s, providers: s.providers.filter((p) => p.id !== id) }))
   }
+  // Removing a provider asks first, and takes its stored API key with it: left in the
+  // keychain, it came back the moment the same host was added again.
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  const confirmRemoveProvider = async (p: ProviderConfig): Promise<void> => {
+    setConfirmRemove(null)
+    if (p.hasKey) await removeKey(p.id)
+    removeProvider(p.id)
+  }
 
   const fetchModels = async (id: string): Promise<void> => {
     setBusy(id)
@@ -85,17 +93,35 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
             <strong>{p.label}</strong>
             <span className="provider__kind">{p.kind}</span>
             {p.hasKey && (
-              <span className="provider__key-ok pill pill--ok">key set ✓</span>
+              <span className="provider__key-ok pill pill--ok">Key set</span>
             )}
-            {!p.builtIn && (
+            {!p.builtIn && confirmRemove !== p.id && (
               <button
                 className="btn btn--danger btn--sm"
-                onClick={() => removeProvider(p.id)}
+                aria-label={`Remove ${p.label}`}
+                onClick={() => setConfirmRemove(p.id)}
               >
                 Remove
               </button>
             )}
           </div>
+          {confirmRemove === p.id && (
+            <div className="provider__confirm" role="group" aria-label={`Remove ${p.label}?`}>
+              <span>
+                Remove {p.label}?{p.hasKey ? ' Its API key is deleted from your keychain too.' : ''}
+              </span>
+              <button
+                className="btn btn--sm btn--danger"
+                disabled={busy === p.id}
+                onClick={() => void confirmRemoveProvider(p)}
+              >
+                Remove
+              </button>
+              <button className="btn btn--sm" onClick={() => setConfirmRemove(null)}>
+                Cancel
+              </button>
+            </div>
+          )}
 
           {(p.kind === 'openai-compatible' || p.baseUrl !== undefined) && (
             <>
@@ -214,8 +240,8 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
             that is silently ignored.
           */}
           {p.kind !== 'vertex' && (
-            <label className="field">
-              <span>API key</span>
+            <div className="field">
+              <label htmlFor={`api-key-${p.id}`}>API key</label>
               {/* A form, so Enter in the box saves the key. */}
               <form
                 className="field__row"
@@ -225,6 +251,7 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                 }}
               >
                 <input
+                  id={`api-key-${p.id}`}
                   type="password"
                   placeholder={
                     p.hasKey
@@ -250,13 +277,14 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                     type="button"
                     className="btn btn--sm btn--danger"
                     disabled={busy === p.id}
+                    aria-label={`Remove ${p.label} API key`}
                     onClick={() => removeKey(p.id)}
                   >
                     Remove
                   </button>
                 )}
               </form>
-            </label>
+            </div>
           )}
 
           <ModelsField
@@ -391,11 +419,13 @@ export function AddProviderSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
 
       <div className="add-endpoint" ref={endpointRef}>
         <input
+          aria-label="Custom provider label"
           placeholder="Custom label (e.g. My vLLM)"
           value={newLabel}
           onChange={(e) => setNewLabel(e.target.value)}
         />
         <input
+          aria-label="Custom provider base URL"
           placeholder="Base URL (http://localhost:8000/v1)"
           value={newUrl}
           onChange={(e) => setNewUrl(e.target.value)}
@@ -796,13 +826,13 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                 ))}
               </select>
             </label>
-            <label className="field">
-              <span>
+            <div className="field">
+              <label htmlFor="web-search-key">
                 {selected.label} API key{' '}
                 {keySet && (
-                  <span className="provider__key-ok pill pill--ok">key set ✓</span>
+                  <span className="provider__key-ok pill pill--ok">Key set</span>
                 )}
-              </span>
+              </label>
               <form
                 className="field__row"
                 onSubmit={(e) => {
@@ -811,6 +841,7 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                 }}
               >
                 <input
+                  id="web-search-key"
                   type="password"
                   placeholder={keySet ? '•••••••• (stored)' : selected.keyPlaceholder}
                   value={keyInputs[selected.keyId] ?? ''}
@@ -830,6 +861,7 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                     type="button"
                     className="btn btn--sm btn--danger"
                     disabled={busy === selected.keyId}
+                    aria-label={`Remove ${selected.label} API key`}
                     onClick={() => removeKey(selected.keyId)}
                   >
                     Remove
@@ -842,7 +874,7 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   {selected.keyUrl.replace(/^https:\/\//, '')}
                 </a>
               </p>
-            </label>
+            </div>
           </>
         )
       })()}

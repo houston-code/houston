@@ -154,7 +154,7 @@ describe('InstructionFilesSection', () => {
       ]
     })
     render(<InstructionFilesSection ctx={ctx()} />)
-    expect(await screen.findByText('Every project')).toBeTruthy()
+    expect(await screen.findByText('All projects')).toBeTruthy()
     expect(screen.getByText('Shortened to fit')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Open pkg/AGENTS.md' }))
     await waitFor(() => expect(api.customizeOpenInstruction).toHaveBeenCalledWith('/w/app', 'pkg/AGENTS.md'))

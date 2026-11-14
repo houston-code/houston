@@ -204,13 +204,19 @@ export function UpdatesSection(): JSX.Element {
   const [checking, setChecking] = useState(false)
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null)
   useEffect(() => {
-    void window.api.getVersion().then(setVersion)
+    void window.api
+      .getVersion()
+      .then(setVersion)
+      .catch(() => {})
   }, [])
   const checkForUpdates = async (): Promise<void> => {
     setChecking(true)
     setUpdateResult(null)
     try {
       setUpdateResult(await window.api.checkForUpdates())
+    } catch (e) {
+      // Shown like a check that failed, rather than leaving no answer at all.
+      setUpdateResult({ status: 'error', currentVersion: version, message: (e as Error).message })
     } finally {
       setChecking(false)
     }

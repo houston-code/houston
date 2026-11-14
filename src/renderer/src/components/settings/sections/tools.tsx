@@ -70,20 +70,26 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
         return (
           <div key={i}>
             <div className="rule">
-              <select value={h.event} onChange={(e) => setEvent(i, e.target.value as Hook['event'])}>
-                <option value="PreToolUse">Pre</option>
-                <option value="PostToolUse">Post</option>
-                <option value="UserPromptSubmit">Prompt</option>
-                <option value="SessionStart">Session</option>
+              {/* The events by the names the description above and project hooks use. */}
+              <select
+                aria-label={`Hook ${i + 1} event`}
+                value={h.event}
+                onChange={(e) => setEvent(i, e.target.value as Hook['event'])}
+              >
+                <option value="PreToolUse">PreToolUse</option>
+                <option value="PostToolUse">PostToolUse</option>
+                <option value="UserPromptSubmit">UserPromptSubmit</option>
+                <option value="SessionStart">SessionStart</option>
                 <option value="Stop">Stop</option>
-                <option value="PreCompact">Compact</option>
-                <option value="Notification">Notify</option>
-                <option value="SessionEnd">End</option>
+                <option value="PreCompact">PreCompact</option>
+                <option value="Notification">Notification</option>
+                <option value="SessionEnd">SessionEnd</option>
               </select>
               {(subjectEvent || strandedMatcher) && (
                 <input
                   list="tool-names"
                   className="rule__tool"
+                  aria-label={`Hook ${i + 1} ${h.event === 'Notification' ? 'wait type' : 'tool'}`}
                   placeholder={h.event === 'Notification' ? 'wait type (or *)' : 'tool (or *)'}
                   value={h.matcher}
                   onChange={(e) => patchHook(i, { matcher: e.target.value.trim() })}
@@ -91,6 +97,7 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
               )}
               <input
                 className="rule__match"
+                aria-label={`Hook ${i + 1} command`}
                 placeholder="shell command, e.g. npm run format"
                 value={h.command}
                 onChange={(e) => patchHook(i, { command: e.target.value })}
@@ -100,7 +107,7 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                 min={1}
                 max={600}
                 className="rule__timeout"
-                aria-label="Timeout in seconds"
+                aria-label={`Hook ${i + 1} timeout in seconds`}
                 title="Timeout in seconds (blank = 60)"
                 placeholder="60s"
                 value={h.timeout ?? ''}
@@ -109,7 +116,7 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   patchHook(i, { timeout: Number.isFinite(n) && n > 0 ? Math.min(600, n) : undefined })
                 }}
               />
-              <button className="btn btn--sm btn--danger" onClick={() => removeHook(i)}>
+              <button className="btn btn--sm btn--danger" aria-label={`Remove hook ${i + 1}`} onClick={() => removeHook(i)}>
                 ✕
               </button>
             </div>
@@ -173,8 +180,12 @@ export function IntegrationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element 
   const onType = ctx.onTypeInTerminal
   // Optional-integrations status (gh CLI + formatters), shown as a hint in the Tools tab.
   const [integrations, setIntegrations] = useState<IntegrationsInfo | null>(null)
+  const [loadError, setLoadError] = useState(false)
   useEffect(() => {
-    void window.api.getIntegrations().then(setIntegrations)
+    void window.api
+      .getIntegrations()
+      .then(setIntegrations)
+      .catch(() => setLoadError(true))
   }, [])
 
   // Tone for the optional-integration status pills. While still loading we use a
@@ -200,7 +211,8 @@ export function IntegrationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element 
       title="Optional integrations"
       desc={
         <>
-          These extras are optional. Houston works without them. Status on this machine:
+          These extras are optional. Houston works without them. Below is what this
+          machine has.
           {onType && integrations?.install && Object.keys(integrations.install).length > 0 && (
             <>
               {' '}
@@ -219,7 +231,9 @@ export function IntegrationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element 
           className={`integration__status pill integration__status--${ghTone} pill--${ghTone}`}
         >
           {integrations == null
-            ? 'Checking…'
+            ? loadError
+              ? 'Unknown'
+              : 'Checking…'
             : !integrations.gh.installed
               ? 'Not found'
               : integrations.gh.authenticated
@@ -227,6 +241,11 @@ export function IntegrationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element 
                 : 'Installed, not signed in'}
         </span>
       </div>
+      {loadError && (
+        <p className="field__hint field__hint--warn" role="alert">
+          Couldn&apos;t check this machine for the optional tools. Reopen Settings to try again.
+        </p>
+      )}
       {integrations != null &&
         !(integrations.gh.installed && integrations.gh.authenticated) && (
           <p className="field__hint">

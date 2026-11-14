@@ -196,7 +196,7 @@ describe('SettingsModal', () => {
     // Models is the default tab; both providers are listed with their state.
     expect(screen.getByText('Anthropic')).toBeInTheDocument()
     expect(screen.getByText('My Local')).toBeInTheDocument()
-    expect(screen.getByText('key set ✓')).toBeInTheDocument() // anthropic.hasKey
+    expect(screen.getByText('Key set')).toBeInTheDocument() // anthropic.hasKey
   })
 
   it('marks the open section in a labelled nav', () => {
@@ -337,6 +337,21 @@ describe('SettingsModal', () => {
     fireEvent.click(within(group).getByRole('radio', { name: /Auto-approve edits/ }))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).approvalPolicy).toBe('auto-edit')
+  })
+
+  it('says so when the optional-integrations check fails, instead of checking forever', async () => {
+    installApi({ getIntegrations: vi.fn(() => Promise.reject(new Error('boom'))) })
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    expect(await screen.findByText(/Couldn't check this machine for the optional tools/)).toBeInTheDocument()
+    expect(screen.queryByText('Checking…')).toBeNull()
+  })
+
+  it('reports a failed update check instead of showing nothing', async () => {
+    installApi({ checkForUpdates: vi.fn(() => Promise.reject(new Error('net::ERR_INTERNET_DISCONNECTED'))) })
+    renderModal({}, { initialTab: 'about' })
+    fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }))
+    expect(await screen.findByText(/Couldn’t check for updates\. Check your internet connection/)).toBeInTheDocument()
   })
 
   it('shows the optional-integrations status and how to enable gh when missing', async () => {
@@ -583,6 +598,36 @@ describe('SettingsModal', () => {
       other.focus()
       fireEvent.keyDown(other, { key: 'f', metaKey: true, ctrlKey: true })
       expect(document.activeElement).toBe(search())
+    })
+
+    it('leaves Mod+F and / to a shortcut being recorded', () => {
+      installApi()
+      renderModal({}, { initialTab: 'keyboard' })
+      const capture = screen.getByText('New chat').closest('.keybind-row')!.querySelector('.keybind-row__capture') as HTMLElement
+      act(() => capture.focus())
+      fireEvent.click(capture)
+      fireEvent.keyDown(capture, { key: 'f', metaKey: true, ctrlKey: true })
+      expect(document.activeElement).not.toBe(search())
+      // The keystroke went to the recording (bound, or flagged as already used), not the search.
+      expect(capture).not.toHaveTextContent('Press keys…')
+    })
+
+    it("opens a result's page at the section that matched", () => {
+      installApi()
+      const scrolled = vi.fn()
+      const original = Element.prototype.scrollIntoView
+      Element.prototype.scrollIntoView = function (this: Element) {
+        scrolled(this.querySelector('h3')?.textContent)
+      }
+      try {
+        renderModal()
+        type('outbound')
+        const heading = document.querySelector('.set-results__page:not([hidden]) .set-results__title') as HTMLElement
+        fireEvent.click(within(heading).getByRole('button', { name: 'Permissions' }))
+        expect(scrolled).toHaveBeenCalledWith('Sandbox egress')
+      } finally {
+        Element.prototype.scrollIntoView = original
+      }
     })
 
     it('opens with a query already typed', () => {
@@ -854,6 +899,19 @@ describe('SettingsModal', () => {
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
       const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
       expect(saved.permissionRules?.map((r) => r.match)).toEqual(['rm *', '*', 'https://a.example/*'])
+    })
+
+    it('moves focus with the rule, so pressing the arrow again keeps moving it', () => {
+      installApi()
+      renderModal({ permissionRules: ordered })
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Move rule 3 up' }))
+      expect(patterns()).toEqual(['*', 'https://a.example/*', 'rm *'])
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Move rule 2 up' }))
+      fireEvent.click(document.activeElement as HTMLElement)
+      expect(patterns()).toEqual(['https://a.example/*', '*', 'rm *'])
+      // At the top, "up" is disabled, so focus lands on the same rule's "down".
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Move rule 1 down' }))
     })
 
     it('reorders by dragging a rule onto another', () => {
@@ -1166,6 +1224,13 @@ describe('SettingsModal', () => {
       const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
       expect(saved).not.toHaveProperty('reasoningSummary')
       expect(saved).not.toHaveProperty('verbosity')
+    })
+
+    it('names what Reset resets when the section heading is hidden under its page title', () => {
+      installApi()
+      renderModal({ theme: 'dark' }, { initialTab: 'appearance' })
+      const reset = screen.getByRole('button', { name: 'Reset Appearance to defaults' })
+      expect(reset).toHaveTextContent('Reset appearance')
     })
 
     it('never marks the approval mode Modified, since its default depends on the machine', () => {
@@ -1578,29 +1643,76 @@ describe('SettingsModal', () => {
     // Only the built-in anthropic provider, so the sole Remove button is its key
     // row's (no non-builtin provider contributes a provider-level Remove).
     renderModal({ providers: [anthropic] })
+    // The key box is named by its label alone, not by the buttons beside it.
+    expect(screen.getByLabelText('API key', { exact: true })).toHaveAttribute('type', 'password')
 
     // anthropic.hasKey → a Remove button exists in its key row.
-    expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    expect(screen.getByRole('button', { name: 'Remove Anthropic API key' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Anthropic API key' }))
 
     await waitFor(() => expect(api.deleteKey).toHaveBeenCalledWith('anthropic'))
     await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Remove Anthropic API key' })).not.toBeInTheDocument()
     )
   })
 
-  it('removes a custom (non-builtin) provider when its Remove is clicked', () => {
+  it('removes a custom (non-builtin) provider once its Remove is confirmed', async () => {
     installApi()
     renderModal()
 
     // Built-in anthropic has no Remove; the custom endpoint does.
     expect(screen.getByText('My Local')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove Anthropic' })).toBeNull()
     const customRow = within(screen.getByText('My Local').closest('.provider') as HTMLElement)
-    fireEvent.click(customRow.getByRole('button', { name: 'Remove' }))
+    fireEvent.click(customRow.getByRole('button', { name: 'Remove My Local' }))
+    // It asks first; Cancel keeps it.
+    const confirm = within(customRow.getByRole('group', { name: 'Remove My Local?' }))
+    fireEvent.click(confirm.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByText('My Local')).toBeInTheDocument()
 
-    expect(screen.queryByText('My Local')).not.toBeInTheDocument()
+    fireEvent.click(customRow.getByRole('button', { name: 'Remove My Local' }))
+    fireEvent.click(within(customRow.getByRole('group', { name: 'Remove My Local?' })).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(screen.queryByText('My Local')).not.toBeInTheDocument())
     // The built-in provider is untouched.
     expect(screen.getByText('Anthropic')).toBeInTheDocument()
+  })
+
+  it('deletes a removed provider’s stored key too, and says so before removing', async () => {
+    const api = installApi()
+    renderModal({ providers: [anthropic, { ...customEndpoint, hasKey: true }] })
+    const customRow = within(screen.getByText('My Local').closest('.provider') as HTMLElement)
+    fireEvent.click(customRow.getByRole('button', { name: 'Remove My Local' }))
+    const confirm = customRow.getByRole('group', { name: 'Remove My Local?' })
+    expect(confirm).toHaveTextContent('Its API key is deleted from your keychain too.')
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(api.deleteKey).toHaveBeenCalledWith('custom-1234'))
+    await waitFor(() => expect(screen.queryByText('My Local')).not.toBeInTheDocument())
+  })
+
+  it('names the controls of MCP servers, hooks, and folders for assistive tech', () => {
+    installApi()
+    renderModal({
+      mcpServers: [{ id: 'github', command: 'npx', args: [], enabled: true }],
+      hooks: [{ event: 'Stop', matcher: '', command: 'make lint' }],
+      additionalRoots: ['/work/shared'],
+      trustedFolders: [{ path: '/work/app', decision: 'trusted', decidedAt: 0, hash: 'h' }]
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
+    expect(screen.getByRole('checkbox', { name: 'Server github enabled' })).toBeChecked()
+    expect(screen.getByText('On')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove MCP server github' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Server github command' })).toHaveValue('npx')
+    fireEvent.click(screen.getByRole('button', { name: 'Hooks' }))
+    expect(screen.getByRole('combobox', { name: 'Hook 1 event' })).toHaveValue('Stop')
+    // The event list uses the names the description uses.
+    expect(screen.getByRole('option', { name: 'UserPromptSubmit' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Hook 1 command' })).toHaveValue('make lint')
+    expect(screen.getByRole('button', { name: 'Remove hook 1' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+    expect(screen.getByRole('button', { name: 'Remove folder /work/shared' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+    expect(screen.getByText('Trusted')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Forget the decision for /work/app' })).toBeInTheDocument()
   })
 
   it('adds an MCP server row when "+ Add MCP server" is clicked', () => {

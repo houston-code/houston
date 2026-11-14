@@ -13,6 +13,8 @@ import { useFocusTrap } from '../lib/useFocusTrap'
  */
 
 const MARK: Record<DoctorCheck['status'], string> = { ok: '✓', warn: '!', fail: '✗' }
+/** What each mark means, for screen readers (the mark and its colour are visual only). */
+const STATUS_TEXT: Record<DoctorCheck['status'], string> = { ok: 'OK', warn: 'Warning', fail: 'Problem' }
 
 function verdict(checks: DoctorCheck[]): { text: string; tone: string } {
   const fails = checks.filter((c) => c.status === 'fail').length
@@ -35,12 +37,18 @@ export function DoctorModal({
   onClose: () => void
 }): JSX.Element {
   const [facts, setFacts] = useState<DoctorFacts | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let live = true
-    void window.api.getDoctorFacts(workspace ?? '').then((f) => {
-      if (live) setFacts(f)
-    })
+    void window.api
+      .getDoctorFacts(workspace ?? '')
+      .then((f) => {
+        if (live) setFacts(f)
+      })
+      .catch((e: unknown) => {
+        if (live) setError(e instanceof Error ? e.message : String(e))
+      })
     return () => {
       live = false
     }
@@ -69,14 +77,18 @@ export function DoctorModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal__head">
-          <h2 id="doctor-title">Doctor</h2>
-          <button className="modal__close" onClick={onClose} aria-label="Close doctor">
+          <h2 id="doctor-title">Diagnostics</h2>
+          <button className="modal__close" onClick={onClose} aria-label="Close diagnostics">
             ✕
           </button>
         </div>
 
         <div className="modal__main doctor">
-          {!report ? (
+          {error ? (
+            <p className="doctor__verdict doctor__verdict--fail" role="alert">
+              Couldn&apos;t check your setup: {error}
+            </p>
+          ) : !report ? (
             <p className="doctor__loading">Checking your setup…</p>
           ) : (
             <>
@@ -90,6 +102,7 @@ export function DoctorModal({
                         <span className={`doctor__mark doctor__mark--${c.status}`} aria-hidden="true">
                           {MARK[c.status]}
                         </span>
+                        <span className="sr-only">{STATUS_TEXT[c.status]}:</span>
                         <span className="doctor__label">{c.label}</span>
                         <span className="doctor__detail">{c.detail}</span>
                         {c.fix && c.status !== 'ok' && (

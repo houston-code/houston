@@ -269,6 +269,8 @@ describe('ConnectModel reopened from a finished step 1', () => {
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-haiku-5-5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Replace key' }))
     fireEvent.change(keyInput(), { target: { value: 'sk-new' } })
+    // The picked model stays, so no provider default is announced.
+    expect(screen.queryByText(/You.ll start on/)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
     await waitFor(() => expect(onConnected).toHaveBeenCalledWith(fresh, 'anthropic', 'claude-haiku-5-5'))
     expect(api.testKey).toHaveBeenCalledWith('anthropic', 'sk-new')

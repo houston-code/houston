@@ -13,6 +13,7 @@ import { highlightTerms, queryTerms } from './settings/search'
 import { isMacPlatform } from '../lib/shortcuts'
 import type { SettingsCtx } from './settings/context'
 import { useAutosave } from './settings/useAutosave'
+import { isRecordingShortcut } from './settings/KeyboardTab'
 
 export { KeyboardTab } from './settings/KeyboardTab'
 export type { TabId } from './settings/pages'
@@ -95,6 +96,8 @@ export function SettingsModal({
   useEffect(() => {
     const mac = isMacPlatform()
     const onKey = (e: KeyboardEvent): void => {
+      // A shortcut being recorded on the Keyboard page takes the keystroke instead.
+      if (isRecordingShortcut()) return
       const mod = mac ? e.metaKey : e.ctrlKey
       const typing =
         e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"]') !== null
@@ -234,10 +237,29 @@ export function SettingsModal({
   const pageMatches = (id: TabId): number =>
     pageById(id).sections.filter((sec) => matches[sec.id]).length
   const resultCount = PAGES.reduce((n, p) => n + pageMatches(p.id), 0)
-  const goToPage = (id: TabId): void => {
+  // A section to bring into view once its page has rendered (a search result's page
+  // opens at the first section that matched, not at the top).
+  const [scrollToHeading, setScrollToHeading] = useState<string | null>(null)
+  const goToPage = (id: TabId, heading: string | null = null): void => {
     setQuery('')
     setTab(id)
+    setScrollToHeading(heading)
     bodyRef.current?.scrollTo?.({ top: 0 })
+  }
+  useEffect(() => {
+    if (!scrollToHeading || searching) return
+    setScrollToHeading(null)
+    const h = [...(bodyRef.current?.querySelectorAll<HTMLElement>('.set-section h3') ?? [])].find(
+      (el) => el.textContent === scrollToHeading
+    )
+    h?.closest('.set-section')?.scrollIntoView?.({ block: 'start' })
+  }, [scrollToHeading, searching])
+  /** The heading of the first section of a page that the search matched. */
+  const firstMatchHeading = (id: TabId): string | null => {
+    const sec = pageById(id).sections.find((entry) => matches[entry.id])
+    if (!sec) return null
+    const el = bodyRef.current?.querySelector(`[data-section="${sec.id}"] .set-section h3`)
+    return el?.textContent ?? null
   }
   const mac = isMacPlatform()
 
@@ -352,7 +374,7 @@ export function SettingsModal({
                 {PAGES.map((p) => (
                   <section key={p.id} className="set-results__page" hidden={pageMatches(p.id) === 0} aria-label={p.label}>
                     <h2 className="set-results__title">
-                      <button className="link" onClick={() => goToPage(p.id)}>
+                      <button className="link" onClick={() => goToPage(p.id, firstMatchHeading(p.id))}>
                         {p.label}
                       </button>
                     </h2>

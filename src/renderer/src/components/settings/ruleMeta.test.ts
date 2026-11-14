@@ -11,6 +11,8 @@ describe('daysAgo', () => {
     expect(daysAgo(now - 5 * DAY, now)).toBe('5 days ago')
     expect(daysAgo(now - 90 * DAY, now)).toBe('3 months ago')
     expect(daysAgo(now - 800 * DAY, now)).toBe('2 years ago')
+    // 24 months is under two full years: one year, not "1 years".
+    expect(daysAgo(now - 720 * DAY, now)).toBe('1 year ago')
   })
 
   it('never reads a future time as negative', () => {

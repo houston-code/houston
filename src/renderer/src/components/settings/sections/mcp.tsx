@@ -11,7 +11,15 @@ import { McpAddPanels } from './mcpCatalog'
  * field loses focus: tidying every keystroke would eat the `-` of `my-server` (a
  * trailing `-` is trimmed) before the next letter arrived.
  */
-function ServerIdField({ id, onChange }: { id: string; onChange: (id: string) => void }): JSX.Element {
+function ServerIdField({
+  id,
+  label,
+  onChange
+}: {
+  id: string
+  label: string
+  onChange: (id: string) => void
+}): JSX.Element {
   const [text, setText] = useState(id)
   const focused = useRef(false)
   useEffect(() => {
@@ -20,6 +28,7 @@ function ServerIdField({ id, onChange }: { id: string; onChange: (id: string) =>
   return (
     <input
       className="rule__tool"
+      aria-label={label}
       placeholder="id"
       value={text}
       onFocus={() => {
@@ -40,7 +49,15 @@ function ServerIdField({ id, onChange }: { id: string; onChange: (id: string) =>
  * A stdio server's arguments, one per line as in the catalog's review form, so an
  * argument may hold spaces (a folder path). Parsed when the field loses focus.
  */
-function ArgsField({ args, onChange }: { args: string[]; onChange: (args: string[]) => void }): JSX.Element {
+function ArgsField({
+  args,
+  label,
+  onChange
+}: {
+  args: string[]
+  label: string
+  onChange: (args: string[]) => void
+}): JSX.Element {
   const [text, setText] = useState(() => args.join('\n'))
   const focused = useRef(false)
   const joined = args.join('\n')
@@ -50,6 +67,7 @@ function ArgsField({ args, onChange }: { args: string[]; onChange: (args: string
   return (
     <textarea
       className="mcp-server__args"
+      aria-label={label}
       rows={Math.max(3, text.split('\n').length)}
       placeholder={'args, one per line, e.g.\n-y\n@modelcontextprotocol/server-filesystem'}
       value={text}
@@ -185,9 +203,10 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   onBlur={() => setRenameHint(null)}
                 />
               ) : (
-                <ServerIdField id={sv.id} onChange={(id) => patchServer(i, { id })} />
+                <ServerIdField id={sv.id} label={`Server ${i + 1} id`} onChange={(id) => patchServer(i, { id })} />
               )}
               <select
+                aria-label={`Server ${sv.id || i + 1} transport`}
                 value={transport}
                 onChange={(e) =>
                   patchServer(i, {
@@ -202,12 +221,15 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
               <label className="mcp-server__enabled" title="Enabled">
                 <input
                   type="checkbox"
+                  aria-label={`Server ${sv.id || i + 1} enabled`}
                   checked={sv.enabled}
                   onChange={(e) => patchServer(i, { enabled: e.target.checked })}
                 />
+                <span aria-hidden="true">On</span>
               </label>
               <button
                 className="btn btn--sm btn--danger"
+                aria-label={sv.id ? `Remove MCP server ${sv.id}` : `Remove MCP server ${i + 1}`}
                 onClick={() => removeServer(i)}
               >
                 ✕
@@ -221,12 +243,14 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
               <>
                 <input
                   className="mcp-server__args"
+                  aria-label={`Server ${sv.id || i + 1} URL`}
                   placeholder="url (e.g. https://example.com/mcp)"
                   value={sv.url ?? ''}
                   onChange={(e) => patchServer(i, { url: e.target.value })}
                 />
                 <HeadersField
                   className="mcp-server__args"
+                  label={`Server ${sv.id || i + 1} headers`}
                   placeholder="headers, one per line (e.g. Authorization: Bearer TOKEN); or use OAuth sign-in below"
                   headers={sv.headers}
                   onChange={(headers) => patchServer(i, { headers })}
@@ -272,13 +296,19 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
               <>
                 <input
                   className="mcp-server__args"
+                  aria-label={`Server ${sv.id || i + 1} command`}
                   placeholder="command (e.g. npx)"
                   value={sv.command}
                   onChange={(e) => patchServer(i, { command: e.target.value })}
                 />
-                <ArgsField args={sv.args ?? []} onChange={(args) => patchServer(i, { args })} />
+                <ArgsField
+                  args={sv.args ?? []}
+                  label={`Server ${sv.id || i + 1} arguments`}
+                  onChange={(args) => patchServer(i, { args })}
+                />
                 <input
                   className="mcp-server__args"
+                  aria-label={`Server ${sv.id || i + 1} working directory`}
                   placeholder="working directory (optional)"
                   value={sv.cwd ?? ''}
                   onChange={(e) => patchServer(i, { cwd: e.target.value || undefined })}
@@ -286,6 +316,7 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                 <HeadersField
                   env
                   className="mcp-server__args"
+                  label={`Server ${sv.id || i + 1} environment variables`}
                   placeholder="env vars, one per line (e.g. GITHUB_TOKEN=ghp_xxx); values are stored encrypted"
                   headers={sv.env}
                   onChange={(env) => patchServer(i, { env })}

@@ -11,7 +11,8 @@ export function daysAgo(at: number, now: number): string {
   if (days < 60) return `${days} days ago`
   const months = Math.floor(days / 30)
   if (months < 24) return `${months} months ago`
-  return `${Math.floor(days / 365)} years ago`
+  const years = Math.floor(days / 365)
+  return `${years} ${years === 1 ? 'year' : 'years'} ago`
 }
 
 /**

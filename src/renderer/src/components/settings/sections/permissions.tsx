@@ -204,6 +204,19 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
   const [newRuleTool, setNewRuleTool] = useState('')
   const [collapsedRuleGroups, setCollapsedRuleGroups] = useState<Set<string>>(new Set())
   const [dragFrom, setDragFrom] = useState<number | null>(null)
+  // Where a rule just moved with its arrow buttons: focus follows it there, since the
+  // rows are keyed by position and the focused button would stay on the old slot.
+  const [movedTo, setMovedTo] = useState<{ index: number; dir: 'up' | 'down' } | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!movedTo) return
+    setMovedTo(null)
+    const n = movedTo.index + 1
+    const find = (dir: string): HTMLButtonElement | null | undefined =>
+      listRef.current?.querySelector<HTMLButtonElement>(`[aria-label="Move rule ${n} ${dir}"]`)
+    const same = find(movedTo.dir)
+    ;(same && !same.disabled ? same : find(movedTo.dir === 'up' ? 'down' : 'up'))?.focus()
+  }, [movedTo])
   const [editingText, setEditingText] = useState(false)
   const toggleRuleGroup = (tool: string, open: boolean): void =>
     setCollapsedRuleGroups((prev) => {
@@ -290,7 +303,10 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
           ? {
               enabled: !filtering,
               count: rules.length,
-              onMove: (to) => setRules(moveRule(rules, index, to)),
+              onMove: (to) => {
+                setRules(moveRule(rules, index, to))
+                setMovedTo({ index: to, dir: to < index ? 'up' : 'down' })
+              },
               onDragStart: () => setDragFrom(index),
               onDrop: () => {
                 if (dragFrom !== null) setRules(moveRule(rules, dragFrom, index))
@@ -462,7 +478,7 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
       )}
 
       {view === 'order' && visible.length > 0 && (
-        <div className="rule-list">{visible.map(({ rule, index }) => row(rule, index, true, true))}</div>
+        <div className="rule-list" ref={listRef}>{visible.map(({ rule, index }) => row(rule, index, true, true))}</div>
       )}
 
       {view === 'tool' &&

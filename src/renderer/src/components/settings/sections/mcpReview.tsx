@@ -169,5 +169,5 @@ export function ReviewForm({
 export function addedMessage(server: McpServerConfig): string {
   return server.enabled
     ? `Added ${server.id}. It starts the next time the agent runs.`
-    : `Added ${server.id}, switched off. Tick its box in the list to switch it on.`
+    : `Added ${server.id}, switched off. Tick its On box in the list to switch it on.`
 }

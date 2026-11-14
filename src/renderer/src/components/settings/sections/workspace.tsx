@@ -35,7 +35,7 @@ export function AdditionalFoldersSection({ ctx }: { ctx: SettingsCtx }): JSX.Ele
           <code className="rule__path" title={dir}>
             {dir}
           </code>
-          <button className="btn btn--sm btn--danger" onClick={() => removeRoot(dir)}>
+          <button className="btn btn--sm btn--danger" aria-label={`Remove folder ${dir}`} onClick={() => removeRoot(dir)}>
             ✕
           </button>
         </div>
@@ -94,7 +94,7 @@ export function TrustedFoldersSection({ ctx }: { ctx: SettingsCtx }): JSX.Elemen
           <span
             className={`mcp-server__status ${t.decision === 'trusted' ? 'mcp-server__status--ok' : 'mcp-server__status--warn'}`}
           >
-            {t.decision === 'trusted' ? 'trusted' : 'never'}
+            {t.decision === 'trusted' ? 'Trusted' : 'Never trust'}
           </span>
           <code className="rule__path" title={t.path}>
             {t.path}
@@ -105,6 +105,7 @@ export function TrustedFoldersSection({ ctx }: { ctx: SettingsCtx }): JSX.Elemen
           <button
             className="btn btn--sm btn--danger"
             title="Forget this decision (asks again on next open)"
+            aria-label={`Forget the decision for ${t.path}`}
             onClick={() =>
               setSettings((s) => ({
                 ...s,
