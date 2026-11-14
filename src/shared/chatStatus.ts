@@ -19,7 +19,17 @@ import type { ChatMessage } from './agent'
  */
 export function rendersAsReply(m: ChatMessage): boolean {
   if (m.role !== 'assistant') return false
-  return m.content.trim() !== '' || (m.reasoning?.some((r) => r.text) ?? false)
+  return countsAsReply(m.content, m.reasoning?.some((r) => r.text) ?? false)
+}
+
+/**
+ * The reply rule on its own: some non-whitespace text, or any reasoning. The
+ * transcript numbers its live (not yet saved) bubbles with this, so a whitespace-only
+ * bubble streamed before a tool call takes no number, exactly as its saved message
+ * takes none in {@link replyMessageIndexes}.
+ */
+export function countsAsReply(text: string, hasReasoning: boolean): boolean {
+  return text.trim() !== '' || hasReasoning
 }
 
 /** The log index of each message that renders as an assistant reply, in order. */

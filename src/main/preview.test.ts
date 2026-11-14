@@ -120,6 +120,32 @@ describe('syncPreviewPanes', () => {
     expect(() => reloadPreviewPane(a, 'a')).not.toThrow()
   })
 
+  it.each(['did-navigate', 'render-process-gone'])(
+    "tears a window's panes down when its page goes away (%s)",
+    async (event) => {
+      const { syncPreviewPanes, watchPreviewHost } = await load()
+      const listeners = new Map<string, Array<() => void>>()
+      const win = Object.assign(fakeWindow(), {
+        webContents: {
+          on: (name: string, fn: () => void) => {
+            listeners.set(name, [...(listeners.get(name) ?? []), fn])
+          }
+        }
+      })
+      watchPreviewHost(win as unknown as Parameters<typeof watchPreviewHost>[0])
+      syncPreviewPanes(win, [spec('a')], true)
+      expect(win.children).toBe(1)
+      for (const fn of listeners.get(event) ?? []) fn()
+      // The native view is off the window and closed.
+      expect(win.children).toBe(0)
+      expect(h.views[0].closed).toBe(true)
+      // The window's pane map is empty: the next visible sync starts a fresh pane.
+      syncPreviewPanes(win, [spec('a')], true)
+      expect(h.views).toHaveLength(2)
+      expect(win.children).toBe(1)
+    }
+  )
+
   it('ignores a sync with no window', async () => {
     const { syncPreviewPanes } = await load()
     syncPreviewPanes(null, [spec('a')], true)

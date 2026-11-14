@@ -82,8 +82,12 @@ function onCloseShortcut(): void {
 
 const MENU_PANELS: readonly MenuPanel[] = ['sidebar', 'terminal', 'tasks', 'preview', 'side-chat']
 
-/** Renderer state the menus reflect; reported over IPC as it changes. */
-let menuState: Required<MenuState> = normalizeMenuState(undefined)
+/** Renderer state the menus reflect, per window renderer (webContents id); reported over IPC as it changes. */
+const menuStates = new Map<number, Required<MenuState>>()
+/** The state the menu last rendered, to skip no-op rebuilds. */
+let renderedStateKey = ''
+/** Whether startup has built the menu (see refreshMenuForFocus). */
+let menuBuilt = false
 
 /**
  * The reported state with every field a plain boolean. It arrives over IPC, so
@@ -100,10 +104,44 @@ export function normalizeMenuState(next: MenuState | undefined): Required<MenuSt
   }
 }
 
-export function setMenuState(next: MenuState): void {
-  const normalized = normalizeMenuState(next)
-  if (JSON.stringify(normalized) === JSON.stringify(menuState)) return
-  menuState = normalized
+/** The part of a renderer that reports menu state (an Electron WebContents). */
+interface MenuStateSender {
+  id: number
+  once(event: 'destroyed', listener: () => void): unknown
+}
+
+/**
+ * Record the menu state one window's renderer reports, and rebuild the menu if that
+ * window is the one it reflects. Each window keeps its own state, so the menu follows
+ * the focused window rather than whichever one reported last.
+ */
+export function setMenuState(next: MenuState, sender: MenuStateSender): void {
+  if (!menuStates.has(sender.id)) {
+    sender.once('destroyed', () => {
+      menuStates.delete(sender.id)
+      refreshMenuForFocus()
+    })
+  }
+  menuStates.set(sender.id, normalizeMenuState(next))
+  refreshMenuForFocus()
+}
+
+/** The state of the window app-level actions land on (see targetWindow). */
+function currentMenuState(): Required<MenuState> {
+  const win = targetWindow()
+  const id = win && !win.isDestroyed?.() ? win.webContents?.id : undefined
+  return (id !== undefined ? menuStates.get(id) : undefined) ?? normalizeMenuState(undefined)
+}
+
+/**
+ * Rebuild the menu if the window it should reflect now has different state (another
+ * window took focus, or that window reported a change). A no-op until startup has
+ * built the menu once: building it reads settings, which waits for the credential
+ * store, and a window can take focus before that.
+ */
+export function refreshMenuForFocus(): void {
+  if (!menuBuilt) return
+  if (JSON.stringify(currentMenuState()) === renderedStateKey) return
   buildAppMenu()
 }
 
@@ -512,8 +550,11 @@ export function buildAppMenu(): void {
   }
   const settings = getSettings()
   renderedSettingsKey = menuSettingsKey(settings)
+  const state = currentMenuState()
+  renderedStateKey = JSON.stringify(state)
+  menuBuilt = true
   const ctx: MenuContext = {
-    ...menuState,
+    ...state,
     recentWorkspaces: settings.recentWorkspaces,
     keybindings: settings.keybindings
   }

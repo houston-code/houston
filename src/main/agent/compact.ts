@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto'
 import type { ChatMessage } from '@shared/agent'
 import { resolveContextWindow } from '@shared/usage'
 import { createProvider } from '../providers'
 import { getProvider } from '../agentHost'
-import { getConversation, setCompaction, setMessages } from '../conversations'
-import { providerStreamError, withProviderRetry } from './retry'
+import { getConversation, peekConversation, setCompaction, setMessages } from '../conversations'
+import { log } from '../logger'
+import { activeRunForConversation } from './loop'
+import { describeProviderError, providerStreamError, withProviderRetry } from './retry'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_TRUNCATED_MESSAGE,
@@ -34,15 +37,88 @@ const DEFAULT_SUMMARY_CHUNK_BUDGET = 100_000
 const KEEP_TAIL_FRACTION = 0.3
 const DEFAULT_KEEP_TAIL_BUDGET = 50_000
 
+/**
+ * Longest a manual compaction may take overall, retries and every chunk included.
+ * Past it the attempt is abandoned with a clear error rather than leaving the user
+ * staring at "Compacting" while a struggling provider is retried in silence.
+ */
+export const COMPACT_DEADLINE_MS = 3 * 60_000
+
+/**
+ * Why a compaction did nothing. On success: `empty` / `single-turn` (nothing worth
+ * summarizing). On failure: `cancelled` (the user stopped it), `timeout` (it ran past
+ * the deadline), `running` (a turn is live, or started, on the chat), `changed` (the
+ * chat moved on while the summary was being written, so it would clobber newer
+ * messages), `busy` (a compaction of that chat is already in flight).
+ */
+export type CompactReason = 'empty' | 'single-turn' | 'cancelled' | 'timeout' | 'running' | 'changed' | 'busy'
+
 export interface CompactResult {
   ok: boolean
   /** Number of messages folded into the summary (0 = nothing to compact). */
   summarized: number
   /** The new message log when something was compacted; undefined otherwise. */
   messages?: ChatMessage[]
-  /** Why nothing was compacted (only set when `summarized` is 0 on success). */
-  reason?: 'empty' | 'single-turn'
+  /** Why nothing was compacted (see {@link CompactReason}). */
+  reason?: CompactReason
   error?: string
+}
+
+/** A transient provider failure the compaction is about to retry. */
+export interface CompactRetryInfo {
+  attempt: number
+  /** Undefined while riding out a network outage (a time budget, not a count). */
+  max?: number
+  error: string
+}
+
+export interface CompactOptions {
+  /** Aborting it cancels the compaction; nothing is written. */
+  signal?: AbortSignal
+  /** Overall deadline; defaults to {@link COMPACT_DEADLINE_MS}. */
+  deadlineMs?: number
+  /** Called before each retry of a failed summarization request. */
+  onRetry?: (info: CompactRetryInfo) => void
+}
+
+export const COMPACT_ERR_CANCELLED = 'Compaction cancelled.'
+export const COMPACT_ERR_RUNNING =
+  'A turn is running in this chat. Wait for it to finish (or stop it), then compact.'
+export const COMPACT_ERR_CHANGED =
+  'The chat changed while it was being compacted, so nothing was replaced. Try /compact again.'
+export const COMPACT_ERR_BUSY = 'This chat is already being compacted.'
+
+function timeoutMessage(ms: number): string {
+  const mins = Math.round(ms / 60_000)
+  const span = mins >= 1 ? `${mins} minute${mins === 1 ? '' : 's'}` : `${Math.round(ms / 1000)} seconds`
+  return `Compaction took longer than ${span} and was stopped. Nothing was changed; try again later.`
+}
+
+/** Compactions in flight, by conversation id, so the UI can cancel one. */
+const inFlight = new Map<string, AbortController>()
+
+/** Whether a compaction of the conversation is in flight. */
+export function compactionInProgress(id: string): boolean {
+  return inFlight.has(id)
+}
+
+/** Cancel the conversation's in-flight compaction. False when there was none. */
+export function cancelCompaction(id: string): boolean {
+  const ctl = inFlight.get(id)
+  if (!ctl) return false
+  ctl.abort()
+  return true
+}
+
+/**
+ * A fingerprint of the stored message log, to notice it moved on mid-compaction. The
+ * log itself, not `updatedAt`: a settings change bumps that without touching a
+ * message. Peeked, so attachments hash as their stored references, not their bytes.
+ */
+function logStamp(id: string): string | null {
+  const conv = peekConversation(id)
+  if (!conv) return null
+  return `${conv.messages.length}:${createHash('sha256').update(JSON.stringify(conv.messages)).digest('hex')}`
 }
 
 /**
@@ -61,8 +137,56 @@ export function applyCompaction(messages: ChatMessage[], cut: number, summary: s
 export async function compactConversationNow(
   id: string,
   providerId: string,
-  model: string
+  model: string,
+  opts: CompactOptions = {}
 ): Promise<CompactResult> {
+  if (inFlight.has(id)) return { ok: false, summarized: 0, reason: 'busy', error: COMPACT_ERR_BUSY }
+  if (opts.signal?.aborted) return { ok: false, summarized: 0, reason: 'cancelled', error: COMPACT_ERR_CANCELLED }
+  const ctl = new AbortController()
+  inFlight.set(id, ctl)
+  const onOuterAbort = (): void => ctl.abort()
+  opts.signal?.addEventListener('abort', onOuterAbort, { once: true })
+  const deadlineMs = opts.deadlineMs ?? COMPACT_DEADLINE_MS
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    ctl.abort()
+  }, deadlineMs)
+  // Settle the moment the signal fires, even when a provider stream ignores it:
+  // the work keeps nothing it hasn't written, and it never writes once aborted.
+  let release: () => void = () => {}
+  const stopped = new Promise<CompactResult>((resolve) => {
+    const done = (): void =>
+      resolve(
+        timedOut
+          ? { ok: false, summarized: 0, reason: 'timeout', error: timeoutMessage(deadlineMs) }
+          : { ok: false, summarized: 0, reason: 'cancelled', error: COMPACT_ERR_CANCELLED }
+      )
+    ctl.signal.addEventListener('abort', done, { once: true })
+    release = () => ctl.signal.removeEventListener('abort', done)
+  })
+  try {
+    return await Promise.race([stopped, compactUnderSignal(id, providerId, model, ctl.signal, opts.onRetry)])
+  } finally {
+    release()
+    clearTimeout(timer)
+    opts.signal?.removeEventListener('abort', onOuterAbort)
+    inFlight.delete(id)
+  }
+}
+
+async function compactUnderSignal(
+  id: string,
+  providerId: string,
+  model: string,
+  signal: AbortSignal,
+  onRetry: CompactOptions['onRetry']
+): Promise<CompactResult> {
+  // A live turn is appending to this log; a summary of it would race those writes.
+  if (activeRunForConversation(id)) {
+    return { ok: false, summarized: 0, reason: 'running', error: COMPACT_ERR_RUNNING }
+  }
+  const stamp = logStamp(id)
   const conv = getConversation(id)
   if (!conv) return { ok: false, summarized: 0, error: 'Conversation not found.' }
 
@@ -117,7 +241,8 @@ export async function compactConversationNow(
           model,
           system: summarizationSystemPrompt,
           messages: buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next)),
-          maxTokens: summaryMaxTokens(window)
+          maxTokens: summaryMaxTokens(window),
+          signal
         })) {
           if (ev.type === 'text') acc += ev.text
           else if (ev.type === 'done') truncated = ev.stopReason === 'max_tokens'
@@ -125,7 +250,15 @@ export async function compactConversationNow(
         }
         if (truncated) throw new Error(SUMMARY_TRUNCATED_MESSAGE)
         return acc
+      }, {
+        signal,
+        onRetry: (attempt, err, max) => {
+          const error = describeProviderError(err)
+          log.warn(`compact: retrying summary request (attempt ${attempt}${max ? ` of ${max}` : ''}): ${error}`)
+          if (!signal.aborted) onRetry?.({ attempt, max, error })
+        }
       })
+      if (signal.aborted) return { ok: false, summarized: 0, error: COMPACT_ERR_CANCELLED }
       const summary = text.trim()
       if (!summary) return { ok: false, summarized: 0, error: 'The model returned an empty summary.' }
       summaryMsgs = buildSummaryMessages(summary)
@@ -133,6 +266,16 @@ export async function compactConversationNow(
     }
   } catch (e) {
     return { ok: false, summarized: 0, error: (e as Error).message }
+  }
+  // Superseded by the caller's abort result; never write after a cancel or timeout.
+  if (signal.aborted) return { ok: false, summarized: 0, error: COMPACT_ERR_CANCELLED }
+  // The summary took a while: a turn sent meanwhile (or any other rewrite) must win
+  // over it, so write only onto the exact log that was summarized.
+  if (activeRunForConversation(id)) {
+    return { ok: false, summarized: 0, reason: 'running', error: COMPACT_ERR_RUNNING }
+  }
+  if (logStamp(id) !== stamp) {
+    return { ok: false, summarized: 0, reason: 'changed', error: COMPACT_ERR_CHANGED }
   }
 
   const messages = [...summaryMsgs, ...conv.messages.slice(target)]

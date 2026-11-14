@@ -29,7 +29,8 @@ import {
   replayUpdates,
   serveAcp,
   type AcpDeps,
-  type AcpStoredSession
+  type AcpStoredSession,
+  type ServeAcpOptions
 } from './acp'
 
 const settings = {
@@ -109,6 +110,8 @@ interface Harness {
   updates: (sessionId: string) => any[]
   /** End the input stream and wait for the server to wind down. */
   end: () => Promise<void>
+  /** Settles when serveAcp returns. */
+  served: Promise<void>
   cwd: string
 }
 
@@ -122,6 +125,9 @@ function harness(opts: {
   answer?: (method: string, params: any) => unknown
   deps?: Partial<AcpDeps>
   stored?: AcpStoredSession[]
+  /** Make a write throw, the way a write to a closed pipe fails. */
+  writeFails?: (line: string) => boolean
+  serve?: ServeAcpOptions
 }): Harness {
   const loop = new FakeLoop()
   const input = new PassThrough()
@@ -162,6 +168,7 @@ function harness(opts: {
       setModel: (id, providerId, model) => void modelWrites.push([id, providerId, model])
     },
     write: (line) => {
+      if (opts.writeFails?.(line)) throw Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
       expect(line.endsWith('\n')).toBe(true)
       const m = JSON.parse(line)
       expect(m.jsonrpc).toBe('2.0')
@@ -184,11 +191,12 @@ function harness(opts: {
     readFile: () => null,
     ...opts.deps
   }
-  const served = serveAcp(input, deps)
+  const served = serveAcp(input, deps, opts.serve)
 
   return {
     loop,
     frames,
+    served,
     stored,
     saved,
     modelWrites,
@@ -404,6 +412,70 @@ describe('ACP server: protocol flow', () => {
     expect((await reply).result).toEqual({ stopReason: 'cancelled' })
     expect(h.loop.cancelled).toEqual(['run-1'])
     await h.end()
+  })
+
+  it('cancels the live run and stops serving when a write to the editor fails (EPIPE)', async () => {
+    let broken = false
+    const h = harness({
+      writeFails: () => broken,
+      run: async (req, send, loop) => {
+        send({ runId: req.runId, type: 'text', delta: 'working' })
+        const cancelled = loop.waitForCancel(req.runId)
+        // The editor went away: the next update can't be written.
+        broken = true
+        send({ runId: req.runId, type: 'text', delta: ' more' })
+        await cancelled
+        send({ runId: req.runId, type: 'done', stopReason: 'aborted' })
+      }
+    })
+    const sessionId = await ready(h)
+    void h.call('session/prompt', { sessionId, prompt: text('long task') })
+    // serveAcp returns although the input never ended.
+    await h.served
+    expect(h.loop.cancelled).toEqual(['run-1'])
+    // Nothing more was written once the pipe broke.
+    expect(h.updates(sessionId)).toHaveLength(1)
+  })
+
+  it('cancels every live run when the output is reported closed', async () => {
+    const outputClosed = new AbortController()
+    const h = harness({
+      serve: { outputClosed: outputClosed.signal },
+      run: async (req, send, loop) => {
+        send({ runId: req.runId, type: 'text', delta: 'working' })
+        await loop.waitForCancel(req.runId)
+        send({ runId: req.runId, type: 'done', stopReason: 'aborted' })
+      }
+    })
+    const a = await ready(h)
+    const b = (await h.call('session/new', { cwd: h.cwd, mcpServers: [] })).result.sessionId
+    void h.call('session/prompt', { sessionId: a, prompt: text('one') })
+    void h.call('session/prompt', { sessionId: b, prompt: text('two') })
+    await vi.waitFor(() => expect(h.loop.requests).toHaveLength(2))
+    const framesBefore = h.frames.length
+    outputClosed.abort()
+    await h.served
+    expect([...h.loop.cancelled].sort()).toEqual(['run-1', 'run-2'])
+    expect(h.frames).toHaveLength(framesBefore)
+  })
+
+  it('on shutdown cancels live runs, still answers the prompt, and returns', async () => {
+    const shutdown = new AbortController()
+    const h = harness({
+      serve: { shutdown: shutdown.signal },
+      run: async (req, send, loop) => {
+        send({ runId: req.runId, type: 'text', delta: 'working' })
+        await loop.waitForCancel(req.runId)
+        send({ runId: req.runId, type: 'done', stopReason: 'aborted' })
+      }
+    })
+    const sessionId = await ready(h)
+    const reply = h.call('session/prompt', { sessionId, prompt: text('long task') })
+    await vi.waitFor(() => expect(h.updates(sessionId)).toHaveLength(1))
+    shutdown.abort()
+    expect((await reply).result).toEqual({ stopReason: 'cancelled' })
+    await h.served
+    expect(h.loop.cancelled).toEqual(['run-1'])
   })
 
   it('denies a pending permission when the editor cancels it', async () => {

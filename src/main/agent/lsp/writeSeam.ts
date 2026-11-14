@@ -71,21 +71,27 @@ export interface AfterWriteOptions {
  * to the tool result ('' when there's nothing to say). Best effort: never throws.
  */
 export async function afterWrite(opts: AfterWriteOptions): Promise<string> {
-  for (const t of opts.targets) {
+  const noteWrite = async (abs: string): Promise<void> => {
     try {
-      await opts.manager.noteWrite(t.abs, opts.roots)
+      await opts.manager.noteWrite(abs, opts.roots)
     } catch {
       // Syncing is best effort; the tools re-sync from disk before each request.
     }
   }
+  const diagnosed = opts.diagnosticsOnSave === false ? [] : opts.targets.filter((x) => !x.deleted).slice(0, MAX_DIAGNOSED_FILES)
+  // A target getting language-server diagnostics is synced by that check, which first
+  // needs the server holding the old text for the baseline. Sending the new text here
+  // would make it send the old text back and wait out a second verdict.
+  const viaDiagnostics = new Set(diagnosed.filter((t) => opts.before.has(t.abs)).map((t) => t.abs))
+  for (const t of opts.targets) if (!viaDiagnostics.has(t.abs)) await noteWrite(t.abs)
   if (opts.diagnosticsOnSave === false) return ''
   const lsp = opts.lspDiagnostics ?? lspEditDiagnostics
   const checker = opts.checker ?? runPostEditDiagnostics
   let out = ''
-  for (const t of opts.targets.filter((x) => !x.deleted).slice(0, MAX_DIAGNOSED_FILES)) {
+  for (const t of diagnosed) {
     try {
       let lspRan = false
-      if (opts.before.has(t.abs)) {
+      if (viaDiagnostics.has(t.abs)) {
         const r = await lsp({
           manager: opts.manager,
           abs: t.abs,
@@ -104,6 +110,9 @@ export async function afterWrite(opts: AfterWriteOptions): Promise<string> {
     } catch {
       // Diagnostics are best-effort feedback; never fail the edit.
     }
+    // Every server holding the file now gets the text on disk: a no-op for the one the
+    // check just synced, and it covers a check that gave up early.
+    if (viaDiagnostics.has(t.abs)) await noteWrite(t.abs)
   }
   return out
 }

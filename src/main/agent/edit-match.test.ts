@@ -131,6 +131,32 @@ describe('resolveEdit — indentation re-adaptation', () => {
     expect(r.content).toBe('\tfoo\r\n\tBAR\r\n')
   })
 
+  it('keeps later lines in place when old_string starts mid-line', () => {
+    // The model copied old_string from the first token of an indented line, so its
+    // first line has no indent while the rest carry their absolute indent. Trailing
+    // spaces in the file defeat the exact tier. `return` must stay at 4 spaces, not
+    // move inside the `if`.
+    const file = 'def f():\n    if x:\n        foo()  \n    return 1\n'
+    const r = resolveEdit(file, 'if x:\n        foo()\n    return 1', 'if x:\n        foo()\n    return 2')
+    expect(r.strategy).toBe('line-trimmed')
+    expect(r.content).toBe('def f():\n    if x:\n        foo()\n    return 2\n')
+  })
+
+  it('keeps later lines in place when a tab-indented old_string starts mid-line', () => {
+    const file = 'def f():\n\tif x:\n\t\tfoo()  \n\treturn 1\n'
+    const r = resolveEdit(file, 'if x:\n\t\tfoo()\n\treturn 1', 'if x:\n\t\tfoo()\n\treturn 2')
+    expect(r.strategy).toBe('line-trimmed')
+    expect(r.content).toBe('def f():\n\tif x:\n\t\tfoo()\n\treturn 2\n')
+  })
+
+  it('still shifts later lines when old_string starts mid-line and is dedented as a whole', () => {
+    // First line copied mid-line, later lines one level shallower than the file.
+    const file = '        if x:\n            foo()  \n        bar()\n'
+    const r = resolveEdit(file, 'if x:\n    foo()\nbar()', 'if x:\n    FOO()\nbar()')
+    expect(r.strategy).toBe('line-trimmed')
+    expect(r.content).toBe('        if x:\n            FOO()\n        bar()\n')
+  })
+
   it('leaves a blank replacement line blank rather than indenting it', () => {
     const file = '    a\n    b\n'
     const r = resolveEdit(file, 'a\nb', 'a\n\nb')
@@ -157,6 +183,18 @@ describe('resolveEdit — line endings & BOM', () => {
     const file = 'a\r\nb\nc\r\n'
     const r = resolveEdit(file, 'a', 'A')
     expect(r.content).toBe('A\r\nb\nc\r\n')
+  })
+
+  it('inserts LF lines into a mostly-LF file with one stray CRLF line', () => {
+    const file = 'a\r\nb\nc\nd\n'
+    const r = resolveEdit(file, 'c', 'c1\nc2')
+    expect(r.content).toBe('a\r\nb\nc1\nc2\nd\n')
+  })
+
+  it('inserts CRLF lines into a mostly-CRLF file with one stray LF line', () => {
+    const file = 'a\nb\r\nc\r\nd\r\n'
+    const r = resolveEdit(file, 'c', 'c1\nc2')
+    expect(r.content).toBe('a\nb\r\nc1\r\nc2\r\nd\r\n')
   })
 
   it('keeps a trailing newline symmetric when old text ended in one', () => {

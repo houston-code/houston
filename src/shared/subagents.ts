@@ -276,6 +276,23 @@ export function recordBytes(r: SubagentRecord): number {
   return JSON.stringify(r).length
 }
 
+/**
+ * recordBytes per record object, for limitSubagentHistory. Every dispatch result
+ * re-checks the chat's whole history, so without this each saved record was
+ * serialized again on every dispatch. Safe because a saved record is never mutated:
+ * the recorder hands out copies (SubagentRecorder.take), and trimming builds a new
+ * record (trimRecord) rather than editing one.
+ */
+const recordBytesCache = new WeakMap<SubagentRecord, number>()
+function savedRecordBytes(r: SubagentRecord): number {
+  let n = recordBytesCache.get(r)
+  if (n === undefined) {
+    n = recordBytes(r)
+    recordBytesCache.set(r, n)
+  }
+  return n
+}
+
 /** A record without its step outputs and diffs: what an old record keeps past the limit. */
 export function trimRecord(r: SubagentRecord): SubagentRecord {
   if (r.trimmed) return r
@@ -300,7 +317,7 @@ export function limitSubagentHistory<M extends { subagents?: SubagentRecord[] }>
   maxBytes: number
 ): M[] {
   let total = 0
-  for (const m of messages) for (const r of m.subagents ?? []) total += recordBytes(r)
+  for (const m of messages) for (const r of m.subagents ?? []) total += savedRecordBytes(r)
   if (total <= maxBytes) return messages
   const out = messages.slice()
   for (let i = 0; i < out.length && total > maxBytes; i++) {
@@ -310,7 +327,7 @@ export function limitSubagentHistory<M extends { subagents?: SubagentRecord[] }>
     const next = recs.map((r) => {
       if (total <= maxBytes || r.trimmed) return r
       const t = trimRecord(r)
-      total -= recordBytes(r) - recordBytes(t)
+      total -= savedRecordBytes(r) - savedRecordBytes(t)
       changed = true
       return t
     })

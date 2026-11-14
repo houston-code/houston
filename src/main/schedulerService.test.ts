@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { POLL_MS, createSchedulerService, fireViaSpawn } from './schedulerService'
+import { LOCK_STALE_MS, POLL_MS, createSchedulerService, fireViaSpawn } from './schedulerService'
 import type { ScheduledRunInfo, ScheduledRunInput } from './agent/scheduler'
 import { resetSpawnBackend, setSpawnBackend, type SpawnSessionInput } from './agent/spawn'
 
@@ -33,12 +33,13 @@ const input = (over: Partial<ScheduledRunInput> = {}): ScheduledRunInput => ({
   ...over
 })
 
-function makeService(opts: { fire?: (s: ScheduledRunInfo) => Promise<void> } = {}) {
+function makeService(opts: { fire?: (s: ScheduledRunInfo) => Promise<void>; lockAttempts?: number } = {}) {
   const fired: ScheduledRunInfo[] = []
   const service = createSchedulerService({
     file,
     fire: opts.fire ?? (async (s) => void fired.push({ ...s })),
-    warn: (m) => warns.push(m)
+    warn: (m) => warns.push(m),
+    ...(opts.lockAttempts !== undefined ? { lockAttempts: opts.lockAttempts } : {})
   })
   return { service, fired }
 }
@@ -239,16 +240,73 @@ describe('createSchedulerService', () => {
       expect(warns).toEqual([])
     })
 
-    it('breaks a lock held far longer than any update takes, even if its pid is alive', () => {
-      // A crashed holder's pid reused by a live process: the pid check alone never fires.
-      writeFileSync(`${file}.lock`, String(process.pid))
-      const old = new Date(Date.now() - 60 * 60 * 1000)
-      utimesSync(`${file}.lock`, old, old)
+    it('breaks a lock older than LOCK_STALE_MS even when its pid is alive (reused)', () => {
+      const lock = `${file}.lock`
+      writeFileSync(lock, String(process.pid)) // a live pid, as after pid reuse
+      const old = (Date.now() - LOCK_STALE_MS - 1000) / 1000
+      utimesSync(lock, old, old)
       const { service } = makeService()
       service.create(input())
       expect(service.list()).toHaveLength(1)
-      expect(existsSync(`${file}.lock`)).toBe(false)
+      expect(existsSync(lock)).toBe(false)
       expect(warns).toEqual([])
+    })
+
+    it('does not break a fresh lock held by a live process', () => {
+      const lock = `${file}.lock`
+      writeFileSync(lock, String(process.pid))
+      const now = Date.now() / 1000
+      utimesSync(lock, now, now)
+      // A short wait: the point is what happens once it runs out, not its length.
+      const { service } = makeService({ lockAttempts: 3 })
+      service.create(input())
+      // Waited out, then went ahead without it; the holder's lock is left in place.
+      expect(warns).toEqual([`could not lock ${file}; updating schedules without the lock`])
+      expect(readFileSync(lock, 'utf8')).toBe(String(process.pid))
+    })
+
+    it('skips the lock and the read on an idle poll, and still sees another process edit', async () => {
+      const lock = `${file}.lock`
+      const { service: app, fired } = makeService()
+      app.start()
+      // A held lock: any poll that tried to take it would wait it out and warn.
+      writeFileSync(lock, String(process.pid))
+      const now = Date.now() / 1000
+      utimesSync(lock, now, now)
+      await vi.advanceTimersByTimeAsync(5 * POLL_MS)
+      expect(warns).toEqual([])
+      expect(readFileSync(lock, 'utf8')).toBe(String(process.pid))
+      rmSync(lock)
+      // Another process adds a schedule: the store's stamp changes, so the next poll
+      // reads it and the run fires on time.
+      const { service: cli } = makeService()
+      cli.create(input({ spec: 'every 30m' }))
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + POLL_MS)
+      expect(fired).toHaveLength(1)
+      app.stop()
+    })
+
+    it('fires a schedule read at startup when it comes due, with the store unchanged', async () => {
+      makeService().service.create(input({ spec: 'every 30m' }))
+      const { service, fired } = makeService()
+      service.start()
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1000)
+      expect(fired).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(1000 + 5)
+      expect(fired).toHaveLength(1)
+      service.stop()
+    })
+
+    it('does not fire a schedule another process cancelled while this one idled', async () => {
+      const { service: cli } = makeService()
+      const info = cli.create(input({ spec: 'every 30m' }))
+      const { service: app, fired } = makeService()
+      app.start()
+      await vi.advanceTimersByTimeAsync(POLL_MS)
+      expect(cli.cancel(info.id)).toBe(true)
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+      expect(fired).toHaveLength(0)
+      app.stop()
     })
   })
 })

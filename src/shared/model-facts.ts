@@ -380,10 +380,22 @@ function firstMatch<T>(rows: Rows<T>, m: string): T | undefined {
   return rows.find(([re]) => re.test(m))?.[1]
 }
 
+/**
+ * Lowercased id for family matching. A model id can be absent at runtime — these
+ * classifiers are fed ids from persisted settings, host listings, and IPC, none of
+ * which the type system guarantees — and an absent id is just the ultimate "unknown
+ * model": it reads as the empty string, matches no family, and so yields each
+ * function's conservative default (null / false) instead of throwing and taking down
+ * the renderer.
+ */
+function lc(model: string | undefined): string {
+  return (model ?? '').toLowerCase()
+}
+
 /** Best-effort USD price per 1M tokens, or null for unknown / local models. Approximate:
  *  provider prices change, so this is a guide, not a billing source of truth. */
 export function modelPricing(model: string): ModelPricing | null {
-  const m = model.toLowerCase()
+  const m = lc(model)
   return (
     firstMatch(CLAUDE_PRICES, m) ??
     firstMatch(OPENAI_PRICES, m) ??
@@ -395,7 +407,7 @@ export function modelPricing(model: string): ModelPricing | null {
 /** Best-effort context window in tokens, or null for unknown ids (the UI then shows the
  *  raw count). */
 export function contextWindowFor(model: string): number | null {
-  const m = model.toLowerCase()
+  const m = lc(model)
   return (
     firstMatch(CLAUDE_WINDOWS, m) ?? firstMatch(GEMINI_WINDOWS, m) ?? firstMatch(OPENAI_WINDOWS, m) ?? null
   )
@@ -408,7 +420,7 @@ export function contextWindowFor(model: string): number | null {
  * their own maximum.
  */
 export function maxOutputTokensFor(model: string): number | null {
-  return firstMatch(CLAUDE_MAX_OUTPUT, model.toLowerCase()) ?? null
+  return firstMatch(CLAUDE_MAX_OUTPUT, lc(model)) ?? null
 }
 
 /**
@@ -417,21 +429,21 @@ export function maxOutputTokensFor(model: string): number | null {
  * "unknown" is the honest answer and lets a caller probe a local server instead.
  */
 export function modelHasTools(model: string): true | null {
-  const m = model.toLowerCase()
+  const m = lc(model)
   const known = firstMatch(CLAUDE_TOOLS, m) ?? firstMatch(OPENAI_TOOLS, m) ?? firstMatch(GEMINI_TOOLS, m)
   return known === true ? true : null
 }
 
 /** Whether the model accepts image inputs. Unknown ids report false. */
 export function modelHasVision(model: string): boolean {
-  const m = model.toLowerCase()
+  const m = lc(model)
   return firstMatch(CLAUDE_VISION, m) ?? firstMatch(OPENAI_VISION, m) ?? firstMatch(GEMINI_VISION, m) ?? false
 }
 
 /** Whether the model has a reasoning mode the request can turn on. The union of the
  *  per-provider gates below, so the UI toggle and the request agree by construction. */
 export function modelHasReasoning(model: string): boolean {
-  const m = model.toLowerCase()
+  const m = lc(model)
   return (
     openaiSupportsReasoning(m) ||
     anthropicSupportsThinking(m) ||

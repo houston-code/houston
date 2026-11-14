@@ -8,6 +8,7 @@ import {
   slugifyBranch,
   worktreePath,
   getRepoInfo,
+  pickDefaultBranch,
   createWorktree,
   removeWorktree,
   isWorktreeDisposable,
@@ -33,6 +34,23 @@ const worktreeList = (mainPath: string, branch = 'main', linked: string[] = []):
     `worktree ${mainPath}\nHEAD abc123\nbranch refs/heads/${branch}\n\n`,
     ...linked.map((p, i) => `worktree ${p}\nHEAD def45${i}\nbranch refs/heads/wt-${i}\n\n`)
   ].join('')
+
+describe('pickDefaultBranch', () => {
+  it('prefers the branch origin/HEAD names, then main, then master', () => {
+    expect(pickDefaultBranch('origin/develop', ['main', 'develop'])).toBe('develop')
+    expect(pickDefaultBranch('', ['feature', 'main'])).toBe('main')
+    expect(pickDefaultBranch('', ['feature', 'master'])).toBe('master')
+  })
+
+  it('only names a branch that exists locally', () => {
+    // origin/HEAD points at a branch never checked out here: fall back.
+    expect(pickDefaultBranch('origin/develop', ['main'])).toBe('main')
+    expect(pickDefaultBranch('origin/develop', ['feature'])).toBeNull()
+    // Not a remote-tracking name: ignored rather than misread.
+    expect(pickDefaultBranch('upstream/feature', ['feature'])).toBeNull()
+    expect(pickDefaultBranch('', [])).toBeNull()
+  })
+})
 
 describe('slugifyBranch', () => {
   it('lowercases and replaces non-alphanumerics with dashes', () => {
@@ -74,9 +92,23 @@ describe('getRepoInfo', () => {
       currentBranch: 'feature',
       unborn: false,
       branches: ['feature', 'main', 'old'],
+      // No origin/HEAD here, so the conventional name stands in.
+      defaultBranch: 'main',
       isLinkedWorktreeRoot: false,
       exists: true
     })
+  })
+
+  it('takes the default branch from origin/HEAD, not from the checked-out branch', async () => {
+    const exec = fakeGit({
+      'worktree list': () => worktreeList('/repo', 'backport/0.11'),
+      'rev-parse --abbrev-ref': () => 'backport/0.11\n',
+      'for-each-ref': () => 'backport/0.11\nmain\ntrunk\n',
+      'symbolic-ref -q': () => 'origin/trunk\n'
+    })
+    const info = await getRepoInfo('/repo', exec, onDisk)
+    expect(info.currentBranch).toBe('backport/0.11')
+    expect(info.defaultBranch).toBe('trunk')
   })
 
   it('flags a linked worktree root, but not the main root or a subdirectory of one', async () => {
@@ -95,16 +127,25 @@ describe('getRepoInfo', () => {
     expect(await at('/repo/.houston/worktrees/x/sub')).toBe(false)
   })
 
+  it('flags a folder with a .git that git cannot open as unreadable', async () => {
+    const exec: GitRun = async () => {
+      throw new Error('not a git repository: (null)')
+    }
+    const info = await getRepoInfo('/repo/wt', exec, onDisk, () => '/repo/wt/.git')
+    expect(info).toMatchObject({ isRepo: false, exists: true, unreadable: true })
+  })
+
   it('reports an existing non-repo folder as isRepo:false, exists:true', async () => {
     const exec: GitRun = async () => {
       throw new Error('not a git repository')
     }
-    expect(await getRepoInfo('/tmp/x', exec, onDisk)).toEqual({
+    expect(await getRepoInfo('/tmp/x', exec, onDisk, () => null)).toEqual({
       isRepo: false,
       root: '',
       currentBranch: null,
       unborn: false,
       branches: [],
+      defaultBranch: null,
       isLinkedWorktreeRoot: false,
       exists: true
     })
@@ -122,6 +163,7 @@ describe('getRepoInfo', () => {
       currentBranch: null,
       unborn: false,
       branches: [],
+      defaultBranch: null,
       isLinkedWorktreeRoot: false,
       exists: false
     })

@@ -10,6 +10,7 @@ import {
   appendCapped,
   backgroundShellGroups,
   killShell,
+  killShellsFor,
   listPreviewServers,
   listShells,
   onShellsChanged,
@@ -25,6 +26,28 @@ const onClose = (child: ChildProcess): Promise<void> =>
   new Promise((resolve) => child.on('close', () => resolve()))
 
 const node = (code: string): ChildProcess => spawn(process.execPath, ['-e', code])
+
+describe('killShellsFor', () => {
+  it("stops a conversation's running shells and leaves other chats' alone", async () => {
+    const mine = node('setInterval(() => {}, 1000)')
+    const theirs = node('setInterval(() => {}, 1000)')
+    const a = registerShell('node mine', mine, 'conv-gone')
+    const b = registerShell('node theirs', theirs, 'conv-kept')
+    const closed = onClose(mine)
+    expect(killShellsFor('conv-gone')).toBe(1)
+    await closed
+    expect(peekShell(a)).toBeUndefined()
+    expect(listShells().some((s) => s.id === a)).toBe(false)
+    expect(peekShell(b)?.running).toBe(true)
+    const closedB = onClose(theirs)
+    killShell(b)
+    await closedB
+  })
+
+  it('does nothing for a conversation with no shells', () => {
+    expect(killShellsFor('conv-none')).toBe(0)
+  })
+})
 
 describe('background shell registry', () => {
   it('captures stdout/stderr and the exit code of a finished shell', async () => {
@@ -58,6 +81,19 @@ describe('background shell registry', () => {
     const id = registerShell('node split', child)
     await onClose(child)
     expect(readShellOutput(id).stdout).toBe('café\n')
+  })
+
+  it('keeps a trailing partial multibyte character the shell ended on', async () => {
+    // Exits mid-character (0xC3 without its continuation byte): the decoder held that
+    // byte back waiting for more, and nothing flushed it at close.
+    const child = node(
+      'process.stdout.write(Buffer.from([0x6f, 0x6b, 0xc3])); process.stderr.write(Buffer.from([0xe2, 0x82]))'
+    )
+    const id = registerShell('node partial', child)
+    await onClose(child)
+    const r = readShellOutput(id)
+    expect(r.stdout).toBe('ok�')
+    expect(r.stderr).toBe('�')
   })
 
   it('peeks at a shell without hiding its output from the next read', async () => {

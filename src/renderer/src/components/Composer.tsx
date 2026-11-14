@@ -16,7 +16,7 @@ import { isMacPlatform } from '../lib/shortcuts'
 import { ComposerPrBar } from './ComposerPrBar'
 import type { PrStatus } from '@shared/gitActions'
 import type { WorkingTreeStats } from '../hooks/useWorkingTreeStats'
-import { loadComposerDraft, saveComposerDraft } from '../lib/composerDraft'
+import { loadComposerContext, loadComposerDraft, saveComposerDraft } from '../lib/composerDraft'
 import { applyMention, mentionBeforeCursor, type MentionToken } from '../lib/mentions'
 import {
   appendPromptHistory,
@@ -281,7 +281,10 @@ export function Composer({
   const [images, setImages] = useState<ImageAttachment[]>([])
   // Non-image context (attached files, a folder listing, the working-tree diff, a
   // link) shown as chips and rendered into the outgoing message text on send.
-  const [context, setContext] = useState<ContextAttachment[]>([])
+  // Seeded from the persisted draft, like the text, so a chat switch or reload keeps them.
+  const [context, setContext] = useState<ContextAttachment[]>(() =>
+    loadComposerContext(conversationId)
+  )
   const [mention, setMention] = useState<MentionToken | null>(null)
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [mentionIndex, setMentionIndex] = useState(0)
@@ -344,16 +347,16 @@ export function Composer({
   // later keystroke; the unmount effect below flushes the latest text so a fast
   // chat switch (within the debounce window) can't lose it. `conversationId` is
   // fixed for the component's lifetime (App.tsx keys the Composer by it).
-  const draftRef = useRef({ conversationId, text })
-  draftRef.current = { conversationId, text }
+  const draftRef = useRef({ conversationId, text, context })
+  draftRef.current = { conversationId, text, context }
   useEffect(() => {
-    const t = setTimeout(() => saveComposerDraft(conversationId, text), DRAFT_SAVE_MS)
+    const t = setTimeout(() => saveComposerDraft(conversationId, text, context), DRAFT_SAVE_MS)
     return () => clearTimeout(t)
-  }, [conversationId, text])
+  }, [conversationId, text, context])
   useEffect(
     () => () => {
-      const { conversationId: cid, text: txt } = draftRef.current
-      saveComposerDraft(cid, txt)
+      const { conversationId: cid, text: txt, context: ctx } = draftRef.current
+      saveComposerDraft(cid, txt, ctx)
     },
     []
   )
