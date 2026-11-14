@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { doneEvidenceGaps, doneEvidenceNote, type DoneEvidence } from './doneEvidence'
 import { EvidenceLedger } from './evidence'
@@ -89,6 +90,7 @@ describe('EvidenceLedger.lastTest', () => {
   it('lists the changed files', () => {
     const l = new EvidenceLedger()
     l.recordFiles('/ws', ['./src/a.ts', '/ws/src/a.ts', 'b.ts'])
-    expect(l.changedFiles()).toEqual(['src/a.ts', 'b.ts'])
+    // Listed relative to the workspace, with the host's path separator.
+    expect(l.changedFiles()).toEqual([join('src', 'a.ts'), 'b.ts'])
   })
 })
