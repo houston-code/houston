@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { buildContext, defaultMode, fixCiContext, hasMention, isValidTrigger, respondContext, reviewContext } from './event.mjs'
+import {
+  buildContext,
+  defaultMode,
+  fixCiContext,
+  hasCommand,
+  hasMention,
+  implementContext,
+  isValidLabel,
+  isValidTrigger,
+  respondContext,
+  reviewContext,
+  taskContext
+} from './event.mjs'
 
 const REPO = 'acme/widgets'
 const SHA = 'a'.repeat(40)
@@ -63,6 +75,8 @@ describe('defaultMode', () => {
     expect(defaultMode('pull_request_review_comment')).toBe('respond')
     expect(defaultMode('pull_request')).toBe('review')
     expect(defaultMode('workflow_run')).toBe('fix-ci')
+    expect(defaultMode('schedule')).toBe('task')
+    expect(defaultMode('workflow_dispatch')).toBe('task')
     expect(defaultMode('push')).toBeNull()
   })
 })
@@ -181,9 +195,102 @@ describe('fixCiContext', () => {
   })
 })
 
+describe('hasCommand', () => {
+  it('finds the trigger followed by the command, in prose only', () => {
+    expect(hasCommand('@houston implement this please', '@houston', 'implement')).toBe(true)
+    expect(hasCommand('Thanks! @Houston  IMPLEMENT', '@houston', 'implement')).toBe(true)
+    expect(hasCommand('@houston implementation details?', '@houston', 'implement')).toBe(false)
+    expect(hasCommand('@houston what would you implement?', '@houston', 'implement')).toBe(false)
+    expect(hasCommand('`@houston implement`', '@houston', 'implement')).toBe(false)
+    expect(hasCommand('> @houston implement\nno', '@houston', 'implement')).toBe(false)
+    expect(hasCommand('@houston-bot implement', '@houston', 'implement')).toBe(false)
+    expect(hasCommand('@houston\nimplement', '@houston', 'implement')).toBe(false)
+  })
+})
+
+describe('isValidLabel', () => {
+  it('takes a printable label name of at most 50 characters', () => {
+    expect(isValidLabel('houston')).toBe(true)
+    expect(isValidLabel('ai: implement')).toBe(true)
+    expect(isValidLabel('')).toBe(false)
+    expect(isValidLabel(' padded')).toBe(false)
+    expect(isValidLabel('a\nb')).toBe(false)
+    expect(isValidLabel('x'.repeat(51))).toBe(false)
+  })
+})
+
+describe('implementContext', () => {
+  const iopts = { ...opts, label: 'houston' }
+  const labeled = (o = {}) => ({
+    action: 'labeled',
+    repository: { default_branch: 'main' },
+    label: { name: 'houston' },
+    issue: { number: 12, state: 'open' },
+    sender: { login: 'dana', type: 'User' },
+    ...o
+  })
+
+  it('implements an issue when the label is added, asking about the labeller', () => {
+    expect(implementContext('issues', labeled(), iopts)).toMatchObject({
+      mode: 'implement',
+      source: 'label',
+      number: 12,
+      author: 'dana',
+      request: null,
+      base: 'main',
+      defaultBranch: 'main'
+    })
+  })
+
+  it('skips other labels and actions, closed issues, bots, and pull requests', () => {
+    expect(implementContext('issues', labeled({ label: { name: 'bug' } }), iopts).skip).toMatch(/not houston/)
+    expect(implementContext('issues', labeled({ action: 'opened' }), iopts).skip).toMatch(/only adding the houston label/)
+    expect(implementContext('issues', labeled({ issue: { number: 12, state: 'closed' } }), iopts).skip).toMatch(/closed/)
+    expect(implementContext('issues', labeled({ sender: { login: 'h[bot]', type: 'Bot' } }), iopts).skip).toMatch(/bot/)
+    expect(implementContext('issues', labeled({ issue: { number: 3, pull_request: {} } }), iopts).skip).toMatch(/never from a pull request/)
+    expect(implementContext('issues', labeled({ repository: {} }), iopts).skip).toMatch(/default branch/)
+  })
+
+  it('implements from a collaborator comment with the implement command', () => {
+    const event = issueComment({ repository: { default_branch: 'trunk' } }, { body: '@houston implement, with tests' })
+    expect(implementContext('issue_comment', event, iopts)).toMatchObject({
+      mode: 'implement',
+      source: 'comment',
+      number: 12,
+      author: 'dana',
+      request: '@houston implement, with tests',
+      base: 'trunk'
+    })
+  })
+
+  it('skips a plain mention, a stranger, and any comment on a pull request', () => {
+    const repo = { repository: { default_branch: 'main' } }
+    expect(implementContext('issue_comment', issueComment(repo), iopts).skip).toMatch(/no @houston implement command/)
+    const stranger = issueComment(repo, { body: '@houston implement', author_association: 'NONE' })
+    expect(implementContext('issue_comment', stranger, iopts).skip).toMatch(/not a collaborator/)
+    const onPr = issueComment({ ...repo, issue: { number: 4, pull_request: {} } }, { body: '@houston implement' })
+    expect(implementContext('issue_comment', onPr, iopts).skip).toMatch(/never pushes to a pull request branch/)
+  })
+
+  it('runs a scheduled or manual opt-in on its branch, with no requester', () => {
+    const ctx = implementContext('schedule', {}, { ...iopts, refName: 'main', refType: 'branch' })
+    expect(ctx).toMatchObject({ mode: 'implement', source: 'schedule', number: null, author: null, base: 'main' })
+    expect(implementContext('workflow_dispatch', {}, { ...iopts, refName: 'v1', refType: 'tag' }).skip).toMatch(/only on a branch/)
+    expect(implementContext('pull_request', {}, iopts).skip).toMatch(/does not handle/)
+  })
+})
+
+describe('taskContext', () => {
+  it('runs on schedule and workflow_dispatch only', () => {
+    expect(taskContext('schedule', {}, opts)).toMatchObject({ mode: 'task', source: 'schedule' })
+    expect(taskContext('workflow_dispatch', {}, opts)).toMatchObject({ mode: 'task', source: 'workflow_dispatch' })
+    expect(taskContext('issues', {}, opts).skip).toMatch(/schedule and workflow_dispatch/)
+  })
+})
+
 describe('buildContext', () => {
   it('refuses pull_request_target in every mode', () => {
-    for (const mode of ['respond', 'review', 'fix-ci']) {
+    for (const mode of ['respond', 'review', 'fix-ci', 'implement', 'task']) {
       expect(() => buildContext(mode, 'pull_request_target', {}, opts)).toThrow(/does not run on pull_request_target/)
     }
   })

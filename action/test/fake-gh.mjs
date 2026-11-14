@@ -10,13 +10,15 @@ const flag = (name) => {
   const i = args.indexOf(name)
   return i >= 0 ? args[i + 1] : undefined
 }
-const bodyFile = flag('--body-file') ?? args.find((a) => a.startsWith('body=@'))?.slice('body=@'.length)
+const bodyFile =
+  flag('--body-file') ?? flag('--input') ?? args.find((a) => a.startsWith('body=@'))?.slice('body=@'.length)
 const entry = { args, ...(bodyFile ? { body: readFileSync(bodyFile, 'utf8') } : {}) }
 if (process.env.FAKE_GH_LOG) appendFileSync(process.env.FAKE_GH_LOG, `${JSON.stringify(entry)}\n`)
 
 const say = (s) => process.stdout.write(`${s}\n`)
 const [a, b] = args
 if (a === 'api' && /collaborators\/[^/]+\/permission$/.test(b ?? '')) say(process.env.FAKE_GH_PERMISSION ?? 'write')
+else if (a === 'api' && args.includes('--paginate') && /\/pulls\/\d+\/comments/.test(args.join(' '))) say('')
 else if (a === 'api' && args.includes('POST')) say('https://github.com/example/repo/pull/7#discussion_r1')
 else if (a === 'issue' && b === 'comment') say('https://github.com/example/repo/issues/7#issuecomment-1')
 else if (a === 'issue' && b === 'view') {
