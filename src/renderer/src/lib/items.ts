@@ -141,6 +141,8 @@ export interface ToolItem {
   sensitiveRead?: boolean
   /** The awaited call writes a credential / secret file, so it prompts even in full auto. */
   sensitiveWrite?: boolean
+  /** With sensitiveWrite: the file is an in-project control file (.houston/, .vscode/, …). */
+  protectedWrite?: boolean
   /** On a network prompt: what "Allow for run" grants (see the tool_approval event). */
   networkScope?: string
   output?: string
@@ -517,6 +519,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           shellOffline: e.shellOffline === true,
           sensitiveRead: e.sensitiveRead === true,
           sensitiveWrite: e.sensitiveWrite === true,
+          protectedWrite: e.protectedWrite === true,
           ...(e.networkScope ? { networkScope: e.networkScope } : {}),
           status: 'awaiting-approval'
         })
@@ -536,6 +539,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           ...(e.shellOffline ? { shellOffline: true } : {}),
           ...(e.sensitiveRead ? { sensitiveRead: true } : {}),
           ...(e.sensitiveWrite ? { sensitiveWrite: true } : {}),
+          ...(e.protectedWrite ? { protectedWrite: true } : {}),
           ...(e.networkScope ? { networkScope: e.networkScope } : {}),
           status: 'awaiting-approval'
         }

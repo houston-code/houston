@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import { existsSync, statSync } from 'node:fs'
 import { join, relative, resolve as resolvePath, sep } from 'node:path'
-import { FALLBACK_SKIP_DIRS, isRegularFile, planRuns, planScope, runPathArgs } from './fileScope'
+import { FALLBACK_SKIP_DIRS, isRegularFile, planRuns, planScope, runPathArgs, type ScopeCache } from './fileScope'
 import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
 
 /**
@@ -205,6 +205,8 @@ export interface StructuralSearchOptions {
   binPath: string | null
   max: number
   signal?: AbortSignal
+  /** The run's memo of which files a search root covers (see ScopeCache); absent, it is worked out afresh. */
+  scopeCache?: ScopeCache
 }
 
 /** Run a structural search and return a human/model-readable result string. */
@@ -220,7 +222,7 @@ export async function searchStructural(o: StructuralSearchOptions): Promise<stri
   // planScope says the walk would wrongly skip (ast-grep always searches those).
   const startAbs = resolvePath(o.workspace, o.searchRel || '.')
   const dir = existsSync(startAbs) && statSync(startAbs).isDirectory()
-  const plan = dir ? await planScope(startAbs) : ({ kind: 'plain' } as const)
+  const plan = dir ? await (o.scopeCache?.plan(startAbs) ?? planScope(startAbs)) : ({ kind: 'plain' } as const)
   const git = plan.kind === 'git'
   const extras = git
     ? plan.explicit

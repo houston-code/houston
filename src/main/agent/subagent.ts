@@ -26,7 +26,7 @@ import type { GitGuard } from './gitGuard'
 import type { EvidenceDraft } from './evidence'
 import { isSandboxed } from '../sandbox'
 import { isSensitiveRead } from './sensitive-paths'
-import { isSensitiveWrite } from './permissions'
+import { isProtectedWrite, isSensitiveWrite } from './permissions'
 import {
   clipText,
   stepHint,
@@ -40,6 +40,7 @@ import {
 import {
   isDiscoveryTool,
   isFinalStep,
+  overCostCap,
   PROGRESS_TOOLS,
   resolveBudgetLimits,
   resolveExtensionLimits,
@@ -384,6 +385,11 @@ export interface SubAgentOptions {
      * it the agent gets the wrap-up reminder, as the main loop does at its own ceiling.
      */
     costCeilingUsd?: number
+    /**
+     * The dispatching run's hard cost cap (USD; unset or 0: none). Once `spentUsd` reaches
+     * it the agent's next step is its last, so it ends on a report.
+     */
+    maxCostUsd?: number
   }
   /**
    * What the dispatching run has spent so far in USD, this agent's own turns included,
@@ -617,7 +623,8 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const budget = resolveBudgetLimits({
     maxIterations: hardCap ?? opts.budget?.maxIterations,
     landingMargin: 2,
-    costCeilingUsd: opts.budget?.costCeilingUsd
+    costCeilingUsd: opts.budget?.costCeilingUsd,
+    maxCostUsd: opts.budget?.maxCostUsd
   })
   const extension = resolveExtensionLimits(budget, {
     autoExtend: hardCap === undefined && opts.budget?.autoExtend !== false,
@@ -774,8 +781,10 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         )
       )
     }
-    // The last step can't run tools, so the agent spends it on its report.
-    const finalStep = isFinalStep(iter, budget)
+    // The last step can't run tools, so the agent spends it on its report. The run's
+    // hard cost cap, once reached, makes the step about to run the last as well.
+    const costCapped = overCostCap(opts.spentUsd?.() ?? 0, budget)
+    const finalStep = isFinalStep(iter, budget) || costCapped
     if (finalStep) messages.push(systemNoteMessage(SUBAGENT_FINAL_STEP_NOTE))
 
     let text = ''
@@ -891,8 +900,8 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         const report = answer.trim() || lastText.trim()
         return finish(
           report
-            ? `${report}\n\n[subagent stopped at its step limit; this is what it had]`
-            : '[subagent reached its step limit without a final answer]',
+            ? `${report}\n\n[subagent stopped at ${costCapped ? "the run's cost" : 'its step'} limit; this is what it had]`
+            : `[subagent reached ${costCapped ? "the run's cost" : 'its step'} limit without a final answer]`,
           'step-limit'
         )
       }
@@ -1055,9 +1064,13 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
               `Reading ${String(call.arguments.path)} needs the user's approval because it looks like a ` +
               'credential or secret file, and this subagent cannot ask for it. Do not retry; note in ' +
               'your report that the main agent can read it with approval if it is needed.'
-          } else if (isSensitiveWrite(tool.kind, call.name, call.arguments)) {
+          } else if (
+            isSensitiveWrite(tool.kind, call.name, call.arguments) ||
+            isProtectedWrite(tool.kind, call.name, call.arguments, roots)
+          ) {
             output =
-              "This call changes a credential or secret file (such as .env) or a git hook or config file, which needs the user's " +
+              'This call changes a credential or secret file (such as .env), a git hook or config file, or a ' +
+              "project control file (such as .houston, .vscode, .envrc, or a CI workflow), which needs the user's " +
               'approval, and this subagent cannot ask for it. Do not retry; note in your report what ' +
               'should change so the main agent can make the change with approval.'
           } else {

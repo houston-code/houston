@@ -17,6 +17,10 @@ describe('detectInstallMethod', () => {
     ['/usr/lib/houston/houston-cli.cjs', 'aur'],
     ['/home/dev/.local/bin/houston', 'install-script'],
     ['/home/dev/code/houston/out/cli/houston-cli.cjs', 'source'],
+    // A source install's `houston` links to the launcher build-cli.mjs writes beside it.
+    ['/home/dev/code/houston/out/cli/houston.cjs', 'source'],
+    // Only that folder: a launcher copied anywhere else is not a source checkout.
+    ['/home/dev/tools/houston.cjs', 'download'],
     ['/home/dev/Downloads/houston-cli.cjs', 'download'],
     ['/srv/tools/houston-cli.cjs', 'download'],
     // The npm package's `houston` runs its launcher, which loads houston-cli.cjs.

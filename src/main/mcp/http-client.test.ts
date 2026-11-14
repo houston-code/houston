@@ -3,6 +3,7 @@ import { version as PKG_VERSION } from '../../../package.json'
 import { McpHttpClient, extractSseData, pickJsonRpc, type FetchFn } from './http-client'
 import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
 import { McpUnauthorizedError } from './client'
+import { MAX_MCP_MESSAGE_CHARS, readCappedText } from './sse-client'
 
 describe('extractSseData', () => {
   it('pulls data payloads out of an SSE body', () => {
@@ -13,6 +14,38 @@ describe('extractSseData', () => {
   it('joins multi-line data within one event', () => {
     const body = 'data: line1\ndata: line2\n\n'
     expect(extractSseData(body)).toEqual(['line1\nline2'])
+  })
+})
+
+describe('readCappedText', () => {
+  const streamOf = (...parts: string[]): Response =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const p of parts) controller.enqueue(new TextEncoder().encode(p))
+          controller.close()
+        }
+      })
+    )
+
+  it('reads a body up to the cap, decoding a character split across chunks', async () => {
+    const euro = new TextEncoder().encode('\u20ac') // 3 bytes
+    const res = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(euro.slice(0, 1))
+          controller.enqueue(euro.slice(1))
+          controller.close()
+        }
+      })
+    )
+    expect(await readCappedText(res, 1)).toBe('\u20ac')
+    expect(await readCappedText(streamOf('ab', 'cd'), 4)).toBe('abcd')
+    expect(await readCappedText(new Response(null))).toBe('')
+  })
+
+  it('rejects a body past the cap', async () => {
+    await expect(readCappedText(streamOf('ab', 'cd', 'e'), 4)).rejects.toThrow(/larger than/)
   })
 })
 
@@ -159,6 +192,32 @@ describe('McpHttpClient', () => {
     client.close()
     expect(client.isClosed).toBe(true)
     await expect(client.callTool('echo', {})).rejects.toThrow(/closed/)
+  })
+
+  it('fails a request whose JSON reply never ends, past the message cap, and stops the transfer', async () => {
+    // An endless body: Response.text() would buffer it until the process ran out of
+    // memory. The capped reader gives up just past MAX_MCP_MESSAGE_CHARS.
+    const chunk = new TextEncoder().encode(' '.repeat(1024 * 1024))
+    let sent = 0
+    let cancelled = false
+    const fetch: FetchFn = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            sent += chunk.length
+            controller.enqueue(chunk)
+          },
+          cancel() {
+            cancelled = true
+          }
+        }),
+        { status: 200, headers: new Headers({ 'content-type': 'application/json' }) }
+      )
+    const client = new McpHttpClient(fetch)
+    await expect(client.connect({ url: 'https://x/mcp' })).rejects.toThrow(/larger than 64 MB/)
+    expect(cancelled).toBe(true)
+    expect(sent).toBeLessThan(MAX_MCP_MESSAGE_CHARS + 4 * chunk.length)
+    client.close()
   })
 
   it('throws on a JSON-RPC error response', async () => {

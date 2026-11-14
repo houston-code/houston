@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os'
 import { resolve, relative, isAbsolute, posix, sep } from 'node:path'
 import type { AppSettings, PermissionRule } from '@shared/types'
 import { parsePatch } from './apply-patch'
-import { isSensitivePath, writesSensitivePath } from './sensitive-paths'
+import { isProtectedControlPath, isSensitivePath, writesProtectedPath, writesSensitivePath } from './sensitive-paths'
 import type { ToolKind } from './tools'
 
 /**
@@ -237,6 +237,16 @@ export function permissionSubject(toolName: string, args: Record<string, unknown
       // `path` left a patch with no subject: no file rule, not even `*` over a path,
       // could match the files it wrote or deleted. Each is matched (see matchRule).
       return patchTargets(args.patch).join(PATCH_SUBJECT_SEPARATOR)
+    case 'mcp_read_resource':
+      // The server's namespace, then what is asked of it: `mcp__<server>__<uri>`, so
+      // a rule over a server's tools (`mcp__proj-db__*`) covers its resources and
+      // prompts too, and one uri can be singled out. Blank before this, so no rule but
+      // the tool's own `*` reached these calls, whichever server they named. A blank
+      // argument still yields a non-empty subject, so "Always allow" on a malformed
+      // call saves a rule that matches nothing rather than the tool-wide `*`.
+      return `mcp__${s('server')}__${s('uri')}`
+    case 'mcp_get_prompt':
+      return `mcp__${s('server')}__${s('name')}`
     default:
       // Namespaced MCP tools (mcp__<id>__<tool>) take arbitrary args, so match on
       // the tool name itself — lets rules target a server/tool, e.g. `mcp__github__*`.
@@ -763,6 +773,24 @@ const COMMAND_PREFIXES = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'ti
  * it is a static tripwire: a path built from variables or substitutions isn't seen.
  */
 export function shellWritesSensitivePath(command: string): boolean {
+  return shellWritesPathMatching(command, isSensitivePath)
+}
+
+/**
+ * Whether a `run_shell` command writes to, or removes, an in-project control file
+ * (see isProtectedControlPath: `.houston/`, `.vscode/`, `.envrc`, `.husky/`, CI
+ * workflows, …) the same ways {@link shellWritesSensitivePath} reads for credential
+ * files (`echo x > .envrc`, `cp evil.json .vscode/tasks.json`, `sed -i … .husky/pre-commit`).
+ * Paths are resolved against the first root, as the command's working directory is.
+ * The same static tripwire: a command that first `cd`s into one of those folders, or
+ * builds the path from variables, isn't seen.
+ */
+export function shellWritesProtectedPath(command: string, roots: string[]): boolean {
+  return shellWritesPathMatching(command, (p) => isProtectedControlPath(p, roots))
+}
+
+/** The shared reading behind the two `shellWrites…Path` tripwires: does a write name a path `hit` flags? */
+function shellWritesPathMatching(command: string, hit: (path: string) => boolean): boolean {
   for (const segment of splitShellCommand(command)) {
     // Bash's words (`\.env` and `".e"nv` are `.env`) and the plain ones (a Windows
     // path keeps its backslashes): either reading naming a credential file flags it.
@@ -773,11 +801,11 @@ export function shellWritesSensitivePath(command: string): boolean {
         // descriptor duplication, not a file.
         if (/^\d*(?:>>|>\||&>>|&>|>)$/.test(token)) {
           const target = tokens[i + 1]
-          if (target !== undefined && isSensitivePath(stripSurroundingQuotes(target))) return true
+          if (target !== undefined && hit(stripSurroundingQuotes(target))) return true
           continue
         }
         const glued = /^\d*(?:>>|>\||&>>|&>|>)([^&].*)$/.exec(token)
-        if (glued && isSensitivePath(stripSurroundingQuotes(glued[1]!))) return true
+        if (glued && hit(stripSurroundingQuotes(glued[1]!))) return true
       }
       // The command word: past `FOO=bar` assignments and prefixes like `sudo`.
       let c = 0
@@ -796,7 +824,7 @@ export function shellWritesSensitivePath(command: string): boolean {
           if (a.startsWith('-')) return false
           // `dd of=.env`, `--target=.env`: the path may follow an `=`.
           const eq = a.indexOf('=')
-          return isSensitivePath(a) || (eq >= 0 && isSensitivePath(a.slice(eq + 1)))
+          return hit(a) || (eq >= 0 && hit(a.slice(eq + 1)))
         })
       if (FILE_WRITING_COMMANDS.has(cmd) && namesSensitive()) return true
       if (
@@ -1249,6 +1277,31 @@ export function isSensitiveWrite(kind: ToolKind, toolName: string, args: Record<
 }
 
 /**
+ * Whether a tool call creates, overwrites, or removes an in-project control file
+ * (`.houston/`, `.vscode/`, `.idea/`, `.envrc`, `.husky/`, `.mcp.json`,
+ * `.devcontainer/`, CI workflows; see isProtectedControlPath): a write tool targeting
+ * one, or a `run_shell` command writing one. Such a file runs code outside the
+ * sandbox later (an editor task, a direnv script, a git hook, a Houston plugin) or
+ * steers the agent's own guardrails, so the gate asks in every mode and "Allow for
+ * run" does not cover it; only an explicit `allow` rule does (see decideApproval).
+ * Shared by the main loop's gate, the subagent gate, and a subagent with no gate.
+ */
+export function isProtectedWrite(
+  kind: ToolKind,
+  toolName: string,
+  args: Record<string, unknown>,
+  roots: string[]
+): boolean {
+  if (kind === 'write') return writesProtectedPath(toolName, args, roots)
+  return (
+    kind === 'shell' &&
+    toolName === 'run_shell' &&
+    typeof args.command === 'string' &&
+    shellWritesProtectedPath(args.command, roots)
+  )
+}
+
+/**
  * Whether one token of a command names a path outside the `roots`, read as written and
  * with each `${x:-word}`-style default in place (see {@link parameterDefaultWords}).
  */
@@ -1447,7 +1500,17 @@ function escapeRegExp(s: string): string {
 function subjectKind(toolName: string): 'shell' | 'url' | 'path' | 'opaque' {
   if (toolName === 'run_shell') return 'shell'
   if (toolName === 'web_fetch') return 'url'
-  if (toolName === 'web_search' || toolName.startsWith('mcp__')) return 'opaque'
+  // The MCP meta-tools' subjects are `mcp__<server>__<uri or name>` (see
+  // permissionSubject), not paths: read as one, a `..` in the uri would climb out of
+  // the server prefix and dodge a deny on the server.
+  if (
+    toolName === 'web_search' ||
+    toolName.startsWith('mcp__') ||
+    toolName === 'mcp_read_resource' ||
+    toolName === 'mcp_get_prompt'
+  ) {
+    return 'opaque'
+  }
   return 'path'
 }
 

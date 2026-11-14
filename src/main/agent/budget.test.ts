@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_BUDGET_LIMITS,
+  COST_CAP_REMINDER_FRACTION,
+  costCapUnenforceableNotice,
+  overCostCap,
   FINAL_STEP_FALLBACK,
   isFinalStep,
   landingReminder,
@@ -43,6 +46,34 @@ describe('resolveBudgetLimits', () => {
     expect(resolveBudgetLimits({ costCeilingUsd: 0 }).costCeilingUsd).toBe(0)
     expect(resolveBudgetLimits({ costCeilingUsd: -1 }).costCeilingUsd).toBe(0)
     expect(resolveBudgetLimits({ costCeilingUsd: 2.5 }).costCeilingUsd).toBe(2.5)
+  })
+
+  it('treats a non-positive or non-finite cost limit as no limit', () => {
+    for (const v of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+      expect(resolveBudgetLimits({ maxCostUsd: v }).maxCostUsd, String(v)).toBe(0)
+    }
+    expect(DEFAULT_BUDGET_LIMITS.maxCostUsd).toBe(0)
+  })
+
+  it('reminds at 80% of a cost limit unless a lower reminder is set', () => {
+    expect(resolveBudgetLimits({ maxCostUsd: 5 })).toMatchObject({ maxCostUsd: 5, costCeilingUsd: 5 * COST_CAP_REMINDER_FRACTION })
+    expect(resolveBudgetLimits({ maxCostUsd: 5, costCeilingUsd: 2 }).costCeilingUsd).toBe(2)
+    // A reminder at or past the limit would never fire before the stop.
+    expect(resolveBudgetLimits({ maxCostUsd: 5, costCeilingUsd: 9 }).costCeilingUsd).toBe(4)
+    expect(resolveBudgetLimits({ maxCostUsd: 5, costCeilingUsd: 5 }).costCeilingUsd).toBe(4)
+  })
+})
+
+describe('overCostCap', () => {
+  it('trips once the spend reaches a positive limit, never without one', () => {
+    expect(overCostCap(0.99, { maxCostUsd: 1 })).toBe(false)
+    expect(overCostCap(1, { maxCostUsd: 1 })).toBe(true)
+    expect(overCostCap(7, { maxCostUsd: 1 })).toBe(true)
+    expect(overCostCap(1e9, { maxCostUsd: 0 })).toBe(false)
+  })
+
+  it('names the model it cannot hold to the limit', () => {
+    expect(costCapUnenforceableNotice('qwen3-coder')).toMatch(/no price for qwen3-coder.*can't be enforced/)
   })
 })
 

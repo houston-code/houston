@@ -37,7 +37,10 @@ export function genericKeyEnvVar(id: string): string {
  * An unknown id (a user's custom provider) gets just the generic form.
  */
 export function providerKeyEnvVars(id: string): string[] {
-  return [...(PROVIDER_KEY_ENV_VARS[id] ?? []), genericKeyEnvVar(id)]
+  // Own-property only: a custom provider id like `constructor` would otherwise spread
+  // an inherited function and throw.
+  const own = Object.hasOwn(PROVIDER_KEY_ENV_VARS, id) ? PROVIDER_KEY_ENV_VARS[id] : []
+  return [...own, genericKeyEnvVar(id)]
 }
 
 /** Every documented provider key env var name (for the CLI's redaction scanner). */
@@ -59,7 +62,7 @@ const PROVIDER_KEY_URLS: Record<string, string> = {
 
 /** Sign-up / key-management URL for a built-in provider id, or undefined if unknown. */
 export function providerKeyUrl(id: string): string | undefined {
-  return PROVIDER_KEY_URLS[id]
+  return Object.hasOwn(PROVIDER_KEY_URLS, id) ? PROVIDER_KEY_URLS[id] : undefined
 }
 
 /**

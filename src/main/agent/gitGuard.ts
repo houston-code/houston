@@ -4,6 +4,7 @@ import { chmod, lstat, readdir, readFile, realpath, stat, unlink, writeFile } fr
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { AgentQuestion } from '@shared/agent'
+import { gitExecutable } from './gitBinary'
 import { GIT_ENV, runGitCapture } from './gitRead'
 
 /**
@@ -224,7 +225,7 @@ async function commondirTarget(file: string, text: string): Promise<string | nul
 export function defaultReadConfigEntries(_file: string, bytes: Buffer): Promise<Array<[string, string]> | null> {
   return new Promise((done) => {
     const child = execFile(
-      'git',
+      gitExecutable(GIT_ENV),
       ['config', '--no-includes', '--file', '-', '-z', '--list'],
       // Outside any repository, so git does no discovery and reads no repo config.
       { cwd: tmpdir(), env: GIT_ENV, timeout: 5_000, maxBuffer: 4_000_000, windowsHide: true },
@@ -596,7 +597,7 @@ export function manualUndo(c: GitChange): string {
 /** Run `git config --file` (outside any repository; runs nothing). Resolves to success. */
 function gitConfigFile(args: string[]): Promise<boolean> {
   return new Promise((done) => {
-    execFile('git', ['config', ...args], { cwd: tmpdir(), env: GIT_ENV, timeout: 5_000, windowsHide: true }, (err) =>
+    execFile(gitExecutable(GIT_ENV), ['config', ...args], { cwd: tmpdir(), env: GIT_ENV, timeout: 5_000, windowsHide: true }, (err) =>
       // Exit 5 from --unset-all means the key was already gone.
       done(!err || (err as { code?: number }).code === 5)
     )

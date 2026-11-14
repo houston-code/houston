@@ -21,7 +21,7 @@ import { formatReadinessLines } from '@shared/planReadiness'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { createFindingPrinter } from '@shared/reviewFindings'
-import { formatUsd } from '@shared/usage'
+import { formatCost } from '@shared/usage'
 import {
   isReasoningEffort,
   REASONING_EFFORTS,
@@ -33,6 +33,7 @@ import {
   type ElicitationResult,
   type PlanDecision,
   type ReasoningEffort,
+  type RunLimitReason,
   type RunSettingsOverrides,
   type StopReason,
   type ToolApprovalDecision,
@@ -147,11 +148,16 @@ export interface HeadlessResult {
   /** The final `done` event's stop reason; null when the run never got that far. */
   stopReason: StopReason | null
   /** Why the loop stopped short, when a `limit` event ended it. */
-  limitReason?: 'max-steps' | 'max-output' | 'stalled'
+  limitReason?: RunLimitReason
   /** Model rounds the agent took (the unit `--max-turns` caps). */
   turns: number
   /** Estimated cost in USD, subagent and review rounds included. */
   costUsd: number
+  /**
+   * True when part of the run was on a model with no known price: `costUsd` leaves
+   * that part out, so it is a lower bound, and `--max-cost` could not be enforced for it.
+   */
+  costUnknown?: boolean
   inputTokens: number
   outputTokens: number
   durationMs: number
@@ -245,7 +251,7 @@ export interface HeadlessOptions {
   effort?: ReasoningEffort
   /** `--max-turns`: a hard step cap for this run, over settings.maxIterations. */
   maxTurns?: number
-  /** `--max-cost`: the USD cost at which the agent is told to wrap up (costCeilingUsd). */
+  /** `--max-cost`: the USD cost at which the run is stopped (maxCostUsd, a hard cap). */
   maxCostUsd?: number
   /** `--verify`: run this command at a natural stop after edits (verifyOnStop + verifyCommand). */
   verifyCommand?: string
@@ -567,7 +573,7 @@ export function headlessOverrides(opts: HeadlessOptions): RunSettingsOverrides |
   const o: RunSettingsOverrides = {
     ...(opts.effort !== undefined ? { reasoningEffort: opts.effort } : {}),
     ...(opts.maxTurns !== undefined ? { maxIterations: opts.maxTurns } : {}),
-    ...(opts.maxCostUsd !== undefined ? { costCeilingUsd: opts.maxCostUsd } : {}),
+    ...(opts.maxCostUsd !== undefined ? { maxCostUsd: opts.maxCostUsd } : {}),
     ...(opts.verifyCommand !== undefined ? { verifyCommand: opts.verifyCommand } : {}),
     ...(opts.noMemory ? { memoryEnabled: false } : {})
   }
@@ -936,6 +942,7 @@ interface TurnTally {
   inTok: number
   outTok: number
   cost: number
+  costUnknown?: boolean
   turns: number
   finalText: string
   receipt?: TurnReceipt
@@ -1174,8 +1181,9 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
   }
 
   // Trusted folders: a headless run never prompts, so an undecided (or drifted)
-  // folder's elevating project config (allow rules / hooks / MCP servers) is
-  // simply left off — the loop enforces that; this just says so once. Trust the
+  // folder's elevating project config (allow rules / hooks / MCP servers / command
+  // allowed-tools / plugins) is simply left off — the loop enforces that; this just
+  // says so once. Trust the
   // folder from the desktop app or an interactive `houston -i` session.
   try {
     const projectCfg = await loadProjectConfig(opts.cwd)
@@ -1189,7 +1197,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       const state = folderTrustState(settings.trustedFolders, path, projectCfg.elevatedHash)
       if (state !== 'trusted' && !opts.json) {
         deps.err(
-          "· ignoring this project's allow rules / hooks / MCP servers (folder not trusted; decide in the desktop app or houston -i)\n"
+          "· ignoring this project's allow rules / hooks / MCP servers / command allowed-tools / plugins (folder not trusted; decide in the desktop app or houston -i)\n"
         )
       }
     }
@@ -1307,6 +1315,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           t.inTok += e.inputTokens
           t.outTok += e.outputTokens
           t.cost += e.cost
+          if (e.costUnknown) t.costUnknown = true
           // One usage event per model round of the agent itself. A subagent's or a
           // review's rounds arrive rolled up as one event with inputTokens 0 (kept off
           // the context meter), so they add cost but not turns.
@@ -1382,7 +1391,9 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
                 ? 'stopped: the agent stalled (no forward progress)'
                 : e.reason === 'max-output'
                   ? 'stopped: the model hit its output limit'
-                  : 'stopped: reached the maximum number of steps'
+                  : e.reason === 'max-cost'
+                    ? 'stopped: reached the cost limit (--max-cost)'
+                    : 'stopped: reached the maximum number of steps'
             deps.err(`· ${why}\n`)
           }
           break
@@ -1412,7 +1423,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
         case 'done':
           if (!opts.json) {
             deps.out('\n')
-            if (t.inTok || t.outTok || t.cost) deps.err(`· ${t.inTok}+${t.outTok} tok · ${formatUsd(t.cost)}\n`)
+            if (t.inTok || t.outTok || t.cost) deps.err(`· ${t.inTok}+${t.outTok} tok · ${formatCost(t.cost, t.costUnknown)}\n`)
           }
           t.stopReason = e.stopReason
           if (e.stopReason === 'error' || e.stopReason === 'aborted') t.errored = true
@@ -1561,6 +1572,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       // Rounded past a millionth of a cent: the sum of per-round floats carries
       // representation noise (0.024000000000000004) a harness shouldn't have to strip.
       costUsd: Math.round(t.cost * 1e6) / 1e6,
+      ...(t.costUnknown ? { costUnknown: true } : {}),
       inputTokens: t.inTok,
       outputTokens: t.outTok,
       durationMs: Math.max(0, now() - startedAt),

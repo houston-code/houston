@@ -104,7 +104,6 @@ import {
 } from './agent/loop'
 import {
   killShell,
-  killShellsFor,
   listShells,
   listPreviewServers,
   onShellsChanged,
@@ -112,7 +111,8 @@ import {
   shellTail
 } from './agent/shells'
 import { removeWorktreeOnArchive } from './archiveWorktree'
-import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
+import { stopAndDeleteConversation } from './deleteChat'
+import { addToQueue, removeFromQueue, clearQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
 import { runAndDrain, drainQueue, startWakeTurn, type DrainIO } from './agent/drain'
 import { setWakeHost } from './agent/backgroundEvents'
 import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
@@ -189,7 +189,6 @@ import {
   createConversation,
   forkConversation,
   forkConversationAt,
-  deleteConversation,
   otherConversationsInWorktree,
   detachConversationWorktree,
   importConversation,
@@ -227,6 +226,7 @@ import {
 } from '@shared/rewind'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { registerScheduleIpc } from './scheduleIpc'
+import { guardIpcHandle, guardIpcOn } from './ipcSender'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 import { wireMediaProtocol } from './mediaProtocol'
 import { searchMcpRegistry } from './mcpRegistry'
@@ -314,6 +314,7 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
     ...(e.model ? { model: e.model } : {}),
     ...(e.cacheReadTokens ? { cacheReadTokens: e.cacheReadTokens } : {}),
     ...(e.cacheWriteTokens ? { cacheWriteTokens: e.cacheWriteTokens } : {}),
+    ...(e.costUnknown ? { costUnknown: true } : {}),
     ...(e.context ? { contextParts: e.context } : {})
   })
   return mergeRunningTotals(e, total)
@@ -658,9 +659,15 @@ export function registerIpc(ready?: Promise<unknown>): void {
       open = true
     }
   )
-  /** `ipcMain.handle`, with the request held until startup has finished. */
+  /**
+   * `ipcMain.handle`, refusing any request that isn't from a chat window's own page
+   * (see ipcSender.ts), and holding the rest until startup has finished. Every
+   * handler in the app is registered through this or `on` below, including the
+   * ones customizeIpc, importIpc and scheduleIpc register.
+   */
+  const guardedHandle = guardIpcHandle((channel, listener) => ipcMain.handle(channel, listener))
   const handle: typeof ipcMain.handle = (channel, listener) =>
-    ipcMain.handle(channel, (event, ...args) =>
+    guardedHandle(channel, (event, ...args) =>
       open || !opened ? listener(event, ...args) : opened.then(() => listener(event, ...args))
     )
   /**
@@ -668,8 +675,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
    * screen, the menu's state), and handling one can read settings, which must not
    * happen before the credential store is ready (see index.ts).
    */
+  const guardedOn = guardIpcOn((channel, listener) => ipcMain.on(channel, listener))
   const on: typeof ipcMain.on = (channel, listener) =>
-    ipcMain.on(channel, (event, ...args) => afterReady(() => listener(event, ...args)))
+    guardedOn(channel, (event, ...args) => afterReady(() => listener(event, ...args)))
   /** Run `fn` now, or as soon as startup has finished. */
   const afterReady = (fn: () => void): void => {
     if (open || !opened) fn()
@@ -705,13 +713,14 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // URL can only ever carry what issueReportBody allows.
   handle(IPC.logsReveal, () => revealLogs())
   // Not held for startup: logging needs no credential, and an error during startup is
-  // exactly the one worth keeping.
+  // exactly the one worth keeping. Still sender-checked, so only a chat window's own
+  // page can write to houston.log through it.
   const logRendererError = createRendererErrorLogger()
-  ipcMain.on(IPC.rendererError, (event, raw: unknown) => logRendererError(event.sender.id, raw))
+  guardedOn(IPC.rendererError, (event, raw: unknown) => logRendererError(event.sender.id, raw))
   handle(IPC.issueReportPreview, (): string => issueReportText())
   handle(IPC.issueReportOpen, (): boolean => openIssueReport())
   // The composer's sandbox badge: a cheap read, unlike the full doctor probe.
-  ipcMain.handle(
+  guardedHandle(
     IPC.sandboxStatus,
     (): SandboxStatus => ({ backend: activeBackendId(), enforced: isSandboxed() })
   )
@@ -1016,7 +1025,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
   )
 
   // Trusted folders: whether this workspace's project config elevates anything
-  // (allow rules / hooks / MCP servers), and where the user's consent stands.
+  // (allow rules / hooks / MCP servers / command allowed-tools / plugin files), and
+  // where the user's consent stands. Plugin sources never leave main; only their
+  // names do.
   handle(IPC.folderTrustStatus, async (_event, workspace: string): Promise<FolderTrustStatus> => {
     if (typeof workspace !== 'string' || !workspace) return { state: 'none' }
     const cfg = await loadProjectConfig(workspace)
@@ -1027,8 +1038,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
         allowRules: cfg.elevated.allowRules.length,
         hooks: cfg.elevated.hooks.length,
         mcpServers: cfg.elevated.mcpServers.length,
-        ...(cfg.elevated.commands?.length ? { commands: cfg.elevated.commands.length } : {})
-      }
+        ...(cfg.elevated.commands?.length ? { commands: cfg.elevated.commands.length } : {}),
+        plugins: cfg.elevated.plugins.length
+      },
+      ...(cfg.elevated.plugins.length ? { plugins: cfg.elevated.plugins.map((p) => p.name) } : {})
     }
   })
   // Persist a trust decision. The fingerprint is recomputed here from the file on
@@ -1484,12 +1497,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       // Stop what the chat still has running before it goes: its live run (which would
       // otherwise keep writing to a deleted chat) and its background shells (whose dev
       // servers would keep their ports, inside a worktree about to be removed).
-      const liveRun = activeRunForConversation(id)
-      if (liveRun) cancelRun(liveRun)
-      killShellsFor(id)
-      deleteConversation(id)
-      // Drop the cached queue too: it went with the file, and must not linger in memory.
-      forgetQueue(id)
+      stopAndDeleteConversation(id)
       attention?.forget(id)
       const worktree =
         action.removeWorktree && conv?.worktree ? await removeWorktree(conv.worktree) : null

@@ -205,7 +205,7 @@ export interface MessageUsage {
 }
 
 /** Why a run stopped short of finishing (the `limit` event's reason). */
-export type RunLimitReason = 'max-steps' | 'max-output' | 'stalled'
+export type RunLimitReason = 'max-steps' | 'max-output' | 'stalled' | 'max-cost'
 
 /** Why one run ended other than by finishing (see {@link ChatMessage.runEnds}). */
 export interface RunEndRecord {
@@ -620,6 +620,8 @@ export interface ModelUsage {
   cacheReadTokens: number
   /** Portion of `inputTokens` that wrote a new cache entry (bills slightly above). */
   cacheWriteTokens: number
+  /** Set once a round on this model could not be priced: `cost` leaves it out. */
+  costUnknown?: boolean
 }
 
 /** Token usage persisted with a conversation so it survives reloads/restarts. */
@@ -968,8 +970,17 @@ export interface AgentRunRequest {
    * permission rules and approval policy (see toolScope.ts).
    */
   toolScope?: ToolScope
-  /** The headless `--append-system-prompt` text, added to the system prompt in its own section. */
+  /**
+   * The headless `--append-system-prompt` text (or an ACP editor's `systemPrompt`),
+   * added to the system prompt in its own section.
+   */
   appendSystemPrompt?: string
+  /**
+   * Directories this run may read and write besides the workspace, on top of
+   * `settings.additionalRoots`: an ACP editor's `additionalDirectories`, for that
+   * session only and never saved. Each must still resolve to count.
+   */
+  additionalRoots?: string[]
   /**
    * The headless `--output-schema`: a JSON Schema the run's final answer must
    * match. The system prompt asks for a final message that is only that JSON;
@@ -1016,6 +1027,8 @@ export interface RunSettingsOverrides {
   maxIterations?: number
   /** `costCeilingUsd`: the cost at which the run is told to wrap up. */
   costCeilingUsd?: number
+  /** `maxCostUsd`: the cost at which the run is stopped (the headless `--max-cost` flag). */
+  maxCostUsd?: number
   /** Turns the end-of-run verification gate on with this command (`verifyOnStop` + `verifyCommand`). */
   verifyCommand?: string
   /** `memoryEnabled`: false runs without saved memories (the headless `--no-memory` flag). */
@@ -1438,6 +1451,14 @@ export type AgentEvent =
        */
       sensitiveWrite?: boolean
       /**
+       * Present and `true` (always alongside `sensitiveWrite`) when the file is an
+       * in-project control file: `.houston/`, `.vscode/`, `.idea/`, `.envrc`, `.husky/`,
+       * `.mcp.json`, `.devcontainer/`, or CI workflows, which run code outside the
+       * sandbox later. "Allow for run" doesn't cover these, so the UI says so and gives
+       * this reason instead of the credential-file one.
+       */
+      protectedWrite?: boolean
+      /**
        * On a network call only: a readable name for what "Allow for run" grants (one
        * site, GitHub posts on one repository, one merge tool), so the card can say how
        * far the grant reaches before the user picks it.
@@ -1607,6 +1628,11 @@ export type AgentEvent =
       delegatedInputTokens?: number
       outputTokens: number
       cost: number
+      /**
+       * Set when the model that billed this round has no known price, so `cost` is 0
+       * because it is unknown, not because the round was free.
+       */
+      costUnknown?: boolean
       /** The model that billed this round; absent on older events. */
       model?: string
       /** Portion of `inputTokens` served from the prompt cache (bills lower). */

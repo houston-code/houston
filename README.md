@@ -429,8 +429,9 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Plugins.** Drop a JS file in `.houston/plugins/` to register *observational*
   lifecycle hooks, `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage',
   fn)`, for logging, metrics, or notifications. Plugins are executable code, so they
-  load only after you set `"projectPlugins": true` in settings.json. Each runs in an
-  isolated context
+  load only after you set `"projectPlugins": true` in settings.json and trust the
+  folder for its current plugin files (a plugin added or edited later asks again).
+  Each runs in an isolated context
   with no `require`/`process`/network, hooks can't block or alter a call, and a
   throwing or slow plugin is caught and ignored. To *block* a tool, use a
   *PreToolUse* shell hook instead.
@@ -818,9 +819,12 @@ are never written back:
 - `--effort <off|low|medium|high|xhigh>`: the model's reasoning effort.
 - `--max-turns <n>`: the most model steps the run may take. It is a hard cap: the
   run never auto-extends past it, and hitting it exits 3.
-- `--max-cost <usd>`: once the run's estimated cost reaches this amount, the agent
-  is told to wrap up. It is a soft ceiling: the step in flight finishes and the
-  agent gets to summarize, so a run can end slightly above it.
+- `--max-cost <usd>`: a hard cost limit. The agent is told to wrap up at 80% of it,
+  and once the run's estimated cost reaches it, the agent gets one last step without
+  tools to summarize and the run stops with exit 3 (`limitReason` `max-cost`). The
+  step that crosses the limit still finishes, so a run can end slightly above it. A
+  model with no known price can't be held to it: Houston warns once, and the result
+  line sets `costUnknown`.
 - `--verify <command>`: when the agent stops after editing files, run this command
   (sandboxed like the agent's own shell). If it fails, its output goes back to the
   agent for a bounded fix-up pass. It needs a policy that can edit, such as
@@ -871,7 +875,7 @@ matching value) or `schemaErrors` (why it didn't match).
 | 0 | The agent finished on its own. | `success` |
 | 1 | The run failed: an error or an aborted run, a stalled agent, or a call refused under `--on-approval fail`. | `error`, `stalled`, `approval_denied` |
 | 2 | Usage error: a bad flag value, an unreadable flag file, or an empty prompt on stdin (nothing ran); or a bad `--input-format stream-json` line. | (no result line), `input_error` |
-| 3 | The run hit a budget before finishing: its step cap (`--max-turns`, or your saved limit) or the model's output limit. | `limit` |
+| 3 | The run hit a budget before finishing: its step cap (`--max-turns`, or your saved limit), its cost limit (`--max-cost`, or your saved limit), or the model's output limit. | `limit` |
 | 4 | The final answer still didn't match `--output-schema` after one corrective round. | `schema_invalid` |
 | 5 | The agent finished, but the last `--verify` check it ran still failed once its fix-up passes ran out. | `verify_failed` |
 | 129, 130, 143 | Stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, and the chat is saved. A second signal exits at once. | `aborted` |
@@ -1078,8 +1082,10 @@ A bare `houston` starts interactive only when it has a real terminal. With a
 prompt piped in (`echo "fix the build" | houston --json`) it runs it one-shot, as
 `-p` would; in CI with nothing piped (no TTY) it prints usage instead of hanging,
 so use `-p "<prompt>"` there.
-`npm run install:cli` symlinks the built bundle (a rebuild is picked up with no
-reinstall) and, if the target dir isn't on your PATH yet, prints the line to add.
+`npm run install:cli` symlinks the built CLI (a rebuild is picked up with no
+reinstall) through a small launcher that turns on Node's compile cache, so it
+starts faster after the first run. If the target dir isn't on your PATH yet, it
+prints the line to add.
 Prefer npm's own linking? The package exposes a `houston` `bin`, so
 `npm run build:cli && npm link` works too. On Windows use `npm link` (npm writes
 a `houston.cmd` shim) or invoke the bundle directly.
@@ -1217,8 +1223,17 @@ in the CLI, so keys already set up with `houston providers set-key` work without
 What maps to what:
 
 - **Sessions** are ordinary Houston conversations in the editor's folder: the editor
-  can list and reopen them, and they also appear in the desktop app and in
-  `houston -i --resume <id>`.
+  can list, load (replaying the history), resume (without it), close, and delete
+  them, and they also appear in the desktop app and in `houston -i --resume <id>`.
+  A delete stops the chat's running prompt and background commands first, as in the
+  app.
+- **Extra folders** (`additionalDirectories`) are readable and writable by that
+  session's runs only, and never saved.
+- **System prompts** from the editor are appended to Houston's, as with
+  `--append-system-prompt`; they can't replace it.
+- **Requests** can be withdrawn with `$/cancel_request`; a withdrawn prompt stops as
+  if cancelled.
+- **Compaction** arrives as `compaction_update` for editors that support it.
 - **Modes** are the approval policies: Plan, Ask, Auto-edit, and Full auto. The
   mode you pick is saved on the chat and restored when it is reopened.
 - **Config options**: the model and the reasoning effort, saved on the chat.
@@ -1259,6 +1274,7 @@ npm run build    # typecheck + bundle to out/
 npm test         # unit tests (vitest: node + jsdom projects)
 npm run test:e2e # Electron e2e suite (Playwright; builds first)
 npm run test:e2e:packaged # same suite against an app already built by `npm run dist*`
+npm run test:soak # memory soak: long desktop and CLI sessions checked against e2e/soak/budgets.ts
 npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 ```
 
@@ -1415,7 +1431,10 @@ the agent loop and UI never depend on a specific provider.
   forced or deleting push) or wipe data outside it (a database reset or drop, Docker
   volumes, `terraform destroy`), and reading or changing a credential file (a `.env`, a
   private key), ask in every mode, since the sandbox protects everything but the
-  project itself and can read your whole filesystem.
+  project itself and can read your whole filesystem. So does changing a project
+  control file that runs code outside the sandbox later (`.houston/`, `.vscode/`,
+  `.idea/`, `.husky/`, `.devcontainer/`, CI workflows, `.envrc`, `.mcp.json`), which
+  *allow-for-the-run* doesn't cover; only an allow rule for the path does.
   `view_localhost` is restricted to loopback addresses and loads untrusted page
   content in a sandboxed, isolated, no-Node window; its main frame can't be
   navigated or redirected off loopback, and its requests can't reach

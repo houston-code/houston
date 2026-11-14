@@ -52,7 +52,9 @@ export function scheduleLastRunText(
         ? 'stopped because it stalled without making progress'
         : s.lastLimit === 'max-output'
           ? 'was cut off at the model’s output limit'
-          : 'stopped at the step limit'
+          : s.lastLimit === 'max-cost'
+            ? 'stopped at the cost limit'
+            : 'stopped at the step limit'
     case 'error': {
       const why = s.lastError ?? 'unknown error'
       return s.lastRunConversationId ? `failed (${why})` : `couldn't start (${why})`

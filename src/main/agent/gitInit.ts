@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { realpathSync, statSync } from 'node:fs'
 import type { GitInitResult } from '@shared/git'
+import { gitExecutable } from './gitBinary'
 import { GIT_ENV, hardenedGitArgs } from './gitRead'
 import { findGitEntry } from './gitEntry'
 
@@ -13,7 +14,7 @@ async function runGit(args: string[], cwd: string): Promise<{ ok: boolean; stder
   }
   return new Promise((resolve) => {
     execFile(
-      'git',
+      gitExecutable(GIT_ENV),
       [...hardening, '--no-pager', ...args],
       { cwd, env: GIT_ENV, timeout: 10_000, maxBuffer: 1_000_000, windowsHide: true },
       (err, _stdout, stderr) => resolve({ ok: !err, stderr: (stderr || '').trim() })

@@ -77,3 +77,12 @@ describe('providerKeyUrl', () => {
     expect(providerKeyUrl('custom-abc12345')).toBeUndefined()
   })
 })
+
+describe('provider ids named after Object.prototype members', () => {
+  it('fall back to the generic env var instead of throwing', () => {
+    expect(providerKeyEnvVars('constructor')).toEqual(['HOUSTON_API_KEY_CONSTRUCTOR'])
+    expect(providerKeyEnvVars('__proto__')).toEqual([genericKeyEnvVar('__proto__')])
+    expect(providerKeyUrl('constructor')).toBeUndefined()
+    expect(providerKeyUrl('toString')).toBeUndefined()
+  })
+})

@@ -23,6 +23,16 @@ import {
 } from './tui-keys'
 import { bellSequence, notifySequence, titleSequence, type TerminalSignal } from './tui-notify'
 import {
+  initialPagerState,
+  maxTop,
+  reducePager,
+  renderPagerScreen,
+  rewrapTop,
+  type PagerSource,
+  type PagerState,
+  type TranscriptDoc
+} from './tui-pager'
+import {
   initialEditorState,
   reduceEditor,
   renderEditor,
@@ -42,6 +52,20 @@ import {
 
 /** Carriage-return + erase-line: rewinds to column 0 and clears the current line. */
 const CLEAR_LINE = '\r\x1b[2K'
+
+/**
+ * Synchronized output (DEC private mode 2026): a terminal that supports it holds
+ * everything between these two and paints it at once, so a multi-row repaint never
+ * shows half drawn. Terminals without it ignore both.
+ */
+export const SYNC_BEGIN = '\x1b[?2026h'
+export const SYNC_END = '\x1b[?2026l'
+
+/** The alternate screen (DEC 1049): the transcript viewer draws there, leaving the scrollback alone. */
+const ALT_SCREEN_ON = '\x1b[?1049h'
+const ALT_SCREEN_OFF = '\x1b[?1049l'
+const HIDE_CURSOR = '\x1b[?25l'
+const SHOW_CURSOR = '\x1b[?25h'
 
 /** Longest prefix shared by every candidate — how Tab completes an ambiguous token. */
 function commonPrefix(items: string[]): string {
@@ -129,6 +153,19 @@ export interface TerminalIoDeps {
    * effect on the next prompt rather than the next launch. Absent = emacs.
    */
   editorMode?: () => 'emacs' | 'vim'
+  /** Terminal height, for the transcript viewer. Defaults to stdout.rows. */
+  rows?: () => number
+  /**
+   * Open text read-only in $VISUAL/$EDITOR (the viewer's `v`). Resolves false when
+   * no editor is set. Absent = the key says it is unavailable.
+   */
+  viewText?: (text: string) => Promise<boolean>
+  /**
+   * Wrap in-place repaints in synchronized-output markers. Defaults to on for the
+   * process's own terminal and off for an injected `write` (or a stdout that is not
+   * a TTY), where there is no screen to paint atomically.
+   */
+  syncOutput?: boolean
 }
 
 /**
@@ -212,6 +249,26 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       history: deps.history ? [...deps.history()].reverse() : undefined
     }) as unknown as ReadlineLike)
   const rawWrite = deps.write ?? ((s: string) => void process.stdout.write(s))
+  // Synchronized output for in-place repaints (see SYNC_BEGIN). Each repaint is
+  // built as one string and written once, so its begin and end can never come apart;
+  // `atomically` covers the few that take several writes, closing in a finally.
+  const syncOn = deps.syncOutput ?? (!deps.write && process.stdout.isTTY === true)
+  let syncDepth = 0
+  const atomically = (fn: () => void): void => {
+    if (!syncOn) return fn()
+    if (syncDepth++ === 0) rawWrite(SYNC_BEGIN)
+    try {
+      fn()
+    } finally {
+      if (--syncDepth === 0) rawWrite(SYNC_END)
+    }
+  }
+  /** One in-place repaint, painted at once where the terminal supports it. */
+  const repaint = (s: string): void => {
+    if (!s) return
+    if (syncOn && syncDepth === 0) rawWrite(SYNC_BEGIN + s + SYNC_END)
+    else rawWrite(s)
+  }
   // Resizes only matter on the process's real terminal: an injected (test) stream
   // has no window, and a process-wide listener per instance would leak.
   const onResize =
@@ -268,6 +325,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     }
   }
 
+  // The transcript viewer is on the alternate screen: output waits for it to close.
+  let pagerOpen = false
+  let heldOutput: string[] = []
+
   // --- Spinner: a single redrawn line, erased before any real output. This is the
   // ONLY in-place redraw in the TUI; confining it to one line + erase-before-write
   // keeps the transcript tear-free.
@@ -290,7 +351,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     let line = frame(statusLabel)
     if (statusLabel && visibleWidth(line) > width) line = frame('')
     tick++
-    rawWrite(CLEAR_LINE + line)
+    // The transcript viewer owns the screen while it is open.
+    if (pagerOpen) return
+    repaint(CLEAR_LINE + line)
   }
   const startTimer = (): void => {
     if (!cancelTimer && spinnerLabel !== null) cancelTimer = schedule(drawSpinner, 100)
@@ -300,17 +363,23 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       cancelTimer()
       cancelTimer = null
     }
-    if (erase) rawWrite(CLEAR_LINE)
+    if (erase && !pagerOpen) rawWrite(CLEAR_LINE)
   }
   const out = (s: string): void => {
     // Nothing to print: leave the spinner alone. The streaming renderer holds a block
     // until it is complete, so most text deltas arrive here empty, and erasing the
     // spinner for each one left it blank for most of a long answer.
     if (!s) return
+    // The transcript viewer owns the screen: hold the output and print it, in order,
+    // once the viewer closes, so nothing lands on the alternate screen and is lost.
+    if (pagerOpen) {
+      heldOutput.push(s)
+      return
+    }
     // Clear the spinner line before real output so streamed text never lands on a
     // spinner frame; the timer redraws it on the next tick, on the fresh line.
-    if (cancelTimer) rawWrite(CLEAR_LINE)
-    rawWrite(s)
+    if (cancelTimer) repaint(CLEAR_LINE + s)
+    else rawWrite(s)
   }
 
   // --- Interrupt watch. While a turn streams, the interface is paused AND the
@@ -333,6 +402,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   const decodeChunk = (data: Buffer | string): string => (typeof data === 'string' ? data : utf8.write(data))
 
   let interruptHandler: (() => void) | null = null
+  // Ctrl-O and Alt-T, at the composer or mid-run. The driver decides what they mean
+  // (and whether the viewer can open now); this reports the keypress.
+  let transcriptHandler: ((during: 'composer' | 'run') => Promise<void>) | null = null
+  let cycleThoughtsHandler: (() => void) | null = null
   // Fired by Shift-Tab, at the composer or mid-run. The driver owns what the modes
   // ARE and what changing one means; this just reports the keypress.
   let cycleModeHandler: (() => void) | null = null
@@ -392,6 +465,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           // Shift-Tab mid-run: the driver retargets the live run and calls setMode,
           // which redraws this line with the new mode.
           cycleModeHandler?.()
+          break
+        case 'transcript':
+          void transcriptHandler?.('run')
+          break
+        case 'cycle-thoughts':
+          cycleThoughtsHandler?.()
           break
         case 'char':
           draft += key.value
@@ -470,6 +549,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         rawWrite(DISABLE_FOCUS_REPORTING)
         rawWrite(DISABLE_BRACKETED_PASTE)
         rawWrite(DISABLE_MODIFIED_KEYS)
+        // Leaving with the viewer open would strand the shell on the alternate screen.
+        if (pagerOpen) rawWrite(SHOW_CURSOR + ALT_SCREEN_OFF)
         stdin.setRawMode(false)
       } catch {
         /* best-effort */
@@ -721,7 +802,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         let s = ''
         if (prevCursorRow > 0) s += `\x1b[${prevCursorRow}A`
         s += '\r\x1b[0J'
-        rawWrite(s)
+        repaint(s)
         drawn = false
         prevCursorRow = 0
       }
@@ -737,7 +818,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         if (up > 0) s += `\x1b[${up}A`
         s += '\r'
         if (v.cursorCol > 0) s += `\x1b[${v.cursorCol}C`
-        rawWrite(s)
+        repaint(s)
         drawn = true
         prevCursorRow = v.cursorRow
         prevRows = v.rows
@@ -750,10 +831,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         if (done || !drawn) return
         const cols = deps.columns?.() ?? process.stdout.columns ?? 80
         const up = physicalCursorRow(prevRows, prevCursorRow, prevCursorCol, cols)
-        rawWrite(`${up > 0 ? `\x1b[${up}A` : ''}\r\x1b[0J`)
-        drawn = false
-        prevCursorRow = 0
-        draw()
+        atomically(() => {
+          rawWrite(`${up > 0 ? `\x1b[${up}A` : ''}\r\x1b[0J`)
+          drawn = false
+          prevCursorRow = 0
+          draw()
+        })
       }
       // A menu whose rows arrived late (an `@` file lookup): repaint, unless the read
       // is over or the region is not on screen (handed to $EDITOR).
@@ -794,13 +877,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         done = true
         pending = null
         openComposer = null
-        eraseRegion()
-        // Leave the submitted message in the scrollback, exactly as readline did:
-        // just the prompt and text, not the command menu that was open under it.
-        if (echo && value !== null) {
-          const v = view(false)
-          rawWrite(`${v.rows.join('\n')}\n`)
-        }
+        atomically(() => {
+          eraseRegion()
+          // Leave the submitted message in the scrollback, exactly as readline did:
+          // just the prompt and text, not the command menu that was open under it.
+          if (echo && value !== null) {
+            const v = view(false)
+            rawWrite(`${v.rows.join('\n')}\n`)
+          }
+        })
         teardown()
         startTimer()
         if (spinnerLabel !== null) startInterruptWatch()
@@ -869,6 +954,23 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         draw()
       }
 
+      /**
+       * Ctrl-O: the transcript viewer takes the terminal, then the composer comes
+       * back exactly as it was (draft, cursor, vim mode), as with $EDITOR above.
+       */
+      const runOverlay = async (open: () => Promise<void>): Promise<void> => {
+        eraseRegion()
+        teardown()
+        try {
+          await open()
+        } catch {
+          /* the viewer failing must not take the composer with it */
+        }
+        if (done) return
+        setup()
+        draw()
+      }
+
       function onData(data: Buffer | string): void {
         const chunk = decodeChunk(data)
         const r = decodeInput(chunk, dec)
@@ -928,10 +1030,25 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               return
             }
             case 'clear-screen':
-              rawWrite('\x1b[2J\x1b[H')
-              drawn = false
-              draw()
+              atomically(() => {
+                rawWrite('\x1b[2J\x1b[H')
+                drawn = false
+                draw()
+              })
               break
+            case 'cycle-thoughts':
+              // The driver prints a line saying what changed; it lands where the
+              // composer was, and the composer is drawn again under it, draft intact.
+              atomically(() => {
+                eraseRegion()
+                cycleThoughtsHandler?.()
+                draw()
+              })
+              break
+            case 'transcript':
+              // runOverlay re-attaches the listener itself, via setup().
+              void runOverlay(() => transcriptHandler?.('composer') ?? Promise.resolve())
+              return
             case 'cycle-mode':
               // The handler updates the driver's policy; promptNow() then renders the
               // new one on the very next draw, with the draft untouched.
@@ -965,8 +1082,133 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     })
   }
 
+  /**
+   * The transcript viewer: `source` full screen on the alternate screen, until q,
+   * Esc or Ctrl-C. Owns stdin in raw mode for its lifetime (the caller has released
+   * it), rewraps on resize, and holds any output that arrives meanwhile until it
+   * closes. Resolves false when there is no terminal to open it on.
+   */
+  const pager = (source: PagerSource): Promise<boolean> => {
+    if (closed || pagerOpen || !stdin.isTTY || typeof stdin.setRawMode !== 'function') return Promise.resolve(false)
+    return new Promise<boolean>((resolve) => {
+      stopTimer(true)
+      stopInterruptWatch()
+      rl.pause()
+      const priorKeypress = stdin.listeners('keypress') as Array<(...args: unknown[]) => void>
+      for (const l of priorKeypress) stdin.removeListener('keypress', l)
+      const cols = (): number => Math.max(20, deps.columns?.() ?? process.stdout.columns ?? 80)
+      const rows = (): number => Math.max(3, deps.rows?.() ?? process.stdout.rows ?? 24)
+      let width = cols()
+      let doc: TranscriptDoc = source.render(width - 1)
+      let state: PagerState = { ...initialPagerState(), top: maxTop(doc, rows() - 1) }
+      let dec: DecoderState = initialDecoderState()
+      let stopResize: (() => void) | null = null
+      let editing = false
+      let done = false
+      pagerOpen = true
+      const draw = (): void => {
+        const screen = renderPagerScreen(state, doc, { rows: rows(), cols: width, title: source.title, paint })
+        // Every row is positioned and cleared on its own: nothing scrolls, nothing wraps.
+        repaint(screen.map((row, i) => `\x1b[${i + 1};1H\x1b[2K${row}`).join(''))
+      }
+      const listen = (): void => {
+        stdin.setRawMode(true)
+        stdin.resume()
+        stdin.on('data', onData)
+      }
+      const unlisten = (): void => {
+        stdin.removeListener('data', onData)
+        stdin.setRawMode(false)
+        stdin.pause()
+      }
+      const finish = (): void => {
+        if (done) return
+        done = true
+        stopResize?.()
+        try {
+          unlisten()
+        } catch {
+          /* best-effort restore */
+        }
+        rawWrite(SHOW_CURSOR + ALT_SCREEN_OFF)
+        pagerOpen = false
+        try {
+          for (const l of priorKeypress) stdin.on('keypress', l)
+          rl.resume()
+          rl.pause()
+        } catch {
+          /* best-effort restore */
+        }
+        // What arrived while the viewer was open, in the order it came.
+        const held = heldOutput
+        heldOutput = []
+        for (const s of held) out(s)
+        startTimer()
+        if (spinnerLabel !== null) startInterruptWatch()
+        resolve(true)
+      }
+      const edit = async (): Promise<void> => {
+        editing = true
+        unlisten()
+        rawWrite(SHOW_CURSOR + ALT_SCREEN_OFF)
+        let opened: boolean
+        try {
+          opened = deps.viewText ? await deps.viewText(source.plain()) : false
+        } catch {
+          opened = false
+        }
+        editing = false
+        if (done) return
+        rawWrite(ALT_SCREEN_ON + HIDE_CURSOR)
+        listen()
+        if (!opened) state = { ...state, message: 'set $VISUAL or $EDITOR to open the transcript in an editor' }
+        draw()
+      }
+      const onTerminalResize = (): void => {
+        if (done || editing) return
+        const before = doc.lines.length
+        width = cols()
+        doc = source.render(width - 1)
+        const top = rewrapTop(state.top, before, doc.lines.length)
+        state = { ...state, top: Math.max(0, Math.min(maxTop(doc, rows() - 1), top)) }
+        draw()
+      }
+      function onData(data: Buffer | string): void {
+        const r = decodeInput(decodeChunk(data), dec)
+        dec = r.state
+        for (const key of r.keys) {
+          if (done || editing) return
+          if (key.type === 'focus') {
+            noteFocus(key.on)
+            continue
+          }
+          const next = reducePager(state, key, { doc, height: rows() - 1 })
+          state = next.state
+          if (next.outcome?.kind === 'close') return finish()
+          if (next.outcome?.kind === 'edit') return void edit()
+        }
+        draw()
+      }
+      try {
+        rawWrite(ALT_SCREEN_ON + HIDE_CURSOR)
+        listen()
+        stopResize = onResize?.(onTerminalResize) ?? null
+        draw()
+      } catch {
+        finish()
+      }
+    })
+  }
+
   return {
     out,
+    pager,
+    onTranscript: (handler) => {
+      transcriptHandler = handler
+    },
+    onCycleThoughts: (handler) => {
+      cycleThoughtsHandler = handler
+    },
     // Erase the current terminal line (e.g. the composer's typed-but-abandoned input
     // on Ctrl-C) so the next prompt redraws clean.
     clearLine: () => rawWrite(CLEAR_LINE),
@@ -974,7 +1216,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     readComposer,
     readSecret,
     yieldComposer: () => {
-      if (!openComposer || !openComposer.empty()) return false
+      // The viewer is up over the composer: whatever wants the turn waits for it.
+      if (pagerOpen || !openComposer || !openComposer.empty()) return false
       openComposer.close()
       return true
     },
@@ -1062,7 +1305,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       stopTimer(true)
       stopInterruptWatch()
       try {
-        return await runPicker(spec, rl, rawWrite, paint, stdin)
+        return await runPicker(spec, rl, repaint, paint, stdin)
       } finally {
         startTimer() // resume the spinner if a turn is still running
         if (spinnerLabel !== null) startInterruptWatch() // …and re-arm Ctrl-C
@@ -1123,13 +1366,14 @@ function runPicker(
     const priorKeypress = stdin.listeners('keypress') as Array<(...args: unknown[]) => void>
     const draw = (first: boolean): void => {
       // \r first: the up-move is counted from column 0 of the row under the picker.
-      if (!first && prevRows > 0) write(`\r\x1b[${prevRows}A\x1b[0J`) // up N physical rows, erase to end
+      // Erase and redraw go out as one write, so `write` can paint them atomically.
+      const erase = !first && prevRows > 0 ? `\r\x1b[${prevRows}A\x1b[0J` : '' // up N physical rows, erase to end
       const lines = session.lines({ width: process.stdout.columns || 0, height: process.stdout.rows || 0 })
       // Count PHYSICAL rows, not logical lines: a rendered line wider than the terminal
       // wraps to several rows, so moving up by the logical count would under-count and
       // the picker would walk down the screen, leaving duplicated rows on each keypress.
       prevRows = pickerPhysicalRows(lines, process.stdout.columns || 0)
-      write(`${lines.join('\n')}\n`)
+      write(`${erase}${lines.join('\n')}\n`)
     }
     const finish = (outcome: PickerOutcome): void => {
       if (done) return
