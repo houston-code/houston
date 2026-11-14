@@ -91,8 +91,10 @@ describe('/memory', () => {
     const h = harness()
     await h.run('show 1')
     expect(h.text()).toContain('tests-need-rg [project, this repository, updated ')
-    expect(h.text()).toContain('line one')
+    // On its own lines, and no "[31m" left behind by removing only the ESC.
+    expect(h.text()).toContain('line one\nred line two\n')
     expect(h.text()).not.toContain('\u001b[31m')
+    expect(h.text()).not.toContain('[31m')
   })
 
   it('forgets with an undo, once', async () => {

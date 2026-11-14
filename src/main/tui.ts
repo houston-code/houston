@@ -1161,8 +1161,8 @@ export function renderUndoResult(files: number, paint: Painter): string {
 export function renderCheckpoint(cp: CheckpointInfo | null, paint: Painter): string {
   if (!cp) return paint('· no changes from this chat to undo yet', 'dim')
   return cp.reverted
-    ? paint(`· the last turn's ${cp.files} file change(s) are already undone (/redo puts them back)`, 'dim')
-    : paint(`· /undo would revert ${cp.files} file(s) changed by the last turn`, 'dim')
+    ? paint(`· the last turn's ${plural(cp.files, 'file change')} ${cp.files === 1 ? 'is' : 'are'} already undone (/redo puts ${cp.files === 1 ? 'it' : 'them'} back)`, 'dim')
+    : paint(`· /undo would revert ${plural(cp.files, 'file')} changed by the last turn`, 'dim')
 }
 
 /**
@@ -1512,6 +1512,11 @@ export async function planDecisionFor(
     case 'reject':
       return { kind: 'reject' }
   }
+}
+
+/** "1 message", "3 messages": a count with its noun, no "(s)". */
+export function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
 }
 
 function truncate(s: string, max: number): string {
@@ -2747,6 +2752,11 @@ export interface TuiIo {
   onSteer?: (handler: (text: string) => boolean) => void
   takeQueued?: () => string[]
   /**
+   * Take (and clear) the line typed while the agent was working but not yet sent:
+   * it opens the next composer, rather than being thrown away when the turn ends.
+   */
+  takeDraft?: () => string
+  /**
    * Register a handler for Shift-Tab (cycle the approval mode). Fires at the
    * composer and mid-run alike; the driver decides what cycling means.
    */
@@ -2771,6 +2781,8 @@ export interface TuiIo {
 
 export interface TuiDeps {
   getSettings: () => AppSettings
+  /** Run just before the farewell on a clean exit (the host waits on background sessions). */
+  beforeExit?: () => Promise<void>
   startRun: (
     req: AgentRunRequest,
     send: (e: AgentEvent) => void,
@@ -3371,6 +3383,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let verbose = settings.tuiVerbose === true
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
+  // A line half-typed while a turn ran (never sent with Enter): the next composer opens with it.
+  let halfDraft = ''
   // What a run hands back unsent: steers it accepted but ended before reading
   // (`steers_returned`), and, when the user interrupted it, the follow-ups typed
   // while it ran. Nothing typed is dropped: after an interrupt it comes back as the
@@ -3404,6 +3418,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
   // What filled the context on the last main round, for /context (estimated parts).
   let contextParts: ContextParts | null = null
+  // What belongs to the chat on screen rather than the session: the staged /image, the
+  // context meter and the run /undo falls back to. Reset whenever another chat (or a
+  // fresh one) takes its place, or the status bar, /context and /undo act on the old one.
+  const resetChatState = (): void => {
+    pendingImages = []
+    contextTokens = 0
+    contextParts = null
+    lastRunId = null
+  }
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
 
@@ -3541,7 +3564,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       conversationId = entry!.id
       messages = conv.messages
       deps.io.out(
-        paint(`· continuing "${entry!.title}" (${messages.length} message(s))\n`, 'dim')
+        paint(`· continuing "${entry!.title}" (${plural(messages.length, 'message')})\n`, 'dim')
       )
       const recap = renderRecap(messages, paint, { width: columns() })
       if (recap) deps.io.out(`${recap}\n`)
@@ -3599,10 +3622,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     messages = []
     conversationId = null
     persistedSettings = null
-    pendingImages = []
-    contextTokens = 0
-    contextParts = null // /context must not show the deleted chat
-    lastRunId = null // /undo must not restore files from the deleted chat's run
+    resetChatState() // /context and /undo must not act on the deleted chat
   }
 
   /**
@@ -3675,7 +3695,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             return `Delete "${title}"? It's the chat you're in: you'll be in a new chat. This cannot be undone.`
           }
           const msgs = messagesOf(o.value)
-          const count = msgs ? ` and its ${msgs.length} message(s)` : ''
+          const count = msgs ? ` and its ${plural(msgs.length, 'message')}` : ''
           return `Delete "${title}"${count}? This cannot be undone.`
         }
       })
@@ -3802,16 +3822,26 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (pendingQueued.length) {
       // Typed while the last turn ran. Dispatch it instead of prompting: waiting for
       // an Enter they already pressed would be the exact tax queueing removes.
-      raw = pendingQueued.join('\n\n')
-      pendingQueued = []
+      // A command among them runs as itself, one entry per pass: joined, "/compact" then
+      // "/cost" became one message the second command vanished into, and a steer
+      // followed by "/plan" reached the model as text.
+      if (pendingQueued.some((q) => /^[/!#]/.test(q.trim()))) {
+        raw = pendingQueued[0]
+        pendingQueued = pendingQueued.slice(1)
+      } else {
+        raw = pendingQueued.join('\n\n')
+        pendingQueued = []
+      }
       deps.io.out(`${composerPrompt(policy, paint)}${raw}\n`)
     } else if (deps.io.readComposer) {
       // A thunk, not a string: Shift-Tab can change the policy WHILE this read is
       // open, and the prompt has to say what will actually happen when you hit Enter.
       const draft = restoreDraft
       restoreDraft = ''
+      const half = halfDraft
+      halfDraft = ''
       if (draft) deps.io.out(paint('· not sent (the turn was interrupted): back in the prompt to edit or send\n', 'dim'))
-      const text = await deps.io.readComposer(() => composerPrompt(policy, paint), draft || undefined, {
+      const text = await deps.io.readComposer(() => composerPrompt(policy, paint), draft || half || undefined, {
         // Read on each redraw: what the keyword would do on this chat's model right now.
         ultrathinkEffect: () =>
           ultrathinkEffect(
@@ -3958,9 +3988,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         messages = []
         conversationId = null // next turn starts (and persists) a fresh conversation
         persistedSettings = null // stored meta belongs to the old conversation
-        pendingImages = [] // don't carry a staged /image into the fresh conversation
-        contextTokens = 0 // the context meter belongs to the old conversation
-        contextParts = null
+        resetChatState()
         deps.io.out(paint('· conversation cleared\n', 'dim'))
         continue
       }
@@ -4009,7 +4037,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         conversationId = id
         messages = conv.messages
-        deps.io.out(paint(`· resumed: ${messages.length} message(s)\n`, 'dim'))
+        resetChatState()
+        deps.io.out(paint(`· resumed: ${plural(messages.length, 'message')}\n`, 'dim'))
         const recap = renderRecap(messages, paint, { width: columns() })
         if (recap) deps.io.out(`${recap}\n`)
         const ended = runEndNotice(messages)
@@ -4033,7 +4062,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const target = result.path ?? defaultExportName(title, at, result.format)
         try {
           const written = deps.writeExport(target, content)
-          deps.io.out(paint(`· exported ${messages.length} message(s) to ${written}\n`, 'dim'))
+          deps.io.out(paint(`· exported ${plural(messages.length, 'message')} to ${written}\n`, 'dim'))
         } catch (e) {
           deps.io.out(paint(`· couldn't export: ${(e as Error).message}\n`, 'yellow'))
         }
@@ -4074,7 +4103,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const title = currentTitle() ?? 'this chat'
         // discardPending: type-ahead must not answer a question about deleting.
         const ans = await deps.io.readLine(
-          paint(`Delete "${title}" and its ${messages.length} message(s)? This cannot be undone. [y/N] `, 'yellow'),
+          paint(`Delete "${title}" and its ${plural(messages.length, 'message')}? This cannot be undone. [y/N] `, 'yellow'),
           { discardPending: true }
         )
         if (!/^y(es)?$/i.test(ans?.trim() ?? '')) {
@@ -4225,12 +4254,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const stillRunning = list.find((x) => x.id === id)?.running
         conversationId = id
         messages = conv.messages
+        resetChatState()
         adoptChatSettings(conv)
         deps.io.out(
           paint(
             stillRunning
-              ? `· opened a running session (${messages.length} message(s) so far); it keeps going in the background\n`
-              : `· opened: ${messages.length} message(s)\n`,
+              ? `· opened a running session (${plural(messages.length, 'message')} so far); it keeps going in the background\n`
+              : `· opened: ${plural(messages.length, 'message')}\n`,
             'dim'
           )
         )
@@ -4283,8 +4313,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // The meter measured the log before the undo; the next turn reports the real size.
           contextTokens = 0
           contextParts = null
-          const left = res.conflicts.length ? `; left ${res.conflicts.length} file(s) that changed since: ${res.conflicts.join(', ')}` : ''
-          deps.io.out(paint(`· undid the rewind (${res.reapplied} file(s) put back${left})\n`, 'dim'))
+          const left = res.conflicts.length ? `; left ${plural(res.conflicts.length, 'file')} that changed since: ${res.conflicts.join(', ')}` : ''
+          deps.io.out(paint(`· undid the rewind (${plural(res.reapplied, 'file')} put back${left})\n`, 'dim'))
           continue
         }
         const points = rewindPoints(messages)
@@ -4369,7 +4399,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           : await deps.checkpoint.undo(runId)
         deps.io.out(
           result.redo
-            ? paint(`· put back ${files} file(s) the last turn had changed\n`, 'dim')
+            ? paint(`· put back ${plural(files, 'file')} the last turn had changed\n`, 'dim')
             : `${renderUndoResult(files, paint)}\n`
         )
         continue
@@ -4582,7 +4612,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         if (res.ok && res.messages) {
           messages = res.messages
-          deps.io.out(paint(`· compacted ${res.summarized} earlier message(s)\n`, 'dim'))
+          // The meter measured the log before it was summarized; the next turn reports
+          // the real size, as after a rewind.
+          contextTokens = 0
+          contextParts = null
+          deps.io.out(paint(`· compacted ${plural(res.summarized, 'earlier message')}\n`, 'dim'))
         } else if (res.ok) {
           deps.io.out(
             paint(
@@ -4596,6 +4630,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· compaction cancelled; nothing changed\n', 'dim'))
         } else {
           deps.io.out(paint(`· couldn't compact: ${res.error ?? 'unknown error'}\n`, 'yellow'))
+        }
+        // A line sent while it compacted was queued (there was no run to steer): send it
+        // next, as /btw does, rather than after the user's next turn. A cancel hands it
+        // back as the draft instead, and a line still being typed stays a draft.
+        const typedWhile = deps.io.takeQueued?.() ?? []
+        const halfTyped = deps.io.takeDraft?.() ?? ''
+        if (res.reason === 'cancelled') {
+          restoreDraft = [restoreDraft, ...typedWhile, halfTyped].filter(Boolean).join('\n\n')
+        } else {
+          pendingQueued = [...pendingQueued, ...typedWhile]
+          if (halfTyped) halfDraft = [halfDraft, halfTyped].filter(Boolean).join('\n\n')
         }
         continue
       }
@@ -4644,12 +4689,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             deps.io.stopSpinner?.()
             deps.io.out(paint('\n^C side chat stopped\n', 'dim'))
           } else if (turn.answer !== undefined) {
-            deps.io.out(`${paint('side chat (not added to this chat):', 'dim')}\n${turn.answer.trim()}\n`)
+            // The model's answer, rendered as a reply is: markdown, wrapped, and with its
+            // control characters dropped (line by line, so its lines stay).
+            const clean = turn.answer.trim().split('\n').map(stripControlChars).join('\n')
+            const body = renderMarkdownAnsi(clean, { paint, width: columns() })
+            deps.io.out(`${paint('side chat (not added to this chat):', 'dim')}\n${body}\n`)
           } else {
-            deps.io.out(paint(`· side chat failed: ${turn.error ?? 'no answer'}\n`, 'red'))
+            deps.io.out(paint(`· side chat failed: ${stripControlChars(turn.error ?? 'no answer')}\n`, 'red'))
           }
         } catch (e) {
-          deps.io.out(paint(`· side chat failed: ${(e as Error).message}\n`, 'red'))
+          deps.io.out(paint(`· side chat failed: ${stripControlChars((e as Error).message)}\n`, 'red'))
         } finally {
           stopSideChat = null
           deps.io.stopSpinner?.()
@@ -4657,9 +4706,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // A line typed while the side chat worked was queued (there was no run to
         // steer): send it as the next turn, or after a stop, offer it as the draft.
         const typed = deps.io.takeQueued?.() ?? []
-        if (typed.length) {
-          if (stopped) restoreDraft = [restoreDraft, ...typed].filter(Boolean).join('\n\n')
-          else pendingQueued = [...pendingQueued, ...typed]
+        const halfTyped = deps.io.takeDraft?.() ?? ''
+        if (stopped) restoreDraft = [restoreDraft, ...typed, halfTyped].filter(Boolean).join('\n\n')
+        else {
+          pendingQueued = [...pendingQueued, ...typed]
+          if (halfTyped) halfDraft = [halfDraft, halfTyped].filter(Boolean).join('\n\n')
         }
         continue
       }
@@ -4945,6 +4996,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           const tag = callTag(e.callId)
           liveCalls.delete(e.callId)
           parallelCalls.delete(e.callId)
+          // With no tool left running the model is writing again, so the spinner stops
+          // naming the last tool ("Run 45s").
+          if (liveCalls.size === 0) deps.io.setSpinnerLabel?.('Working')
           // The list was just drawn from the call's args; its result is only the
           // model-facing summary of what we already showed.
           if (todoCalls.delete(e.callId) && e.ok) {
@@ -5232,7 +5286,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`\n· ${limitNoticeText(e.reason)}\n`, 'yellow'))
           break
         case 'compaction':
-          deps.io.out(paint(`\n· compacted ${e.summarized} messages\n`, 'dim'))
+          deps.io.out(paint(`\n· compacted ${plural(e.summarized, 'message')}\n`, 'dim'))
           break
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension) — display-only, never
@@ -5356,8 +5410,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     const interrupted = interruptedQueued !== null
     returnedSteers = []
     interruptedQueued = null
-    if (interrupted) restoreDraft = unsent.join('\n\n')
-    else pendingQueued = unsent
+    // A line still being typed when the turn ended was never sent: it stays a draft.
+    const typing = deps.io.takeDraft?.() ?? ''
+    if (interrupted) restoreDraft = [...unsent, typing].filter(Boolean).join('\n\n')
+    else {
+      // Appended: entries still queued from before (one command per pass) go first.
+      pendingQueued = [...pendingQueued, ...unsent]
+      if (typing) halfDraft = [halfDraft, typing].filter(Boolean).join('\n\n')
+    }
 
     // A plan-mode turn hands off to execution through the present_plan flow: the agent
     // calls present_plan, the plan_ready case above renders it and collects an
@@ -5379,6 +5439,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       )
     )
   }
+  // Anything the host still has to finish (background sessions) prints its wait first.
+  await deps.beforeExit?.()
   deps.io.out(paint('\nBye.\n', 'dim'))
   return 0
 }
