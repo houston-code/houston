@@ -1,4 +1,7 @@
 import type { Middleware } from '@anthropic-ai/sdk'
+import type { BedrockMantleClientOptions } from '@anthropic-ai/bedrock-sdk'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { Provider } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { BEDROCK_MODELS } from '@shared/provider-catalog'
@@ -6,6 +9,7 @@ import { createMessagesProvider, type MessagesClient } from './anthropic'
 import { idleTimeoutFetch } from './idle-fetch'
 import { ProviderError, SDK_MAX_RETRIES } from '../agent/retry'
 import { AWS_CREDENTIALS, boundCredentialLookup, findCredentialLookupError } from './cloud-credentials'
+import { clientKey, fileStamp, forgetSharedClient, isAuthRejection, sharedClient } from './client-cache'
 
 /**
  * Claude on Amazon Bedrock.
@@ -39,13 +43,61 @@ export interface BedrockOptions {
   headers?: Record<string, string>
 }
 
+type CredentialChainResolver = NonNullable<BedrockMantleClientOptions['providerChainResolver']>
+
+/**
+ * One AWS credential chain for the life of a client. Left to itself the SDK builds a
+ * fresh default chain for every request it signs, and a fresh chain remembers nothing:
+ * each request of every turn went back to SSO, STS, a `credential_process` or instance
+ * metadata. This is the same chain (environment first, then the Node default chain),
+ * built once, so the credentials it resolves are reused until they near expiry, when
+ * it refreshes them. A failed lookup is not remembered.
+ */
+function memoizedCredentialChain(): CredentialChainResolver {
+  let chain: ReturnType<CredentialChainResolver> | undefined
+  return () =>
+    (chain ??= import('@aws-sdk/credential-providers').then(
+      ({ createCredentialChain, fromEnv, fromNodeProviderChain }) =>
+        createCredentialChain(fromEnv(), fromNodeProviderChain()),
+      (err: unknown) => {
+        chain = undefined
+        throw err
+      }
+    ))
+}
+
+/**
+ * The shared-client key for these options (see client-cache.ts): the settings, the SDK's
+ * environment fallbacks for them, the bearer key, and what the AWS chain reads (its
+ * environment variables and the shared credentials and config files), so a new key, a
+ * new profile or rewritten credentials get a new client. Exported for testing.
+ */
+export function bedrockClientKey(opts: BedrockOptions): string {
+  const env = process.env
+  return clientKey('bedrock', {
+    region: opts.region || env.AWS_REGION || env.AWS_DEFAULT_REGION,
+    baseUrl: opts.baseUrl || env.ANTHROPIC_BEDROCK_MANTLE_BASE_URL,
+    headers: opts.headers,
+    apiKey: opts.apiKey || env.AWS_BEARER_TOKEN_BEDROCK,
+    aws: [
+      env.AWS_PROFILE,
+      env.AWS_ACCESS_KEY_ID,
+      env.AWS_SECRET_ACCESS_KEY,
+      env.AWS_SESSION_TOKEN,
+      fileStamp(env.AWS_SHARED_CREDENTIALS_FILE || join(homedir(), '.aws', 'credentials')),
+      fileStamp(env.AWS_CONFIG_FILE || join(homedir(), '.aws', 'config'))
+    ]
+  })
+}
+
 /** A provider for Claude on Bedrock, over the Mantle (SigV4) client. */
 export function createBedrockProvider(opts: BedrockOptions = {}): Provider {
-  // Lazy + memoized, like the other adapters: the AWS signing stack is a heavy
-  // import, and a user who never selects this provider never pays for it.
-  let clientPromise: Promise<MessagesClient> | undefined
+  // Lazy, like the other adapters: the AWS signing stack is a heavy import, and a user
+  // who never selects this provider never pays for it. Shared across turns and side
+  // requests, with its credential chain, so credentials are looked up once, not per request.
+  const key = bedrockClientKey(opts)
   const getClient = (): Promise<MessagesClient> =>
-    (clientPromise ??= import('@anthropic-ai/bedrock-sdk').then((m) => {
+    sharedClient(key, () => import('@anthropic-ai/bedrock-sdk').then((m) => {
       // The SigV4 credential lookup runs before the SDK's request timer and ignores
       // the abort signal, so bound it here (see cloud-credentials.ts).
       class BoundedMantle extends m.AnthropicBedrockMantle {
@@ -56,6 +108,8 @@ export function createBedrockProvider(opts: BedrockOptions = {}): Provider {
       return new BoundedMantle({
         fetch: idleTimeoutFetch(),
         maxRetries: SDK_MAX_RETRIES,
+        // Consulted only to sign: a bearer key skips SigV4 and never calls it.
+        providerChainResolver: memoizedCredentialChain(),
         ...(opts.region ? { awsRegion: opts.region } : {}),
         ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
         ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
@@ -73,10 +127,12 @@ export function createBedrockProvider(opts: BedrockOptions = {}): Provider {
       } catch (err) {
         const lookup = findCredentialLookupError(err)
         if (lookup) {
-          // Start the next turn from a fresh client, in case the stuck lookup is cached.
-          clientPromise = undefined
+          // Start the next turn from a fresh client: the stuck lookup is cached in its chain.
+          forgetSharedClient(key)
           throw lookup
         }
+        // Credentials AWS refused (rotated keys, a revoked session) are looked up afresh.
+        if (isAuthRejection(err)) forgetSharedClient(key)
         throw explainLegacyModelError(err, req.model)
       }
     }

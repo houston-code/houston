@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ChatRequest } from '@shared/agent'
-import { createVertexProvider, listVertexModels } from './vertex'
+import { createVertexProvider, listVertexModels, vertexClientKey } from './vertex'
+import { resetSharedClients } from './client-cache'
 
 /**
  * Vertex rides the shared Anthropic adapter, so this covers what's specific to it:
@@ -9,6 +13,9 @@ import { createVertexProvider, listVertexModels } from './vertex'
  * thinking gates. A dated 4.0 id that misses the legacy gate gets sent adaptive
  * thinking and the API rejects the turn, which no type or compile check would catch.
  */
+
+// Clients are shared across providers at module level; each test builds its own.
+beforeEach(() => resetSharedClients())
 
 const h = vi.hoisted(() => ({ stream: vi.fn(), ctor: vi.fn() }))
 vi.mock('@anthropic-ai/vertex-sdk', () => {
@@ -104,6 +111,69 @@ describe('createVertexProvider client options', () => {
       }
     }
     expect(h.ctor).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('vertex clients shared across turns and side requests', () => {
+  beforeEach(() => {
+    h.stream.mockReset()
+    h.ctor.mockReset()
+  })
+
+  it('reuses one client for providers built with the same settings (a turn, then its title request)', async () => {
+    await run({ region: 'us-east5', projectId: 'p' }, { model: 'claude-opus-4-8' })
+    await run({ region: 'us-east5', projectId: 'p' }, { model: 'claude-haiku-5-5' })
+    expect(h.ctor).toHaveBeenCalledTimes(1)
+  })
+
+  it('builds a new client when any setting changes', async () => {
+    const settings = [
+      { region: 'us-east5' },
+      { region: 'europe-west1' },
+      { region: 'europe-west1', projectId: 'p2' },
+      { region: 'europe-west1', projectId: 'p2', baseUrl: 'https://gateway.example.test/v1' },
+      { region: 'europe-west1', projectId: 'p2', baseUrl: 'https://gateway.example.test/v1', headers: { 'X-Key': 'a' } },
+      { region: 'europe-west1', projectId: 'p2', baseUrl: 'https://gateway.example.test/v1', headers: { 'X-Key': 'b' } }
+    ]
+    for (const opts of settings) await run(opts, { model: 'claude-opus-4-8' })
+    expect(h.ctor).toHaveBeenCalledTimes(settings.length)
+  })
+
+  it('builds a new client once a fresh login rewrites the credentials file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-vertex-adc-'))
+    const file = join(dir, 'application_default_credentials.json')
+    writeFileSync(file, '{"type":"authorized_user"}')
+    vi.stubEnv('GOOGLE_APPLICATION_CREDENTIALS', file)
+    try {
+      await run({ region: 'us-east5' }, { model: 'claude-opus-4-8' })
+      await run({ region: 'us-east5' }, { model: 'claude-opus-4-8' })
+      expect(h.ctor).toHaveBeenCalledTimes(1)
+      writeFileSync(file, '{"type":"authorized_user","account":"someone-else"}')
+      await run({ region: 'us-east5' }, { model: 'claude-opus-4-8' })
+      expect(h.ctor).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('starts the next turn from a fresh client after Google refuses the credentials', async () => {
+    h.stream.mockReturnValueOnce({
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.reject(Object.assign(new Error('Request had invalid authentication credentials.'), { status: 401 }))
+      })
+    })
+    const provider = createVertexProvider({ region: 'us-east5' })
+    const gen = provider.streamChat({ model: 'claude-opus-4-8', messages: [{ role: 'user', content: 'hi' }] } as ChatRequest)
+    await expect(gen.next()).rejects.toMatchObject({ status: 401 })
+    await run({ region: 'us-east5' }, { model: 'claude-opus-4-8' })
+    expect(h.ctor).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a gateway credential out of the cache key', () => {
+    const key = vertexClientKey({ region: 'us-east5', headers: { Authorization: 'Bearer gw-secret-123' } })
+    expect(key).not.toContain('gw-secret-123')
+    expect(key).toMatch(/^vertex:[0-9a-f]{64}$/)
   })
 })
 

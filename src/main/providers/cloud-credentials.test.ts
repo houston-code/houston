@@ -4,6 +4,7 @@ import { createBedrockProvider } from './bedrock'
 import { createVertexProvider } from './vertex'
 import { classifyProviderFailure, isRetryableError } from '../agent/retry'
 import { CREDENTIAL_LOOKUP_LIMIT_MS } from './cloud-credentials'
+import { resetSharedClients } from './client-cache'
 
 /**
  * The cloud hosts resolve credentials inside the SDK's request pipeline, before the
@@ -14,6 +15,9 @@ import { CREDENTIAL_LOOKUP_LIMIT_MS } from './cloud-credentials'
  * These run the real SDK clients (only the credential source and the network are
  * stubbed), because the bug lives in how the SDK sequences signing and fetching.
  */
+
+// Clients are shared across providers at module level; each test builds its own.
+beforeEach(() => resetSharedClients())
 
 const h = vi.hoisted(() => ({
   /** What the stub credential source does when asked. */
