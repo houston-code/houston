@@ -37,7 +37,7 @@ permissions, and skills behave the same everywhere.
 
 **Desktop-only surfaces.** The sidebar, the Preview panel, the integrated terminal
 and Files panel, rendered diagrams, and the tools that need a browser engine
-(`view_localhost` and `render_mockup`). Spawned sessions run in every client, but
+(`view_localhost`, `browser_session`, and `render_mockup`). Spawned sessions run in every client, but
 only the desktop app lists them in a sidebar.
 
 ### Desktop app
@@ -1667,7 +1667,9 @@ destination (the prompt says which):
   Permissions → **Web reads in full auto** can let these run without asking. Either
   way, a URL or query carrying a credential is refused.
 - **`view_localhost`** asks once per host, since a page can load from the internet. A
-  call that clicks or types (`steps`) asks once more per host.
+  call that clicks or types (`steps`) asks once more per host. **`browser_session`**
+  shares those grants: opening or reading a page asks once per host, and `act` asks
+  once more, for the host the session is on.
 - **GitHub writes** (open a PR or issue, comment, review, reopen, mark ready or draft)
   share one grant per repository, so allowing a comment on one repository never allows
   anything on another. The repository is the one `gh` would pick (your
@@ -2285,6 +2287,7 @@ missed while Houston was closed fires once at the next launch.
 | `show_images` | shows you image files the agent produced |
 | `render_mockup` | screenshots an HTML mockup without a dev server (desktop app) |
 | `view_localhost` | loads and tests a page from your local dev server (desktop app) |
+| `browser_session` | keeps a page from your local dev server open across calls, to test a flow step by step (desktop app) |
 
 ### Reviewing changes
 
@@ -2359,6 +2362,29 @@ console output.
 - Text typed into a password field is never shown back to the agent.
 - Steps can't download or upload files, or use your camera, microphone, or location.
 - The page can't leave localhost.
+
+### Testing a flow step by step
+
+`browser_session` (desktop app) keeps one page from your local dev server open for the
+rest of a turn, so the agent can test a flow across several calls instead of fitting
+it into one. Cookies, storage, and what's on the page (a login, a half-filled form)
+carry over between calls. Its actions:
+
+- **open** loads a localhost URL, in the page already open when there is one.
+- **act** runs the same steps as `view_localhost` on the current page. A step can name
+  an element by its ref from the last snapshot (like `e12`) instead of a CSS selector.
+- **snapshot** returns the page's accessibility tree (roles, names, states, and a ref
+  for each element) with a screenshot.
+- **console** and **network** return the page's recent console messages, and its recent
+  requests with method, URL, status, and timing.
+- **close** ends the session. It also closes on its own when the turn ends.
+
+**Safety** is the same as `view_localhost`: the same hidden, locked-down browser, only
+localhost pages, the same blocks on private network addresses, downloads, uploads, and
+device permissions, and the same approvals (see Network calls in full auto). Each session has
+its own cookies, never shared with another chat, `view_localhost`, or the app, and
+cleared when it closes. Snapshot elements are marked with a `data-houston-ref`
+attribute so their refs stay stable.
 
 ## Hooks
 

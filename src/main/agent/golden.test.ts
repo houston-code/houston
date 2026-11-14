@@ -45,6 +45,7 @@ import { estimateTokens, estimateToolTokens } from './compaction'
 import { FIND_TOOLS_NAME } from './lazy-mcp'
 import { getTool } from './tools'
 import { resetCaptureBackend, setCaptureBackend } from './viewlocalhost'
+import { resetBrowserBackend, setBrowserBackend, type BrowserBackend } from './browserSession'
 import { resetMockupBackend, setMockupBackend } from './mockupRender'
 import { resetSpawnBackend, setSpawnBackend } from './spawn'
 import { resetSchedulerBackend, setSchedulerBackend } from './scheduler'
@@ -221,6 +222,7 @@ let desktopClient = false
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true })
   resetCaptureBackend()
+  resetBrowserBackend()
   resetMockupBackend()
   desktopClient = false
   resetSpawnBackend()
@@ -232,6 +234,7 @@ afterEach(() => {
 function configureDesktopBackends(): void {
   desktopClient = true
   setCaptureBackend({} as CaptureDeps)
+  setBrowserBackend({} as BrowserBackend)
   setMockupBackend(async () => [])
   setSpawnBackend({} as SpawnBackend)
   setSchedulerBackend({} as SchedulerBackend)
@@ -706,6 +709,7 @@ describe('fixed per-request overhead', () => {
     const over: string[] = []
     for (const c of configs) {
       resetCaptureBackend()
+      resetBrowserBackend()
       resetMockupBackend()
       resetSpawnBackend()
       resetSchedulerBackend()
@@ -830,6 +834,7 @@ function wireBackends(c: Omit<BackendConfig, 'label'>): void {
   // The browser engine comes only with the desktop app, which also draws galleries.
   if (c.capture) {
     setCaptureBackend({} as CaptureDeps)
+    setBrowserBackend({} as BrowserBackend)
     setMockupBackend(async () => [])
     desktopClient = true
   }

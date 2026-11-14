@@ -96,6 +96,7 @@ describe('tool registry', () => {
       'apply_patch',
       'ask_user',
       'ast_grep',
+      'browser_session',
       'cancel_scheduled_run',
       'dispatch_agent',
       'dispatch_writable_agent',
