@@ -668,7 +668,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Scheduled runs: persist under userData, fire through the spawn backend just
   // wired above (a fired occurrence is an ordinary background session in the
   // sidebar). start() also catches up occurrences missed while the app was closed.
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome) })
+  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask') })
   setSchedulerBackend(scheduler)
   // Its catch-up run needs the provider keys, so not before the credential store is ready.
   afterReady(() => scheduler.start())
@@ -1426,7 +1426,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return { deleted: true, worktree }
     }
   )
-  // Rename / pin / archive / move-to-group. Does not affect the recency ordering.
+  // Rename / pin / archive / move-to-group / set labels. Does not affect the recency ordering.
   // Archiving also removes the chat's worktree when that loses nothing (clean and
   // merged); awaited so the list the renderer re-reads next already shows the chat
   // back at its repo root.
@@ -1435,7 +1435,13 @@ export function registerIpc(ready?: Promise<unknown>): void {
     async (
       _event,
       id: string,
-      patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
+      patch: {
+        title?: string
+        pinned?: boolean
+        archived?: boolean
+        groupId?: string | null
+        labels?: string[]
+      }
     ) => {
       organizeConversation(id, patch)
       if (patch.archived !== true) return

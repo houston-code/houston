@@ -10,7 +10,7 @@ import {
   type ProviderStreamEvent,
   type ToolApprovalDecision
 } from '@shared/agent'
-import type { Hook, PermissionRule } from '@shared/types'
+import type { ApprovalPolicy, Hook, PermissionRule } from '@shared/types'
 import type { SandboxRunOptions, SandboxRunResult } from '../sandbox'
 
 // Integration coverage for the lifecycle-hook wiring in the agent loop
@@ -112,6 +112,7 @@ async function run(opts: {
   provider?: Provider
   userText?: string
   messages?: ChatMessage[]
+  policy?: ApprovalPolicy
   onApproval?: (callId: string, decide: (d: ToolApprovalDecision) => void) => void
 }): Promise<{ events: AgentEvent[]; messages: ChatMessage[] }> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
@@ -124,7 +125,7 @@ async function run(opts: {
       workspace: ws,
       providerId: 'anthropic',
       model: 'claude-test',
-      approvalPolicy: 'ask',
+      approvalPolicy: opts.policy ?? 'ask',
       messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }]
     },
     (e) => {
@@ -730,5 +731,134 @@ describe('observational hooks in the loop (Notification, SessionEnd)', () => {
       tool_input: { path: 'a.txt' },
       cwd: realpathSync(ws)
     })
+  })
+})
+
+// A PreToolUse hook's approve stands in for the user's click on an ORDINARY prompt (the
+// mode's, or the user's own `ask` rule) and nothing more. The checks that ask in every
+// mode exist for the user to see the call, and a hook is automation: it can't clear
+// them. And only the user's own hooks may approve at all: a trusted project's hook
+// runs, but its approve is ignored.
+describe('hook approve clears only the ordinary prompt', () => {
+  const approve: Partial<SandboxRunResult> = { stdout: JSON.stringify({ decision: 'approve' }) }
+  const oneCall = (name: string, args: Record<string, unknown>): ProviderStreamEvent[][] => [
+    [
+      { type: 'tool_call', call: { id: 'c1', name, arguments: args } },
+      { type: 'done', stopReason: 'tool_use' }
+    ],
+    [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+  ]
+  const prompted = (events: AgentEvent[]): boolean => events.some((e) => e.type === 'tool_approval')
+  const ran = (text: string): boolean => h.calls.some((c) => c.command.includes(text))
+  beforeEach(() => {
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: '*', command: 'ok' }]
+    h.static = { ok: approve }
+  })
+  afterEach(() => {
+    delete h.settings.trustedFolders
+  })
+
+  it("a user hook's approve still skips a plain auto-edit shell prompt", async () => {
+    const { events } = await run({
+      policy: 'auto-edit',
+      turns: oneCall('run_shell', { command: 'echo plain' }),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(prompted(events)).toBe(false)
+    expect(ran('echo plain')).toBe(true)
+  })
+
+  it.each([
+    ['a workspace-escaping command', 'cat /etc/hosts'],
+    ['a work-discarding command', 'git reset --hard HEAD~3']
+  ])('does not skip %s, even in full auto', async (_label, command) => {
+    const { events } = await run({
+      policy: 'full-auto',
+      turns: oneCall('run_shell', { command }),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(prompted(events)).toBe(true)
+    expect(toolResult(events)).toContain('Denied by the user')
+    expect(ran(command)).toBe(false)
+  })
+
+  it('does not skip a credential-file read', async () => {
+    writeFileSync(join(ws, '.env'), 'API_KEY=secret-value')
+    const { events } = await run({
+      policy: 'full-auto',
+      turns: oneCall('read_file', { path: '.env' }),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(prompted(events)).toBe(true)
+    expect(toolResult(events)).not.toContain('secret-value')
+  })
+
+  it('does not skip a credential-file write', async () => {
+    const { events } = await run({
+      policy: 'full-auto',
+      turns: oneCall('write_file', { path: '.env', content: 'X=1' }),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(prompted(events)).toBe(true)
+    expect(existsSync(join(ws, '.env'))).toBe(false)
+  })
+
+  it('does not stand in for the consent to run unconfined shell', async () => {
+    h.sandboxed = false
+    const { events } = await run({
+      policy: 'full-auto',
+      turns: oneCall('run_shell', { command: 'echo unconfined' }),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(events.find((e) => e.type === 'tool_approval')).toMatchObject({ sandboxed: false })
+    expect(ran('echo unconfined')).toBe(false)
+  })
+
+  it('does not skip a memory save in a conversation that fetched from the web', async () => {
+    const memRoot = mkdtempSync(join(tmpdir(), 'houston-hook-mem-'))
+    const before = process.env.HOUSTON_MEMORY_DIR
+    process.env.HOUSTON_MEMORY_DIR = memRoot
+    try {
+      const { events } = await run({
+        policy: 'full-auto',
+        messages: [
+          { role: 'user', content: 'read it' },
+          { role: 'assistant', content: '', toolCalls: [{ id: 'f1', name: 'web_fetch', arguments: { url: 'https://example.com' } }] },
+          { role: 'tool', content: 'page', toolCallId: 'f1', toolName: 'web_fetch' },
+          { role: 'user', content: 'remember it' }
+        ],
+        turns: oneCall('memory_save', { scope: 'global', type: 'user', name: 'planted', description: 'd', body: 'b' }),
+        onApproval: (_id, decide) => decide('deny')
+      })
+      expect(events.find((e) => e.type === 'tool_approval')).toMatchObject({ name: 'memory_save' })
+      expect(toolResult(events)).toContain('Denied by the user')
+    } finally {
+      process.env.HOUSTON_MEMORY_DIR = before
+      rmSync(memRoot, { recursive: true, force: true })
+    }
+  })
+
+  it("ignores a trusted project's hook approve", async () => {
+    // The hook lives in the project's settings, not the user's.
+    h.settings.hooks = []
+    mkdirSync(join(ws, '.houston'), { recursive: true })
+    writeFileSync(
+      join(ws, '.houston', 'settings.json'),
+      JSON.stringify({ hooks: [{ event: 'PreToolUse', matcher: '*', command: 'ok' }] })
+    )
+    const { loadProjectConfig } = await import('./projectConfig')
+    const real = realpathSync(ws)
+    const cfg = await loadProjectConfig(real)
+    expect(cfg.elevated.hooks).toHaveLength(1)
+    h.settings.trustedFolders = [{ path: real, decision: 'trusted', hash: cfg.elevatedHash, decidedAt: 1 }]
+    const { events } = await run({
+      policy: 'auto-edit',
+      turns: oneCall('run_shell', { command: 'echo from-project' }),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    // The project hook ran (it's trusted), but its approve didn't clear the prompt.
+    expect(h.calls.some((c) => c.command === 'ok')).toBe(true)
+    expect(prompted(events)).toBe(true)
+    expect(ran('echo from-project')).toBe(false)
   })
 })

@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Provider, ProviderStreamEvent } from '@shared/agent'
+import { GIT_ENV } from './gitRead'
 
 const host = vi.hoisted(() => ({
   provider: { id: 'p', kind: 'openai-compatible', models: [{ id: 'm' }] } as unknown,
@@ -22,6 +23,7 @@ import {
   lookupPr,
   pushBranch,
   pushEnv,
+  pushTargetProblem,
   riskyRepoConfig,
   sanitizeCommitMessage,
   suggestCommitMessage
@@ -73,6 +75,55 @@ describe('riskyRepoConfig', () => {
     ].join('\0')
     expect(riskyRepoConfig(out)).toEqual(['core.sshcommand', 'gpg.program', 'include.path'])
     expect(riskyRepoConfig('')).toEqual([])
+  })
+
+  it('names the keys that reach past this repository or run a ref command on push', () => {
+    const keys = ['core.alternateRefsCommand', 'remote.origin.vcs', 'push.recurseSubmodules', 'submodule.recurse']
+    const out = [...keys.flatMap((k) => ['local', `${k}\nx`]), 'global', 'submodule.recurse\ntrue', ''].join('\0')
+    expect(riskyRepoConfig(out)).toEqual(keys.map((k) => k.toLowerCase()))
+  })
+})
+
+describe('pushTargetProblem', () => {
+  it('passes network remotes', () => {
+    for (const url of [
+      'https://github.com/o/r.git',
+      'http://git.example.test/r',
+      'ssh://git@github.com/o/r.git',
+      'git://example.test/r.git',
+      'git@github.com:o/r.git',
+      'host:path/r.git',
+      '[::1]:r.git',
+      'codecommit::us-east-1://r',
+      '  https://example.test/r\n'
+    ]) {
+      expect(pushTargetProblem(url), url).toBeNull()
+    }
+  })
+
+  it('refuses local paths, file URLs, and the command transports', () => {
+    for (const url of [
+      '/tmp/r.git',
+      './r.git',
+      '../r.git',
+      'r.git',
+      '.cache/r.git',
+      '~/r.git',
+      'sub/dir:with-colon',
+      'file:///tmp/r.git',
+      'FILE://localhost/tmp/r.git',
+      'C:\\Users\\me\\r.git',
+      'C:/r.git',
+      '\\\\server\\share\\r.git',
+      'testgit::/tmp/r.git',
+      'helper::file:///tmp/r'
+    ]) {
+      expect(pushTargetProblem(url), url).toMatch(/folder on this computer/)
+    }
+    expect(pushTargetProblem('ext::sh -c touch% /tmp/x')).toMatch(/ext:: transport/)
+    expect(pushTargetProblem('EXT::sh')).toMatch(/ext:: transport/)
+    expect(pushTargetProblem('fd::3')).toMatch(/fd:: transport/)
+    expect(pushTargetProblem('')).toBe('it has no URL')
   })
 })
 
@@ -137,21 +188,69 @@ describe('commitAll', () => {
   )
 })
 
+/**
+ * Push to a bare repository over "ssh" with no network: an ssh command that runs the
+ * remote half (`git-receive-pack '<path>'`) right here instead of on a host. A push to
+ * a local path is refused, so this is how the tests reach a remote at all. POSIX only:
+ * the stand-in is a shell one-liner.
+ */
+async function withFakeSsh<T>(fn: () => Promise<T>): Promise<T> {
+  const saved = { GIT_SSH_COMMAND: env.GIT_SSH_COMMAND, GIT_SSH_VARIANT: env.GIT_SSH_VARIANT }
+  // Called as `<cmd> <host> "git-receive-pack '<path>'"` (the simple variant adds no options).
+  env.GIT_SSH_COMMAND = `sh -c 'eval "git \${2#git-}"' fake-ssh`
+  env.GIT_SSH_VARIANT = 'simple'
+  try {
+    return await fn()
+  } finally {
+    restoreEnv(saved)
+  }
+}
+
+/** The environment the module under test runs git with, which the helpers here edit. */
+const env = GIT_ENV as Record<string, string | undefined>
+
+/** Put GIT_ENV's keys back the way {@link withFakeSsh} or a test found them. */
+function restoreEnv(saved: Record<string, string | undefined>): void {
+  for (const [k, v] of Object.entries(saved)) {
+    if (v === undefined) delete env[k]
+    else env[k] = v
+  }
+}
+
+/** Run `fn` with the user's global git config read from a file holding `text`. */
+async function withGlobalConfig<T>(text: string, fn: () => Promise<T>): Promise<T> {
+  const file = join(tmp('ga-home-'), 'gitconfig')
+  writeFileSync(file, text)
+  const saved = { GIT_CONFIG_GLOBAL: env.GIT_CONFIG_GLOBAL }
+  env.GIT_CONFIG_GLOBAL = file
+  try {
+    return await fn()
+  } finally {
+    restoreEnv(saved)
+  }
+}
+
+const posix = gitOk && process.platform !== 'win32' ? it : it.skip
+const sshUrl = (path: string): string => `ssh://fake-host${path}`
+const refsOf = (bare: string): string => execFileSync('git', ['-C', bare, 'for-each-ref'], { encoding: 'utf8' })
+
 describe('pushBranch and branchSync', () => {
-  maybe(
+  posix(
     'publishes a branch on its first push, then pushes new commits to its upstream',
     async () => {
       const remote = tmp('ga-remote-')
       execFileSync('git', ['init', '-q', '--bare', remote])
       const r = repo()
-      git(r, 'remote', 'add', 'origin', remote)
+      git(r, 'remote', 'add', 'origin', sshUrl(remote))
       expect(await branchSync(r)).toEqual({ branch: 'main', upstream: null, ahead: 1, remote: 'origin' })
-      expect(await pushBranch(r, deps([r]))).toEqual({ ok: true, detail: 'origin/main' })
-      expect(await branchSync(r)).toMatchObject({ upstream: 'origin/main', ahead: 0 })
-      writeFileSync(join(r, 'a.txt'), 'two\n')
-      await commitAll(r, 'Two', deps([r]))
-      expect(await branchSync(r)).toMatchObject({ ahead: 1 })
-      expect(await pushBranch(r, deps([r]))).toEqual({ ok: true, detail: 'origin/main' })
+      await withFakeSsh(async () => {
+        expect(await pushBranch(r, deps([r]))).toEqual({ ok: true, detail: 'origin/main' })
+        expect(await branchSync(r)).toMatchObject({ upstream: 'origin/main', ahead: 0 })
+        writeFileSync(join(r, 'a.txt'), 'two\n')
+        await commitAll(r, 'Two', deps([r]))
+        expect(await branchSync(r)).toMatchObject({ ahead: 1 })
+        expect(await pushBranch(r, deps([r]))).toEqual({ ok: true, detail: 'origin/main' })
+      })
       expect(execFileSync('git', ['-C', remote, 'log', '-1', '--format=%s', 'main'], { encoding: 'utf8' }).trim()).toBe('Two')
     },
     TIMEOUT
@@ -192,20 +291,119 @@ describe('pushBranch and branchSync', () => {
   )
 
   maybe(
+    'refuses a remote that is a folder on this computer, so its hooks never run',
+    async () => {
+      // What a sandboxed agent can build inside the workspace: a bare repository with
+      // hooks, and a push URL pointing at it while the fetch URL looks normal.
+      const r = repo()
+      const planted = join(r, '.cache', 'r.git')
+      execFileSync('git', ['init', '-q', '--bare', planted])
+      const marker = join(r, 'hook-ran')
+      for (const hook of ['pre-receive', 'update', 'post-receive']) {
+        const file = join(planted, 'hooks', hook)
+        writeFileSync(file, `#!/bin/sh\ntouch "${marker}"\n`)
+        chmodSync(file, 0o755)
+      }
+      git(r, 'remote', 'add', 'origin', 'https://example.invalid/r.git')
+      for (const pushUrl of [planted, `file://${planted}`, '.cache/r.git', `ext::sh -c touch% ${marker}`]) {
+        git(r, 'remote', 'set-url', '--push', 'origin', pushUrl)
+        const res = await pushBranch(r, deps([r]))
+        expect(res, pushUrl).toMatchObject({ ok: false, error: expect.stringMatching(/^Houston won't push to origin: its URL /) })
+        // The URL is never echoed (an https one can carry a token).
+        expect((res as { error: string }).error).not.toContain(planted)
+      }
+      // The plain remote URL too, with no push URL.
+      git(r, 'config', '--unset-all', 'remote.origin.pushurl')
+      git(r, 'remote', 'set-url', 'origin', planted)
+      expect(await pushBranch(r, deps([r]))).toMatchObject({ ok: false, error: /its URL is a folder on this computer/ })
+      expect(existsSync(marker)).toBe(false)
+      expect(refsOf(planted)).toBe('')
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    "checks the URL git really pushes to, after the user's own pushInsteadOf rewrite",
+    async () => {
+      const r = repo()
+      const planted = tmp('ga-planted-')
+      execFileSync('git', ['init', '-q', '--bare', planted])
+      git(r, 'remote', 'add', 'origin', 'https://example.invalid/r.git')
+      const res = await withGlobalConfig(`[url "${planted}"]\n\tpushInsteadOf = https://example.invalid/r.git\n`, () =>
+        pushBranch(r, deps([r]))
+      )
+      expect(res).toMatchObject({ ok: false, error: /its URL is a folder on this computer/ })
+      expect(refsOf(planted)).toBe('')
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    'refuses a repository that pushes its submodules or names a ref command',
+    async () => {
+      for (const [key, value] of [
+        ['push.recurseSubmodules', 'on-demand'],
+        ['submodule.recurse', 'true'],
+        ['core.alternateRefsCommand', 'touch pwned'],
+        ['remote.origin.vcs', 'ext']
+      ]) {
+        const r = repo()
+        git(r, 'remote', 'add', 'origin', 'https://example.invalid/r.git')
+        git(r, 'config', key, value)
+        expect(await pushBranch(r, deps([r])), key).toMatchObject({ ok: false, error: expect.stringContaining(key.toLowerCase()) })
+      }
+    },
+    TIMEOUT
+  )
+
+  posix(
+    "pushes only this repository, overriding the user's own submodule push settings",
+    async () => {
+      const remote = tmp('ga-remote-')
+      execFileSync('git', ['init', '-q', '--bare', remote])
+      const r = repo()
+      git(r, 'remote', 'add', 'origin', sshUrl(remote))
+      // A user-level push.recurseSubmodules=check would fail this push (the gitlink
+      // below has never been pushed anywhere); the Changes panel's override skips it.
+      const sub = repo()
+      git(r, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 'sub')
+      git(r, 'commit', '-qm', 'Add sub')
+      // A submodule commit that exists only in this checkout, on no remote.
+      writeFileSync(join(r, 'sub', 'a.txt'), 'unpushed\n')
+      git(join(r, 'sub'), '-c', 'user.email=t@t.t', '-c', 'user.name=Test', 'commit', '-qam', 'Unpushed')
+      git(r, 'commit', '-qam', 'Bump sub')
+      // Without the override, git itself refuses this push.
+      expect(() =>
+        execFileSync('git', ['-C', r, '-c', 'push.recurseSubmodules=check', 'push', '-q', remote, 'HEAD:refs/heads/probe'], {
+          stdio: 'ignore'
+        })
+      ).toThrow()
+      const res = await withGlobalConfig('[push]\n\trecurseSubmodules = check\n', () =>
+        withFakeSsh(() => pushBranch(r, deps([r])))
+      )
+      expect(res).toEqual({ ok: true, detail: 'origin/main' })
+      expect(execFileSync('git', ['-C', remote, 'log', '-1', '--format=%s', 'main'], { encoding: 'utf8' }).trim()).toBe('Bump sub')
+    },
+    TIMEOUT
+  )
+
+  posix(
     'pushes a branch that tracks a differently named one to its own name',
     async () => {
       for (const pushDefault of ['simple', 'upstream']) {
         const remote = tmp('ga-remote-')
         execFileSync('git', ['init', '-q', '--bare', remote])
         const r = repo()
+        // Set up over the local path, then point the remote at the (fake) ssh URL.
         git(r, 'remote', 'add', 'origin', remote)
         git(r, 'push', '-q', 'origin', 'main')
         git(r, 'fetch', '-q', 'origin')
+        git(r, 'remote', 'set-url', 'origin', sshUrl(remote))
         git(r, 'config', 'push.default', pushDefault)
         git(r, 'switch', '-q', '-c', 'feat', 'origin/main')
         writeFileSync(join(r, 'a.txt'), 'feat\n')
         git(r, 'commit', '-qam', 'Feat')
-        expect(await pushBranch(r, deps([r]))).toEqual({ ok: true, detail: 'origin/feat' })
+        expect(await withFakeSsh(() => pushBranch(r, deps([r])))).toEqual({ ok: true, detail: 'origin/feat' })
         const rgit = (...a: string[]): string => execFileSync('git', ['-C', remote, ...a], { encoding: 'utf8' }).trim()
         expect(rgit('log', '-1', '--format=%s', 'feat')).toBe('Feat')
         expect(rgit('log', '-1', '--format=%s', 'main')).toBe('init')

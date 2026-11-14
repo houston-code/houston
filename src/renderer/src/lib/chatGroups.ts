@@ -20,8 +20,17 @@ export interface SidebarSection {
   id: string
   name: string
   collapsed: boolean
-  /** The section's top-level chats, in order. Spawned chats nested under a parent are not here. */
+  /**
+   * The section's top-level chats, in order, after its label filter. Spawned chats
+   * nested under a parent are not here.
+   */
   conversations: ConversationMeta[]
+  /** How many top-level chats the section holds before its label filter. */
+  total: number
+  /** The label ids the section is filtered to (empty = unfiltered). */
+  labelFilter: string[]
+  /** Every label id carried by a chat in the section (nested chats too), before the filter. */
+  labelIds: string[]
   /**
    * Spawned chats nested under their parent, by parent id, in order. A child can
    * itself be a parent (a spawned session that spawned another).
@@ -107,6 +116,21 @@ const bySectionOrder =
   return ao - bo
 }
 
+/**
+ * The top-level chats that pass a label filter: each one carrying any of `filter`'s
+ * labels, or with a nested chat (at any depth) that does. An empty filter passes all.
+ */
+export function filterByLabels(
+  chats: ConversationMeta[],
+  filter: readonly string[],
+  children: Record<string, ConversationMeta[]>
+): ConversationMeta[] {
+  if (filter.length === 0) return chats
+  const want = new Set(filter)
+  const carries = (c: ConversationMeta): boolean => (c.labels ?? []).some((l) => want.has(l))
+  return chats.filter((c) => carries(c) || descendantsOf(c.id, children).some(carries))
+}
+
 export function buildSidebarSections(
   conversations: ConversationMeta[],
   groups: ChatGroup[],
@@ -118,7 +142,13 @@ export function buildSidebarSections(
    */
   wantsAttention?: (id: string) => boolean,
   /** Split the ungrouped chats by project folder or date, as of `now` (ms). */
-  autoGroup?: { by: SidebarGroupBy; now: number }
+  autoGroup?: { by: SidebarGroupBy; now: number },
+  /**
+   * Label filters by section id: a filtered section keeps the top-level chats that
+   * carry any of its labels, or that have a nested chat carrying one (the whole tree
+   * shows, so a match is never cut off from the chat that spawned it).
+   */
+  labelFilters: Record<string, string[]> = {}
 ): SidebarSection[] {
   const groupById = new Map(groups.map((g) => [g.id, g]))
   const pinned: ConversationMeta[] = []
@@ -169,50 +199,57 @@ export function buildSidebarSections(
   }
 
   const sections: SidebarSection[] = []
+  // One section from its (unfiltered) chats: sorted, then cut down to its label filter.
+  const section = (
+    kind: SectionKind,
+    id: string,
+    name: string,
+    collapsed: boolean,
+    list: ConversationMeta[]
+  ): SidebarSection => {
+    const filter = labelFilters[id] ?? []
+    const sorted = list.sort(order)
+    const labelIds = [
+      ...new Set(sorted.flatMap((c) => [c, ...descendantsOf(c.id, children)]).flatMap((c) => c.labels ?? []))
+    ]
+    return {
+      kind,
+      id,
+      name,
+      collapsed,
+      conversations: filterByLabels(sorted, filter, children),
+      total: sorted.length,
+      labelFilter: filter,
+      labelIds,
+      children
+    }
+  }
 
   if (pinned.length > 0) {
-    sections.push({
-      kind: 'pinned',
-      id: 'pinned',
-      name: 'Pinned',
-      collapsed: collapsedSections.pinned ?? false,
-      conversations: pinned.sort(order),
-      children
-    })
+    sections.push(section('pinned', 'pinned', 'Pinned', collapsedSections.pinned ?? false, pinned))
   }
 
   // Groups always show (even when empty) so chats can be dropped into them.
   for (const g of groups) {
-    sections.push({
-      kind: 'group',
-      id: g.id,
-      name: g.name,
-      collapsed: g.collapsed ?? false,
-      conversations: (byGroup.get(g.id) ?? []).sort(order),
-      children
-    })
+    sections.push(section('group', g.id, g.name, g.collapsed ?? false, byGroup.get(g.id) ?? []))
   }
 
   if (ungrouped.length > 0 && autoGroup) {
     for (const auto of autoSections(ungrouped, autoGroup.by, autoGroup.now, recency)) {
-      sections.push({
-        kind: 'auto',
-        id: auto.id,
-        name: auto.name,
-        collapsed: collapsedSections[auto.id] ?? false,
-        conversations: auto.conversations.sort(order),
-        children
-      })
+      sections.push(
+        section('auto', auto.id, auto.name, collapsedSections[auto.id] ?? false, auto.conversations)
+      )
     }
   } else if (ungrouped.length > 0) {
-    sections.push({
-      kind: 'ungrouped',
-      id: 'ungrouped',
-      name: groups.length > 0 || pinned.length > 0 ? 'Ungrouped' : 'Chats',
-      collapsed: collapsedSections.ungrouped ?? false,
-      conversations: ungrouped.sort(order),
-      children
-    })
+    sections.push(
+      section(
+        'ungrouped',
+        'ungrouped',
+        groups.length > 0 || pinned.length > 0 ? 'Ungrouped' : 'Chats',
+        collapsedSections.ungrouped ?? false,
+        ungrouped
+      )
+    )
   }
 
   return sections

@@ -32,7 +32,7 @@ import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type Sign
 import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
-import type { AgentEvent } from '@shared/agent'
+import type { AgentEvent, ConversationMeta } from '@shared/agent'
 import { setSpawnBackend } from './agent/spawn'
 import { setSchedulerBackend } from './agent/scheduler'
 import { createSpawnBackend } from './spawnSession'
@@ -100,7 +100,7 @@ import {
   type HeadlessOptions,
   type HeadlessSignal
 } from './headless'
-import { serveAcp } from './acp'
+import { serveAcp, type AcpLaunchOptions } from './acp'
 import { createTerminalIo, resolveColor } from './tui-io'
 import {
   makeCompleter,
@@ -134,14 +134,24 @@ import {
 } from './conversations'
 
 /** Resume-picker rows, each marked with the desktop app's unread state for it. */
-function withUnread(convs: { id: string; title: string; updatedAt: number }[]): ResumeEntry[] {
+function withUnread(convs: { id: string; title: string; updatedAt: number; workspace?: string }[]): ResumeEntry[] {
   const unread = new ReadStateStore(join(getUserDataDir(), 'read-state.json')).snapshot()
   return convs.map((c) => ({
     id: c.id,
     title: c.title,
     updatedAt: c.updatedAt,
+    ...(c.workspace ? { workspace: c.workspace } : {}),
     ...(unread[c.id] ? { unread: unread[c.id].outcome } : {})
   }))
+}
+
+/** How many chats the resume picker lists: per folder, and across every folder. */
+const RESUME_LIMIT = 20
+const RESUME_ALL_LIMIT = 50
+
+/** Newest first, `limit` at most, with the desktop's unread state. */
+function resumeEntries(convs: ConversationMeta[], limit: number): ResumeEntry[] {
+  return withUnread([...convs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit))
 }
 
 /**
@@ -412,7 +422,7 @@ export function wireTerminalSessionBackends(opts: {
     })
   })
 
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome) })
+  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask') })
   setSchedulerBackend(scheduler)
   if (opts.startScheduler) scheduler.start()
 
@@ -728,7 +738,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           setWakeHost({ enabled: () => getSettings().backgroundWake !== false, start: tryWake }),
         take: (id) => {
           clearChildReportFlag(id)
-          return wakeNote(takeBackgroundEvents(id), takeChildReports(id))?.content ?? null
+          const note = wakeNote(takeBackgroundEvents(id), takeChildReports(id))
+          return note ? { content: note.content, ...(note.taintSource ? { taintSource: note.taintSource } : {}) } : null
         }
       },
       checkUpdate: async () => {
@@ -822,19 +833,18 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         // marked with the desktop app's unread state (read fresh each time, and only
         // read: the app owns that file and would overwrite a write from here).
         list: (workspace) =>
-          withUnread(
-            listConversations()
-              .filter((c) => c.workspace === workspace)
-              .sort((a, b) => b.updatedAt - a.updatedAt)
-              .slice(0, 20)
+          resumeEntries(
+            listConversations().filter((c) => c.workspace === workspace),
+            RESUME_LIMIT
           ),
         search: (workspace, query) =>
-          withUnread(
-            searchConversations(query)
-              .filter((c) => c.workspace === workspace)
-              .sort((a, b) => b.updatedAt - a.updatedAt)
-              .slice(0, 20)
+          resumeEntries(
+            searchConversations(query).filter((c) => c.workspace === workspace),
+            RESUME_LIMIT
           ),
+        // The picker's Ctrl-A scope: every folder's chats, each with its folder.
+        listAll: () => resumeEntries(listConversations(), RESUME_ALL_LIMIT),
+        searchAll: (query) => resumeEntries(searchConversations(query), RESUME_ALL_LIMIT),
         fork: (id) => {
           const forked = forkConversation(id)
           return forked ? { id: forked.id } : null
@@ -1031,7 +1041,7 @@ export function reserveStdoutForProtocol(): (frame: string) => void {
  * Run Houston as an Agent Client Protocol server on stdio (`--acp`) until the
  * editor closes the connection. Returns the exit code.
  */
-export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
+export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOptions = {}): Promise<number> {
   const writeFrame = reserveStdoutForProtocol()
   // The editor went away mid-write: there is no one left to serve, so live prompts
   // are cancelled rather than left editing files for a reader that is gone.
@@ -1067,6 +1077,7 @@ export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
           process.stderr.write(`${m}\n`)
         },
         version: host.version ?? 'dev',
+        ...launch,
         store: {
           create: ({ workspace, providerId, model }) => createConversation({ workspace, providerId, model }),
           get: (id) => {

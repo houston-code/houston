@@ -29,8 +29,10 @@ import {
   acpAvailableCommands,
   acpCommands,
   acpMcpServersToConfigs,
+  acpPromptUsage,
   acpToolKind,
   elicitationSchema,
+  parseAcpArgs,
   previewToDiffContent,
   promptFromBlocks,
   replayUpdates,
@@ -343,7 +345,11 @@ describe('ACP server: protocol flow', () => {
     )
 
     const res = await h.call('session/prompt', { sessionId, prompt: text('fix a.txt') })
-    expect(res.result).toEqual({ stopReason: 'end_turn' })
+    // The turn's token totals ride the response, for clients that score or bill runs.
+    expect(res.result).toEqual({
+      stopReason: 'end_turn',
+      usage: { totalTokens: 1050, inputTokens: 1000, outputTokens: 50 }
+    })
 
     // The run got the editor's folder and the user's words.
     const req = h.loop.requests[0]
@@ -1180,6 +1186,88 @@ describe('ACP server: session lifecycle, extra folders, system prompt, cancellat
       ['failed', 'busy']
     ])
     await h.end()
+  })
+})
+
+describe('ACP server: launch flags and turn usage', () => {
+  it('reads --approval, --full-auto, --effort and --max-turns, in both value forms', () => {
+    expect(parseAcpArgs(['--acp'])).toEqual({})
+    expect(parseAcpArgs(['--acp', '--full-auto', '--effort', 'high', '--max-turns=500'])).toEqual({
+      defaultPolicy: 'full-auto',
+      defaultEffort: 'high',
+      maxIterations: 500
+    })
+    expect(parseAcpArgs(['--approval=auto-edit', '--acp'])).toEqual({ defaultPolicy: 'auto-edit' })
+    // The last word wins, as in the other clients.
+    expect(parseAcpArgs(['--full-auto', '--approval', 'plan'])).toEqual({ defaultPolicy: 'plan' })
+    // Flags meant for other modes are left alone.
+    expect(parseAcpArgs(['--acp', '--json', '--model', 'x'])).toEqual({})
+  })
+
+  it('rejects a value a flag cannot take, naming it', () => {
+    expect(parseAcpArgs(['--approval', 'yolo'])).toEqual({ error: expect.stringContaining('--approval must be one of') })
+    expect(parseAcpArgs(['--effort'])).toEqual({ error: expect.stringContaining('(got nothing)') })
+    for (const bad of ['0', '-3', '2.5', 'many', '']) {
+      expect(parseAcpArgs([`--max-turns=${bad}`])).toEqual({ error: expect.stringContaining('--max-turns must be') })
+    }
+  })
+
+  it('starts new sessions in the launch mode and effort, and caps every turn', async () => {
+    const h = harness({
+      deps: { defaultPolicy: 'full-auto', defaultEffort: 'high', maxIterations: 900 },
+      run: async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    const created = await h.call('session/new', { cwd: h.cwd, mcpServers: [] })
+    expect(created.result.modes.currentModeId).toBe('full-auto')
+    expect(created.result.configOptions.find((o: any) => o.id === 'reasoning_effort').currentValue).toBe('high')
+    await h.call('session/prompt', { sessionId: created.result.sessionId, prompt: text('go') })
+    const req = h.loop.requests[0]
+    expect(req.approvalPolicy).toBe('full-auto')
+    expect(req.reasoningEffort).toBe('high')
+    expect(req.overrides).toEqual({ maxIterations: 900 })
+    await h.end()
+  })
+
+  it('leaves the step cap to settings without --max-turns', async () => {
+    const h = harness({ run: async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' }) })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('go') })
+    expect(h.loop.requests[0].overrides).toBeUndefined()
+    await h.end()
+  })
+
+  it('sums every model round into the reply, cached input included, on every stop reason', async () => {
+    const h = harness({
+      run: async (req, send) => {
+        const r = req.runId
+        send({ runId: r, type: 'usage', inputTokens: 1000, outputTokens: 40, cost: 0.01, cacheReadTokens: 800, cacheWriteTokens: 100 })
+        // A subagent's rounds arrive rolled up, their input apart from inputTokens: counted.
+        send({ runId: r, type: 'usage', inputTokens: 0, delegatedInputTokens: 700, outputTokens: 30, cost: 0.02, cacheReadTokens: 500 })
+        send({ runId: r, type: 'usage', inputTokens: 1500, outputTokens: 60, cost: 0.01, cacheReadTokens: 1200 })
+        send({ runId: r, type: 'limit', reason: 'max-steps' })
+        send({ runId: r, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    const sessionId = await ready(h)
+    const res = await h.call('session/prompt', { sessionId, prompt: text('go') })
+    expect(res.result).toEqual({
+      stopReason: 'max_turn_requests',
+      usage: { totalTokens: 3330, inputTokens: 3200, outputTokens: 130, cachedReadTokens: 2500, cachedWriteTokens: 100 }
+    })
+    // A second turn starts from zero rather than adding to the first.
+    const again = await h.call('session/prompt', { sessionId, prompt: text('again') })
+    expect(again.result.usage).toEqual(res.result.usage)
+    await h.end()
+  })
+
+  it('omits usage when the turn billed no tokens', () => {
+    expect(acpPromptUsage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })).toBeUndefined()
+    expect(acpPromptUsage({ input: 0, output: 5, cacheRead: 0, cacheWrite: 0 })).toEqual({
+      totalTokens: 5,
+      inputTokens: 0,
+      outputTokens: 5
+    })
   })
 })
 
