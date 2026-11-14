@@ -914,6 +914,9 @@ launch. In this mode:
   options as `1.`, `2.` and so on: type the number and press Enter. Typing anything
   else answers in your own words (`n` and a reason at an approval, a custom answer to a
   question), and Enter on its own takes the safe choice (deny, at an approval).
+- **`/resume` lists this folder's sessions by number**: type one to open it. Search
+  with `/resume` and some words. Its live filter, preview, renaming, deleting and
+  the all-folders view need the arrow-key picker, so they are off in this mode.
 - **The composer only appends.** Typed text is echoed once and Backspace erases one
   character. Pasting several lines still lands as one message. Up and Down, `Shift-Tab`
   and `Ctrl-U` print the prompt again on a new line with the text as it now stands.

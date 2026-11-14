@@ -96,6 +96,7 @@ import {
   renderSessionRow,
   sessionFolder,
   sessionPickerHint,
+  screenReaderResumeNote,
   subagentGlyph,
   shortCwd,
   homeRelative,
@@ -7978,6 +7979,41 @@ describe('/resume arrow-key picker', () => {
     expect(first).toContain('ctrl-r rename · ctrl-d or x delete\nctrl-a all folders · esc cancel')
     expect(t.text()).toContain('resumed: 1 message')
     expect(rec.runs[0].messages[0]).toEqual({ role: 'user', content: 'make the button blue' })
+  })
+
+  it('in screen-reader mode opens a session from the numbered list and says what it leaves out', async () => {
+    const { d, rec } = deps(finished, {}, (req) => req.messages)
+    const st = pickerStore(seed())
+    d.persist = st.persist
+    d.now = () => 60_000
+    const t = fakeIo(['/resume', '2', 'go on', null])
+    let selects = 0
+    t.io.select = async () => {
+      selects++
+      return { kind: 'cancel' }
+    }
+    d.io = t.io
+    await runTui({ ...opts, screenReader: true }, d)
+    // The arrow-key picker (filter, preview, actions) is never opened; the plain
+    // numbered list is, with no doubled numbers and no escapes.
+    expect(selects).toBe(0)
+    const out = t.text()
+    expect(out).toContain('1. Auth refactor')
+    expect(out).toContain('2. CSS tweaks')
+    expect(out).not.toContain('1. 1.')
+    expect(out).not.toContain('\x1b')
+    expect(out).toContain(
+      'To search, type /resume followed by words. The arrow-key picker also offers renaming, deleting and sessions in other folders; turn off /screen-reader to use it.'
+    )
+    expect(rec.runs[0].messages[0]).toEqual({ role: 'user', content: 'make the button blue' })
+    expect(st.renamed).toEqual([])
+    expect(st.removed).toEqual([])
+  })
+
+  it('the screen-reader /resume note names only what this store can do', () => {
+    expect(screenReaderResumeNote({}, false)).toBe('To search, type /resume followed by words.')
+    expect(screenReaderResumeNote({ remove: () => {} }, false)).toContain('also offers deleting;')
+    expect(screenReaderResumeNote({ rename: () => {} }, true)).toContain('also offers renaming and sessions in other folders;')
   })
 
   it('typing filters live by content, and Esc clears the filter before it cancels', async () => {

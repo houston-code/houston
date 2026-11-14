@@ -1411,6 +1411,23 @@ export function renderConversationList(convs: ResumeEntry[], now: number, paint:
   return lines.join('\n')
 }
 
+/**
+ * What `/resume` can and can't do in screen-reader mode, said once under the list:
+ * it opens a session by number and searches by `/resume <words>`, while the arrow-key
+ * picker's in-place rename, delete and all-folders view are left out. Pure.
+ */
+export function screenReaderResumeNote(persist: Pick<TuiPersist, 'rename' | 'remove'>, canScope: boolean): string {
+  const missing = [
+    persist.rename ? 'renaming' : '',
+    persist.remove ? 'deleting' : '',
+    canScope ? 'sessions in other folders' : ''
+  ].filter(Boolean)
+  const search = 'To search, type /resume followed by words.'
+  if (!missing.length) return search
+  const list = missing.length === 1 ? missing[0] : `${missing.slice(0, -1).join(', ')} and ${missing.at(-1)}`
+  return `${search} The arrow-key picker also offers ${list}; turn off /screen-reader to use it.`
+}
+
 /** Map a resume selection (1-based index) to a conversation id, or null to cancel. */
 export function parseResumeSelection(answer: string, convs: ResumeEntry[]): string | null {
   const n = Number(answer.trim())
@@ -4586,14 +4603,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         // The arrow-key picker when the terminal has one: live filter, preview, and
         // rename/delete in place. `undefined` means it isn't available here, so fall
-        // back to the numbered list and a typed answer.
+        // back to the numbered list and a typed answer. Screen-reader mode always takes
+        // the numbered list: the picker's live filter, preview and in-place actions
+        // all redraw, and its rows carry their own numbers, so the numbered rendering
+        // of it would read "1. 1. title".
         let id: string | null | undefined
         const canScope = Boolean(deps.persist.listAll && deps.persist.searchAll)
-        if (deps.io.select && (convs.length || canScope)) {
+        if (deps.io.select && !screenReader && (convs.length || canScope)) {
           id = await pickSession(deps.persist, deps.io.select, query, convs)
         }
         if (id === undefined) {
           deps.io.out(`${renderConversationList(convs, nowFn(), paint)}\n`)
+          if (screenReader) deps.io.out(`${screenReaderResumeNote(deps.persist, canScope)}\n`)
           if (!convs.length) continue
           // discardPending like the other prompts, so type-ahead can't auto-select.
           const ans = await deps.io.readLine('> ', { discardPending: true })
