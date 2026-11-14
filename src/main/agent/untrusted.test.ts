@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Provider } from '@shared/agent'
 import {
   buildQuarantineMessages,
@@ -341,6 +341,21 @@ describe('runQuarantineExtraction', () => {
     await expect(
       runQuarantineExtraction({ provider, model: 'm', content: 'x', source: 's' })
     ).rejects.toThrow(/model offline/)
+  })
+
+  it("reports the reader's usage so the caller can bill it, and nothing when none is reported", async () => {
+    const provider = {
+      streamChat: async function* () {
+        yield { type: 'text', text: 'It says hi.' }
+        yield { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 900, outputTokens: 40 } }
+      }
+    } as unknown as Provider
+    const onUsage = vi.fn()
+    await runQuarantineExtraction({ provider, model: 'm', content: 'x', source: 's', onUsage })
+    expect(onUsage).toHaveBeenCalledWith({ inputTokens: 900, outputTokens: 40 })
+    const silent = vi.fn()
+    await runQuarantineExtraction({ provider: fakeProvider(['ok']), model: 'm', content: 'x', source: 's', onUsage: silent })
+    expect(silent).not.toHaveBeenCalled()
   })
 })
 

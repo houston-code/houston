@@ -16,6 +16,7 @@ import type {
   PlanPayload,
   Provider,
   ProviderStreamEvent,
+  ProviderWebSearchRequest,
   ReasoningEffort,
   RunSettingsOverrides,
   ToolApprovalDecision
@@ -47,6 +48,8 @@ import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { SILENT_CHECK_IN, SILENT_ITERATION_LIMIT } from './stall'
 import { MAX_PROVIDER_RETRIES } from './retry'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
+import { turnCostUsd } from '@shared/usage'
+import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
 import { idleTimeoutFetch } from '../providers/idle-fetch'
@@ -10608,6 +10611,159 @@ describe('nativeWebSearchFor', () => {
     const r = await entry.nativeWebSearch!.search('q', 3)
     expect(r.hits[0].url).toBe('https://example.test')
     expect(webSearch).toHaveBeenCalledWith({ model: 'claude-x', query: 'q', maxResults: 3, signal })
+  })
+
+  it('reports the search request\'s usage with the model that ran it, and nothing when there is none', async () => {
+    const usage = { inputTokens: 100, outputTokens: 10, searches: 1 }
+    const billed = [true, false]
+    const webSearch = vi.fn(async (req: ProviderWebSearchRequest) => {
+      if (billed.shift()) req.onUsage?.(usage)
+      return { hits: [] }
+    })
+    const onUsage = vi.fn()
+    const entry = nativeWebSearchFor(
+      { provider: { ...scripted([]), webSearch }, providerId: 'anthropic', model: 'claude-x' },
+      new AbortController().signal,
+      onUsage
+    )
+    await entry.nativeWebSearch!.search('q', 3)
+    await entry.nativeWebSearch!.search('q', 3)
+    expect(onUsage).toHaveBeenCalledTimes(1)
+    expect(onUsage).toHaveBeenCalledWith(usage, 'claude-x')
+  })
+})
+
+describe('provider-run web search cost', () => {
+  /** web_search once, then a text reply; each main round reports a token of usage. */
+  const searchThenAnswer = (webSearch: Provider['webSearch']): Provider => {
+    let n = 0
+    return {
+      webSearch,
+      async *streamChat() {
+        if (n++ === 0) {
+          yield { type: 'tool_call', call: { id: 's1', name: 'web_search', arguments: { query: 'widgets' } } }
+          yield { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 1, outputTokens: 1 } }
+        } else {
+          yield { type: 'text', text: 'done' }
+          yield { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 1 } }
+        }
+      }
+    }
+  }
+  const usages = (r: RunResult): Extract<AgentEvent, { type: 'usage' }>[] =>
+    r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]
+  const withSearchSettings = async <T,>(extra: Record<string, unknown>, fn: () => Promise<T>): Promise<T> => {
+    const keys = ['webReads', ...Object.keys(extra)]
+    Object.assign(h.settings, { webReads: 'allow', ...extra })
+    try {
+      return await fn()
+    } finally {
+      for (const k of keys) delete h.settings[k]
+    }
+  }
+
+  it("bills the search's tokens to the run, priced on the run's model", async () => {
+    const webSearch = vi.fn(async (req: ProviderWebSearchRequest) => {
+      req.onUsage?.({ inputTokens: 20000, outputTokens: 400, cacheReadTokens: 2000, searches: 1 })
+      return { hits: [{ url: 'https://example.test/a', title: 'A' }] }
+    })
+    const r = await withSearchSettings({}, () =>
+      run({ provider: searchThenAnswer(webSearch), policy: 'full-auto', model: 'claude-opus-4-8' })
+    )
+    expect(webSearch).toHaveBeenCalledTimes(1)
+    const search = usages(r).find((u) => u.outputTokens === 400)
+    expect(search).toBeDefined()
+    // The search's own context never reaches the context-size meter.
+    expect(search!.inputTokens).toBe(0)
+    expect(search!.cacheReadTokens).toBe(2000)
+    expect(search!.model).toBe('claude-opus-4-8')
+    expect(search!.cost).toBeCloseTo(
+      turnCostUsd('claude-opus-4-8', 20000, 400, { readTokens: 2000 }),
+      10
+    )
+    expect(search!.cost).toBeGreaterThan(0)
+  })
+
+  it('counts the search toward the cost ceiling', async () => {
+    const landing = (r: RunResult): ChatMessage[] =>
+      r.messages.filter((m) => m.role === 'user' && /wrap up/i.test(m.content))
+    const pricey = vi.fn(async (req: ProviderWebSearchRequest) => {
+      req.onUsage?.({ inputTokens: 2_000_000, outputTokens: 0 })
+      return { hits: [] }
+    })
+    const cheap = vi.fn(async () => ({ hits: [] }))
+    const settings = { costCeilingUsd: 1, maxIterations: 50, stallDetection: false }
+    const over = await withSearchSettings(settings, () =>
+      run({ provider: searchThenAnswer(pricey), policy: 'full-auto', model: 'claude-opus-4-8' })
+    )
+    expect(landing(over)).toHaveLength(1)
+    // A search with no usage reported records nothing, and doesn't fail the call.
+    const none = await withSearchSettings(settings, () =>
+      run({ provider: searchThenAnswer(cheap), policy: 'full-auto', model: 'claude-opus-4-8' })
+    )
+    expect(landing(none)).toHaveLength(0)
+    expect(usages(none)).toHaveLength(2)
+    const result = none.events.find((e) => e.type === 'tool_result' && e.name === 'web_search') as { ok: boolean }
+    expect(result.ok).toBe(true)
+  })
+
+  it('bills a search that failed inside a billed reply', async () => {
+    const failing = vi.fn(async (req: ProviderWebSearchRequest) => {
+      req.onUsage?.({ inputTokens: 5000, outputTokens: 50 })
+      throw new Error('Web search failed: too_many_requests')
+    })
+    const r = await withSearchSettings({}, () =>
+      run({ provider: searchThenAnswer(failing), policy: 'full-auto', model: 'claude-opus-4-8' })
+    )
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'web_search') as { ok: boolean }
+    expect(result.ok).toBe(false)
+    const search = usages(r).find((u) => u.outputTokens === 50)
+    expect(search?.cost).toBeCloseTo(turnCostUsd('claude-opus-4-8', 5000, 50), 10)
+  })
+})
+
+describe('isolated-reader (quarantine) cost', () => {
+  it("bills the reader's request to the run, priced on the run's model", async () => {
+    // A read tool whose result goes through the isolated reader, as a flagged page does.
+    h.probeTools = [
+      {
+        kind: 'read',
+        summarize: () => 'probe read_file',
+        schema: {
+          name: 'read_file',
+          description: 'Read a file.',
+          parameters: { type: 'object', properties: { path: { type: 'string' } }, additionalProperties: false }
+        },
+        execute: async (_args, ctx) => ctx.quarantineExtract!({ content: 'page', source: 'https://x.test/' })
+      }
+    ]
+    let main = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        if (req.system === QUARANTINE_SYSTEM_PROMPT) {
+          yield { type: 'text', text: 'The page says hello.' }
+          yield { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 3000, outputTokens: 70, cacheReadTokens: 100 } }
+          return
+        }
+        if (main++ === 0) {
+          yield { type: 'tool_call', call: { id: 'q1', name: 'read_file', arguments: { path: 'a' } } }
+          yield { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 1, outputTokens: 1 } }
+        } else {
+          yield { type: 'text', text: 'done' }
+          yield { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 1 } }
+        }
+      }
+    }
+    const r = await run({ provider, policy: 'full-auto', model: 'claude-opus-4-8' })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'read_file') as { output: string }
+    expect(result.output).toContain('The page says hello.')
+    const reader = (r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]).find(
+      (u) => u.outputTokens === 70
+    )
+    expect(reader).toBeDefined()
+    expect(reader!.inputTokens).toBe(0)
+    expect(reader!.model).toBe('claude-opus-4-8')
+    expect(reader!.cost).toBeCloseTo(turnCostUsd('claude-opus-4-8', 3000, 70, { readTokens: 100 }), 10)
   })
 })
 
