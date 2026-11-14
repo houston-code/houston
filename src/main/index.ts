@@ -8,11 +8,11 @@ import { isAllowedNavigation } from './navigation'
 import { cascadeBounds, loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
 import { mainWindowWebPreferences } from './main-window-prefs'
 import { registerIpc } from './ipc'
-import { buildAppMenu } from './menu'
+import { buildAppMenu, refreshMenuForFocus } from './menu'
 import { killAllShells } from './agent/shells'
 import { lspManager } from './agent/lsp/manager'
 import { startShellLedger } from './agent/shellLedger'
-import { destroyAllPreviewPanes, destroyPreviewPanesOf } from './preview'
+import { destroyAllPreviewPanes, destroyPreviewPanesOf, watchPreviewHost } from './preview'
 import { killAllTerminals } from './terminal'
 import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
@@ -32,6 +32,7 @@ import { chatWindows, isPrimaryWindow, registerAppWindow, setWindowOpener, targe
 import { wireImageDownscale } from './imageDownscale'
 import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation } from './quit-confirm'
 import { parseHeadlessArgs } from './headless'
+import { drainStdio } from './stdioDrain'
 import { parseTuiArgs } from './tui'
 import { runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from './terminalEntry'
 import { activeBackendId, isSandboxed } from './sandbox'
@@ -126,6 +127,8 @@ function createWindow(): BrowserWindow {
     webPreferences: mainWindowWebPreferences(join(__dirname, '../preload/index.js'))
   })
   registerAppWindow(win)
+  // The menu reflects the focused window's state (its open panels, whether it has a chat).
+  win.on('focus', refreshMenuForFocus)
 
   win.on('ready-to-show', () => win.show())
 
@@ -138,6 +141,8 @@ function createWindow(): BrowserWindow {
     // Linux from quitting now that the app's last window is gone.
     if (chatWindows().length === 0) destroyHelperWindows()
   })
+  // ...and when the page reloads or crashes, which leaves the window but drops the dock.
+  watchPreviewHost(win)
 
   // On Windows/Linux, closing the last window quits the app (window-all-closed →
   // app.quit()), so the live-run confirmation has to happen here, while the window
@@ -318,7 +323,10 @@ app.on('window-all-closed', () => {
 // window is still alive) silently aborts them and drops queued input — confirm first. The
 // window-close path on Windows/Linux is covered by the close guard in
 // createWindow. (Headless uses `app.exit`, which skips before-quit.)
-app.on('before-quit', (e) => guardQuitWithLiveWork(e, targetWindow()))
+// Only the desktop app asks: a terminal client (-i, -p, --acp) has no window to ask in,
+// and a SIGHUP/SIGTERM from a closed terminal or an editor must quit it, not raise a
+// native dialog that leaves it running with no terminal.
+if (!acp && !tui && !headless) app.on('before-quit', (e) => guardQuitWithLiveWork(e, targetWindow()))
 
 /**
  * `app.exit` skips will-quit, so the terminal clients wait for queued credential writes
@@ -326,13 +334,16 @@ app.on('before-quit', (e) => guardQuitWithLiveWork(e, targetWindow()))
  */
 async function flushBeforeExit(code: number): Promise<number> {
   flushRuleUsage()
+  let exitCode = code
   try {
     await flushSecrets()
-    return code
   } catch {
     // flushSecrets already logged it.
-    return code === 0 ? 1 : code
+    exitCode = code === 0 ? 1 : code
   }
+  // app.exit drops output still queued for a pipe (asynchronous on macOS).
+  await drainStdio()
+  return exitCode
 }
 
 // Don't leave the agent's background shells or terminals running after the app exits.

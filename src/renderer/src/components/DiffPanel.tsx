@@ -597,6 +597,16 @@ export function DiffPanel({
           <p className="changes-panel__empty">Loading…</p>
         ) : !workspace ? (
           <p className="changes-panel__empty">Open a chat in a project to see its changes.</p>
+        ) : tree && !tree.isRepo && tree.unreadable ? (
+          <div className="changes-panel__empty changes-panel__init">
+            <p>
+              This workspace is in a git repository that git can’t open, so its changes
+              can’t be shown here. Fix the repository in a terminal, then refresh.
+            </p>
+            <p className="changes-panel__git-error">
+              git says: <code>{tree.unreadable}</code>
+            </p>
+          </div>
         ) : tree && !tree.isRepo ? (
           <div className="changes-panel__empty changes-panel__init">
             <p>

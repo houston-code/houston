@@ -3,6 +3,7 @@ import type { ModelOption } from '@shared/types'
 import { FOUNDRY_MODELS } from '@shared/provider-catalog'
 import { createMessagesProvider, type MessagesClient } from './anthropic'
 import { idleTimeoutFetch } from './idle-fetch'
+import { SDK_MAX_RETRIES } from '../agent/retry'
 
 /**
  * Claude on Microsoft Foundry.
@@ -68,6 +69,7 @@ export function createFoundryProvider(opts: FoundryOptions = {}): Provider {
       (m) =>
         new m.AnthropicFoundry({
           fetch: idleTimeoutFetch(),
+          maxRetries: SDK_MAX_RETRIES,
           ...NO_ENV_RESOURCE,
           apiKey: opts.apiKey,
           baseURL: foundryBaseUrl(opts),

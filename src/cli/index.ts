@@ -1,5 +1,6 @@
 import type * as CliRun from './run'
 import { launchDetached, resolveDirectory, runOpenCommand } from './openInApp'
+import { drainStdio } from '../main/stdioDrain'
 
 /**
  * Standalone CLI entry — the interactive TUI (`-i`) and one-shot headless (`-p`)
@@ -105,6 +106,7 @@ One-shot exit codes:
   2  bad flag value or empty prompt  3  hit a budget (step cap or output limit)
   4  the answer did not match --output-schema
   5  the last --verify check still failed
+  129/130/143  stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM
 
 Providers:
   houston providers                    list configured providers and hosts to add
@@ -303,15 +305,14 @@ if (isDirectRun()) {
     process.exit(1)
   })
 
-  void main().then(
-    (code) => {
-      flushBeforeExit()
-      process.exit(code)
-    },
-    (e) => {
-      process.stderr.write(`Fatal: ${(e as Error).message}\n`)
-      flushBeforeExit()
-      process.exit(1)
-    }
-  )
+  // process.exit drops output still queued for a pipe (asynchronous on macOS), so
+  // the answer and the --json result line are flushed first.
+  const exit = (code: number): void => {
+    flushBeforeExit()
+    void drainStdio().finally(() => process.exit(code))
+  }
+  void main().then(exit, (e) => {
+    process.stderr.write(`Fatal: ${(e as Error).message}\n`)
+    exit(1)
+  })
 }

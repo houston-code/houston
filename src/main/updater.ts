@@ -60,6 +60,8 @@ export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 /** Staged once at launch; handed to the renderer (one-shot) via IPC.updateWhatsNew. */
 let pendingWhatsNew: WhatsNew | null = null
+/** Whether this run has already done its "What's new" bookkeeping (see stageWhatsNew). */
+let whatsNewStaged = false
 
 let configured = false
 
@@ -525,9 +527,14 @@ export async function checkForUpdatesFromMenu(): Promise<void> {
  * Detect an upgrade since the last run and stage the "What's new" popup. Always
  * records the running version so the popup shows at most once per upgrade. Runs
  * regardless of the packaged gate (it's just version bookkeeping, a no-op churn
- * in dev where the version never changes).
+ * in dev where the version never changes). Once per run: whichever of initUpdates
+ * and the renderer's first takePendingWhatsNew comes first does it, so a renderer
+ * that asks before startup reaches initUpdates still gets the popup, and the later
+ * call can't stage one again that nobody will ask for.
  */
 function stageWhatsNew(): void {
+  if (whatsNewStaged) return
+  whatsNewStaged = true
   const current = app.getVersion()
   const lastSeen = readLastSeenVersion()
   if (shouldShowWhatsNew(lastSeen, current)) {
@@ -545,6 +552,7 @@ function stageWhatsNew(): void {
 
 /** The staged "What's new" payload, consumed once (cleared on read). */
 export function takePendingWhatsNew(): WhatsNew | null {
+  stageWhatsNew()
   const v = pendingWhatsNew
   pendingWhatsNew = null
   return v

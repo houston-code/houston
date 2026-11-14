@@ -958,6 +958,29 @@ describe('fork from a message', () => {
     expect(onForkFrom).toHaveBeenCalledWith(1)
   })
 
+  it('does not number a whitespace-only bubble, matching how main counts saved replies', () => {
+    // A model that streams "\n" before a tool call leaves a blank live bubble; its
+    // saved message is not a reply (rendersAsReply), so the next reply is still reply 0.
+    const onForkFrom = vi.fn()
+    render(
+      <Transcript
+        items={[
+          userItem({ id: 'u1' }),
+          assistantItem({ id: 'a0', text: '\n' }),
+          toolItem({ id: 'call-1' }),
+          assistantItem({ id: 'a1', text: 'the real reply' })
+        ]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+        onForkFrom={onForkFrom}
+      />
+    )
+    const buttons = screen.getAllByRole('button', { name: 'Fork from here' })
+    fireEvent.click(buttons[buttons.length - 1])
+    expect(onForkFrom).toHaveBeenCalledWith(0)
+  })
+
   it('offers Fork from here in a user message menu, with that message as the target', () => {
     const handlers = { disabled: false, onRewind: vi.fn(), onEdit: vi.fn(), onFork: vi.fn() }
     render(

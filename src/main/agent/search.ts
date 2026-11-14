@@ -2,11 +2,11 @@ import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import { promises as fs, existsSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
-import { minimatch } from 'minimatch'
 import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
 import {
   FALLBACK_SKIP_DIRS,
   gitListFiles,
+  globTester,
   hasHiddenSegment,
   isRegularFile,
   planRuns,
@@ -135,8 +135,26 @@ export function runRipgrep(
     // otherwise turn into replacement characters in the matched line.
     const outDecoder = new StringDecoder('utf8')
     const errDecoder = new StringDecoder('utf8')
+    // Once `max` complete, non-empty lines are buffered the result is settled (only
+    // the first `max` are ever returned), so stop ripgrep instead of letting it walk
+    // the rest of the tree. `stopped` marks the kill as ours: whatever exit status it
+    // produces is never read as a search error.
+    let complete = 0
+    let lineStart = 0
+    let stopped = false
     child.stdout.on('data', (c: Buffer) => {
-      if (out.length < 5_000_000) out += outDecoder.write(c)
+      if (stopped || out.length >= 5_000_000) return
+      out += outDecoder.write(c)
+      if (max <= 0) return
+      for (let i = out.indexOf('\n', lineStart); i !== -1; i = out.indexOf('\n', lineStart)) {
+        if (i > lineStart) complete++
+        lineStart = i + 1
+        if (complete >= max) {
+          stopped = true
+          child.kill()
+          return
+        }
+      }
     })
     child.stderr.on('data', (c: Buffer) => {
       if (err.length < 64_000) err += errDecoder.write(c)
@@ -159,7 +177,7 @@ export function runRipgrep(
         .filter(Boolean)
         .map((l) => clip(l.replace(/^\.[\\/]/, '')))
         .slice(0, max)
-      if (matches.length === 0 && code === 2) {
+      if (matches.length === 0 && code === 2 && !stopped) {
         resolve({ matches: [], error: err.trim() || 'ripgrep error' })
         return
       }
@@ -176,14 +194,15 @@ async function scanFile(
   regex: RegExp,
   out: string[],
   max: number,
-  opts: MatchOptions
+  opts: MatchOptions,
+  inGlob: ((rel: string) => boolean) | null
 ): Promise<void> {
   // Normalize to forward slashes so a path-scoped glob matches on Windows too, where
   // relative() yields backslashes that minimatch would treat as escape characters.
   const rel = relative(workspace, full).split(sep).join('/')
   // matchBase mirrors ripgrep's gitignore-style globs: a slash-less pattern
   // like "*.ts" matches files at any depth, while "src/**/*.ts" matches by path.
-  if (opts.glob && !minimatch(rel, opts.glob, { matchBase: true })) return
+  if (inGlob && !inGlob(rel)) return
   let content: string
   try {
     content = await fs.readFile(full, 'utf8')
@@ -229,7 +248,8 @@ async function jsWalk(
   regex: RegExp,
   out: string[],
   max: number,
-  opts: MatchOptions
+  opts: MatchOptions,
+  inGlob: ((rel: string) => boolean) | null
 ): Promise<void> {
   if (out.length >= max) return
   let entries
@@ -244,9 +264,9 @@ async function jsWalk(
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       if (FALLBACK_SKIP_DIRS.has(entry.name)) continue
-      await jsWalk(full, workspace, regex, out, max, opts)
+      await jsWalk(full, workspace, regex, out, max, opts, inGlob)
     } else if (entry.isFile()) {
-      await scanFile(full, workspace, regex, out, max, opts)
+      await scanFile(full, workspace, regex, out, max, opts, inGlob)
     }
   }
 }
@@ -281,6 +301,9 @@ export async function searchContents(o: SearchOptions): Promise<string> {
     context: o.context,
     filesWithMatches: o.filesWithMatches
   }
+  // The file-glob filter, compiled once per search rather than once per file.
+  // matchBase mirrors ripgrep's gitignore-style globs (see scanFile).
+  const inGlob = o.glob ? globTester(o.glob, { matchBase: true }) : null
   const isFile = statSync(o.startAbs).isFile()
   // A file argument is searched as given, like ripgrep does; only a directory
   // needs the git-or-fallback decision.
@@ -296,7 +319,7 @@ export async function searchContents(o: SearchOptions): Promise<string> {
           .map((rel) => join(o.startAbs, rel))
           .filter(isRegularFile)
           .map((full) => relative(o.workspace, full).split(sep).join('/'))
-          .filter((rel) => !o.glob || minimatch(rel, o.glob, { matchBase: true }))
+          .filter((rel) => !inGlob || inGlob(rel))
       : []
     const all: string[] = []
     for (const run of planRuns(o.searchRel || '.', extras, undefined, !git || plan.walk)) {
@@ -332,7 +355,7 @@ export async function searchContents(o: SearchOptions): Promise<string> {
   // the JS fallback must too, or the backends disagree.
   const listed = git ? await gitListFiles(o.startAbs) : null
   if (isFile) {
-    await scanFile(o.startAbs, o.workspace, regex, out, o.max, matchOpts)
+    await scanFile(o.startAbs, o.workspace, regex, out, o.max, matchOpts, inGlob)
   } else if (listed) {
     for (const rel of listed) {
       if (out.length >= o.max) break
@@ -340,10 +363,10 @@ export async function searchContents(o: SearchOptions): Promise<string> {
       const full = join(o.startAbs, rel)
       // Regular files only, as the walk's Dirent check: never follow a symlink.
       if (!isRegularFile(full)) continue
-      await scanFile(full, o.workspace, regex, out, o.max, matchOpts)
+      await scanFile(full, o.workspace, regex, out, o.max, matchOpts, inGlob)
     }
   } else {
-    await jsWalk(o.startAbs, o.workspace, regex, out, o.max, matchOpts)
+    await jsWalk(o.startAbs, o.workspace, regex, out, o.max, matchOpts, inGlob)
   }
   return out.length ? out.join('\n') : 'No matches found.'
 }

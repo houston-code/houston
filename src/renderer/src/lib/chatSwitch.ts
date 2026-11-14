@@ -87,6 +87,7 @@ export function compactNotice(res: CompactOutcome): string {
       ? 'This conversation is a single turn, so there are no earlier turns to summarize. Start a new chat to free up context.'
       : 'Nothing to compact yet.'
   }
+  if (res.reason === 'cancelled') return 'Compaction cancelled. Nothing was changed.'
   return `Couldn't compact: ${res.error ?? 'unknown error'}`
 }
 
@@ -109,7 +110,7 @@ export async function finishCompact(res: CompactOutcome, d: ReopenDeps): Promise
   if (res.ok && res.messages) {
     if (!(await d.reload()) || !d.stillOpen()) return
   }
-  d.notify(compactNotice(res), res.ok ? 'info' : 'error')
+  d.notify(compactNotice(res), res.ok || res.reason === 'cancelled' ? 'info' : 'error')
 }
 
 export interface ResendDeps {

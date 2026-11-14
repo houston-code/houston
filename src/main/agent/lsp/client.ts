@@ -147,7 +147,15 @@ export class LspClient {
 
   private async doStart(): Promise<void> {
     this.state = 'starting'
-    const proc = this.opts.spawn(this.server, this.roots)
+    let proc: ChildProcess
+    try {
+      proc = this.opts.spawn(this.server, this.roots)
+    } catch (e) {
+      // A launch that throws (an unusable path or argument) is a failed start like any
+      // other: it counts against the crash budget and frees the server's slot.
+      this.die(`failed to start: ${(e as Error).message}`)
+      throw e
+    }
     this.proc = proc
     if (!proc.stdout || !proc.stdin) {
       this.die('the server process has no stdio')
