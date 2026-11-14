@@ -1,6 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, posix } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { expect, test } from '@playwright/test'
+import { fusesFor } from '../scripts/electron-fuses.mjs'
+import { fuseBinaryOf, readFuses } from './fuses'
 import { findPackagedApp, ROOT } from './launch'
 
 /**
@@ -181,4 +184,29 @@ test('the macOS bundle declares its id, version and minimum OS', () => {
   // electron-builder.yml pins the floor so an older Mac gets a clean "requires macOS 13"
   // dialog instead of a dyld crash; a dropped setting would fall back to Electron's own.
   expect(value('LSMinimumSystemVersion')).toBe('13.0')
+})
+
+test("the shipped binary's Electron fuses are flipped for this platform", () => {
+  skipUnlessPackaged()
+  // Read from the artifact itself, not the inspectable copy the launch tests drive (see
+  // e2e/fuses.ts). With these flipped, a same-user process can't run its own code as the
+  // signed app through --inspect, NODE_OPTIONS, a loose app dir, or (outside Linux, whose
+  // sandbox forwarder needs it) ELECTRON_RUN_AS_NODE.
+  const actual = readFuses(fuseBinaryOf(packaged!))
+  const expected = Object.fromEntries(
+    Object.entries(fusesFor(process.platform)).map(([name, on]) => [name, on ? 'enabled' : 'disabled'])
+  )
+  expect(actual).toEqual(expected)
+})
+
+test('a signed macOS app does not accept DYLD environment variables', () => {
+  test.skip(process.platform !== 'darwin', 'entitlements are macOS-only')
+  skipUnlessPackaged()
+  // Entitlements exist only once the release signs the app (PR CI packages unsigned, and
+  // then codesign prints none); scripts/electron-fuses.test.mjs checks the plist itself.
+  const entitlements = execFileSync('codesign', ['-d', '--entitlements', '-', '--xml', packaged!.bundle], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore']
+  })
+  expect(entitlements).not.toContain('com.apple.security.cs.allow-dyld-environment-variables')
 })

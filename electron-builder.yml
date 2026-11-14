@@ -64,6 +64,13 @@ files:
 # the right binary, hard-failing if a sub-package is missing. `npm run dist*` first runs
 # scripts/verify-bundled-binaries.mjs to assert the sources exist before packaging.
 afterPack: ./scripts/copy-bundled-binaries.mjs
+#
+# The same hook flips the Electron fuses (scripts/electron-fuses.mjs): no Node debugger
+# (--inspect, SIGUSR1), no NODE_OPTIONS, the app loads only from an integrity-checked
+# app.asar, and ELECTRON_RUN_AS_NODE works on Linux only (the sandbox's egress forwarder
+# needs it). `electronFuses` is deliberately NOT set here: it is one config for every
+# platform, so it can't keep RunAsNode for Linux alone, and it would flip a second set
+# after the hook's. scripts/electron-fuses.test.mjs fails if it appears.
 
 # node-pty is a native addon (the integrated terminal's PTY backend), so let
 # electron-builder rebuild native modules against the bundled Electron ABI. The
@@ -152,7 +159,10 @@ mac:
   # Hardened-runtime entitlements applied during the sign step. Electron needs the
   # JIT / unsigned-executable-memory exceptions for V8; disable-library-validation lets
   # the signed app load the node-pty native addon and spawn the vendored rg/ast-grep
-  # binaries. entitlementsInherit applies the same set to the helper (renderer/GPU/util)
+  # binaries, and lets an ad-hoc re-signed copy (the packaged e2e's) load its frameworks.
+  # allow-dyld-environment-variables is deliberately absent, so DYLD_INSERT_LIBRARIES
+  # can't inject a library into the signed app (scripts/electron-fuses.test.mjs checks the
+  # whole set). entitlementsInherit applies the same set to the helper (renderer/GPU/util)
   # processes. Without an explicit file electron-builder falls back to its defaults; we
   # pin our own so the set is reviewable and stable.
   entitlements: build/entitlements.mac.plist

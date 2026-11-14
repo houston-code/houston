@@ -1416,6 +1416,13 @@ the agent loop and UI never depend on a specific provider.
   Houston's own network tools refuse to send a request that carries one.
 - **Keys at rest** are encrypted via the OS credential store; only ciphertext is
   written to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
+- **The packaged app runs only its own code.** Its Electron fuses ignore `--inspect`
+  and `NODE_OPTIONS`, load the app only from an integrity-checked `app.asar`, and
+  (except on Linux, where the shell sandbox's network forwarder needs it) ignore
+  `ELECTRON_RUN_AS_NODE`; the macOS build doesn't accept `DYLD_*` variables. So
+  another program can't start Houston as a debugger or plain Node and run its own
+  code as Houston, which on macOS is what would let it ask the Keychain for
+  Houston's keys.
 
 Coding agents run model-authored commands. Treat *full auto* + network with the
 same caution you'd treat running untrusted code, and switch to *ask* or *auto-edit*
