@@ -143,8 +143,8 @@ export async function runTurn(s: SoakApp, turn: number, timeoutMs: number): Prom
       (marker) => {
         ;(document.querySelector('.jump-bottom') as HTMLElement | null)?.click()
         // Where there is no OS sandbox (the Windows runner), a shell command asks even in
-        // Full auto. Answer as a user would, once per run.
-        ;[...document.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith('Allow for run'))?.click()
+        // Full auto. Answer as a user would, once per chat.
+        ;[...document.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith('Allow for this chat'))?.click()
         return document.body.innerText.includes(marker)
       },
       `${TURN_DONE}-${turn}`,
@@ -163,13 +163,13 @@ export async function runTurn(s: SoakApp, turn: number, timeoutMs: number): Prom
 }
 
 /**
- * Approve the open shell-command prompt for the rest of the run, if one is showing.
+ * Approve the open shell-command prompt for the rest of the chat, if one is showing.
  * Where there is no OS sandbox (the Windows runner) a shell command asks even in Full
  * auto, as it must.
  */
 export async function allowRunIfAsked(s: SoakApp): Promise<void> {
   await s.page.evaluate(() => {
-    ;[...document.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith('Allow for run'))?.click()
+    ;[...document.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith('Allow for this chat'))?.click()
   })
 }
 

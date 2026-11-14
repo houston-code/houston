@@ -1966,8 +1966,8 @@ On any single tool call you can:
   same tool, never by one on a file edit (or on each other). An MCP grant covers that
   one server's tools, not every server's. The grant is kept in memory only: quitting
   Houston (the app, or that terminal session) ends it, and deleting the chat forgets
-  it. On a shell command it also lets shell commands reach the network for the rest
-  of the chat. A few prompts keep asking anyway: a command that reaches outside the
+  it. On a shell command it never grants network: commands still run offline until
+  you answer the separate network question. A few prompts keep asking anyway: a command that reaches outside the
   project or can throw away work, a memory save after the chat took in outside text,
   and anything a permission `ask` rule covers.
 - **always allow / always deny:** save a permission rule so the choice persists
