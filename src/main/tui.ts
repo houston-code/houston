@@ -196,6 +196,11 @@ export interface TuiOptions {
   /** `--add-dir`: extra directories (absolute) the session's runs may work in; `/add-dir` adds more. */
   addDirs?: string[]
   /**
+   * Reduced motion for this session: the entry point resolves it from
+   * HOUSTON_REDUCE_MOTION and the saved setting; /reduce-motion changes it.
+   */
+  reduceMotion?: boolean
+  /**
    * The first bad flag value (`--approval nonsense`). runTui reports it and exits
    * with a usage error before anything runs, rather than silently ignoring it.
    */
@@ -921,10 +926,11 @@ export function spinnerFrame(
    * redrawn, so all of this costs no extra screen space and cannot tear the
    * transcript.
    */
-  opts: { draft?: string; queued?: number; mode?: string; status?: string } = {}
+  opts: { draft?: string; queued?: number; mode?: string; status?: string; glyph?: string } = {}
 ): string {
   const i = ((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length
-  const head = `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(formatElapsed(elapsedSec * 1000), 'dim')}`
+  // A fixed glyph (reduced motion) replaces the animation frames entirely.
+  const head = `${paint(opts.glyph ?? SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(formatElapsed(elapsedSec * 1000), 'dim')}`
   // The approval mode, kept visible WHILE the turn runs: the composer's status line
   // is gone exactly when "how much is running without asking?" matters most.
   const mode = opts.mode ? paint(`  [${opts.mode}]`, 'dim') : ''
@@ -1658,6 +1664,8 @@ export type SlashResult =
   | { kind: 'vim'; on?: boolean }
   /** `/add-dir <path>` adds a session directory; a bare `/add-dir` lists them. */
   | { kind: 'add-dir'; path: string }
+  /** Turn reduced motion on or off (/reduce-motion); bare toggles. */
+  | { kind: 'reduce-motion'; on?: boolean }
   /** Revert (or restore) the files the last turn changed (/undo, /redo). */
   | { kind: 'undo'; redo: boolean }
   /**
@@ -1806,6 +1814,12 @@ export function parseSlashCommand(
       if (a === 'on') return { kind: 'vim', on: true }
       if (a === 'off') return { kind: 'vim', on: false }
       return { kind: 'vim' } // bare /vim toggles
+    }
+    case 'reduce-motion': {
+      const a = arg.trim().toLowerCase()
+      if (a === 'on') return { kind: 'reduce-motion', on: true }
+      if (a === 'off') return { kind: 'reduce-motion', on: false }
+      return { kind: 'reduce-motion' }
     }
     case 'rewind': {
       const [first, second] = arg.trim().split(/\s+/)
@@ -1972,6 +1986,7 @@ export const HELP_TEXT = [
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
   '  /add-dir [path]       let the agent work in another folder this session (alone: list them)',
+  '  /reduce-motion [on|off]  a still activity line instead of the spinner',
   '  /undo, /redo          revert (or restore) the files the last turn changed',
   '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
   '  /changes              what is different in the working tree (also /diff)',
@@ -2990,6 +3005,11 @@ export interface TuiIo {
   setSpinnerLabel?: (label: string) => void
   stopSpinner?: () => void
   /**
+   * Switch the accessibility modes the adapter owns. `reduceMotion` keeps the spinner
+   * still: a fixed mark, its elapsed time refreshed only every few seconds.
+   */
+  setAccessibility?: (a: { reduceMotion?: boolean }) => void
+  /**
    * Emit an attention signal: set the tab/window title, and — only when the user
    * has switched away — ring the bell and fire the terminal's notification. This
    * is what makes a long unattended run trustworthy: a session that blocks on an
@@ -3750,6 +3770,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.updateSettings?.({ reasoningDisplay: d })
     deps.io.out(`${freshLine()}${paint(reasoningDisplayNote(d), 'dim')}\n`)
   }
+  // Reduced motion: the spinner stays still. Resolved at launch (env + setting).
+  let reduceMotion = opts.reduceMotion ?? settings.reduceMotion === true
+  deps.io.setAccessibility?.({ reduceMotion })
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
   // A line half-typed while a turn ran (never sent with Enter): the next composer opens with it.
@@ -4670,7 +4693,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'settings') {
-        renderSettingsOverview(deps, paint)
+        renderSettingsOverview(deps, paint, { reduceMotion })
         continue
       }
       if (result.kind === 'add-dir') {
@@ -4706,6 +4729,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'transcript') {
         await openTranscript()
+        continue
+      }
+      if (result.kind === 'reduce-motion') {
+        reduceMotion = result.on ?? !reduceMotion
+        deps.updateSettings?.({ reduceMotion })
+        deps.io.setAccessibility?.({ reduceMotion })
+        deps.io.out(
+          paint(
+            reduceMotion
+              ? '· reduced motion on: the activity line holds still and its timer updates every few seconds\n'
+              : '· reduced motion off: the spinner animates again\n',
+            'dim'
+          )
+        )
         continue
       }
       if (result.kind === 'verbose') {
@@ -6137,7 +6174,7 @@ function handleInfoCommand(
  * and the safe subset editable from the terminal. Read-only — the editing verbs live
  * on /hooks and /mcp.
  */
-function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
+function renderSettingsOverview(deps: TuiDeps, paint: Painter, live: { reduceMotion: boolean }): void {
   const path = deps.settingsPath?.() ?? '(unknown)'
   const lines = [
     paint('Settings', 'bold'),
@@ -6150,6 +6187,9 @@ function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
     `    ${paint('/mcp', 'cyan')}     list, or  /mcp add (stdio)  ·  /mcp remove <n>  ·  /mcp login|logout <n>`,
     `    ${paint('/trust', 'cyan')}   this folder's project-config trust  ·  /trust forget re-decides`,
     `    ${paint('/memory', 'cyan')}  saved memories  ·  /memory show|edit|pin|forget <n>  ·  /memory on|off`,
+    '',
+    '  This terminal:',
+    `    reduced motion: ${live.reduceMotion ? 'on' : 'off'}  (/reduce-motion on|off)`,
     '',
     paint('  Changes here apply on your next message, no restart needed.', 'dim')
   ]

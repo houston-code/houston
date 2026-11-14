@@ -106,6 +106,7 @@ import {
 } from './headless'
 import { serveAcp, type AcpLaunchOptions } from './acp'
 import { createTerminalIo, resolveColor } from './tui-io'
+import { resolveAccessibility } from './tui-a11y'
 import {
   makeCompleter,
   commandMenu,
@@ -603,6 +604,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   }
   // Colorize only when the environment says so (TTY, NO_COLOR, TERM, FORCE_COLOR).
   tui.color = resolveColor(process.env, Boolean(process.stdout.isTTY))
+  // Reduced motion from HOUSTON_REDUCE_MOTION or the saved setting.
+  tui.reduceMotion = resolveAccessibility(process.env, getSettings()).reduceMotion
   // Load highlight.js lazily (dynamic import) so it stays out of the module graph
   // that index.test.ts loads — only the real interactive path pulls it in.
   // `./syntax` itself carries no heavy deps (highlight.js is injected below), so

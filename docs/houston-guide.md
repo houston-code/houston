@@ -710,7 +710,7 @@ safe subset in place. In the desktop app:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/add-dir`, `/vim`, `/verbose`, `/output`, `/copy`, `/thoughts`,
+**Terminal-only commands.** `/add-dir`, `/vim`, `/reduce-motion`, `/verbose`, `/output`, `/copy`, `/thoughts`,
 `/transcript`, `/spawned`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`,
 `/permissions`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
@@ -891,6 +891,14 @@ one, marks, macros, and `.` repeat.
 
 Everything else in the composer (Enter to send, `Ctrl-R` history search,
 `Ctrl-X Ctrl-E`, pasting) works the same in both modes.
+
+### Reduced motion
+
+`/reduce-motion` holds the activity line still while a turn runs: a fixed mark instead
+of the spinning one, with the elapsed time updated every few seconds instead of ten
+times a second. It is remembered; `/reduce-motion off` turns the animation back on.
+Setting `HOUSTON_REDUCE_MOTION=1` in the environment turns it on for that launch.
+`/settings` shows whether it is on. Nothing else in the terminal animates.
 
 ## Seeing what the tools did
 

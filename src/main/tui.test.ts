@@ -6147,6 +6147,40 @@ describe('/vim', () => {
   })
 })
 
+describe('/reduce-motion', () => {
+  it('parses the toggle and its explicit forms', () => {
+    const s = {} as AppSettings
+    expect(parseSlashCommand('/reduce-motion', s)).toEqual({ kind: 'reduce-motion' })
+    expect(parseSlashCommand('/reduce-motion on', s)).toEqual({ kind: 'reduce-motion', on: true })
+    expect(parseSlashCommand('/reduce-motion OFF', s)).toEqual({ kind: 'reduce-motion', on: false })
+  })
+
+  it('hands the launch value to the adapter, then toggles, saves and applies it', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/reduce-motion', '/settings', '/reduce-motion off', null])
+    const applied: Array<{ reduceMotion?: boolean }> = []
+    t.io.setAccessibility = (a) => applied.push(a)
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui({ ...opts, reduceMotion: false }, d)
+    expect(applied.map((a) => a.reduceMotion)).toEqual([false, true, false])
+    expect(patches).toEqual([{ reduceMotion: true }, { reduceMotion: false }])
+    expect(t.text()).toContain('reduced motion on')
+    expect(t.text()).toContain('reduced motion: on')
+  })
+
+  it('starts on when the saved setting says so', async () => {
+    const { d } = deps([], { reduceMotion: true })
+    const t = fakeIo([null])
+    const applied: Array<{ reduceMotion?: boolean }> = []
+    t.io.setAccessibility = (a) => applied.push(a)
+    d.io = t.io
+    await runTui(opts, d)
+    expect(applied[0]).toEqual({ reduceMotion: true })
+  })
+})
+
 // Houston has snapshotted every write since forever, and the desktop can roll a
 // turn back with a click. From the terminal there was no way in — so under
 // auto-edit or full-auto, "that was wrong, put it back" meant reverting by hand.

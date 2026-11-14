@@ -22,6 +22,7 @@ import {
   type DecoderState
 } from './tui-keys'
 import { bellSequence, notifySequence, titleSequence, type TerminalSignal } from './tui-notify'
+import { REDUCED_MOTION_REFRESH_MS, STATIC_SPINNER_GLYPH } from './tui-a11y'
 import {
   initialPagerState,
   maxTop,
@@ -373,10 +374,14 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   let spinnerStart = 0
   let tick = 0
   let cancelTimer: (() => void) | null = null
+  // Reduced motion: a still mark instead of the frames, and the timer refreshed every
+  // few seconds rather than ten times a second. Set by the driver (setAccessibility).
+  let reduceMotion = false
   const drawSpinner = (): void => {
     if (spinnerLabel === null) return
     const frame = (status: string): string =>
       spinnerFrame(tick, spinnerLabel ?? '', Math.floor((now() - spinnerStart) / 1000), paint, {
+        ...(reduceMotion ? { glyph: STATIC_SPINNER_GLYPH } : {}),
         ...(modeLabel ? { mode: modeLabel } : {}),
         ...(status ? { status } : {}),
         ...(draft ? { draft } : {}),
@@ -393,7 +398,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     repaint(CLEAR_LINE + line)
   }
   const startTimer = (): void => {
-    if (!cancelTimer && spinnerLabel !== null) cancelTimer = schedule(drawSpinner, 100)
+    if (!cancelTimer && spinnerLabel !== null) {
+      cancelTimer = schedule(drawSpinner, reduceMotion ? REDUCED_MOTION_REFRESH_MS : 100)
+      // At the slow pace the first tick is seconds away: draw the line now.
+      if (reduceMotion) drawSpinner()
+    }
   }
   const stopTimer = (erase: boolean): void => {
     if (cancelTimer) {
@@ -1409,6 +1418,16 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     onSteer: (handler) => {
       steerHandler = handler
+    },
+    setAccessibility: (a) => {
+      if (a.reduceMotion !== undefined && a.reduceMotion !== reduceMotion) {
+        reduceMotion = a.reduceMotion
+        // A running timer keeps its old pace otherwise; restart it at the new one.
+        if (cancelTimer) {
+          stopTimer(false)
+          startTimer()
+        }
+      }
     },
     setMode: (label) => {
       modeLabel = label

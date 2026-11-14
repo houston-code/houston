@@ -943,6 +943,13 @@ export interface AppSettings {
    * 'summary'.
    */
   reasoningDisplay?: 'show' | 'summary' | 'hide'
+  /**
+   * The terminal's reduced motion (/reduce-motion): the activity line shows a still
+   * mark instead of an animated spinner and refreshes its timer only every few
+   * seconds. Also on with HOUSTON_REDUCE_MOTION=1, and implied by screen-reader mode.
+   * Absent = off.
+   */
+  reduceMotion?: boolean
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /** User-defined chat labels, in display order. */

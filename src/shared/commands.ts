@@ -336,6 +336,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'reduce-motion', group: 'Terminal', args: '[on|off]',
+    description: 'Hold the activity line still instead of animating the spinner',
+    clients: ['tui']
+  },
+  {
     name: 'verbose', group: 'Terminal',
     description: "Show each tool's full output as it runs",
     clients: ['tui']
@@ -487,6 +492,7 @@ export function builtinCommands(client: CommandClient): Command[] {
 const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   vim: 'the app\'s composer has no vim mode',
   'add-dir': 'in the app, add folders the agent may use under Settings, Workspace, Additional folders',
+  'reduce-motion': 'the app follows your system\'s reduce motion setting',
   verbose: 'in the app, open a tool row to see its full output',
   output: 'in the app, open a tool row to see its full output',
   thoughts: 'in the app, reasoning folds above each reply; Settings > Appearance > Always show reasoning keeps it open',

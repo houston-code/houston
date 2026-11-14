@@ -272,6 +272,62 @@ function spinnerHarness() {
   }
 }
 
+describe('createTerminalIo spinner, reduced motion', () => {
+  function harness() {
+    const writes: string[] = []
+    const intervals: number[] = []
+    let ticks: Array<() => void> = []
+    let nowMs = 1000
+    const io = createTerminalIo({
+      createInterface: () => fakeRl().rl,
+      write: (s) => writes.push(s),
+      drainInput: () => {},
+      now: () => nowMs,
+      schedule: (fn, ms) => {
+        intervals.push(ms)
+        ticks.push(fn)
+        return () => {
+          ticks = ticks.filter((t) => t !== fn)
+        }
+      }
+    })
+    return {
+      io,
+      intervals,
+      text: () => writes.join(''),
+      tick: () => ticks.forEach((fn) => fn()),
+      advance: (ms: number) => {
+        nowMs += ms
+      }
+    }
+  }
+
+  it('draws a still mark at once and refreshes only every few seconds', () => {
+    const h = harness()
+    h.io.setAccessibility!({ reduceMotion: true })
+    h.io.startSpinner!('Working')
+    expect(h.intervals).toEqual([5000])
+    expect(h.text()).toContain('• Working 0s')
+    h.advance(5000)
+    h.tick()
+    h.advance(5000)
+    h.tick()
+    // Every frame is the same mark: no braille animation frames at all.
+    expect(h.text()).toContain('• Working 10s')
+    expect(h.text()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
+  })
+
+  it('switching it mid-run restarts the timer at the new pace', () => {
+    const h = harness()
+    h.io.startSpinner!('Working')
+    expect(h.intervals).toEqual([100])
+    h.io.setAccessibility!({ reduceMotion: true })
+    expect(h.intervals).toEqual([100, 5000])
+    h.io.setAccessibility!({ reduceMotion: false })
+    expect(h.intervals).toEqual([100, 5000, 100])
+  })
+})
+
 describe('createTerminalIo spinner', () => {
   it('schedules a redraw on start and draws the label + elapsed', () => {
     const h = spinnerHarness()
