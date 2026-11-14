@@ -3664,6 +3664,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let theme: ThemeName = resolveTheme(settings.tuiTheme ?? '') ?? opts.detectedTheme ?? 'default'
   const makeSessionPainter = (): Painter => makePainter(opts.color && !screenReader, theme)
   let paint = makeSessionPainter()
+  // Reduced motion: the spinner stays still. Resolved at launch (env + setting).
+  // Applied before anything reads or prints: the trust prompt and first-run setup
+  // below are the first things a screen-reader user meets.
+  let reduceMotion = opts.reduceMotion ?? settings.reduceMotion === true
+  // Screen-reader mode implies reduced motion; the preference itself is kept apart.
+  const applyAccessibility = (): void =>
+    deps.io.setAccessibility?.({ screenReader, reduceMotion: reduceMotion || screenReader })
+  applyAccessibility()
   const newId = deps.newId ?? randomUUID
 
   // Trusted-folders gate: if this project's .houston/settings.json ELEVATES
@@ -3830,12 +3838,6 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.updateSettings?.({ reasoningDisplay: d })
     deps.io.out(`${freshLine()}${paint(reasoningDisplayNote(d), 'dim')}\n`)
   }
-  // Reduced motion: the spinner stays still. Resolved at launch (env + setting).
-  let reduceMotion = opts.reduceMotion ?? settings.reduceMotion === true
-  // Screen-reader mode implies reduced motion; the preference itself is kept apart.
-  const applyAccessibility = (): void =>
-    deps.io.setAccessibility?.({ screenReader, reduceMotion: reduceMotion || screenReader })
-  applyAccessibility()
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
   // A line half-typed while a turn ran (never sent with Enter): the next composer opens with it.

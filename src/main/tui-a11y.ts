@@ -110,9 +110,13 @@ export function plainText(s: string): string {
       .replace(LEADING_RE, (_m, indent: string, mark: string) => `${indent}${LEADING_MARKS[mark] ?? ''}`)
       // Rules and table separators drawn with box lines.
       .replace(/[─━═]+(?:┼[─━═]+)*/g, '')
-      .replace(/ [│┃║] /g, ', ')
-      .replace(/ · /g, ', ')
-      .replace(/ → /g, ' to ')
-      .replace(/ ⇒ /g, ' gives ')
+      .replace(/[ \t]+[│┃║][ \t]+/g, ', ')
+      .replace(/[ \t]+·[ \t]+/g, ', ')
+      // A status mark inside a row ("Anthropic  ✗ no key"): the words after it say it.
+      .replace(/([ \t])[✓✗✕][ \t]+/g, '$1')
+      // A prompt's arrow ("setup › ") reads as a colon.
+      .replace(/ ›( |$)/gm, ':$1')
+      .replace(/[ \t]+→[ \t]+/g, ' to ')
+      .replace(/[ \t]+⇒[ \t]+/g, ' gives ')
   )
 }

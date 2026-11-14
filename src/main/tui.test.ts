@@ -4152,6 +4152,22 @@ describe('runTui — /login & keyless start', () => {
     })
   })
 
+  it('screen-reader mode is in force before first-run setup says or asks anything', async () => {
+    const { d } = wizardDeps([], { selected: null, providers: twoProviders })
+    const t = fakeIo(['', null])
+    const order: string[] = []
+    t.io.setAccessibility = (a) => order.push(`a11y:${a.screenReader}`)
+    const read = t.io.readLine
+    t.io.readLine = (p, o) => {
+      order.push('read')
+      return read(p, o)
+    }
+    d.io = t.io
+    await runTui({ ...opts, screenReader: true }, d)
+    expect(order[0]).toBe('a11y:true')
+    expect(t.out.length).toBeGreaterThan(0)
+  })
+
   it('skipping setup lands in a gated REPL, not the shell', async () => {
     const { d, rec } = wizardDeps([], { selected: null, providers: twoProviders })
     // Enter to skip, then try a prompt (blocked), then EOF.

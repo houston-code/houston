@@ -75,6 +75,9 @@ describe('plainText', () => {
     expect(plainText('a │ b')).toBe('a, b')
     expect(plainText('────────')).toBe('')
     expect(plainText('  you › hi\n  houston › hello')).toBe('  you: hi\n  houston: hello')
+    expect(plainText('/hooks add  ·  /hooks remove <n>')).toBe('/hooks add, /hooks remove <n>')
+    expect(plainText('1) Anthropic (Claude)  ✗ no key   models')).toBe('1) Anthropic (Claude)  no key   models')
+    expect(plainText('setup › ')).toBe('setup: ')
   })
 
   it('leaves the words of a reply alone', () => {
