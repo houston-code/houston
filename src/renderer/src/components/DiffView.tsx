@@ -211,10 +211,13 @@ export function DiffView({
       if (i === undefined) return <div className="diff__line diff__line--empty" aria-hidden="true" />
       const l = shown[i]
       const type = l.type === 'ctx' ? 'ctx' : side === 'old' ? 'del' : 'add'
-      const t = targetOf(l, l.type === 'ctx' ? side : undefined)
+      // An unchanged line is one line on both sides: either half comments on it as the
+      // new line (where its comments show), and only the right half's number is the
+      // keyboard button, so the row doesn't offer the same action twice.
+      const t = targetOf(l, l.type === 'ctx' ? 'new' : undefined)
       return (
         <div className={`diff__line diff__line--${type}${onLineClick ? ' diff__line--commentable' : ''}`} {...lineClick(t)}>
-          {gutterNo(t, side === 'old' ? l.oldNo : l.newNo)}
+          {gutterNo(l.type === 'ctx' && side === 'old' ? null : t, side === 'old' ? l.oldNo : l.newNo)}
           <span className="diff__sign">{sign(type)}</span>
           <LineText text={l.text} mark={marksFor(i, l)} lang={lang} />
         </div>

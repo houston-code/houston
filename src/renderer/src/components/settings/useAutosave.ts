@@ -31,6 +31,29 @@ export function settingsPatch(base: AppSettings, next: AppSettings): Partial<App
   return any ? (patch as Partial<AppSettings>) : null
 }
 
+/** An entry's identity for {@link mergeList}, ignoring the derived key flag. */
+function entryId(v: unknown): string {
+  return JSON.stringify(v && typeof v === 'object' && !Array.isArray(v) ? { ...v, hasKey: undefined } : v)
+}
+
+/**
+ * A three-way merge of one list setting. `base` is the list this panel started from,
+ * `next` the user's edit of it, `current` what is stored now (another writer may have
+ * changed it meanwhile: an "Always allow" rule saved from an approval prompt, a server
+ * added elsewhere). The user's list wins, in the user's order, except that entries
+ * added elsewhere since `base` are kept (appended) and entries removed elsewhere stay
+ * removed. An entry is matched by its whole value, so an edit is a removal plus an
+ * addition.
+ */
+export function mergeList<T>(base: readonly T[] | undefined, next: readonly T[], current: readonly T[] | undefined): T[] {
+  const baseIds = new Set((base ?? []).map(entryId))
+  const currentIds = new Set((current ?? []).map(entryId))
+  const nextIds = new Set(next.map(entryId))
+  const removedElsewhere = (v: T): boolean => baseIds.has(entryId(v)) && !currentIds.has(entryId(v))
+  const addedElsewhere = (current ?? []).filter((v) => !baseIds.has(entryId(v)) && !nextIds.has(entryId(v)))
+  return [...next.filter((v) => !removedElsewhere(v)), ...addedElsewhere]
+}
+
 export type SaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
 
 /** A text field where an edit is still being typed (its value commits when it loses focus). */
@@ -102,6 +125,16 @@ export function useAutosave({
       try {
         const current = await window.api.getSettings()
         const merged: Record<string, unknown> = { ...current, ...patch }
+        // A list the user edited is merged with what is stored now, so an entry another
+        // writer added while Settings was open isn't dropped by this stale copy.
+        const was = replaced as unknown as Record<string, unknown>
+        const now = current as unknown as Record<string, unknown>
+        for (const [k, v] of Object.entries(patch)) {
+          if (!Array.isArray(v)) continue
+          const b = was[k]
+          const c = now[k]
+          if ((b === undefined || Array.isArray(b)) && (c === undefined || Array.isArray(c))) merged[k] = mergeList(b, v, c)
+        }
         // A setting removed here (e.g. back to automatic) is removed, not stored as undefined.
         for (const [k, v] of Object.entries(patch)) if (v === undefined) delete merged[k]
         const fresh = await window.api.saveSettings(merged as unknown as AppSettings)

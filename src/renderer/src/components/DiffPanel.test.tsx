@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkingTreeChanges } from '@shared/workingTree'
 import { fileDiffSignature, type ChatChanges } from '@shared/changes'
@@ -247,6 +247,34 @@ describe('DiffPanel', () => {
     expect(screen.getByRole('radio', { name: 'This turn' })).toHaveAttribute('aria-checked', 'true')
   })
 
+  it('ignores a slow reply for a scope the user already switched away from', async () => {
+    const chat: ChatChanges = {
+      files: [
+        {
+          path: 'src/turn.ts',
+          status: 'modified',
+          added: 1,
+          removed: 0,
+          binary: false,
+          hunks: [{ header: '@@ -1,1 +1,2 @@', lines: [{ type: 'ctx', text: 'a' }, { type: 'add', text: 'b' }] }]
+        }
+      ],
+      added: 1,
+      removed: 0,
+      unavailable: 0
+    }
+    const { getWorkingTreeChanges } = installApi(sampleChanges, chat)
+    let resolveTree: (v: WorkingTreeChanges) => void = () => {}
+    getWorkingTreeChanges.mockImplementation(() => new Promise((r) => (resolveTree = r)))
+    render(<DiffPanel workspace="/repo" conversationId="c1" />)
+    fireEvent.click(screen.getByRole('radio', { name: 'This turn' }))
+    expect(await screen.findByText('src/turn.ts')).toBeInTheDocument()
+    await act(async () => resolveTree(sampleChanges))
+    expect(getWorkingTreeChanges).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('src/turn.ts')).toBeInTheDocument()
+    expect(screen.queryByText(/changed no files/)).not.toBeInTheDocument()
+  })
+
   it('reverts a file only after confirming, sending what it showed', async () => {
     const { revertChange, getWorkingTreeChanges } = installApi(sampleChanges)
     render(<DiffPanel workspace="/repo" conversationId="c1" />)
@@ -354,6 +382,53 @@ describe('DiffPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     expect(screen.queryByText('Say goodbye as well')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Send .* to the agent/ })).not.toBeInTheDocument()
+  })
+
+  it('lists a comment as outdated once a refresh moves its line, instead of under other code', async () => {
+    const { getWorkingTreeChanges } = installApi(sampleChanges)
+    const onSendComments = vi.fn()
+    render(<DiffPanel workspace="/repo" conversationId="c1" onSendComments={onSendComments} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 1 of src/foo.ts' }))
+    fireEvent.change(screen.getByLabelText('Comment on src/foo.ts line 1'), { target: { value: 'Name this constant.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+    expect(screen.queryByRole('region', { name: 'Comments not on a line shown here' })).not.toBeInTheDocument()
+
+    // The file gains a line above, so line 1 now holds different code.
+    const shifted: WorkingTreeChanges = {
+      ...sampleChanges,
+      files: [
+        {
+          ...sampleChanges.files[0],
+          hunks: [
+            {
+              header: '@@ -1,2 +1,3 @@',
+              lines: [
+                { type: 'add', text: 'import x' },
+                { type: 'del', text: 'const b = 2' },
+                { type: 'add', text: 'const b = 4' }
+              ]
+            }
+          ]
+        },
+        sampleChanges.files[1]
+      ]
+    }
+    getWorkingTreeChanges.mockResolvedValue(shifted)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    const outdated = await screen.findByRole('region', { name: 'Comments not on a line shown here' })
+    expect(getWorkingTreeChanges).toHaveBeenCalledTimes(2)
+    expect(outdated).toHaveTextContent('Name this constant.')
+    expect(outdated).toHaveTextContent('const b = 3')
+    // Not under the diff any more, but still counted, editable, and sent.
+    expect(screen.getAllByText('Name this constant.')).toHaveLength(1)
+    expect(screen.getByText('1 comment on 1 file')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.change(screen.getByLabelText('Comment on src/foo.ts line 1'), { target: { value: 'Rename it.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send 1 comment to the agent' }))
+    expect(onSendComments).toHaveBeenCalledWith([
+      { path: 'src/foo.ts', side: 'new', line: 1, code: 'const b = 3', body: 'Rename it.' }
+    ])
   })
 
   it('asks before discarding every comment, and cancels an open editor with Esc', async () => {

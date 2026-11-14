@@ -546,3 +546,159 @@ describe('McpClient (real stdio process)', () => {
     client.close()
   }, 15_000)
 })
+
+/** How a promise settled within `ms`, or that it had not by then. */
+async function settlesWithin<T>(
+  p: Promise<T>,
+  ms: number
+): Promise<{ settled: boolean; value?: T; error?: unknown }> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<{ settled: boolean }>((resolve) => {
+    timer = setTimeout(() => resolve({ settled: false }), ms)
+  })
+  try {
+    return await Promise.race([
+      p.then(
+        (value) => ({ settled: true, value }),
+        (error: unknown) => ({ settled: true, error })
+      ),
+      late
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * A stdio server that completes the handshake (declaring resources and prompts) and
+ * then never answers anything else, recording every message the client writes.
+ */
+function hangingSpawn(written: Array<Record<string, unknown>>): {
+  spawn: SpawnFn
+  reply: (id: unknown, result: unknown) => void
+} {
+  const stdout = new EventEmitter()
+  const reply = (id: unknown, result: unknown): void => {
+    stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`))
+  }
+  const stdin = Object.assign(new EventEmitter(), {
+    write(line: string): boolean {
+      const msg = JSON.parse(line.trim()) as Record<string, unknown> & { id?: number; method?: string }
+      written.push(msg)
+      if (msg.id === undefined) return true
+      let result: unknown
+      if (msg.method === 'initialize') result = { capabilities: { resources: {}, prompts: {} } }
+      else if (msg.method === 'tools/list') result = { tools: [{ name: 'slow' }] }
+      else if (msg.method === 'resources/list') result = { resources: [] }
+      else if (msg.method === 'prompts/list') result = { prompts: [] }
+      else return true // tools/call, resources/read, prompts/get: never answered
+      queueMicrotask(() => reply(msg.id, result))
+      return true
+    }
+  })
+  const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+  return { spawn: (() => child) as unknown as SpawnFn, reply }
+}
+
+describe('McpClient cancellation', () => {
+  const cancels = (written: Array<Record<string, unknown>>): Array<Record<string, unknown>> =>
+    written.filter((m) => m.method === 'notifications/cancelled')
+
+  it('settles a hung tools/call as soon as its signal aborts, and tells the server', async () => {
+    const written: Array<Record<string, unknown>> = []
+    const client = new McpClient(hangingSpawn(written).spawn)
+    try {
+      await client.connect({ command: 'fake' })
+      const stop = new AbortController()
+      const call = client.callTool('slow', {}, stop.signal)
+      await new Promise((r) => setTimeout(r, 5))
+      const sent = written.find((m) => m.method === 'tools/call')
+      expect(sent).toBeDefined()
+
+      const t0 = Date.now()
+      stop.abort()
+      const outcome = await settlesWithin(call, 1_000)
+      expect(outcome.settled).toBe(true)
+      expect(Date.now() - t0).toBeLessThan(100)
+      expect(outcome.error).toBeInstanceOf(Error)
+      expect((outcome.error as Error).message).toMatch(/cancel/i)
+
+      // The MCP cancellation notification: the request's id and a reason, no id of its own.
+      const [cancel] = cancels(written)
+      expect(cancel).toMatchObject({
+        jsonrpc: '2.0',
+        method: 'notifications/cancelled',
+        params: { requestId: sent!.id, reason: expect.any(String) }
+      })
+      expect(cancel).not.toHaveProperty('id')
+      // Stopping one call is not a dead server.
+      expect(client.isClosed).toBe(false)
+    } finally {
+      client.close()
+    }
+  })
+
+  it('ignores the late answer to a cancelled call and keeps serving new ones', async () => {
+    const written: Array<Record<string, unknown>> = []
+    const server = hangingSpawn(written)
+    const client = new McpClient(server.spawn)
+    try {
+      await client.connect({ command: 'fake' })
+      const stop = new AbortController()
+      const call = client.callTool('slow', {}, stop.signal)
+      await new Promise((r) => setTimeout(r, 5))
+      const firstId = written.find((m) => m.method === 'tools/call')!.id
+      stop.abort()
+      expect((await settlesWithin(call, 1_000)).error).toBeInstanceOf(Error)
+      expect(() => server.reply(firstId, { content: [{ type: 'text', text: 'late' }] })).not.toThrow()
+
+      const next = client.callTool('slow', {})
+      await new Promise((r) => setTimeout(r, 5))
+      const nextId = written.filter((m) => m.method === 'tools/call')[1]!.id
+      server.reply(nextId, { content: [{ type: 'text', text: 'fresh' }] })
+      expect(await next).toBe('fresh')
+    } finally {
+      client.close()
+    }
+  })
+
+  it('never sends a call whose signal has already aborted', async () => {
+    const written: Array<Record<string, unknown>> = []
+    const client = new McpClient(hangingSpawn(written).spawn)
+    try {
+      await client.connect({ command: 'fake' })
+      const stop = new AbortController()
+      stop.abort()
+      const outcome = await settlesWithin(client.callTool('slow', {}, stop.signal), 1_000)
+      expect(outcome.settled).toBe(true)
+      expect(outcome.error).toBeInstanceOf(Error)
+      expect(written.some((m) => m.method === 'tools/call')).toBe(false)
+      expect(cancels(written)).toEqual([])
+    } finally {
+      client.close()
+    }
+  })
+
+  it('cancels a hung resources/read and prompts/get the same way', async () => {
+    const written: Array<Record<string, unknown>> = []
+    const client = new McpClient(hangingSpawn(written).spawn)
+    try {
+      await client.connect({ command: 'fake' })
+      const stop = new AbortController()
+      const read = client.readResource('mem://x', stop.signal)
+      const prompt = client.getPrompt('p', {}, stop.signal)
+      await new Promise((r) => setTimeout(r, 5))
+      stop.abort()
+      const [r, p] = await Promise.all([settlesWithin(read, 1_000), settlesWithin(prompt, 1_000)])
+      expect(r.settled && p.settled).toBe(true)
+      expect(r.error).toBeInstanceOf(Error)
+      expect(p.error).toBeInstanceOf(Error)
+      const ids = written.filter((m) => m.method === 'resources/read' || m.method === 'prompts/get').map((m) => m.id)
+      expect(ids).toHaveLength(2)
+      const cancelled = cancels(written).map((m) => (m.params as { requestId: unknown }).requestId)
+      expect(cancelled.sort()).toEqual(ids.sort())
+    } finally {
+      client.close()
+    }
+  })
+})

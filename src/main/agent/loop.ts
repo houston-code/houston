@@ -199,7 +199,7 @@ import {
   rememberSubAgent,
   updateSubAgentMessages
 } from './subagentSessions'
-import { reviewWorkspaceChanges } from './review'
+import { reviewWorkspaceChanges, type ReviewHistory } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
 import { isMockupBackendConfigured, mockupBackend } from './mockupRender'
 import { withModelImages } from './modelImages'
@@ -1691,6 +1691,9 @@ export async function startRun(
     // A trusted folder's project MCP servers join the user's own under a `proj-`
     // id prefix (user servers win collisions); untrusted folders contribute none.
     // The headless --mcp-config servers join for this run only, never saved.
+    // Stop ends the wait for a slow server; a server that is down is named to the user
+    // (once per change per chat), shown below once the redactor exists.
+    const mcpNotices: string[] = []
     const mcpToolDefs = (
       await getMcpToolDefs(
         mergeRunMcpServers(
@@ -1699,9 +1702,14 @@ export async function startRun(
             : settings.mcpServers,
           req.extraMcpServers
         ),
-        runId
+        runId,
+        { signal: abort.signal, noticeKey: conversationId ?? runId, onNotice: (m) => mcpNotices.push(m) }
       )
     ).filter((d) => toolOffered(req.toolScope, d.schema.name))
+    if (abort.signal.aborted) {
+      emit({ type: 'done', stopReason: 'aborted' })
+      return
+    }
     // Lazy loading (lazy-mcp.ts): every schema rides along on every request, so the
     // deferred built-ins, and MCP tools once more than a threshold are connected, are
     // listed in the find_tools catalog instead and advertised only once loaded. At
@@ -1844,6 +1852,9 @@ export async function startRun(
     })
     // What subagents and reviews spent this run, so the cost-ceiling reminder counts it.
     let delegatedCostUsd = 0
+    // This run's review_changes rounds: bounds repeat reviews and carries findings forward.
+    // (A literal, not createReviewHistory(): tests mock ./review down to reviewWorkspaceChanges.)
+    const reviewHistory: ReviewHistory = { rounds: 0, reviewed: new Set(), previous: [] }
 
     // Surface a hook's `systemMessage` directive as a user-facing transcript notice.
     // Emit-only by design: it never lands in `messages`, so the model never sees it
@@ -1851,6 +1862,9 @@ export async function startRun(
     const emitHookNotice = (outcome: HookOutcome): void => {
       if (outcome.systemMessage) emit({ type: 'notice', message: redact(outcome.systemMessage) })
     }
+    // MCP servers that are down this turn (collected above). A server's error text can
+    // quote anything it printed, so it is redacted like any other text shown.
+    for (const message of mcpNotices) emit({ type: 'notice', message: redact(message) })
 
     // Scrub secrets out of the just-submitted user turn before anything downstream —
     // the model, plugins, hooks, and the persisted transcript — sees it, reusing the
@@ -2824,7 +2838,7 @@ export async function startRun(
       // within the project sandbox.
       dispatchSubAgent: (opts) => runDispatch({ callId, opts, writable: false, depth: 1 }),
       dispatchWritableSubAgent: (opts) => runDispatch({ callId, opts, writable: true, depth: 1 }),
-      dispatchReview: (base, paths, effort, model) => {
+      dispatchReview: (base, paths, effort, model, context) => {
         // An explicit model runs the whole review — dimension reviewers and
         // skeptical verifiers alike — on that (usually cheaper) sibling, billed
         // at ITS rates. Validated like a dispatch override: fail loudly with the
@@ -2860,6 +2874,8 @@ export async function startRun(
           base,
           paths,
           effort,
+          context,
+          history: reviewHistory,
           explicitCacheControl: needsExplicitCacheControl(reviewModel, reviewCaps),
           // The reviewers are nested subagents whose transcripts (and diff-bearing
           // prompts) ship to the provider without passing flushResult — scrub them

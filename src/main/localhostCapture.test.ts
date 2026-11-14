@@ -28,7 +28,11 @@ const fake = vi.hoisted(() => {
     /** Called as each URL loads, before it finishes, so a test can raise protocol events. */
     onLoad: (_url: string): void => {},
     /** Called with each step script before it answers, so a test can raise protocol events. */
-    onScript: (_script: string): void => {}
+    onScript: (_script: string): void => {},
+    /** Step scripts never answer, as on a page whose main thread is blocked. */
+    hang: false,
+    /** How many times a capture window was destroyed. */
+    destroyed: 0
   }
   class FakeWebContents {
     private handlers = new Map<string, (...args: unknown[]) => void>()
@@ -76,6 +80,7 @@ const fake = vi.hoisted(() => {
       if (script.includes('b.innerText.slice(')) return state.pageText
       state.scripts.push(script)
       state.onScript(script)
+      if (state.hang) return new Promise<never>(() => {})
       return state.results.length ? state.results.shift() : state.fallback
     }
     sendInputEvent(event: unknown): void {
@@ -101,7 +106,9 @@ const fake = vi.hoisted(() => {
     isDestroyed(): boolean {
       return false
     }
-    destroy(): void {}
+    destroy(): void {
+      state.destroyed++
+    }
   }
   const ses = { webRequest: { onBeforeRequest: () => {} }, on: () => {}, setPermissionRequestHandler: () => {} }
   return { state, BrowserWindow, session: { fromPartition: () => ses } }
@@ -119,7 +126,9 @@ const {
   visibleScript,
   wireLocalhostCapture
 } = await import('./localhostCapture')
-const { PRESS_KEYS, REDACTED_PASSWORD, captureLocalhost, resetCaptureBackend } = await import('./agent/viewlocalhost')
+const { PRESS_KEYS, REDACTED_PASSWORD, STEP_TIMEOUT_MS, captureLocalhost, resetCaptureBackend } = await import(
+  './agent/viewlocalhost'
+)
 
 describe('step scripts', () => {
   it('embeds selector and value as JSON literals, so they cannot break out', () => {
@@ -572,5 +581,57 @@ describe('dialogs in the Electron backend', () => {
     // Malformed params still produce a line rather than throwing.
     expect(dialogConsoleEntry(undefined).text).toBe('[dialog] (answered cancel)')
     expect(dialogConsoleEntry({ type: 7, message: { toString: () => 'x' } }).text).toBe('[dialog] (answered cancel)')
+  })
+})
+
+describe('a blocked page in the Electron backend', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    fake.state.results = []
+    fake.state.fallback = 'ok'
+    fake.state.pageText = ''
+    fake.state.scripts = []
+    fake.state.inputs = []
+    fake.state.hang = true
+    fake.state.destroyed = 0
+    wireLocalhostCapture()
+  })
+  afterEach(() => {
+    fake.state.hang = false
+    vi.useRealTimers()
+    resetCaptureBackend()
+  })
+
+  it('ends a wait_for at its own timeout even though the page never answers', async () => {
+    const p = captureLocalhost({
+      url: 'http://localhost:3000',
+      steps: [{ action: 'wait_for', selector: '.ok', timeoutMs: 1000 }]
+    })
+    await vi.advanceTimersByTimeAsync(2000)
+    const cap = await p
+    expect(cap.steps).toEqual([
+      { step: 'wait for ".ok"', ok: false, error: 'no visible element matched within 1000ms' }
+    ])
+    expect(fake.state.scripts).toHaveLength(1)
+    expect(fake.state.destroyed).toBe(1)
+  })
+
+  it('ends an expect_text at its own timeout even though the page never answers', async () => {
+    const p = captureLocalhost({
+      url: 'http://localhost:3000',
+      steps: [{ action: 'expect_text', text: 'Done', absent: false, timeoutMs: 1000 }]
+    })
+    await vi.advanceTimersByTimeAsync(2000)
+    const cap = await p
+    expect(cap.steps?.[0]).toMatchObject({ ok: false })
+    expect(fake.state.destroyed).toBe(1)
+  })
+
+  it('fails the capture and destroys the window when a click never returns', async () => {
+    const p = captureLocalhost({ url: 'http://localhost:3000', steps: [{ action: 'click', selector: '#go' }] })
+    const settled = expect(p).rejects.toThrow(/stopped responding/)
+    await vi.advanceTimersByTimeAsync(STEP_TIMEOUT_MS + 1000)
+    await settled
+    expect(fake.state.destroyed).toBe(1)
   })
 })

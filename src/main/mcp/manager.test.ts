@@ -52,7 +52,8 @@ import {
   _setMcpSseClientFactory,
   disconnectAllMcp,
   getMcpStatuses,
-  getMcpToolDefs
+  getMcpToolDefs,
+  mcpUnavailableNotice
 } from './manager'
 
 /**
@@ -1076,5 +1077,173 @@ describe('mcp manager: a server that lists malformed tools', () => {
     expect((defs[0].schema.parameters as { type?: string }).type).toBe('object')
     expect(defs[0].schema.description).toMatch(/^Big\./)
     expect(defs[0].schema.description).toMatch(/input schema was too large/)
+  })
+})
+
+/** How a promise settled within `ms`, or that it had not by then. */
+async function settlesWithin<T>(
+  p: Promise<T>,
+  ms: number
+): Promise<{ settled: boolean; value?: T; error?: unknown }> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<{ settled: boolean }>((resolve) => {
+    timer = setTimeout(() => resolve({ settled: false }), ms)
+  })
+  try {
+    return await Promise.race([
+      p.then(
+        (value) => ({ settled: true, value }),
+        (error: unknown) => ({ settled: true, error })
+      ),
+      late
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+describe('mcp manager: Stop', () => {
+  /**
+   * A stdio server that answers initialize after `initDelayMs`, lists one tool, and
+   * never answers a tools/call; records every message the client writes.
+   */
+  function hangingSpawn(written: Array<Record<string, unknown>>, initDelayMs = 0): SpawnFn {
+    return (() => {
+      const stdout = new EventEmitter()
+      const stdin = Object.assign(new EventEmitter(), {
+        write(line: string): boolean {
+          const msg = JSON.parse(line.trim()) as Record<string, unknown> & { id?: number; method?: string }
+          written.push(msg)
+          if (msg.id === undefined || msg.method === 'tools/call') return true
+          const result = msg.method === 'tools/list' ? { tools: [{ name: 'slow' }] } : {}
+          setTimeout(
+            () => stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`)),
+            msg.method === 'initialize' ? initDelayMs : 0
+          )
+          return true
+        }
+      })
+      return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    }) as unknown as SpawnFn
+  }
+
+  it('settles a hung tool call as soon as the run stops, and tells the server', async () => {
+    const written: Array<Record<string, unknown>> = []
+    useFactory(hangingSpawn(written))
+    const [tool] = await getMcpToolDefs([cfg()])
+    const stop = new AbortController()
+    const call = tool.execute({}, { workspace: '/tmp', allowNetwork: false, signal: stop.signal } as ToolContext)
+    await vi.waitFor(() => expect(written.some((m) => m.method === 'tools/call')).toBe(true))
+    const sent = written.find((m) => m.method === 'tools/call')!
+
+    const t0 = Date.now()
+    stop.abort()
+    const outcome = await settlesWithin(call, 1_000)
+    expect(outcome.settled).toBe(true)
+    expect(Date.now() - t0).toBeLessThan(100)
+    // A rejection, which the loop reports as the stopped call it is.
+    expect(outcome.error).toBeInstanceOf(Error)
+    expect(written.find((m) => m.method === 'notifications/cancelled')).toMatchObject({
+      params: { requestId: sent.id, reason: expect.any(String) }
+    })
+    // Not mistaken for a lost connection: nothing was reconnected.
+    expect(created).toHaveLength(1)
+    expect(created[0].isClosed).toBe(false)
+  })
+
+  it('stops waiting for a server that is slow to start when the run stops', async () => {
+    const written: Array<Record<string, unknown>> = []
+    useFactory(hangingSpawn(written, 400))
+    const stop = new AbortController()
+    const defs = getMcpToolDefs([cfg()], 'run-stop', { signal: stop.signal })
+    await new Promise((r) => setTimeout(r, 20))
+    const t0 = Date.now()
+    stop.abort()
+    const outcome = await settlesWithin(defs, 1_000)
+    expect(outcome.settled).toBe(true)
+    expect(Date.now() - t0).toBeLessThan(100)
+    expect(outcome.value).toEqual([])
+    releaseMcpRun('run-stop')
+    // The connect carries on for the next run, which finds the server ready.
+    const next = await getMcpToolDefs([cfg()])
+    expect(next.map((d) => d.schema.name)).toEqual([mcpToolName('srv', 'slow')])
+    expect(created).toHaveLength(1)
+  })
+})
+
+describe('mcp manager: notices for servers that are down', () => {
+  const server = (id: string, over: Partial<McpServerConfig> = {}): McpServerConfig =>
+    cfg({ id, name: id, command: id, ...over })
+
+  it('names a failed server once per conversation, not on every turn', async () => {
+    useFactory(failingSpawn())
+    const told: string[] = []
+    const onNotice = (m: string): number => told.push(m)
+    await getMcpToolDefs([server('broken')], 'run-1', { noticeKey: 'conv-a', onNotice })
+    expect(told).toEqual([`MCP server "broken" isn't available (failed to start: boom). Its tools are off for this turn.`])
+    await getMcpToolDefs([server('broken')], 'run-2', { noticeKey: 'conv-a', onNotice })
+    expect(told).toHaveLength(1)
+    // Another conversation hasn't been told yet.
+    await getMcpToolDefs([server('broken')], 'run-3', { noticeKey: 'conv-b', onNotice })
+    expect(told).toHaveLength(2)
+    expect(told.every((m) => !m.includes('—'))).toBe(true)
+  })
+
+  it('says nothing about healthy servers, or servers this run does not use', async () => {
+    created = []
+    const ok = okSpawn()
+    const bad = failingSpawn()
+    _setMcpClientFactory(() => {
+      const c = new McpClient(((command: string, ...rest: unknown[]) =>
+        (command === 'bad' ? (bad as (...a: unknown[]) => unknown) : (ok as (...a: unknown[]) => unknown))(
+          command,
+          ...rest
+        )) as unknown as SpawnFn)
+      created.push(c)
+      return c
+    })
+    const told: string[] = []
+    await getMcpToolDefs([server('good'), server('bad')], 'run-1', { noticeKey: 'c1', onNotice: (m) => told.push(m) })
+    expect(told).toHaveLength(1)
+    expect(told[0]).toContain('"bad"')
+    // A run in another folder that only uses the healthy server hears nothing.
+    const other: string[] = []
+    await getMcpToolDefs([server('good')], 'run-2', { noticeKey: 'c2', onNotice: (m) => other.push(m) })
+    expect(other).toEqual([])
+  })
+
+  it('tells again after the server recovered and then failed again', async () => {
+    const told: string[] = []
+    const onNotice = (m: string): number => told.push(m)
+    useFactory(failingSpawn())
+    await getMcpToolDefs([server('flaky')], undefined, { noticeKey: 'c', onNotice })
+    useFactory(okSpawn())
+    await getMcpToolDefs([server('flaky', { args: ['--fixed'] })], undefined, { noticeKey: 'c', onNotice })
+    expect(told).toHaveLength(1)
+    useFactory(failingSpawn())
+    await getMcpToolDefs([server('flaky', { args: ['--broken'] })], undefined, { noticeKey: 'c', onNotice })
+    expect(told).toHaveLength(2)
+  })
+
+  it('words a timeout and a long or unprintable error plainly', () => {
+    expect(mcpUnavailableNotice({ id: 'slow', state: 'error', error: 'MCP initialize timed out' })).toBe(
+      `MCP server "slow" isn't available (timed out starting). Its tools are off for this turn.`
+    )
+    const odd = mcpUnavailableNotice({ id: 'x', state: 'error', error: `MCP server process exited: a\u0007b ${'z'.repeat(400)}` })
+    expect(odd).toMatch(/^MCP server "x" isn't available \(process exited: a b z+…\)\. Its tools are off for this turn\.$/)
+    expect(odd.length).toBeLessThan(320)
+  })
+
+  it('says a remote server needing sign-in needs sign-in', async () => {
+    _setMcpHttpClientFactory(
+      () => new McpHttpClient(async () => new Response('', { status: 401 }))
+    )
+    const told: string[] = []
+    await getMcpToolDefs([cfg({ id: 'web', transport: 'http', command: '', url: 'https://x/mcp' })], undefined, {
+      noticeKey: 'c',
+      onNotice: (m) => told.push(m)
+    })
+    expect(told).toHaveLength(1)
+    expect(told[0]).toMatch(/^MCP server "web" needs you to sign in\. Its tools are off for this turn\./)
   })
 })

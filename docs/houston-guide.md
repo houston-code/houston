@@ -261,6 +261,15 @@ repository.
 | 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
 | 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `error`); a second signal exits at once |
 
+**Stopping Houston stops what the agent started.** When `-p`, `-i`, or `--acp` ends,
+normally or because the terminal closed or it was sent a signal, it stops the
+background commands the agent started, its MCP connections, and its language servers
+before exiting. Background commands get SIGTERM first, so a dev server or `docker
+compose up` can shut down cleanly (and stop its containers), and anything still
+running a moment later is killed. Stopping one background command, from the agent or
+the Background tasks list, works the same way, with a few seconds' grace. On Windows
+the stop is immediate.
+
 ### Standalone CLI
 
 The same `-p`, `-i`, and `--acp` clients as one self-contained Node script, with no
@@ -1167,7 +1176,9 @@ picked.
 - **Comment on lines.** Click a line (or its line number) to leave a comment on it;
   `Cmd+Enter` (`Ctrl+Enter`) saves and `Esc` cancels. Comments wait under their lines,
   can be edited or deleted, and stay while you switch scope, close the view or open
-  another chat. **Send N comments to the agent** sends them all as one message naming
+  another chat. A comment whose line no longer holds the code it was left on (a
+  refresh moved or changed it), or that isn't in the current view, is listed below
+  the diff instead, where it can still be edited, deleted, or sent. **Send N comments to the agent** sends them all as one message naming
   each file, line and the code on it; the chat shows it as "N review comments", with
   the full text one click away. **Discard** asks before dropping them.
 
@@ -2121,7 +2132,12 @@ and quality.
 - **Click a finding** to see why it matters and the suggested fix.
 - **Options:** scope it to a `base` branch or specific `paths`; raise `effort` to
   `high` to verify each finding with several independent skeptics; pass `model` to run
-  the reviewers and verifiers on a cheaper sibling model.
+  the reviewers and verifiers on a cheaper sibling model; pass `context` to state
+  decisions you already settled, so the reviewers treat them as intentional.
+- **Repeat reviews.** A later review in the same run tells its reviewers what the
+  earlier ones confirmed or rejected, so they don't raise those again. After two
+  reviews, the same unchanged diff isn't reviewed a third time, and a run gets at most
+  four reviews.
 
 ### Showing images
 
@@ -2338,6 +2354,11 @@ Houston also:
   works; the names tell you what you just handed the agent.
 - `/mcp` in the terminal and the Settings panel show each server's live status:
   connected with a tool count, needs sign-in, or the connection error.
+- When a server is down at the start of a turn (it failed to start, timed out, or needs
+  sign-in), the chat shows a notice naming it, once per chat until its status changes.
+  The turn goes on without that server's tools.
+- Stop works during a slow MCP call: the call ends at once and the server is told the
+  request was cancelled.
 
 ### Server questions (elicitation)
 

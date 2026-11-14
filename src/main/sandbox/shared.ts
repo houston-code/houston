@@ -548,7 +548,7 @@ export function killProcessTree(child: ChildProcess): void {
 /** Grace period after SIGTERM before escalating to SIGKILL on timeout/abort. Long
  *  enough for a package manager or dev server to flush and exit cleanly, short enough
  *  that a wedged process is reaped promptly. */
-const KILL_GRACE_MS = 3_000
+export const KILL_GRACE_MS = 3_000
 
 /** Grace period after the process exits (or is killed) for final stdio to flush
  *  before the call settles. Bounds how long a wedged/orphaned pipe can stall us. */

@@ -14,9 +14,11 @@ import {
 import {
   ListRefresher,
   PendingRequests,
+  cancelledNotification,
   handleServerMessage,
   keepAliveDuring,
   kindOf,
+  mcpCancelledError,
   parseIncoming,
   type ElicitationWireResult,
   type McpListKind
@@ -85,11 +87,15 @@ export interface McpConnection {
   /** Prompt templates the server exposes; empty when it doesn't support them. */
   readonly prompts: McpPromptInfo[]
   readonly isClosed: boolean
-  callTool(name: string, args: Record<string, unknown>): Promise<string>
+  /**
+   * Call a tool. An aborted `signal` (the run's Stop) rejects at once and sends the
+   * server `notifications/cancelled`; the same holds for the two calls below.
+   */
+  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>
   /** Read a resource's contents by uri (flattened to text). */
-  readResource(uri: string): Promise<string>
+  readResource(uri: string, signal?: AbortSignal): Promise<string>
   /** Fetch a prompt template by name (flattened to text). */
-  getPrompt(name: string, args: Record<string, string>): Promise<string>
+  getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<string>
   close(): void
 }
 
@@ -338,26 +344,26 @@ export class McpClient {
   }
 
   /** Call a tool and return its flattened text result. */
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
     const res = (await this.request(
       'tools/call',
       { name, arguments: args ?? {} },
       CALL_TIMEOUT_MS,
-      { progress: true }
+      { progress: true, signal }
     )) as { content?: unknown; isError?: boolean }
     const text = flattenMcpContent(res?.content)
     return res?.isError ? `${text}\n[the MCP tool reported an error]`.trim() : text || '[no output]'
   }
 
   /** Read a resource's contents by uri, flattened to text. */
-  async readResource(uri: string): Promise<string> {
-    const res = await this.request('resources/read', { uri }, CALL_TIMEOUT_MS)
+  async readResource(uri: string, signal?: AbortSignal): Promise<string> {
+    const res = await this.request('resources/read', { uri }, CALL_TIMEOUT_MS, { signal })
     return flattenMcpResourceContents(res) || '[no content]'
   }
 
   /** Fetch a prompt template by name, flattened to text. */
-  async getPrompt(name: string, args: Record<string, string>): Promise<string> {
-    const res = await this.request('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS)
+  async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<string> {
+    const res = await this.request('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, { signal })
     return flattenMcpPromptMessages(res) || '[no content]'
   }
 
@@ -461,16 +467,23 @@ export class McpClient {
     method: string,
     params: unknown,
     timeoutMs: number,
-    opts: { progress?: boolean } = {}
+    opts: { progress?: boolean; signal?: AbortSignal } = {}
   ): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error('MCP client is closed'))
+    // Stopped before it went out: nothing to send, and nothing to cancel.
+    if (opts.signal?.aborted) return Promise.reject(mcpCancelledError(method))
     const id = this.nextId++
     // Ask for progress on long calls: a server that reports it keeps the call's
     // inactivity clock (see PendingRequests) from expiring mid-work.
     const sent = opts.progress
       ? { ...(params as Record<string, unknown>), _meta: { progressToken: id } }
       : params
-    const result = this.pending.wait(id, method, timeoutMs)
+    const result = this.pending.wait(id, method, timeoutMs, undefined, {
+      signal: opts.signal,
+      onCancel: () => {
+        if (!this.closed) this.send(cancelledNotification(id))
+      }
+    })
     try {
       this.send({ jsonrpc: '2.0', id, method, params: sent })
     } catch (e) {

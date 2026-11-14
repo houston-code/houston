@@ -69,7 +69,7 @@ import {
   spawnSandboxed,
   type EgressProxyEndpoints
 } from '../sandbox'
-import { backgroundShellGroups, killShell, readShellOutput, registerShell } from './shells'
+import { backgroundShellGroups, readShellOutput, registerShell, stopShell } from './shells'
 import { reviewGitChanges, type GitGuard } from './gitGuard'
 import { foreignListenerNote, urlPort, type PortListener } from './portOwner'
 import { cwdFromRoot, runInSession, shellCwdLabel, shellCwdLine, type ShellSession } from './shell-session'
@@ -230,7 +230,8 @@ export interface ToolContext {
     base?: string,
     paths?: string[],
     effort?: 'normal' | 'high',
-    model?: string
+    model?: string,
+    context?: string
   ) => Promise<string>
   /**
    * Manage scheduled background runs (injected by the loop when the host wired a
@@ -869,16 +870,52 @@ const writeFile: ToolDef = {
     const abs = resolveInRoots(rootsOf(ctx), rel)
     const content = str(args, 'content')
     const redacted = content.includes('[redacted:')
-    const current = ctx.fileTracker || redacted ? await readIfPresent(abs) : null
-    if (current !== null) assertSeen(ctx, 'write_file', abs, rel, current)
+    const current = await readIfPresent(abs)
+    if (current !== null && ctx.fileTracker) assertSeen(ctx, 'write_file', abs, rel, current)
     if (redacted) {
       assertNoRedactedValues(current?.toString('utf8') ?? '', content)
     }
     await fs.mkdir(dirname(abs), { recursive: true })
     await fs.writeFile(abs, content, 'utf8')
     ctx.fileTracker?.noteWrite(abs, content)
-    return `Wrote ${Buffer.byteLength(content)} bytes to ${rel}.`
+    const done = `Wrote ${Buffer.byteLength(content)} bytes to ${rel}.`
+    const rewrite = current === null ? null : heavyRewrite(current.toString('utf8'), content)
+    return rewrite
+      ? `${done} This replaced ${rewrite.replaced} of ${rewrite.total} lines of the existing file; for a change to part of a file, edit_file keeps the rest intact.`
+      : done
   }
+}
+
+/** Existing files at least this long (non-blank lines) get the heavy-rewrite note. */
+const REWRITE_NOTE_MIN_LINES = 100
+/** ...when fewer than this share of their lines survive the write. */
+const REWRITE_NOTE_MAX_KEPT = 0.5
+
+/**
+ * Whether a whole-file write replaced most of a large existing file: counts the old
+ * file's non-blank lines that do not appear in the new content (as a multiset, so a
+ * line kept once is credited once). Null when the file is small or mostly kept. Pure.
+ */
+export function heavyRewrite(before: string, after: string): { replaced: number; total: number } | null {
+  const lines = (s: string): string[] =>
+    s
+      .split('\n')
+      .map((l) => l.trimEnd())
+      .filter((l) => l.trim() !== '')
+  const old = lines(before)
+  if (old.length < REWRITE_NOTE_MIN_LINES) return null
+  const pool = new Map<string, number>()
+  for (const l of lines(after)) pool.set(l, (pool.get(l) ?? 0) + 1)
+  let kept = 0
+  for (const l of old) {
+    const n = pool.get(l) ?? 0
+    if (n > 0) {
+      kept++
+      pool.set(l, n - 1)
+    }
+  }
+  if (kept >= old.length * REWRITE_NOTE_MAX_KEPT) return null
+  return { replaced: old.length - kept, total: old.length }
 }
 
 const editFile: ToolDef = withShellCwdHint({
@@ -2133,8 +2170,11 @@ const killShellTool: ToolDef = {
   async execute(args, ctx) {
     const id = str(args, 'shell_id')
     if (!id) throw new Error('shell_id is required.')
+    // Waits for the stop to finish (SIGTERM, then SIGKILL after a grace), so the
+    // result only says "killed" once the shell's processes are actually gone.
+    const outcome = await stopShell(id)
     const text = ((): string => {
-      switch (killShell(id)) {
+      switch (outcome) {
         case 'killed':
           return `Killed background shell ${id}.`
         case 'killed-leftovers':
@@ -3259,7 +3299,7 @@ const reviewChanges: ToolDef = {
   schema: {
     name: 'review_changes',
     description:
-      'Run an adversarial, multi-agent review of the current uncommitted changes for correctness, security, and quality. It spawns an independent read-only reviewer per dimension (each in its own fresh context, so they don\'t inherit your blind spots), then a skeptical verifier that re-checks every candidate finding against the real code and drops false positives, and returns the confirmed findings. Use it to self-review after completing a substantial change, before telling the user you are done, then fix what it confirms and verify the fixes directly. One review plus targeted fixes is usually enough: re-run it only if you make further substantial changes, and pass paths to scope the re-review to what changed rather than re-reviewing the whole diff. Reviews uncommitted changes (vs HEAD) by default; pass base to review against another commit or branch, and paths to limit the review to specific files.',
+      'Run an adversarial, multi-agent review of the current uncommitted changes for correctness, security, and quality. It spawns an independent read-only reviewer per dimension (each in its own fresh context, so they don\'t inherit your blind spots), then a skeptical verifier that re-checks every candidate finding against the real code and drops false positives, and returns the confirmed findings. Use it to self-review after completing a substantial change, before telling the user you are done, then fix what it confirms and verify the fixes directly. One review plus targeted fixes is usually enough: re-run it only if you make further substantial changes, and pass paths to scope the re-review to what changed rather than re-reviewing the whole diff. Each later round\'s reviewers are told what earlier rounds found; after two rounds an unchanged diff is not reviewed again, and a run gets at most four reviews. Reviews uncommitted changes (vs HEAD) by default; pass base to review against another commit or branch, and paths to limit the review to specific files.',
     parameters: objectSchema(
       {
         base: {
@@ -3283,6 +3323,11 @@ const reviewChanges: ToolDef = {
           type: 'string',
           description:
             "Optional: run the reviewer and verifier subagents on a different model from the current provider (e.g. a cheaper sibling for a routine review). Must be one of the provider's configured model ids; omit to use the current model."
+        },
+        context: {
+          type: 'string',
+          description:
+            'Optional: decisions the user already settled about this change (e.g. "keep the old API on purpose"), so the reviewers treat them as intentional rather than reporting them.'
         }
       },
       []
@@ -3298,7 +3343,8 @@ const reviewChanges: ToolDef = {
       str(args, 'base') || undefined,
       paths,
       effort,
-      str(args, 'model') || undefined
+      str(args, 'model') || undefined,
+      str(args, 'context') || undefined
     )
   }
 }

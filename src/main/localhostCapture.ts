@@ -226,6 +226,18 @@ export function dialogConsoleEntry(params: unknown): ConsoleEntry {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+const TIMED_OUT = Symbol('timed out')
+
+/** `work`'s result, or TIMED_OUT once `ms` passes first (the abandoned call is left to settle unobserved). */
+function withinMs<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  work.catch(() => {})
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const expiry = new Promise<typeof TIMED_OUT>((r) => {
+    timer = setTimeout(() => r(TIMED_OUT), ms)
+  })
+  return Promise.race([work, expiry]).finally(() => clearTimeout(timer))
+}
+
 /**
  * Evaluate `script` every POLL_MS until `settled` accepts its result or
  * `timeoutMs` passes, and return the last result (undefined if it never
@@ -242,8 +254,12 @@ async function pollPage(
   let last: unknown
   for (;;) {
     try {
-      last = await wc.executeJavaScript(script, true)
-      if (settled(last)) return last
+      // A blocked main thread never answers, so each evaluation gets only the time left.
+      const result = await withinMs(wc.executeJavaScript(script, true), Math.max(0, deadline - Date.now()))
+      if (result !== TIMED_OUT) {
+        last = result
+        if (settled(last)) return last
+      }
     } catch {
       // Keep polling until the deadline.
     }
