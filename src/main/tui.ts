@@ -514,7 +514,9 @@ export function renderApprovalPrompt(
       ? `\n${paint('⚠ runs UNSANDBOXED (no OS confinement on this host)', 'yellow', 'bold')}`
       : ev.sensitiveRead
         ? `\n${paint('⚠ reads a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
-        : ev.sensitiveWrite
+        : ev.sensitiveWrite && ev.protectedWrite
+          ? `\n${paint('⚠ changes a project control file that can run code outside the sandbox (asks every time; "Allow for run" does not cover it)', 'yellow', 'bold')}`
+          : ev.sensitiveWrite
           ? `\n${paint('⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)', 'yellow', 'bold')}`
           : ''
   // Until the chat has a shell-network grant, every answer runs the command offline;
@@ -3255,23 +3257,41 @@ export function summarizeElevated(c: {
   hooks: unknown[]
   mcpServers: unknown[]
   commands?: unknown[]
+  plugins?: Array<{ name: string }>
 }): string {
   const commands = c.commands?.length ?? 0
+  const plugins = c.plugins ?? []
   return [
     c.allowRules.length ? `${c.allowRules.length} allow rule${c.allowRules.length === 1 ? '' : 's'}` : '',
     c.hooks.length ? `${c.hooks.length} hook${c.hooks.length === 1 ? '' : 's'}` : '',
     c.mcpServers.length ? `${c.mcpServers.length} MCP server${c.mcpServers.length === 1 ? '' : 's'}` : '',
-    commands ? `${commands} command${commands === 1 ? '' : 's'} that pre-approve${commands === 1 ? 's' : ''} tools` : ''
+    commands ? `${commands} command${commands === 1 ? '' : 's'} that pre-approve${commands === 1 ? 's' : ''} tools` : '',
+    // Each plugin file by name: trusting the folder consents to running exactly these.
+    plugins.length
+      ? `${plugins.length} plugin${plugins.length === 1 ? '' : 's'} (${plugins.map((p) => p.name).join(', ')})`
+      : ''
   ]
     .filter(Boolean)
     .join(', ')
 }
 
 /** Which of the project's files define its elevating config, for the trust prompt. */
-export function elevatedSource(c: { allowRules: unknown[]; hooks: unknown[]; mcpServers: unknown[]; commands?: unknown[] }): string {
+export function elevatedSource(c: {
+  allowRules: unknown[]
+  hooks: unknown[]
+  mcpServers: unknown[]
+  commands?: unknown[]
+  plugins?: unknown[]
+}): string {
   const settings = c.allowRules.length > 0 || c.hooks.length > 0 || c.mcpServers.length > 0
-  if (!c.commands?.length) return '.houston/settings.json'
-  return settings ? '.houston/settings.json and .houston/commands' : '.houston/commands'
+  const commands = (c.commands?.length ?? 0) > 0
+  const plugins = (c.plugins?.length ?? 0) > 0
+  const sources = [
+    settings || (!commands && !plugins) ? '.houston/settings.json' : '',
+    commands ? '.houston/commands' : '',
+    plugins ? '.houston/plugins' : ''
+  ].filter(Boolean)
+  return sources.length < 3 ? sources.join(' and ') : `${sources.slice(0, -1).join(', ')}, and ${sources[sources.length - 1]}`
 }
 
 /**
@@ -3301,8 +3321,11 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
     `\n${paint(state === 'changed' ? 'This project’s trusted configuration changed.' : 'This project asks for extra permissions.', 'cyan')}\n` +
       `  It defines ${summarizeElevated(cfg.elevated)} (in ${elevatedSource(cfg.elevated)}).\n` +
       paint(
-        '  Hooks and MCP servers run as you, and allow rules and pre-approving commands auto-approve matching actions.\n' +
-          '  Only trust folders whose authors you trust; until then Houston ignores them.\n',
+        '  Hooks, MCP servers, and plugins run as you, and allow rules and pre-approving commands auto-approve matching actions.\n' +
+          '  Only trust folders whose authors you trust; until then Houston ignores them.\n' +
+          (cfg.elevated.plugins.length
+            ? '  Plugins also need the projectPlugins setting on; a plugin added or edited later asks again.\n'
+            : ''),
         'dim'
       )
   )
@@ -3323,7 +3346,7 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
   deps.io.out(
     paint(
       decision === 'trusted'
-        ? '· folder trusted: its allow rules, hooks, and MCP servers now apply\n'
+        ? '· folder trusted: its allow rules, hooks, MCP servers, and plugins now apply\n'
         : '· never trusting this folder: its extra permissions stay off\n',
       'dim'
     )
@@ -3348,7 +3371,7 @@ export async function runTrustCommand(
   const cfg = await loadProjectConfig(cwd)
   if (!cfg.elevatedHash) {
     deps.io.out(
-      paint('· this project defines no extra permissions (nothing in .houston/settings.json elevates)\n', 'dim')
+      paint('· this project defines no extra permissions (nothing in its .houston folder elevates)\n', 'dim')
     )
     return
   }
@@ -3364,7 +3387,7 @@ export async function runTrustCommand(
   if (op === 'status') {
     const label =
       state === 'trusted'
-        ? 'trusted: its allow rules, hooks, and MCP servers apply'
+        ? 'trusted: its allow rules, hooks, MCP servers, and plugins apply'
         : state === 'untrusted'
           ? 'never trusted: its extra permissions are ignored'
           : state === 'changed'

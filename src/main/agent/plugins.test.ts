@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -7,7 +8,8 @@ import {
   PLUGINS_DIR,
   evaluatePlugin,
   loadPlugins,
-  loadPluginsIfEnabled,
+  loadTrustedPlugins,
+  readPluginFiles,
   type PluginEvent
 } from './plugins'
 
@@ -283,35 +285,94 @@ describe('loadPlugins', () => {
   })
 })
 
-describe('loadPluginsIfEnabled', () => {
-  it('does NOT load or evaluate workspace plugins when the setting is off (default)', async () => {
-    // A plugin that would register a hook if it were ever evaluated.
+describe('readPluginFiles', () => {
+  it('reads and hashes the files that would load, in sorted order, evaluating nothing', async () => {
     const ws = workspaceWith({
-      'evil.js': `houston.on('onToolStart', () => {})`
+      'b.js': 'throw new Error("never evaluated")',
+      'a.js': '// a',
+      'notes.txt': 'not a plugin'
     })
-    const warn = vi.fn()
     try {
-      for (const setting of [undefined, false]) {
-        const host = await loadPluginsIfEnabled(ws, setting, warn)
-        expect(host.size).toBe(0)
-        expect(host.has('onToolStart')).toBe(false)
-      }
+      const { files, skipped } = await readPluginFiles(ws)
+      expect(files.map((f) => f.name)).toEqual(['a.js', 'b.js'])
+      expect(files[0]!.sha256).toBe(createHash('sha256').update('// a').digest('hex'))
+      expect(files[0]!.source).toBe('// a')
+      expect(skipped).toEqual([])
     } finally {
       rmSync(ws, { recursive: true, force: true })
     }
   })
 
-  it('loads workspace plugins only when explicitly enabled', async () => {
-    const ws = workspaceWith({
-      'p.js': `houston.on('onToolStart', () => {})`
-    })
+  it('reports an oversized file as skipped instead of reading it', async () => {
+    const ws = workspaceWith({ 'big.js': `// ${'x'.repeat(300 * 1024)}` })
     try {
-      const host = await loadPluginsIfEnabled(ws, true)
-      expect(host.size).toBe(1)
-      expect(host.has('onToolStart')).toBe(true)
+      const { files, skipped } = await readPluginFiles(ws)
+      expect(files).toEqual([])
+      expect(skipped).toEqual([{ name: 'big.js', reason: expect.stringContaining('exceeds') }])
     } finally {
       rmSync(ws, { recursive: true, force: true })
     }
+  })
+
+  it('never follows a symlinked plugin file', async () => {
+    const ws = workspaceWith({})
+    const outside = mkdtempSync(join(tmpdir(), 'houston-plugin-target-'))
+    writeFileSync(join(outside, 'x.js'), '// outside the project')
+    symlinkSync(join(outside, 'x.js'), join(ws, PLUGINS_DIR, 'link.js'))
+    try {
+      expect((await readPluginFiles(ws)).files).toEqual([])
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('is empty when the workspace has no plugins folder', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'houston-plugins-none-'))
+    try {
+      expect(await readPluginFiles(ws)).toEqual({ files: [], skipped: [] })
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('loadTrustedPlugins', () => {
+  const file = (source: string): { name: string; sha256: string; source: string } => ({
+    name: 'p.js',
+    sha256: createHash('sha256').update(source).digest('hex'),
+    source
+  })
+  // A plugin that registers a hook (and so would show up in `size`) if it were ever
+  // evaluated.
+  const probe = (): { name: string; sha256: string; source: string } =>
+    file(`houston.on('onToolStart', () => {})`)
+
+  it('does NOT evaluate plugins when the setting is off, even for a trusted folder', async () => {
+    for (const enabled of [undefined, false]) {
+      const host = await loadTrustedPlugins([probe()], { enabled, trusted: true })
+      expect(host.size).toBe(0)
+      expect(host.has('onToolStart')).toBe(false)
+    }
+  })
+
+  it('does NOT evaluate plugins for an untrusted folder, even with the setting on', async () => {
+    // The global switch alone must never run a repository's plugin.
+    const warn = vi.fn()
+    const host = await loadTrustedPlugins(
+      [file(`throw new Error('evaluated an untrusted plugin')`)],
+      { enabled: true, trusted: false },
+      warn
+    )
+    expect(host.size).toBe(0)
+    // Not even evaluated: a throwing top level would have warned.
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('evaluates exactly the given sources when the setting is on and the folder is trusted', async () => {
+    const host = await loadTrustedPlugins([probe()], { enabled: true, trusted: true })
+    expect(host.size).toBe(1)
+    expect(host.has('onToolStart')).toBe(true)
   })
 })
 

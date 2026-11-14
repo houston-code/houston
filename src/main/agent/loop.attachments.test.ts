@@ -31,7 +31,8 @@ vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
 vi.mock('./plugins', () => ({
   loadPlugins: async () => ({ has: () => false, size: 0, emit: async () => {} }),
-  loadPluginsIfEnabled: async () => ({ has: () => false, size: 0, emit: async () => {} })
+  loadTrustedPlugins: async () => ({ has: () => false, size: 0, emit: async () => {} }),
+  readPluginFiles: async () => ({ files: [], skipped: [] })
 }))
 
 const { startRun } = await import('./loop')

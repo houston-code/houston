@@ -126,6 +126,24 @@ unsandboxed shell commands for the run; elsewhere it is skipped with a notice. A
 user-set command gets network exactly when the agent's own shell commands do, since it
 runs project scripts the agent can edit. Each one is followed by the git check below.
 
+The project's **control files** are guarded the same way: a file edit or shell command
+that writes anything under `.houston/`, `.vscode/`, `.idea/`, `.husky/`,
+`.devcontainer/`, `.github/workflows/`, or `.github/actions/`, or any `.envrc` or
+`.mcp.json`, asks in every mode, and "Allow for run" does not cover it; only an
+explicit `allow` rule for the path does. Those files run code outside the sandbox later
+(an editor task, a direnv script, a git hook, a Houston plugin, a CI job) or change
+Houston's own settings for the folder. Like the other shell checks this reads the words
+a command names, so a path assembled from variables, or a write made after a `cd` into
+one of those folders, isn't seen.
+
+A project's elevating configuration (its `allow` rules, hooks, and MCP servers from
+`.houston/settings.json`, and its `.houston/plugins/*.js` files) is honored only after
+the user trusts that folder, and the trust is bound to a fingerprint that includes each
+plugin file's name and content hash. Plugins also need the `projectPlugins` setting,
+which is only a master switch: it never runs a plugin in a folder the user hasn't
+trusted, and a plugin added or edited after the trust turns the folder's trust off until
+the user consents again. Plugins run in Houston's main process, outside the sandbox.
+
 The sandbox also leaves the project's `.git` writable, so ordinary git (commits,
 `git config`, upstreams, hook installers) works inside it. What a command could plant
 there for the user's **own** git to run later, outside the sandbox (a hook,

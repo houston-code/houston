@@ -4,7 +4,7 @@ import type { SettingsCtx } from '../context'
 
 type TrustState = NonNullable<PermissionPolicyView['project']>['trust']
 
-/** Whether a project's elevating config (allow rules, hooks, MCP servers) is in effect. */
+/** Whether a project's elevating config (allow rules, hooks, MCP servers, plugins) is in effect. */
 export function TrustBadge({ trust }: { trust: TrustState }): JSX.Element | null {
   if (trust === 'none') return null
   const [tone, text] =
@@ -32,6 +32,44 @@ export function ReadOnlyRules({ rules, empty }: { rules: PermissionRule[]; empty
         </li>
       ))}
     </ul>
+  )
+}
+
+/** A project's plugin files shown, not edited: name and the start of its content hash. */
+export function ReadOnlyPlugins({ plugins }: { plugins: Array<{ name: string; sha256: string }> }): JSX.Element {
+  return (
+    <ul className="ro-rules">
+      {plugins.map((p) => (
+        <li key={p.name} className="ro-rule">
+          <code className="ro-rule__tool">{p.name}</code>
+          <code className="ro-rule__match" title={`SHA-256 ${p.sha256}`}>
+            {p.sha256.slice(0, 12)}
+          </code>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** This project's plugin files, from its `.houston/plugins` folder; read-only. */
+export function ProjectPluginsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element | null {
+  const project = ctx.policy?.project
+  if (!project || project.plugins.length === 0) return null
+  return (
+    <SettingsSection
+      title="This project's plugins"
+      desc={
+        <>
+          JavaScript files in <code>.houston/plugins</code> that run inside Houston, outside the
+          sandbox. They run only while you trust the folder and the <code>projectPlugins</code>{' '}
+          setting is on, and a plugin added or edited since you trusted it turns them all off
+          until you trust the folder again.
+        </>
+      }
+    >
+      <TrustBadge trust={project.trust} />
+      <ReadOnlyPlugins plugins={project.plugins} />
+    </SettingsSection>
   )
 }
 

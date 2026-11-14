@@ -172,6 +172,7 @@ import {
   isSensitiveWrite,
   shellAllowCoversTripwires,
   shellCwdOutsideRoots,
+  isProtectedWrite,
   shellReferencesExternalPath,
   shellDiscardsWork
 } from './permissions'
@@ -262,7 +263,7 @@ import {
   skillRestrictionRefusal,
   type SkillRestriction
 } from './skillSpec'
-import { loadPluginsIfEnabled } from './plugins'
+import { loadTrustedPlugins } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
 import { inferVerifyCommand } from '../verifyInfer'
@@ -516,6 +517,7 @@ interface RunState {
       shellOffline?: boolean
       sensitiveRead?: boolean
       sensitiveWrite?: boolean
+      protectedWrite?: boolean
       networkScope?: string
     }
   >
@@ -1016,6 +1018,7 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       ...(a.shellOffline ? { shellOffline: true } : {}),
       ...(a.sensitiveRead ? { sensitiveRead: true } : {}),
       ...(a.sensitiveWrite ? { sensitiveWrite: true } : {}),
+      ...(a.protectedWrite ? { protectedWrite: true } : {}),
       ...(a.networkScope ? { networkScope: a.networkScope } : {})
     })
   }
@@ -1810,19 +1813,25 @@ export async function startRun(
     const notedSkills = notedSkillNames(messages.filter((m) => m.role === 'user').map((m) => m.content))
     // Local plugins (.houston/plugins/*.js) register observational lifecycle
     // hooks. They are executable JS run in-process and `vm` is not a security
-    // boundary, so they are NEVER auto-run for an opened repo — only when the user
-    // has explicitly opted into project plugins for a trusted project. See
-    // plugins.ts for the trust boundary.
+    // boundary, so they are NEVER auto-run for an opened repo: only when the user
+    // has turned on the projectPlugins master switch AND trusted this folder for
+    // its current plugin files (each file's hash is in the elevated fingerprint,
+    // so `projectTrusted` is false once one is added or edited). The sources run
+    // are the ones that fingerprint was computed over. See plugins.ts.
     // A plugin failure goes to houston.log and shows once per distinct failure as a
     // run notice; never to stderr, which would draw over the terminal UI.
     const pluginWarningsShown = new Set<string>()
-    const plugins = await loadPluginsIfEnabled(workspace, settings.projectPlugins, (msg) => {
-      const safe = scrubError(msg)
-      log.warn(safe)
-      if (pluginWarningsShown.has(safe)) return
-      pluginWarningsShown.add(safe)
-      emit({ type: 'notice', message: safe })
-    })
+    const plugins = await loadTrustedPlugins(
+      projectConfig.elevated.plugins,
+      { enabled: settings.projectPlugins, trusted: projectTrusted },
+      (msg) => {
+        const safe = scrubError(msg)
+        log.warn(safe)
+        if (pluginWarningsShown.has(safe)) return
+        pluginWarningsShown.add(safe)
+        emit({ type: 'notice', message: safe })
+      }
+    )
     const agentsByName = new Map(agents.map((a) => [a.name, a]))
     const capabilities = buildCapabilities(
       agents,
@@ -2483,6 +2492,8 @@ export async function startRun(
       sensitiveRead?: boolean
       /** A change to a credential file: likewise. */
       sensitiveWrite?: boolean
+      /** A change to an in-project control file (see isProtectedWrite): likewise. */
+      protectedWrite?: boolean
       /** A write's per-file diffs, for the approval card and the live row. */
       preview?: FileDiffPreview[] | null
       /** A network call's destination (see networkDestination): what "Allow for run" grants. */
@@ -2499,6 +2510,7 @@ export async function startRun(
         unsandboxedShell,
         sensitiveRead,
         sensitiveWrite,
+        protectedWrite,
         preview,
         networkDest,
         denyNote,
@@ -2518,6 +2530,7 @@ export async function startRun(
           ...(unsandboxedShell ? { sandboxed: false } : {}),
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+          ...(protectedWrite ? { protectedWrite: true } : {}),
           ...(networkScope ? { networkScope } : {})
         })
         // Register the resolver before emitting: a host that answers inside its
@@ -2535,6 +2548,7 @@ export async function startRun(
           ...(unsandboxedShell ? { sandboxed: false } : {}),
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+          ...(protectedWrite ? { protectedWrite: true } : {}),
           ...(networkScope ? { networkScope } : {})
         })
         const { decision, note } = await approval
@@ -2608,7 +2622,8 @@ export async function startRun(
         const shellEscapesWorkspace = trip?.escapes === true
         const discardsWork = trip?.discards === true
         const ruleAction = trip ? trip.ruleAction : matched
-        const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs)
+        const protectedWrite = isProtectedWrite(kind, name, gateArgs, roots)
+        const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs) || protectedWrite
         const mustApprove =
           kind === 'read'
             ? decideApproval({
@@ -2622,7 +2637,8 @@ export async function startRun(
               }).mustApprove
             : ruleAction === 'ask' ||
               ((shellEscapesWorkspace || discardsWork) && ruleAction !== 'allow') ||
-              (sensitiveWrite && ruleAction !== 'allow' && !run.override.has(grantKey(name, kind)))
+              // A control file isn't covered by this run's grant, only by an allow rule.
+              (sensitiveWrite && ruleAction !== 'allow' && (protectedWrite || !run.override.has(grantKey(name, kind))))
         if (!mustApprove) return runCall()
         return promptGatedCall({
           subCallId: mintSubCallId(callId, kind),
@@ -2633,6 +2649,7 @@ export async function startRun(
           unsandboxedShell: false,
           sensitiveRead,
           sensitiveWrite,
+          protectedWrite,
           preview: kind === 'write' ? await previewWrite(name, gateArgs, roots) : null,
           denyNote: `${APPROVAL_DENIED} Do not retry this call; work around it or note it in your report.`,
           runCall
@@ -5280,7 +5297,12 @@ export async function startRun(
             // Writing one (a file tool targeting it, or a shell command redirecting into,
             // copying over, or removing it) prompts the same way: only the user can
             // restore a `.env` an agent overwrote.
-            const sensitiveWrite = isSensitiveWrite(tool.kind, call.name, execArgs)
+            // Writing an in-project control file (.houston/, .vscode/, .envrc, .husky/, CI
+            // workflows) asks in every mode, and "Allow for run" doesn't cover it: it runs
+            // code outside the sandbox later. Its card carries the sensitive-write warning
+            // with its own reason.
+            const protectedWrite = isProtectedWrite(tool.kind, call.name, execArgs, roots)
+            const sensitiveWrite = isSensitiveWrite(tool.kind, call.name, execArgs) || protectedWrite
             // Network consent is per-DESTINATION: "Allow for run" grants only this host,
             // so approving a fetch to one host never opens egress to every host. The
             // granted-host set stands in for the generic kind override on network calls.
@@ -5329,6 +5351,7 @@ export async function startRun(
               shellDiscardsWork: discardsWork,
               sensitiveRead,
               sensitiveWrite,
+              protectedWrite,
               networkRead: tool.kind === 'network' && fullAutoNetworkRead(call.name, execArgs, settings.webReads),
               memoryTainted: tainted && MEMORY_WRITE_TOOL_NAMES.includes(call.name),
               taintedLaunch: tainted && launchesSession(call.name),
@@ -5376,6 +5399,7 @@ export async function startRun(
                 ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+                ...(protectedWrite ? { protectedWrite: true } : {}),
                 ...(networkScope ? { networkScope } : {})
               })
               // Registered before the emit so a synchronous answer (headless resolves
@@ -5393,6 +5417,7 @@ export async function startRun(
                 ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+                ...(protectedWrite ? { protectedWrite: true } : {}),
                 ...(networkScope ? { networkScope } : {})
               })
               const { decision, note: denyGuidance } = await approval

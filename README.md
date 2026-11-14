@@ -429,8 +429,9 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Plugins.** Drop a JS file in `.houston/plugins/` to register *observational*
   lifecycle hooks, `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage',
   fn)`, for logging, metrics, or notifications. Plugins are executable code, so they
-  load only after you set `"projectPlugins": true` in settings.json. Each runs in an
-  isolated context
+  load only after you set `"projectPlugins": true` in settings.json and trust the
+  folder for its current plugin files (a plugin added or edited later asks again).
+  Each runs in an isolated context
   with no `require`/`process`/network, hooks can't block or alter a call, and a
   throwing or slow plugin is caught and ignored. To *block* a tool, use a
   *PreToolUse* shell hook instead.
@@ -1418,7 +1419,10 @@ the agent loop and UI never depend on a specific provider.
   forced or deleting push) or wipe data outside it (a database reset or drop, Docker
   volumes, `terraform destroy`), and reading or changing a credential file (a `.env`, a
   private key), ask in every mode, since the sandbox protects everything but the
-  project itself and can read your whole filesystem.
+  project itself and can read your whole filesystem. So does changing a project
+  control file that runs code outside the sandbox later (`.houston/`, `.vscode/`,
+  `.idea/`, `.husky/`, `.devcontainer/`, CI workflows, `.envrc`, `.mcp.json`), which
+  *allow-for-the-run* doesn't cover; only an allow rule for the path does.
   `view_localhost` is restricted to loopback addresses and loads untrusted page
   content in a sandboxed, isolated, no-Node window; its main frame can't be
   navigated or redirected off loopback, and its requests can't reach
