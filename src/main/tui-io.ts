@@ -1,7 +1,7 @@
 import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import { spinnerFrame, type TuiIo, type Painter, type ImagePasteRequest, type ImagePasteResult } from './tui'
-import { filterTerminalOutput, visibleWidth, stripControlChars } from './tui-wrap'
+import { filterTerminalOutput, stripAnsi, stripControlChars, truncateVisible, truncateVisibleStart, visibleWidth } from './tui-wrap'
 import type { NotifySpec } from '@shared/notify'
 import { findUltrathink, ultrathinkHint, type KeywordRange, type UltrathinkEffect } from '@shared/ultrathink'
 import {
@@ -93,6 +93,9 @@ function defaultSuspend(onContinue: () => void): void {
   process.kill(0, 'SIGTSTP')
 }
 
+/** Whether writing `s` leaves the cursor at the start of a line (colour codes after the newline aside). */
+const endsLine = (s: string): boolean => stripAnsi(s).endsWith('\n')
+
 /** Longest prefix shared by every candidate — how Tab completes an ambiguous token. */
 function commonPrefix(items: string[]): string {
   if (!items.length) return ''
@@ -143,7 +146,11 @@ export interface TerminalIoDeps {
   write?: (s: string) => void
   /** Discard buffered type-ahead before a sensitive read. Defaults to draining stdin. */
   drainInput?: () => void
-  /** Painter for spinner frames (matches the session's color setting). */
+  /**
+   * Painter for what the adapter draws itself (the spinner, the picker, the composer's
+   * marks and the menu under it), until the driver hands it the session's theme
+   * through `setPaint`.
+   */
   paint?: Painter
   /** Schedule a repeating tick; returns a canceller. Injectable for tests. */
   schedule?: (fn: () => void, ms: number) => () => void
@@ -173,15 +180,15 @@ export interface TerminalIoDeps {
    * Rows to show under the composer for the current line: the live command menu,
    * or the files matching an `@` mention. Called on every redraw, so it must be
    * cheap and synchronous; work that isn't (a file lookup) calls `redraw` when it
-   * has rows to show.
+   * has rows to show. `paint` is the composer's current painter (the session's theme).
    */
-  menuFor?: (line: string, redraw: () => void) => string[]
+  menuFor?: (line: string, redraw: () => void, paint: Painter) => string[]
   /**
    * Which key set the composer answers to, read fresh on each read so `/vim` takes
    * effect on the next prompt rather than the next launch. Absent = emacs.
    */
   editorMode?: () => 'emacs' | 'vim'
-  /** Terminal height, for the transcript viewer. Defaults to stdout.rows. */
+  /** Terminal height, for the transcript viewer and the picker's window. Defaults to stdout.rows. */
   rows?: () => number
   /**
    * Open text read-only in $VISUAL/$EDITOR (the viewer's `v`). Resolves false when
@@ -323,7 +330,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   const drainInput = deps.drainInput ?? defaultDrain
   const platform = deps.platform ?? process.platform
   const suspendProcess = deps.suspendProcess ?? defaultSuspend
-  const paint = deps.paint ?? ((s: string) => s)
+  // Replaced by setPaint once the driver knows the session's theme, and on /theme.
+  let paint: Painter = deps.paint ?? ((s: string) => s)
+  const columnsNow = (): number => deps.columns?.() ?? process.stdout.columns ?? 80
   const now = deps.now ?? Date.now
   const schedule =
     deps.schedule ??
@@ -427,25 +436,47 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     rawWrite(`${plainText(s)}\n`)
   }
   const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1)
+  // Whether the cursor sits after output that did not end its line. The spinner
+  // erases the line it is on before every frame and every write, so it must never
+  // share a line with real output: a half-written line was wiped by the next frame.
+  let midLine = false
+  /**
+   * Output from outside the prompt on screen (a background session's notice, which
+   * lands whenever that session ends), printed above the prompt, which is drawn
+   * again under it. Set while the composer or a picker is open. Written into the
+   * prompt's redraw region instead, it tore the region: the half-typed message
+   * stayed above the notice looking sent.
+   */
+  let printAbove: ((s: string) => void) | null = null
   const drawSpinner = (): void => {
     if (spinnerLabel === null || screenReader) return
-    const frame = (status: string): string =>
+    const frame = (status: string, shownDraft: string): string =>
       spinnerFrame(tick, spinnerLabel ?? '', Math.floor((now() - spinnerStart) / 1000), paint, {
         ...(reduceMotion ? { glyph: STATIC_SPINNER_GLYPH } : {}),
         ...(modeLabel ? { mode: modeLabel } : {}),
         ...(status ? { status } : {}),
-        ...(draft ? { draft } : {}),
+        ...(shownDraft ? { draft: shownDraft } : {}),
         ...(queued.length ? { queued: queued.length } : {})
       })
-    // The status is the first thing to go when the line is full: a wrapped spinner
-    // line can't be erased in place, and the draft matters more than the status.
-    const width = (deps.columns?.() ?? process.stdout.columns ?? 80) - 1
-    let line = frame(statusLabel)
-    if (statusLabel && visibleWidth(line) > width) line = frame('')
+    // A wrapped spinner line can't be erased in place: every frame would leave the
+    // row above it behind. The status is the first thing to go when the line is full,
+    // since the draft matters more; then the start of the draft, since its end is
+    // where the user is typing.
+    const width = columnsNow() - 1
+    let line = frame(statusLabel, draft)
+    if (statusLabel && visibleWidth(line) > width) line = frame('', draft)
+    if (draft && visibleWidth(line) > width) {
+      // The draft shows after "  › ", four columns.
+      const room = width - visibleWidth(frame('', '')) - 4
+      line = frame('', room > 1 ? truncateVisibleStart(draft, room) : '')
+    }
+    if (visibleWidth(line) > width) line = truncateVisible(line, width)
     tick++
     // The transcript viewer owns the screen while it is open.
     if (pagerOpen) return
-    repaint(CLEAR_LINE + line)
+    // Below a half-written line, not over it.
+    repaint(`${midLine ? '\n' : ''}${CLEAR_LINE}${line}`)
+    midLine = false
   }
   const startTimer = (): void => {
     if (screenReader) return
@@ -460,7 +491,14 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       cancelTimer()
       cancelTimer = null
     }
-    if (erase && !pagerOpen && !screenReader) rawWrite(CLEAR_LINE)
+    // Erase the spinner's line, never a half-written line of output, and nothing while
+    // the transcript viewer has the screen or in screen-reader mode (no redraws there).
+    if (erase && !pagerOpen && !screenReader && !midLine) rawWrite(CLEAR_LINE)
+  }
+  /** Start a prompt at the left edge: below a half-written line rather than on it. */
+  const toFreshLine = (): void => {
+    if (midLine && !pagerOpen && !screenReader) rawWrite('\n')
+    midLine = false
   }
   const out = (s: string): void => {
     // Nothing to print: leave the spinner alone. The streaming renderer holds a block
@@ -470,23 +508,29 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     const safe = filterTerminalOutput(s)
     // The transcript viewer owns the screen: hold the output and print it, in order,
     // once the viewer closes, so nothing lands on the alternate screen and is lost.
+    // Checked first: an open prompt sits under the viewer, off screen, until then.
     if (pagerOpen) {
       heldOutput.push(safe)
       return
     }
+    // Screen-reader mode redraws nothing in place: every write is a plain append, even
+    // with a prompt open (whose reads there are append-only lines too).
     if (screenReader) {
       const plain = plainText(safe)
       if (plain) rawWrite(plain)
       return
     }
+    if (printAbove) return printAbove(safe)
     // Clear the spinner line before real output so streamed text never lands on a
     // spinner frame; the timer redraws it on the next tick, on the fresh line.
     // Everything the TUI prints comes through here, much of it text Houston didn't
     // write. The filter keeps Houston's own colours and links and shows any other
     // control character, so no string can repaint the lines above, write the
     // clipboard or query the terminal (see filterTerminalOutput).
-    if (cancelTimer) repaint(CLEAR_LINE + safe)
+    // A line still being written holds no spinner, and is continued instead.
+    if (cancelTimer && !midLine) repaint(CLEAR_LINE + safe)
     else rawWrite(safe)
+    midLine = !endsLine(safe)
   }
 
   // --- Interrupt watch. While a turn streams, the interface is paused AND the
@@ -741,6 +785,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // and hand stdin from the streaming Ctrl-C watcher to readline (which now owns
       // input, including its own Ctrl-C via the 'SIGINT' event).
       stopTimer(true)
+      toFreshLine()
       stopInterruptWatch()
       // Drop type-ahead before a security-sensitive prompt so a stray buffered
       // 'y' can't answer an approval the user never actually saw.
@@ -764,6 +809,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         questionAbort = null
         rl.pause() // back to idle: stop echoing until the next read
         pending = null
+        midLine = false // the answer's Enter ended the line
         startTimer() // resume the spinner if the turn is still running
         if (spinnerLabel !== null) startInterruptWatch() // …and re-arm Ctrl-C
         resolve(answer)
@@ -790,6 +836,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // Hand stdin from the streaming Ctrl-C watcher / spinner to this reader, and
       // drop any type-ahead so buffered bytes can't seed the secret.
       stopTimer(true)
+      toFreshLine()
       stopInterruptWatch()
       drainInput()
       rl.pause()
@@ -821,6 +868,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           /* best-effort restore */
         }
         rawWrite('\n') // raw mode swallowed the Enter, so terminate the line ourselves
+        midLine = false
         startTimer()
         if (spinnerLabel !== null) startInterruptWatch()
         resolve(value)
@@ -1246,6 +1294,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
 
     return new Promise<string | null>((resolve) => {
       stopTimer(true)
+      toFreshLine()
       stopInterruptWatch()
       rl.pause()
 
@@ -1268,25 +1317,28 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       let stopResize: (() => void) | null = null
       // Reserve the last column: writing exactly `columns` cells makes some
       // terminals wrap and insert a phantom row, which would desync the redraw.
-      const width = (): number =>
-        Math.max(8, (deps.columns?.() ?? process.stdout.columns ?? 80) - 1)
+      const width = (): number => Math.max(8, columnsNow() - 1)
       const view = (withMenu = true): ReturnType<typeof renderEditor> => {
         // The line under the cursor drives the menu: typing `/` shows what you can
         // run, without having to already know its name.
-        const menu = withMenu ? (deps.menuFor?.(state.lines[state.row] ?? '', redrawMenu) ?? []) : []
+        const menu = withMenu ? (deps.menuFor?.(state.lines[state.row] ?? '', redrawMenu, paint) ?? []) : []
         // The `ultrathink` keyword in the draft: say what it will do to this turn, and
         // colour the word where it will raise the turn's reasoning. The hint only where
         // it fits on one row: a wrapped row would desync the redraw region.
         const uses = withMenu ? findUltrathink(state.lines.join('\n')) : []
         const effect = uses.length ? (opts?.ultrathinkEffect?.() ?? 'raises') : null
         const hint = effect ? ultrathinkHint(effect) : ''
-        const below = hint && hint.length <= width() ? [...menu, paint(hint, 'dim')] : [...menu]
+        const belowRows = hint && hint.length <= width() ? [...menu, paint(hint, 'dim')] : [...menu]
         // A stashed draft on an empty composer: say how to get it back, or it is lost
         // to anyone who pressed Ctrl-S by accident.
         const stashHint = 'stashed draft: Ctrl-S brings it back'
         if (withMenu && state.stashed && editorEmpty(state) && stashHint.length <= width()) {
-          below.push(paint(stashHint, 'dim'))
+          belowRows.push(paint(stashHint, 'dim'))
         }
+        // Every row under the composer is cut to the width: the
+        // redraw moves up by rows as drawn, and a menu row that wrapped (a long command
+        // description) left a stale copy of the prompt behind on each keystroke.
+        const below = belowRows.map((r) => truncateVisible(r, width()))
         const marks = effect === 'raises' ? marksByLine(state.lines, uses) : undefined
         return renderEditor(state, {
           // The mode marker rides in front of the prompt, so which mode you are in
@@ -1314,7 +1366,25 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         drawn = false
         prevCursorRow = 0
       }
+      // Output that arrived while $EDITOR had the screen, printed when the composer is back.
+      let heldAbove = ''
+      const flushHeld = (): void => {
+        if (heldAbove) rawWrite(endsLine(heldAbove) ? heldAbove : `${heldAbove}\n`)
+        heldAbove = ''
+      }
+      const showAbove = (s: string): void => {
+        if (!drawn) {
+          heldAbove += s
+          return
+        }
+        atomically(() => {
+          eraseRegion()
+          rawWrite(endsLine(s) ? s : `${s}\n`)
+          draw()
+        })
+      }
       const draw = (): void => {
+        if (!drawn) flushHeld()
         const v = view()
         let s = ''
         if (drawn) {
@@ -1386,8 +1456,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         composerStash = state.stashed
         pending = null
         openComposer = null
+        printAbove = null
         atomically(() => {
           eraseRegion()
+          flushHeld()
           // Leave the submitted message in the scrollback, exactly as readline did:
           // just the prompt and text, not the command menu that was open under it.
           if (echo && value !== null) {
@@ -1395,6 +1467,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
             rawWrite(`${v.rows.join('\n')}\n`)
           }
         })
+        midLine = false
         teardown()
         startTimer()
         if (spinnerLabel !== null) startInterruptWatch()
@@ -1407,6 +1480,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         empty: () => state.lines.every((l) => l.length === 0),
         close: () => finish(null)
       }
+      printAbove = showAbove
 
       /** Print notes above the composer, then draw it again under them. */
       const noteAbove = (lines: string[]): void => {
@@ -1459,7 +1533,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           let next = state
           for (let i = 0; i < back; i++) next = reduceEditor(next, { type: 'backspace' }).state
           state = reduceEditor(next, { type: 'char', value: insert }).state
-        } else if (hits.length > 1 && !(deps.menuFor?.(state.lines[state.row] ?? '', redrawMenu) ?? []).length) {
+        } else if (hits.length > 1 && !(deps.menuFor?.(state.lines[state.row] ?? '', redrawMenu, paint) ?? []).length) {
           // Ambiguous and nothing more to insert: show the candidates above the
           // composer, unless the live menu under it already lists them (a slash
           // command). Printing them there too left a copy in the scrollback on
@@ -1590,6 +1664,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               done = true
               composerStash = state.stashed
               pending = null
+              // Closed before the handler runs: what it prints goes to the transcript,
+              // not above a composer that is no longer there.
+              openComposer = null
+              printAbove = null
+              flushHeld()
+              midLine = false
               teardown()
               startTimer()
               if (spinnerLabel !== null) startInterruptWatch()
@@ -1668,6 +1748,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         teardown()
         done = true
         pending = null
+        openComposer = null
+        printAbove = null
         void plainRead(promptNow()).then(resolve)
       }
     })
@@ -1812,6 +1894,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     // on Ctrl-C) so the next prompt redraws clean.
     clearLine: () => {
       if (!screenReader) rawWrite(CLEAR_LINE)
+      midLine = false
+    },
+    // The session's theme: the next frame, prompt, or menu is drawn with it.
+    setPaint: (p) => {
+      paint = p
     },
     readLine: (prompt, opts) => (screenReader ? readLinear(prompt, opts) : plainRead(prompt, opts)),
     readComposer,
@@ -1858,6 +1945,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         if (a.screenReader && cancelTimer) stopTimer(true)
         screenReader = a.screenReader
         announced = null
+        // Screen-reader output is never tracked for in-place redraws; start clean either way.
+        midLine = false
         if (!screenReader) startTimer()
       }
       if (a.reduceMotion !== undefined && a.reduceMotion !== reduceMotion) {
@@ -1944,9 +2033,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // stdin (its own raw keypress + Ctrl-C cancel), so release the watcher first.
       if (screenReader) return selectNumbered(spec)
       stopTimer(true)
+      toFreshLine()
       stopInterruptWatch()
       try {
-        return await runPicker(spec, rl, repaint, paint, stdin)
+        return await runPicker(spec, rl, repaint, paint, stdin, {
+          size: () => ({ rows: deps.rows?.() ?? process.stdout.rows ?? 0, columns: columnsNow() }),
+          printAbove: (fn) => {
+            printAbove = fn
+          }
+        })
       } finally {
         startTimer() // resume the spinner if a turn is still running
         if (spinnerLabel !== null) startInterruptWatch() // …and re-arm Ctrl-C
@@ -1984,7 +2079,13 @@ function runPicker(
   rl: ReadlineLike,
   write: (s: string) => void,
   paint: Painter,
-  stdin: NodeJS.ReadStream
+  stdin: NodeJS.ReadStream,
+  screen: {
+    /** The terminal's size now (0 when unknown), read on every redraw. */
+    size: () => { rows: number; columns: number }
+    /** Register how outside output is printed above the open picker (null once it closes). */
+    printAbove: (fn: ((s: string) => void) | null) => void
+  }
 ): Promise<PickerOutcome> {
   // No real terminal, or no raw mode available → let the driver use the typed path.
   if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return Promise.resolve({ kind: 'type' })
@@ -2011,18 +2112,26 @@ function runPicker(
       const erase = !first && prevRows > 0 ? `\r\x1b[${prevRows}A\x1b[0J` : '' // up N physical rows, erase to end
       // Option labels can be the model's text (an ask_user answer) and /resume rows are
       // chat titles and previews, so every line passes the same filter as other writes.
-      const lines = session
-        .lines({ width: process.stdout.columns || 0, height: process.stdout.rows || 0 })
-        .map(filterTerminalOutput)
+      const { rows, columns } = screen.size()
+      // The real screen size: the window of rows fits its height (the redraw moves up
+      // over the region and can't pass the top), and each line is cut to its width.
+      const lines = session.lines({ width: columns, height: rows }).map(filterTerminalOutput)
       // Count PHYSICAL rows, not logical lines: a rendered line wider than the terminal
       // wraps to several rows, so moving up by the logical count would under-count and
       // the picker would walk down the screen, leaving duplicated rows on each keypress.
-      prevRows = pickerPhysicalRows(lines, process.stdout.columns || 0)
+      prevRows = pickerPhysicalRows(lines, columns || 0)
       write(`${erase}${lines.join('\n')}\n`)
     }
+    // Outside output goes above the picker, which is drawn again under it.
+    // One write, erase and text, then the redraw, so `write` can paint each at once.
+    screen.printAbove((s) => {
+      write(`${prevRows > 0 ? `\r\x1b[${prevRows}A\x1b[0J` : ''}${endsLine(s) ? s : `${s}\n`}`)
+      draw(true)
+    })
     const finish = (outcome: PickerOutcome): void => {
       if (done) return
       done = true
+      screen.printAbove(null)
       try {
         stdin.removeListener('keypress', onKey)
         for (const l of priorKeypress) if (!stdin.listeners('keypress').includes(l)) stdin.on('keypress', l)
