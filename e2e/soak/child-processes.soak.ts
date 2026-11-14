@@ -56,9 +56,16 @@ test('terminals and stopped runs leave no processes behind', async () => {
     await expect(s.page.locator('.app')).toBeVisible()
     expect(await waitUntil(() => running(reloadTag) === 0, 15_000), 'the terminal command ended on reload').toBe(true)
 
-    // ...and when its window closes.
+    // ...and when its window closes. On Linux and Windows closing the last window quits
+    // the app, and an open terminal makes that ask first ("Quit anyway?"); answer Quit,
+    // as the user would, and the quit must take the terminal's command with it.
     const closeTag = `soak-term-${randomBytes(4).toString('hex')}`
     await startInTerminal(s, closeTag)
+    if (process.platform !== 'darwin') {
+      await s.app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox
+      })
+    }
     await s.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.close())
     expect(await waitUntil(() => running(closeTag) === 0, 15_000), 'the terminal command ended on window close').toBe(true)
   } finally {

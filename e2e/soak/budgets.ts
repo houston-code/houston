@@ -11,7 +11,11 @@
  *   largeChat: opening +322, window heap open 74, 0.8-1.8 s, kept -71 to 277 (one sample,
  *     before settledSample), window heap kept 48
  *   cliSession: peak 419, growth turn 2 to 12 154, idle 192
- * Linux and Windows start from the same limits until their first runs are read.
+ * Measured on Linux x64 (ubuntu-22.04 runner), where they differ:
+ *   cliSession: peak 446, growth 253, idle 446 (glibc keeps the freed heap, so the
+ *     idle size stays at the peak; macOS gives it back)
+ *   desktopSession: peak 1102, kept 87; largeChat: kept 78
+ * Windows starts from the macOS limits until its first runs are read.
  *
  * The window heap a closed chat leaves behind (35-48 MB) is a known retention: App
  * callbacks and effect cleanups from the render where the chat was open keep that
@@ -34,7 +38,7 @@ const BUDGETS = {
   },
   cliSession: {
     darwin: { peakResidentMB: 700, lateGrowthMB: 300, idleResidentMB: 400 },
-    linux: { peakResidentMB: 700, lateGrowthMB: 300, idleResidentMB: 400 },
+    linux: { peakResidentMB: 700, lateGrowthMB: 400, idleResidentMB: 600 },
     win32: { peakResidentMB: 800, lateGrowthMB: 300, idleResidentMB: 500 }
   }
 }
