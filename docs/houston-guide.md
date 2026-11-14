@@ -2965,7 +2965,8 @@ When a conversation grows too large, Houston keeps it inside the model's context
 window:
 
 1. it first trims large tool output the agent has moved past (the agent can re-read
-   anything it still needs)
+   anything it still needs). On a large-window model this starts well before the
+   window is nearly full, at about 160k tokens.
 2. then it summarizes the older part of the conversation, including the earlier steps
    of one long request
 
@@ -2975,6 +2976,9 @@ window:
   shell's folder, and the background shells still running.
 - **Sized to the model.** The threshold is set automatically from the selected model's
   context window: a large-window model compacts later, a small local model sooner.
+  When a model bills long prompts at a higher rate past some size, compaction keeps
+  the conversation under that size, and `/context` says where the conversation stands
+  against it. A fixed threshold in Settings governs both trimming and summarizing.
 - **Built up, not redone.** The summary is saved with the conversation, so later turns
   extend it instead of re-summarizing from scratch.
 - **Nothing disappears on screen.** The full transcript stays visible; only what's sent

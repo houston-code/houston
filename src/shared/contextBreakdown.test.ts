@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ContextParts } from './agent'
-import { contextEstimate, contextRows, contextShare, renderContextReport } from './contextBreakdown'
+import { contextEstimate, contextRows, contextShare, priceTierNote, renderContextReport } from './contextBreakdown'
 
 const parts: ContextParts = {
   system: 4000,
@@ -36,6 +36,15 @@ describe('context breakdown', () => {
 
   it('falls back to the estimate when the provider measured nothing, marked as approximate', () => {
     expect(renderContextReport(parts, 0, null)).toMatch(/Total\s+~\s*20k$/m)
+  })
+
+  it('notes the long-context price tier, and says when a request crossed it', () => {
+    expect(priceTierNote(50_000, null)).toBeNull()
+    expect(priceTierNote(50_000, 100_000)).toContain('over 100k tokens')
+    expect(priceTierNote(50_000, 100_000)).not.toContain('Past')
+    expect(priceTierNote(120_000, 100_000)).toMatch(/^Past this model's long-context price tier/)
+    expect(renderContextReport(parts, 21_000, 200_000, 20_000)).toContain('Past this model')
+    expect(renderContextReport(parts, 21_000, 200_000)).not.toContain('long-context')
   })
 
   it('says what to do when nothing has run yet', () => {

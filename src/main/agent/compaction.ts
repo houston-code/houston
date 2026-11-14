@@ -46,6 +46,14 @@ export const COMPACTION_TAIL_FRACTION = 0.5
 export const COMPACTION_WINDOW_FRACTION = 0.8
 
 /**
+ * Share of a model's long-context price tier kept free below its boundary. Past the
+ * boundary every token of a request bills at the higher rate (see `turnCostUsd`), so
+ * compaction aims under it with room for the next turn's growth and the slack in the
+ * ~4-chars-per-token estimate.
+ */
+export const PRICE_TIER_HEADROOM_FRACTION = 0.1
+
+/**
  * The effective compaction threshold in tokens. An explicit setting always wins
  * (0 disables compaction, matching the documented semantics); otherwise the
  * threshold scales to the selected model's context window — a fixed count is
@@ -53,18 +61,59 @@ export const COMPACTION_WINDOW_FRACTION = 0.8
  * on a 1M-token model, far too late on a 16k local one). When the window is
  * unknown (a custom/local model with no capability metadata) fall back to the
  * fixed default.
+ *
+ * `priceTierAbove` is the prompt size past which the model bills at its long-context
+ * rate (`ModelPricing.longContext.above`), when it has one. The automatic threshold
+ * then stays under that boundary less {@link PRICE_TIER_HEADROOM_FRACTION}: a window
+ * left to grow to 80% of a 1M window would bill most of a long session at several
+ * times the base rate.
  */
 export function resolveCompactionThreshold(
   explicit: number | undefined,
-  contextWindow: number | null
+  contextWindow: number | null,
+  priceTierAbove?: number | null
 ): number {
   if (typeof explicit === 'number' && Number.isFinite(explicit)) {
     return explicit > 0 ? Math.floor(explicit) : 0
   }
-  if (typeof contextWindow === 'number' && contextWindow > 0) {
-    return Math.floor(contextWindow * COMPACTION_WINDOW_FRACTION)
+  const byWindow =
+    typeof contextWindow === 'number' && contextWindow > 0
+      ? Math.floor(contextWindow * COMPACTION_WINDOW_FRACTION)
+      : DEFAULT_COMPACTION_THRESHOLD
+  if (typeof priceTierAbove === 'number' && Number.isFinite(priceTierAbove) && priceTierAbove > 0) {
+    return Math.min(byWindow, Math.floor(priceTierAbove * (1 - PRICE_TIER_HEADROOM_FRACTION)))
   }
-  return DEFAULT_COMPACTION_THRESHOLD
+  return byWindow
+}
+
+/**
+ * Window size at which stale tool results start going out as stubs, ahead of the
+ * compaction threshold. On a large window the threshold sits hundreds of thousands
+ * of tokens up, and every request below it re-sends every old file read and build
+ * log; stubbing them costs no model call, and `recall_history` or a re-run brings
+ * any of them back. Summarization still waits for the threshold.
+ */
+export const EARLY_EVICTION_TOKENS = 160_000
+
+/**
+ * An early eviction must free at least this share of its trigger. Each advance
+ * rewrites the window from the first new stub on (one prompt-cache miss), and a
+ * window that sits above the trigger after one would otherwise advance again on
+ * every iteration for a sliver of room each time.
+ */
+export const EARLY_EVICTION_MIN_GAIN_FRACTION = 0.1
+
+/**
+ * The window size at which the loop advances its eviction watermark without
+ * summarizing: {@link EARLY_EVICTION_TOKENS} when that is below the automatic
+ * threshold, else the threshold itself (eviction then runs only alongside
+ * compaction, as it always has). An explicit threshold governs both, and 0 turns
+ * both off.
+ */
+export function resolveEvictionTrigger(explicit: number | undefined, threshold: number): number {
+  if (threshold <= 0) return 0
+  if (typeof explicit === 'number' && Number.isFinite(explicit)) return threshold
+  return Math.min(threshold, EARLY_EVICTION_TOKENS)
 }
 
 /**
@@ -705,6 +754,27 @@ export function hasEvictableToolResults(
     if (isEvictable(messages[i], minBytes)) return true
   }
   return false
+}
+
+/**
+ * Rough tokens that moving the eviction boundary up to `to` would free in
+ * `messages[from..to)`, on the same ~4-chars-per-token basis as
+ * {@link estimateTokens}: each result that would be stubbed, less its stub.
+ */
+export function evictableTokens(
+  messages: ChatMessage[],
+  from: number,
+  to: number,
+  minBytes: number = EVICT_MIN_BYTES
+): number {
+  let tokens = 0
+  for (let i = Math.max(0, from); i < Math.min(to, messages.length); i++) {
+    const m = messages[i]
+    if (!isEvictable(m, minBytes)) continue
+    const stub = evictionStub(m.toolName, '', 0).length
+    tokens += Math.max(0, Math.ceil((m.content.length - stub) / 4)) + messageAttachmentTokens(m)
+  }
+  return tokens
 }
 
 /**
