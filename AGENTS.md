@@ -174,6 +174,11 @@ for the *denied* path, not only the allowed one, and a security pass before the 
 - `src/main/agent/tools.ts`: file-tool path containment (`realpathWithinRoots`). A path
   that resolves outside the workspace roots, including through a symlink or a dangling
   one, must be refused.
+- `src/main/agent/safeWrite.ts`: every main-process write, delete, or mode change to an
+  agent-chosen path. The check above is on a string; this re-derives containment at the
+  write (component-wise mkdir, `O_NOFOLLOW` open, fd identity check before any byte), so
+  a symlink a background shell swaps onto the path can't redirect it. Never write such a
+  path with plain `fs` calls.
 - `src/main/agent/permissions.ts`: permission-rule matching. Subject and pattern are
   canonicalized per kind before comparison (paths anchored to the roots, URL authority
   lowercased, shell commands dequoted and `$'...'` decoded) so a re-spelling of a denied

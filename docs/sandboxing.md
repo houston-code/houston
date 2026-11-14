@@ -54,6 +54,48 @@ broadly-available primitive with the same shape, which is why its backend runs
 unconfined. The rest of this document records *why* the obvious Windows candidates were
 rejected, so the decision isn't re-litigated from scratch.
 
+## File tools: containment that holds while a shell runs (all backends)
+
+The structured file tools (`write_file`, `edit_file`, `multi_edit`, `notebook_edit`,
+`apply_patch` and its rollback, `lsp_rename`, which runs as an `apply_patch`, and the
+checkpoint and Changes-view restores) run in Houston's own process, outside the shell
+sandbox. Their confinement is in code: a path that resolves outside the project roots,
+lexically or through a symlink (a dangling one included), is refused
+([`resolveInRoots`](../src/main/agent/tools.ts)).
+
+A check on a path string is not enough on its own, because a sandboxed background shell
+may create symlinks inside the project. If the write resolved the same string again
+later, a shell could replace a folder on the path with a symlink to somewhere outside
+the project in between, and the unconfined write would follow it. So every write,
+delete, and mode change goes through
+[`src/main/agent/safeWrite.ts`](../src/main/agent/safeWrite.ts), which re-derives
+containment at the moment it acts:
+
+- missing parent folders are created one at a time from the canonical in-project
+  ancestor, each re-checked after it is made;
+- the file is opened with `O_NOFOLLOW` (and `O_EXCL` when it is new), so a symlink put
+  at the file itself fails the open;
+- before any byte is written, the open file is checked against the path: the parent
+  must still resolve to the same in-project folder and the file must be the one at that
+  path (same device and inode; on Linux the open file's real location is also read). An
+  existing file is opened without truncating it and only truncated once it passes, so a
+  redirected open damages nothing. Modes are set on the open file, not by path;
+- a delete removes a symlink as a link, and refuses a parent that no longer resolves
+  inside the project. A rolled-back `apply_patch` removes the folders it created only
+  while they are empty.
+
+A symlink inside the project that was already there is still followed to its
+in-project target, as before.
+
+Residuals. Node has no `openat`, so a step that names a path resolves its folders again:
+a swap landed in the microseconds between the last check and the open can leave an
+empty file or folder outside the project (an empty file is removed again when the swap
+is detected), and a delete timed the same way could remove a same-named file elsewhere.
+On macOS, getting file contents written outside would take several swaps landed within
+microseconds, in order. Windows has no `O_NOFOLLOW`, so there the checks run but the
+open itself can follow a link planted in that window; shell commands on Windows are
+unconfined and ask every time anyway (see below).
+
 ## Git hooks and settings (all backends)
 
 Each workspace root is writable, `.git` included, and that is deliberate: `git commit`,
@@ -356,7 +398,8 @@ it ([`src/main/sandbox/windows.ts`](../src/main/sandbox/windows.ts),
   ([`src/main/agent/approval.ts`](../src/main/agent/approval.ts));
 - the structured file tools' JS-level path containment still holds on **every** OS, so
   `write_file` / `edit_file` / `apply_patch` stay confined to the project regardless of
-  the shell backend.
+  the shell backend (with the Windows residual noted under
+  [File tools](#file-tools-containment-that-holds-while-a-shell-runs-all-backends)).
 
 So the behavior degrades to "you are told it isn't jailed, and you must consent,"
 rather than pretending to confine.
