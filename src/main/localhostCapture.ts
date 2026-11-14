@@ -1,14 +1,16 @@
+import { randomUUID } from 'node:crypto'
 import { BrowserWindow, session, type Session, type WebContents } from 'electron'
 import { isLoopbackHost } from './agent/loopback'
 import { blockFileChoosers, hardenUntrustedSession } from './hardenedSession'
 import { attachCdp, cdpFullPage, cdpScreenshot, emulateViewport, type Cdp } from './cdp'
+import { setBrowserBackend, type BrowserBackend, type BrowserPage, type NetworkEntry } from './agent/browserSession'
 import {
+  REF_ATTRIBUTE,
   setCaptureBackend,
   VIEWPORT,
   type CaptureDeps,
   type CaptureEmulation,
   type CaptureStep,
-  type CaptureSession,
   type ConsoleEntry,
   type PressKey,
   type Rect
@@ -193,6 +195,162 @@ export const PAGE_TEXT_SCRIPT = `(() => {
   return b && b.getClientRects().length ? b.innerText.slice(0, ${RAW_PAGE_TEXT_CHARS}) : '';
 })()`
 
+/** Most nodes one accessibility snapshot lists; the rest are summarized in one line. */
+export const MAX_SNAPSHOT_NODES = 600
+
+/**
+ * Page-side accessibility snapshot for browser_session: the visible page as an
+ * indented tree of roles and accessible names (landmarks, headings, lists, controls,
+ * images, and the text between them), one line per node. Each element listed gets a
+ * stable ref (`e12`), kept in the {@link REF_ATTRIBUTE} attribute so the same element
+ * keeps its ref across snapshots and a later step can target it. A password field's
+ * value is never read; it shows only whether it is filled. Run without a user gesture.
+ */
+export const SNAPSHOT_SCRIPT = `(() => {
+  const ATTR = ${JSON.stringify(REF_ATTRIBUTE)};
+  const MAX_NODES = ${MAX_SNAPSHOT_NODES};
+  const norm = (s) => String(s == null ? '' : s).replace(/\\s+/g, ' ').trim();
+  const cut = (s, n) => (s.length > n ? s.slice(0, n) + '...' : s);
+  const used = new Set();
+  let next = 0;
+  for (const el of document.querySelectorAll('[' + ATTR + ']')) {
+    const m = /^e(\\d+)$/.exec(el.getAttribute(ATTR) || '');
+    if (m) next = Math.max(next, Number(m[1]));
+  }
+  const refFor = (el) => {
+    let r = el.getAttribute(ATTR);
+    if (!r || !/^e\\d+$/.test(r) || used.has(r)) {
+      r = 'e' + (++next);
+      el.setAttribute(ATTR, r);
+    }
+    used.add(r);
+    return r;
+  };
+  const INPUT_ROLE = { button: 'button', submit: 'button', reset: 'button', image: 'button', checkbox: 'checkbox',
+    radio: 'radio', range: 'slider', number: 'spinbutton', search: 'searchbox', color: 'button', file: 'button' };
+  const TAG_ROLE = { BUTTON: 'button', SUMMARY: 'button', TEXTAREA: 'textbox', NAV: 'navigation', MAIN: 'main',
+    HEADER: 'banner', FOOTER: 'contentinfo', ASIDE: 'complementary', FORM: 'form', DIALOG: 'dialog',
+    TABLE: 'table', TR: 'row', TH: 'columnheader', TD: 'cell', UL: 'list', OL: 'list', LI: 'listitem',
+    H1: 'heading', H2: 'heading', H3: 'heading', H4: 'heading', H5: 'heading', H6: 'heading' };
+  const LEAF = new Set(['button', 'link', 'heading', 'textbox', 'searchbox', 'combobox', 'listbox', 'checkbox',
+    'radio', 'slider', 'spinbutton', 'switch', 'img', 'tab', 'menuitem', 'option', 'progressbar']);
+  const FROM_CONTENT = new Set(['button', 'link', 'heading', 'tab', 'menuitem', 'option', 'checkbox', 'radio',
+    'switch', 'treeitem', 'tooltip', 'cell', 'columnheader']);
+  const SKIP = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'OPTION']);
+  const roleOf = (el) => {
+    const explicit = norm(el.getAttribute('role')).split(' ')[0];
+    if (explicit && explicit !== 'none' && explicit !== 'presentation' && explicit !== 'generic') return explicit;
+    if (explicit) return '';
+    const tag = el.tagName;
+    if (tag === 'A' && el.hasAttribute('href')) return 'link';
+    if (tag === 'INPUT') return INPUT_ROLE[el.type] || 'textbox';
+    if (tag === 'SELECT') return el.multiple || el.size > 1 ? 'listbox' : 'combobox';
+    if (tag === 'IMG') return el.getAttribute('alt') === '' ? '' : 'img';
+    if (tag === 'svg') return el.getAttribute('aria-label') ? 'img' : '';
+    if (el.isContentEditable && !(el.parentElement && el.parentElement.isContentEditable)) return 'textbox';
+    return TAG_ROLE[tag] || '';
+  };
+  const textOf = (el) => norm(el.innerText || el.textContent);
+  const nameOf = (el, role) => {
+    const by = el.getAttribute('aria-labelledby');
+    if (by) {
+      const t = norm(by.split(/\\s+/).map((id) => document.getElementById(id)).filter(Boolean).map(textOf).join(' '));
+      if (t) return t;
+    }
+    const label = norm(el.getAttribute('aria-label'));
+    if (label) return label;
+    if (el.labels && el.labels.length) {
+      const t = norm(Array.from(el.labels).map(textOf).join(' '));
+      if (t) return t;
+    }
+    if (el.tagName === 'IMG' || (el.tagName === 'INPUT' && el.type === 'image')) return norm(el.getAttribute('alt'));
+    if (el.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes(el.type)) {
+      return norm(el.value) || (el.type === 'submit' ? 'Submit' : el.type === 'reset' ? 'Reset' : '');
+    }
+    if (FROM_CONTENT.has(role)) {
+      const t = textOf(el);
+      if (t) return t;
+    }
+    return norm(el.getAttribute('title')) || norm(el.getAttribute('placeholder'));
+  };
+  const attrsOf = (el, role) => {
+    const a = [];
+    const aria = (n) => el.getAttribute('aria-' + n);
+    if (role === 'heading') {
+      const lvl = aria('level') || (/^H[1-6]$/.test(el.tagName) ? el.tagName.slice(1) : '');
+      if (lvl) a.push('level=' + lvl);
+    }
+    if (el.disabled === true || aria('disabled') === 'true') a.push('disabled');
+    if ((role === 'checkbox' || role === 'radio' || role === 'switch') && el.tagName === 'INPUT') {
+      if (el.checked) a.push('checked');
+    } else if (aria('checked') === 'true') a.push('checked');
+    if (aria('pressed') === 'true') a.push('pressed');
+    if (aria('selected') === 'true') a.push('selected');
+    const expanded = aria('expanded');
+    if (expanded === 'true' || expanded === 'false') a.push(expanded === 'true' ? 'expanded' : 'collapsed');
+    if (el.required === true || aria('required') === 'true') a.push('required');
+    if (el.tagName === 'INPUT' && el.type === 'password') {
+      if (el.value) a.push('filled');
+    } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+      if (!INPUT_ROLE[el.type] || role === 'slider' || role === 'spinbutton') {
+        if (el.value) a.push('value=' + JSON.stringify(cut(String(el.value), 100)));
+      }
+    } else if (el.tagName === 'SELECT') {
+      const picked = Array.from(el.selectedOptions || []).map((o) => norm(o.textContent)).filter(Boolean);
+      if (picked.length) a.push('value=' + JSON.stringify(cut(picked.join(', '), 100)));
+    } else if (role === 'textbox' && el.isContentEditable) {
+      const t = textOf(el);
+      if (t) a.push('value=' + JSON.stringify(cut(t, 100)));
+    }
+    if (role === 'link') {
+      const href = el.getAttribute('href');
+      if (href) a.push('url=' + JSON.stringify(cut(href, 100)));
+    }
+    return a;
+  };
+  const shown = (el) => {
+    if (el.getAttribute('aria-hidden') === 'true') return 'no';
+    if (typeof el.checkVisibility !== 'function' || el.checkVisibility({ visibilityProperty: true })) return 'yes';
+    // An element with no box of its own (display: contents) still shows its children.
+    return getComputedStyle(el).display === 'contents' ? 'children' : 'no';
+  };
+  const lines = [];
+  let more = 0;
+  const emit = (depth, text) => {
+    if (lines.length >= MAX_NODES) { more++; return; }
+    lines.push('  '.repeat(depth) + '- ' + text);
+  };
+  const walk = (node, depth) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === 3) {
+        const t = norm(child.textContent);
+        if (t) emit(depth, 'text ' + JSON.stringify(cut(t, 200)));
+        continue;
+      }
+      if (child.nodeType !== 1) continue;
+      const el = child;
+      if (SKIP.has(el.tagName) || (el.tagName === 'INPUT' && el.type === 'hidden')) continue;
+      const vis = shown(el);
+      if (vis === 'no') continue;
+      const role = vis === 'yes' ? roleOf(el) : '';
+      let inner = depth;
+      if (role) {
+        const name = nameOf(el, role);
+        const attrs = attrsOf(el, role);
+        emit(depth, role + (name ? ' ' + JSON.stringify(cut(name, 100)) : '') +
+          (attrs.length ? ' [' + attrs.join(', ') + ']' : '') + ' [ref=' + refFor(el) + ']');
+        if (LEAF.has(role)) continue;
+        inner = depth + 1;
+      }
+      if (el.tagName !== 'svg') walk(el, inner);
+      if (el.shadowRoot) walk(el.shadowRoot, inner);
+    }
+  };
+  if (document.body) walk(document.body, 0);
+  if (more) lines.push('- ... ' + more + ' more node(s) not shown');
+  return lines.join('\\n');
+})()`
+
 /**
  * Page-side check for a `wait_for` step: does the selector match a visible
  * element? Returns 'invalid' for a selector the page can't parse, so the step
@@ -333,11 +491,23 @@ function captureSession(): Session {
   return ses
 }
 
+/** Most console lines a browser_session page keeps; older ones are dropped as new ones arrive. */
+export const SESSION_CONSOLE_LIMIT = 1_000
+/** Most requests a browser_session page's network log keeps. */
+export const SESSION_NETWORK_LIMIT = 500
+
 async function openElectronWindow(opts: {
   width: number
   height: number
   emulate?: CaptureEmulation
-}): Promise<CaptureSession> {
+  /**
+   * A browser_session page's own session, already hardened with the same guards as
+   * the capture session (see openBrowserPage). Absent for a view_localhost capture.
+   */
+  ses?: Session
+  /** Keep at most this many console lines (a page that stays open). Absent: keep all. */
+  consoleLimit?: number
+}): Promise<BrowserPage> {
   const win = new BrowserWindow({
     show: false,
     width: opts.width,
@@ -346,7 +516,7 @@ async function openElectronWindow(opts: {
       // Offscreen rendering so the window never flashes on screen; the page is
       // untrusted, so it's sandboxed, isolated, has no Node integration, and runs
       // in a private session whose requests can't reach private/LAN/metadata hosts.
-      session: captureSession(),
+      session: opts.ses ?? captureSession(),
       offscreen: true,
       sandbox: true,
       contextIsolation: true,
@@ -393,6 +563,14 @@ async function openElectronWindow(opts: {
     const lvl = level ?? e?.level
     const txt = message ?? e?.message ?? ''
     entries.push({ level: consoleLevelName(lvl), text: String(txt) })
+    if (opts.consoleLimit !== undefined && entries.length > opts.consoleLimit) {
+      entries.splice(0, entries.length - opts.consoleLimit)
+    }
+  })
+  // A renderer that crashed leaves a window that answers nothing: the session reopens.
+  let gone = false
+  wc.on('render-process-gone', () => {
+    gone = true
   })
 
   // Every capture gets a DevTools client, attached on a blank page before the real
@@ -537,6 +715,17 @@ async function openElectronWindow(opts: {
       }
     },
     typedSecrets: () => typedSecrets,
+    async snapshot() {
+      try {
+        // No user gesture: reading the tree must not give the page activation to spend.
+        const tree: unknown = await wc.executeJavaScript(SNAPSHOT_SCRIPT, false)
+        return typeof tree === 'string' ? tree : null
+      } catch {
+        return null
+      }
+    },
+    networkEntries: () => [],
+    isClosed: () => gone || win.isDestroyed(),
     close: () => {
       cdp.detach()
       if (!win.isDestroyed()) win.destroy()
@@ -546,7 +735,71 @@ async function openElectronWindow(opts: {
 
 const electronCaptureDeps: CaptureDeps = { open: openElectronWindow }
 
-/** Bind the agent's `view_localhost` tool to the real Electron capture backend. Call once at startup. */
+/** Request details the network log reads (a slice of Electron's webRequest details). */
+interface RequestDetails {
+  id: number
+  url: string
+  method: string
+  timestamp: number
+  resourceType?: string
+  statusCode?: number
+  error?: string
+}
+
+/**
+ * Open a browser_session page: the same offscreen window a view_localhost capture
+ * uses (same loopback pin, dialog and file-picker suppression), in a session of its
+ * own so its cookies outlive one call but are never shared with another run, a
+ * capture, or the app. The session gets exactly the capture session's guards
+ * ({@link hardenUntrustedSession}); the network log only observes requests the guard
+ * already let through or cancelled, through listeners that cannot change them.
+ */
+async function openBrowserPage(opts: { width: number; height: number }): Promise<BrowserPage> {
+  // In memory (no `persist:` prefix) and without an HTTP cache, like the capture session.
+  const ses = session.fromPartition(`browser-session-${randomUUID()}`, { cache: false })
+  hardenUntrustedSession(ses)
+  const log: NetworkEntry[] = []
+  const started = new Map<number, number>()
+  const record = (d: RequestDetails): void => {
+    const start = started.get(d.id)
+    started.delete(d.id)
+    log.push({
+      method: d.method,
+      url: d.url,
+      ...(d.statusCode !== undefined && !d.error ? { status: d.statusCode } : {}),
+      ...(d.error ? { error: d.error } : {}),
+      ...(start !== undefined ? { durationMs: Math.max(0, d.timestamp - start) } : {}),
+      ...(d.resourceType ? { resourceType: d.resourceType } : {})
+    })
+    if (log.length > SESSION_NETWORK_LIMIT) log.splice(0, log.length - SESSION_NETWORK_LIMIT)
+  }
+  ses.webRequest.onSendHeaders((d: RequestDetails) => {
+    if (started.size < SESSION_NETWORK_LIMIT * 4) started.set(d.id, d.timestamp)
+  })
+  ses.webRequest.onCompleted((d: RequestDetails) => record(d))
+  ses.webRequest.onErrorOccurred((d: RequestDetails) => record(d))
+  const page = await openElectronWindow({ ...opts, ses, consoleLimit: SESSION_CONSOLE_LIMIT }).catch((err) => {
+    void ses.clearStorageData().catch(() => {})
+    throw err
+  })
+  return {
+    ...page,
+    networkEntries: () => log,
+    close: () => {
+      page.close()
+      // Nothing the page stored outlives the session.
+      void ses.clearStorageData().catch(() => {})
+    }
+  }
+}
+
+const electronBrowserBackend: BrowserBackend = { open: openBrowserPage }
+
+/**
+ * Bind the agent's `view_localhost` and `browser_session` tools to the real Electron
+ * backends. Call once at startup.
+ */
 export function wireLocalhostCapture(): void {
   setCaptureBackend(electronCaptureDeps)
+  setBrowserBackend(electronBrowserBackend)
 }
