@@ -116,6 +116,8 @@ import {
 import { htmlToAnsi } from './syntax'
 import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
 import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
+import { renderUsageReport } from './tui-usage'
+import type { UsageReport } from '@shared/usageReport'
 import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
 import { workspaceLabel } from '@shared/notify'
 import {
@@ -1671,6 +1673,8 @@ export type SlashResult =
   | { kind: 'output'; index: number }
   /** Copy the n-th latest reply, or one of its code blocks, to the clipboard (/copy [n]). */
   | { kind: 'copy'; index: number; bad?: boolean }
+  /** Spend and tokens per day and per project, from the saved chats (/usage). */
+  | { kind: 'usage' }
   /** List (and open) the background sessions the agent spawned (/spawned). */
   | { kind: 'spawned' }
   /** List or act on the sessions the agent proposed (/proposals [start|here|dismiss n]). */
@@ -1832,6 +1836,8 @@ export function parseSlashCommand(
       const n = Number.parseInt(arg.trim(), 10)
       return { kind: 'output', index: Number.isInteger(n) && n >= 1 ? n : 1 }
     }
+    case 'usage':
+      return { kind: 'usage' }
     case 'copy': {
       // `/copy` is the last reply; a number counts back from there.
       const a = arg.trim()
@@ -1950,6 +1956,7 @@ export const HELP_TEXT = [
   '  /delete               delete this chat (asks first)',
   '  /permissions [remove n]  list the saved permission rules, or remove one',
   '  /cost                 show session token + cost totals',
+  '  /usage                spend and tokens per day (last 7) and per project, from the chats on this computer',
   '  /context              what fills the context now, part by part',
   '  /skills /agents       list workspace skills / custom agents',
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
@@ -3054,6 +3061,11 @@ export interface TuiDeps {
    * OSC 52, which the command always sends too.
    */
   copyText?: (text: string) => boolean
+  /**
+   * Spend and tokens per day and per project over the chats saved on this computer,
+   * for `/usage` (the desktop usage view's report). Absent ⇒ the command says so.
+   */
+  usageReport?: () => UsageReport
   /**
    * Open `initial` text in the user's `$VISUAL`/`$EDITOR` and return the edited
    * result (null if no editor is configured or the edit was aborted). Used by the
@@ -4589,6 +4601,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'copy') {
         await runCopyCommand(result, messages, deps, paint)
+        continue
+      }
+      if (result.kind === 'usage') {
+        if (!deps.usageReport) {
+          deps.io.out(paint('· usage totals are unavailable here\n', 'dim'))
+          continue
+        }
+        try {
+          deps.io.out(`${renderUsageReport(deps.usageReport(), paint)}\n`)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't read usage: ${(e as Error).message}\n`, 'yellow'))
+        }
         continue
       }
       if (result.kind === 'reasoning') {

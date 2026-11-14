@@ -134,7 +134,8 @@ import {
   setGeneratedTitle,
   reportChildToParent,
   takeChildReports,
-  saveSideChat
+  saveSideChat,
+  computeUsageReport
 } from './conversations'
 
 /** Resume-picker rows, each marked with the desktop app's unread state for it. */
@@ -842,6 +843,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // /copy: the platform's clipboard helper when this is a local session (never
       // over SSH, where OSC 52 is the way to the user's own clipboard).
       copyText: (text) => writeClipboardText(text),
+      // /usage: the desktop usage view's report, summed locally from the saved chats.
+      usageReport: () => computeUsageReport(),
       clipboardImage: () => {
         const img = readClipboardImage()
         if (!img) return { error: `no image on the clipboard (${noClipboardHint(process.platform)})` }

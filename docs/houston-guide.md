@@ -1721,6 +1721,11 @@ opens a panel built from the chats saved on this computer. Nothing is sent anywh
 
 Costs are estimates from each model's list price.
 
+In the terminal, `/usage` prints the same report as a compact table: the last 7 days
+(one row a day, with cost, replies, and tokens in and out), the top 5 projects of all
+time, and totals for the last 7 days, the last 30 days, and all time, plus the undated
+spend. The cost reminder is set with `costCeilingUsd` in settings.json there.
+
 ## Version and updates
 
 - **See your version:** the interactive terminal shows it in the startup banner, and

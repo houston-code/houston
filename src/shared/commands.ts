@@ -314,7 +314,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   {
     name: 'usage', group: 'Setup',
     description: 'Spend and tokens per day and per project, from the chats on this computer',
-    clients: ['gui']
+    clients: ['gui', 'tui']
   },
   {
     name: 'doctor', group: 'Setup',

@@ -3036,6 +3036,28 @@ describe('runTui', () => {
     })
   })
 
+  it('/usage prints the usage report, or says it is unavailable', async () => {
+    const { d } = deps([])
+    expect(parseSlashCommand('/usage', settings())).toEqual({ kind: 'usage' })
+    const t1 = fakeIo(['/usage', null])
+    d.io = t1.io
+    await runTui(opts, d)
+    expect(t1.text()).toContain('usage totals are unavailable here')
+    const empty = {
+      days: [],
+      projects: [],
+      recent: { cost: 0, inputTokens: 0, outputTokens: 0 },
+      allTime: { cost: 0, inputTokens: 0, outputTokens: 0, chats: 0 },
+      undated: { cost: 0, outputTokens: 0 }
+    }
+    d.usageReport = () => empty
+    const t2 = fakeIo(['/usage', null])
+    d.io = t2.io
+    await runTui(opts, d)
+    expect(t2.text()).toContain('No spend recorded yet.')
+    expect(t2.text()).not.toContain('Unknown command')
+  })
+
   it('/share copies the invite over OSC 52 and prints it', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const t = fakeIo(['/share', null])
