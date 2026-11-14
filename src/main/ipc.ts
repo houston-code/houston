@@ -227,6 +227,7 @@ import {
 } from '@shared/rewind'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { registerScheduleIpc } from './scheduleIpc'
+import { guardIpcHandle, guardIpcOn } from './ipcSender'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 import { wireMediaProtocol } from './mediaProtocol'
 import { searchMcpRegistry } from './mcpRegistry'
@@ -658,9 +659,15 @@ export function registerIpc(ready?: Promise<unknown>): void {
       open = true
     }
   )
-  /** `ipcMain.handle`, with the request held until startup has finished. */
+  /**
+   * `ipcMain.handle`, refusing any request that isn't from a chat window's own page
+   * (see ipcSender.ts), and holding the rest until startup has finished. Every
+   * handler in the app is registered through this or `on` below, including the
+   * ones customizeIpc, importIpc and scheduleIpc register.
+   */
+  const guardedHandle = guardIpcHandle((channel, listener) => ipcMain.handle(channel, listener))
   const handle: typeof ipcMain.handle = (channel, listener) =>
-    ipcMain.handle(channel, (event, ...args) =>
+    guardedHandle(channel, (event, ...args) =>
       open || !opened ? listener(event, ...args) : opened.then(() => listener(event, ...args))
     )
   /**
@@ -668,8 +675,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
    * screen, the menu's state), and handling one can read settings, which must not
    * happen before the credential store is ready (see index.ts).
    */
+  const guardedOn = guardIpcOn((channel, listener) => ipcMain.on(channel, listener))
   const on: typeof ipcMain.on = (channel, listener) =>
-    ipcMain.on(channel, (event, ...args) => afterReady(() => listener(event, ...args)))
+    guardedOn(channel, (event, ...args) => afterReady(() => listener(event, ...args)))
   /** Run `fn` now, or as soon as startup has finished. */
   const afterReady = (fn: () => void): void => {
     if (open || !opened) fn()
@@ -705,13 +713,14 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // URL can only ever carry what issueReportBody allows.
   handle(IPC.logsReveal, () => revealLogs())
   // Not held for startup: logging needs no credential, and an error during startup is
-  // exactly the one worth keeping.
+  // exactly the one worth keeping. Still sender-checked, so only a chat window's own
+  // page can write to houston.log through it.
   const logRendererError = createRendererErrorLogger()
-  ipcMain.on(IPC.rendererError, (event, raw: unknown) => logRendererError(event.sender.id, raw))
+  guardedOn(IPC.rendererError, (event, raw: unknown) => logRendererError(event.sender.id, raw))
   handle(IPC.issueReportPreview, (): string => issueReportText())
   handle(IPC.issueReportOpen, (): boolean => openIssueReport())
   // The composer's sandbox badge: a cheap read, unlike the full doctor probe.
-  ipcMain.handle(
+  guardedHandle(
     IPC.sandboxStatus,
     (): SandboxStatus => ({ backend: activeBackendId(), enforced: isSandboxed() })
   )
