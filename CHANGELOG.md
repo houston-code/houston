@@ -12,7 +12,7 @@ This release also updates the bundled Electron runtime for Chromium and Node sec
 
 ### Added
 
-- Claude Fable 5.2 is now the default Anthropic flagship model. Existing installs get it added automatically, and Fable 5.1 stays available. It is priced at $8 input, $40 output and $0.20 cached reads per million tokens. The Bedrock, Vertex and Foundry model lists now offer 5.2. Your selected default model does not change. (#594)
+- Claude Fable 5.2 replaces Fable 5.1 as the Anthropic flagship in the seeded model list. Existing installs get it added automatically, and Fable 5.1 stays available. It is priced at $8 input, $40 output and $0.20 cached reads per million tokens. The Bedrock, Vertex and Foundry model lists now offer 5.2. The default Anthropic model is still Opus 5.5, and your selected default model does not change. (#594)
 - gpt-6.1-terra is now a default OpenAI model, added automatically to existing installs. It has its own pricing ($1 input, $5 output per million tokens) instead of being estimated at the gpt-6.1-sol rate. If you delete it, it stays deleted. (#579)
 - When a test, build, lint or similar command is piped into another program (for example `| head`), the shell tool now notes that the exit code belongs to that last program, not the command itself. It also explains how to get the real status. Sandbox and permission hints now appear in this case too, so the agent no longer reads a failed run as a pass. (#574)
 
