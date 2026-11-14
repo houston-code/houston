@@ -620,3 +620,85 @@ describe('observational events (Notification, SessionEnd)', () => {
     expect([...BLOCKING_EVENT_TYPES].sort()).toEqual(['elicitation', 'plan_ready', 'tool_approval', 'tool_question'])
   })
 })
+
+describe('context-only events (SubagentStart, SubagentStop, PostCompact)', () => {
+  const all = JSON.stringify({
+    decision: 'block',
+    additionalContext: 'extra',
+    updatedInput: { a: 1 },
+    systemMessage: 'note',
+    reason: 'why'
+  })
+
+  it.each(['SubagentStart', 'SubagentStop', 'PostCompact'] as const)(
+    '%s adds context and a note, but never blocks, approves or rewrites',
+    async (event) => {
+      for (const stdout of [all, JSON.stringify({ decision: 'approve', additionalContext: 'extra' })]) {
+        const r = await runHooks(
+          [{ event, matcher: '*', command: 'h' }],
+          event,
+          { tool: event === 'PostCompact' ? event : 'research', input: {} },
+          '/ws',
+          sig,
+          runnerFrom({ h: { stdout, exitCode: 2 } })
+        )
+        expect(r.blocked).toBe(false)
+        expect(r.approved).toBe(false)
+        expect(r.updatedInput).toBeUndefined()
+        expect(r.additionalContext).toBe('extra')
+      }
+      const withNote = await runHooks(
+        [{ event, matcher: '*', command: 'h' }],
+        event,
+        { tool: 'research', input: {} },
+        '/ws',
+        sig,
+        runnerFrom({ h: { stdout: all } })
+      )
+      expect(withNote.systemMessage).toBe('note')
+    }
+  )
+
+  it('a context-only hook that fails to start blocks nothing', async () => {
+    const r = await runHooks(
+      [{ event: 'SubagentStart', matcher: '*', command: 'h' }],
+      'SubagentStart',
+      { tool: 'research', input: {} },
+      '/ws',
+      sig,
+      async () => {
+        throw new Error('spawn EACCES')
+      }
+    )
+    expect(r.blocked).toBe(false)
+  })
+
+  it('Subagent hooks match the agent name; PostCompact only * or empty', () => {
+    const list: Hook[] = [
+      { event: 'SubagentStart', matcher: 'review*', command: 'a' },
+      { event: 'SubagentStop', matcher: 'writable', command: 'b' },
+      { event: 'PostCompact', matcher: '', command: 'c' },
+      { event: 'PostCompact', matcher: 'x', command: 'd' }
+    ]
+    expect(matchingHooks(list, 'SubagentStart', 'reviewer').map((x) => x.command)).toEqual(['a'])
+    expect(matchingHooks(list, 'SubagentStart', 'research')).toEqual([])
+    expect(matchingHooks(list, 'SubagentStop', 'writable').map((x) => x.command)).toEqual(['b'])
+    expect(matchingHooks(list, 'PostCompact').map((x) => x.command)).toEqual(['c'])
+  })
+
+  it('puts the agent and the summary in the stdin payload', () => {
+    expect(
+      JSON.parse(hookStdinPayload('SubagentStart', { tool: 'reviewer', input: {}, prompt: 'review it', subagent: { name: 'reviewer' } }, '/ws'))
+    ).toEqual({ hook_event_name: 'SubagentStart', cwd: '/ws', prompt: 'review it', agent_name: 'reviewer' })
+    expect(
+      JSON.parse(
+        hookStdinPayload('SubagentStop', { tool: 'reviewer', input: {}, subagent: { name: 'reviewer', status: 'done', report: 'LGTM' } }, '/ws')
+      )
+    ).toEqual({ hook_event_name: 'SubagentStop', cwd: '/ws', agent_name: 'reviewer', agent_status: 'done', agent_report: 'LGTM' })
+    expect(JSON.parse(hookStdinPayload('PostCompact', { tool: 'PostCompact', input: {}, summary: 'S' }, '/ws'))).toEqual({
+      hook_event_name: 'PostCompact',
+      cwd: '/ws',
+      summary: 'S'
+    })
+  })
+})

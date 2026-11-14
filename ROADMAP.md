@@ -191,14 +191,13 @@ dropped.
   subagents and the side chat. *Why deferred:* each needs a review surface for proposed
   memories, and the attended path had to prove what is worth keeping first.
 
-- **More lifecycle hook events.** Hooks fire at eight points today (`PreToolUse`,
-  `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop`, `PreCompact`, and the
-  observe-only `Notification` and `SessionEnd`). Natural additions include `SubagentStop`
-  (when a dispatched subagent finishes) and `PostCompact` (after a compaction lands).
-  *Why deferred:* each needs its firing point and its blocking/context-injection
-  semantics pinned down (a subagent has several exit paths and no hook wiring yet; a
-  post-compaction hook has no obvious place to splice returned context back in), so they
-  are better designed deliberately than bolted onto the highest-churn part of the loop.
+- **More lifecycle hook events.** Hooks fire at eleven points today (`PreToolUse`,
+  `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop`, `PreCompact`, the
+  observe-only `Notification` and `SessionEnd`, and the context-only `SubagentStart`,
+  `SubagentStop` and `PostCompact`). Natural additions include `PermissionRequest`.
+  *Why deferred:* a permission hook would decide approvals, so its interaction with
+  managed and project rules needs designing first rather than bolting onto the
+  highest-churn part of the loop.
 
 - **Permission rules that match a tool's arguments.** A rule matches a tool name plus a
   glob over one subject string (the command, path, URL, or query). For a namespaced MCP

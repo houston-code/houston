@@ -376,6 +376,9 @@ export interface Hook {
     | 'PreCompact'
     | 'Notification'
     | 'SessionEnd'
+    | 'SubagentStart'
+    | 'SubagentStop'
+    | 'PostCompact'
   matcher: string
   command: string
   /**
@@ -394,7 +397,10 @@ export const HOOK_EVENTS: Hook['event'][] = [
   'Stop',
   'PreCompact',
   'Notification',
-  'SessionEnd'
+  'SessionEnd',
+  'SubagentStart',
+  'SubagentStop',
+  'PostCompact'
 ]
 
 /**
