@@ -917,6 +917,13 @@ and page through a large file by them.
 - An edit whose snippet matches nothing points the agent at the closest part of the
   file instead of only failing.
 
+**Whole-file rewrites.** When the agent overwrites a file of 200 or more lines, the
+result tells it how many lines changed and how many were removed, and warns it when
+more than 30% of the file is gone. A rewrite that puts a placeholder such as
+`// ... existing code ...` or `# rest unchanged` where real code was is refused, since
+the code it stands for would be deleted; the agent writes the whole file or edits just
+the part it means to change.
+
 ## Code intelligence (language servers)
 
 When a language server for the project's language is installed, Houston uses it the
