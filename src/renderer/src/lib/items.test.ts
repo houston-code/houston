@@ -24,6 +24,7 @@ import {
   type UserItem
 } from './items'
 import { rewindableTurnIndices } from '@shared/rewind'
+import { APPROVAL_INTERRUPTED_NOTE } from '@shared/promptOutcome'
 import { describeTool } from './toolDisplay'
 
 describe('itemsFromMessages', () => {
@@ -90,6 +91,42 @@ describe('itemsFromMessages', () => {
       { text: 'Connection reset', tone: 'error' }
     ])
     expect(endsWithRecordedError(messages, 'Connection reset')).toBe(true)
+  })
+
+  it('marks an approval the run was stopped in front of as stopped, not denied', () => {
+    const interrupted = `Denied by the user. They said: ${APPROVAL_INTERRUPTED_NOTE}`
+    const call = (id: string): ChatMessage => ({
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id, name: 'run_shell', arguments: { command: 'npm test' } }]
+    })
+    const messages: ChatMessage[] = [
+      call('s'),
+      { role: 'tool', toolCallId: 's', toolName: 'run_shell', content: interrupted },
+      call('d'),
+      { role: 'tool', toolCallId: 'd', toolName: 'run_shell', content: 'Denied by the user.' }
+    ]
+    const statuses = itemsFromMessages(messages).flatMap((i) => (i.kind === 'tool' ? [i.status] : []))
+    expect(statuses).toEqual(['stopped', 'denied'])
+    // The same live, from the result the loop sends when Stop answers the prompt.
+    const waiting = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_approval',
+      callId: 's',
+      name: 'run_shell',
+      summary: 'npm test',
+      args: { command: 'npm test' },
+      kind: 'shell'
+    } as AgentEvent)
+    const live = reduceEvent(waiting, {
+      runId: 'r',
+      type: 'tool_result',
+      callId: 's',
+      name: 'run_shell',
+      ok: false,
+      output: interrupted
+    } as AgentEvent)
+    expect((live[0] as ToolItem).status).toBe('stopped')
   })
 
   it('flags the compaction summary turn so it renders as markdown', () => {
