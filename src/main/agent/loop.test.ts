@@ -7361,6 +7361,64 @@ describe('loop control — verification gate', () => {
     expect(shellResult?.ok).toBe(true)
     expect(h.verifyRuns).toHaveLength(0)
   }, 20_000)
+
+  type ShellReceipt = {
+    filesChanged: string[]
+    checks: Array<{ kind: string; ok?: boolean; beforeLastWrite?: true }>
+  }
+  const receiptOf = (r: Awaited<ReturnType<typeof run>>): ShellReceipt | undefined =>
+    (r.events.find((e) => e.type === 'receipt') as { receipt: ShellReceipt } | undefined)?.receipt
+
+  it('files a shell command changed land on the receipt, without a verify command', async () => {
+    gitRepoWithTrackedFile()
+    const r = await shellOnlyRun("printf 'v2\\n' > tracked.txt && printf 'gen\\n' > generated.txt")
+    expect(receiptOf(r)?.filesChanged).toEqual(['generated.txt', 'tracked.txt'])
+  }, 20_000)
+
+  it('a read-only shell command adds no files to the receipt', async () => {
+    gitRepoWithTrackedFile()
+    writeFileSync(join(ws, 'tracked.txt'), 'dirty before the run\n')
+    const r = await shellOnlyRun('ls && cat tracked.txt && git status')
+    expect(receiptOf(r)?.filesChanged ?? []).toEqual([])
+  }, 20_000)
+
+  it('a shell edit after a passing test marks that pass as before the last change', async () => {
+    gitRepoWithTrackedFile()
+    writeFileSync(join(ws, 'test.mjs'), 'process.exit(0)\n')
+    const r = await run({
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'node test.mjs' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          {
+            type: 'tool_call',
+            call: { id: 's2', name: 'run_shell', arguments: { command: "sed -i.bak 's/v1/v2/' tracked.txt" } }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const receipt = receiptOf(r)
+    expect(readFileSync(join(ws, 'tracked.txt'), 'utf8')).toBe('v2\n')
+    expect(receipt?.filesChanged).toContain('tracked.txt')
+    expect(receipt?.checks).toEqual([expect.objectContaining({ kind: 'test', ok: true, beforeLastWrite: true })])
+  }, 20_000)
+
+  it('a test run after an edit in the same shell command still counts for the final code', async () => {
+    gitRepoWithTrackedFile()
+    writeFileSync(join(ws, 'test.mjs'), 'process.exit(0)\n')
+    const r = await shellOnlyRun("printf 'v2\\n' > tracked.txt && node test.mjs")
+    const receipt = receiptOf(r)
+    expect(receipt?.filesChanged).toContain('tracked.txt')
+    expect(receipt?.checks).toHaveLength(1)
+    expect(receipt?.checks[0]).toMatchObject({ kind: 'test', ok: true })
+    expect(receipt?.checks[0].beforeLastWrite).toBeUndefined()
+  }, 20_000)
 })
 
 describe('egress hardening', () => {
