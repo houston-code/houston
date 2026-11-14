@@ -228,6 +228,23 @@ function scriptKind(name: string): CheckKind | null {
   return null
 }
 
+/** Script files a shell runs directly: `./build.sh`, `bash scripts/test.sh`. */
+const SHELL_SCRIPT = /\.(sh|bash|zsh|ps1)$/i
+
+/**
+ * A script file named for what it does: `build.sh`, `scripts/lint.mjs`, `test_app.py`.
+ * The name is all there is to go on, so only the package-script names count.
+ */
+function scriptFileKind(path: string): CheckKind | null {
+  const p = path.replace(/\\/g, '/')
+  if (!p || p.length > 256) return null
+  if (TEST_SCRIPT.test(p)) return 'test'
+  const stem = (p.split('/').pop() ?? '').replace(/\.[a-z0-9]+$/i, '').replace(/_/g, '-')
+  // A `check.sh` could check anything; as a package script `check` is usually tsc.
+  if (!stem || /^check([:-].*)?$/i.test(stem)) return null
+  return scriptKind(stem)
+}
+
 /** What one simple command is for, or null when it's none of the receipt's kinds. */
 function classifySegment(segment: string): CheckKind | null {
   const w = stripWrappers(words(segment))
@@ -280,7 +297,17 @@ function classifySegment(segment: string): CheckKind | null {
         const sub = args[at + 1] ?? ''
         return sub === 'test' ? 'test' : sub === 'runserver' ? 'server' : null
       }
-      return script && script.length <= 256 && TEST_SCRIPT.test(script) ? 'test' : null
+      return scriptFileKind(script)
+    }
+    case 'sh':
+    case 'bash':
+    case 'zsh':
+    case 'pwsh':
+    case 'powershell': {
+      // `bash -c '…'` runs a string, not a file; `bash -e build.sh` runs build.sh.
+      if (args.some((x) => /^-[a-z]*c$/i.test(x) || /^-command$/i.test(x))) return null
+      const script = args.find((x) => !x.startsWith('-')) ?? ''
+      return SHELL_SCRIPT.test(script) ? scriptFileKind(script) : null
     }
     case 'http.server':
       return 'server'
@@ -375,6 +402,7 @@ function classifySegment(segment: string): CheckKind | null {
     case 'xh':
       return LOOPBACK.test(segment) ? 'http' : null
     default:
+      if (SHELL_SCRIPT.test(w[0]) && w[0].includes('/')) return scriptFileKind(w[0])
       // `npx create-react-app app`, `npm exec create-vite`: a scaffolder fetched from the registry.
       return prog.startsWith('create-') ? 'install' : null
   }
