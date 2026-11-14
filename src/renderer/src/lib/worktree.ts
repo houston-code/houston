@@ -40,6 +40,16 @@ export function planNewChatWorkspace(info: RepoInfo, workspace: string): NewChat
 }
 
 /**
+ * The folder a new chat opened from `chat` starts in. A chat in a Houston worktree
+ * hands over its repo's root, not its own checkout: the new chat belongs to the
+ * project, and starting from the checkout would show that per-chat folder until the
+ * git lookup re-anchored it (see {@link planNewChatWorkspace}). Pure.
+ */
+export function newChatFolder(chat: { workspace: string; worktree?: { repoRoot: string } }): string {
+  return chat.worktree?.repoRoot || chat.workspace
+}
+
+/**
  * Whether a new chat's "New worktree" toggle starts on: where the planner would turn
  * it on (a repo root with commits), unless the user has said they don't want it.
  */
@@ -56,12 +66,15 @@ export function canCreateWorktree(info: RepoInfo): boolean {
 }
 
 /**
- * The base the picker starts on. Must be a value the picker actually lists, or the
+ * The base the picker starts on: the repo's mainline (`main`), so a new worktree
+ * doesn't inherit whatever branch the main checkout happens to have out. Without
+ * one, the current branch. Must be a value the picker actually lists, or the
  * select shows its first option while sending a different (empty) base. An unborn
- * current branch isn't listed, so fall back to the newest branch that has commits.
+ * current branch isn't listed, so it falls back to the newest branch with commits.
  * `''` means "the current HEAD" (detached HEAD, listed as its own option).
  */
 export function defaultBaseBranch(info: RepoInfo): string {
+  if (info.defaultBranch && info.branches.includes(info.defaultBranch)) return info.defaultBranch
   if (info.unborn) return info.branches[0] ?? ''
   return info.currentBranch ?? ''
 }

@@ -19,6 +19,12 @@ import {
   throttleInfo,
   withProviderRetry
 } from './retry'
+import {
+  GEMINI_PER_DAY_QUOTA_ID,
+  GEMINI_PER_MINUTE_QUOTA_ID,
+  geminiApiError,
+  geminiQuotaBody
+} from '../test/gemini-errors'
 
 /** A thrown SDK-shaped error: a status, and optionally the headers it came with. */
 function apiError(status: number, message = 'boom', headers?: Record<string, string>): Error {
@@ -105,6 +111,59 @@ describe('isRetryableError', () => {
     // An ordinary rate limit is still retried.
     expect(isQuotaExhaustedError({ status: 429, message: 'Rate limit reached for requests' })).toBe(false)
     expect(isRetryableError({ status: 429, message: 'Rate limit reached for requests' })).toBe(true)
+  })
+
+  it("retries Gemini's per-minute quota, which it words like an exhausted one", () => {
+    // Gemini says "You exceeded your current quota" for a per-minute rate limit too, and
+    // then names how long to wait. Failing that over (or failing the run with a billing
+    // message) when 41 seconds would have cleared it was the bug.
+    const err = geminiApiError(
+      429,
+      geminiQuotaBody({ quotaId: GEMINI_PER_MINUTE_QUOTA_ID, retryDelay: '41s', retryText: 'Please retry in 41.181469235s.' })
+    )
+    expect(isQuotaExhaustedError(err)).toBe(false)
+    expect(isRetryableError(err)).toBe(true)
+    // The structured RetryInfo wins over the rounded-off sentence.
+    expect(retryAfterHintMs(err)).toBe(41_000)
+    expect(retryDelayMs(err, 1, { rand: () => 1 })).toBe(41_000)
+  })
+
+  it("treats Gemini's per-day quota as exhausted, even though it names a retry delay", () => {
+    const err = geminiApiError(429, geminiQuotaBody({ quotaId: GEMINI_PER_DAY_QUOTA_ID, retryDelay: '13s' }))
+    expect(isQuotaExhaustedError(err)).toBe(true)
+    expect(isRetryableError(err)).toBe(false)
+  })
+
+  it('treats a Gemini quota with no retry delay at all as exhausted', () => {
+    const err = geminiApiError(429, geminiQuotaBody({ quotaId: GEMINI_PER_MINUTE_QUOTA_ID }))
+    expect(isQuotaExhaustedError(err)).toBe(true)
+    expect(isRetryableError(err)).toBe(false)
+  })
+
+  it('reads the "Please retry in Ns" sentence when the RetryInfo detail is missing', () => {
+    const err = geminiApiError(
+      429,
+      geminiQuotaBody({ quotaId: GEMINI_PER_MINUTE_QUOTA_ID, retryText: 'Please retry in 12.5s.' })
+    )
+    expect(isQuotaExhaustedError(err)).toBe(false)
+    expect(retryAfterHintMs(err)).toBe(12_500)
+  })
+
+  it('clamps a Gemini retry delay like any other server-named wait', () => {
+    const err = geminiApiError(
+      429,
+      geminiQuotaBody({ quotaId: GEMINI_PER_MINUTE_QUOTA_ID, retryDelay: '3600s' })
+    )
+    expect(retryAfterHintMs(err)).toBe(60_000)
+  })
+
+  it('keeps OpenAI insufficient_quota terminal, whatever else the error carries', () => {
+    const err = Object.assign(new Error('429 You exceeded your current quota. Please retry in 20s.'), {
+      status: 429,
+      code: 'insufficient_quota'
+    })
+    expect(isQuotaExhaustedError(err)).toBe(true)
+    expect(isRetryableError(err)).toBe(false)
   })
 
   it('does not retry ordinary 4xx', () => {
@@ -256,6 +315,15 @@ describe('retryAfterHintMs', () => {
 
   it('clamps an absurd window so a server cannot park a run on it', () => {
     expect(retryAfterHintMs({ headers: { 'retry-after': '86400' } })).toBe(60_000)
+  })
+
+  it('reads retry-after-ms, ahead of retry-after', () => {
+    expect(retryAfterHintMs({ headers: new Headers({ 'retry-after-ms': '1500' }) })).toBe(1_500)
+    expect(retryAfterHintMs({ headers: { 'Retry-After-Ms': '250', 'retry-after': '30' } })).toBe(250)
+    // Clamped exactly like the seconds form.
+    expect(retryAfterHintMs({ headers: { 'retry-after-ms': '3600000' } })).toBe(60_000)
+    // An unreadable one falls back to retry-after rather than hiding it.
+    expect(retryAfterHintMs({ headers: { 'retry-after-ms': 'soon', 'retry-after': '7' } })).toBe(7_000)
   })
 
   it('prefers the value an in-band ProviderError already carries', () => {
@@ -565,6 +633,12 @@ describe('classifyProviderFailure', () => {
 
   it('tells an exhausted quota from a rate limit, though both are 429s', () => {
     expect(classifyProviderFailure(apiError(429, 'You exceeded your current quota'))).toBe('quota')
+  })
+
+  it('reads a 402 Payment Required as out of credit, and does not retry it', () => {
+    const err = apiError(402, 'This request requires more credits, or fewer max_tokens.')
+    expect(classifyProviderFailure(err)).toBe('quota')
+    expect(isRetryableError(err)).toBe(false)
   })
 
   it('recognizes a network failure by its cause chain', () => {

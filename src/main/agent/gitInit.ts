@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { realpathSync, statSync } from 'node:fs'
 import type { GitInitResult } from '@shared/git'
 import { GIT_ENV, hardenedGitArgs } from './gitRead'
+import { findGitEntry } from './gitEntry'
 
 async function runGit(args: string[], cwd: string): Promise<{ ok: boolean; stderr: string }> {
   let hardening: string[]
@@ -48,6 +49,15 @@ export async function initGitRepo(workspace: string): Promise<GitInitResult> {
   // for a nested path, could create a repo inside another one.
   const inside = await runGit(['rev-parse', '--is-inside-work-tree'], root)
   if (inside.ok) return { ok: true, alreadyRepo: true }
+  // A `.git` that git can't open (a worktree whose admin files are gone, say) is a
+  // repository to repair, not a folder to initialize: a new one would nest inside it.
+  const entry = findGitEntry(root)
+  if (entry) {
+    return {
+      ok: false,
+      error: `This folder already belongs to a git repository (${entry}) that git can't open. Repair that repository instead of creating a new one.`
+    }
+  }
 
   const init = await runGit(['init'], root)
   if (!init.ok) return { ok: false, error: init.stderr || 'git init failed.' }

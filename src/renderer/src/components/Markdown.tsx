@@ -4,6 +4,7 @@ import { visualKind } from '../lib/visuals'
 import { CodeBlock } from './CodeBlock'
 import { Icon } from './Icon'
 import { VisualBlock } from './VisualBlock'
+import { ItemBoundary } from './ItemBoundary'
 import { FileLink, useFileLinks, type FileLinks } from './FileLink'
 import { fileTargetFromHref } from '../lib/fileLinks'
 
@@ -71,7 +72,9 @@ function renderBlock(block: Block, key: number, visuals: boolean, files: FileLin
     case 'code': {
       const kind = visuals ? visualKind(block.lang, block.info) : null
       return kind ? (
-        <VisualBlock key={key} kind={kind} block={block} />
+        <ItemBoundary key={key} resetKey={block.value}>
+          <VisualBlock kind={kind} block={block} />
+        </ItemBoundary>
       ) : (
         <CodeBlock key={key} lang={block.lang} value={block.value} />
       )
@@ -151,7 +154,17 @@ function renderBlock(block: Block, key: number, visuals: boolean, files: FileLin
  * text that comes from outside the conversation's own replies (MCP prompts).
  */
 export const Markdown = memo(function Markdown({ text, visuals = false }: { text: string; visuals?: boolean }): JSX.Element {
+  // Model-written text: a render bug on some input shows a notice in its place
+  // rather than blanking the window, and the next streamed delta tries again.
+  return (
+    <ItemBoundary resetKey={text}>
+      <MarkdownBody text={text} visuals={visuals} />
+    </ItemBoundary>
+  )
+})
+
+function MarkdownBody({ text, visuals }: { text: string; visuals: boolean }): JSX.Element {
   const blocks = parseMarkdown(text)
   const files = useFileLinks()
   return <div className="md">{blocks.map((b, i) => renderBlock(b, i, visuals, files))}</div>
-})
+}

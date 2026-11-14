@@ -45,6 +45,13 @@ const TOOL_EVENTS = new Set<HookEvent>(['PreToolUse', 'PostToolUse'])
 /** Events a hook can veto — a block stops the action (or, for Stop, forces another turn). */
 const BLOCKING_EVENTS = new Set<HookEvent>(['PreToolUse', 'UserPromptSubmit', 'Stop'])
 
+/**
+ * How long one hook command may run before it is stopped. The sandbox's own default is
+ * five minutes, meant for agent commands; a hook runs on every matching tool call or
+ * prompt, so one that hangs would stall the run that long each time.
+ */
+export const HOOK_TIMEOUT_MS = 60_000
+
 export interface HookContext {
   /** The tool name for Pre/PostToolUse; the event name for lifecycle events. */
   tool: string
@@ -245,13 +252,23 @@ export async function runHooks(
           workspace,
           allowNetwork: false,
           signal,
-          env: prepared.env
+          env: prepared.env,
+          timeoutMs: HOOK_TIMEOUT_MS
         })
       } catch (e) {
         if (blocking) blocked = true
         // The command itself stays out of the message: it can hold a token, and this
         // text can reach an error the user sees.
         reasons.push(`A ${event} hook could not be started: ${e instanceof Error ? e.message : String(e)}`)
+        continue
+      }
+      // A hook that ran out of time said nothing it finished saying, so its output is
+      // not read as a decision. A guard (PreToolUse, UserPromptSubmit) still fails
+      // closed, but says why instead of looking like a deliberate block; a Stop hook
+      // that hung doesn't keep the turn going, since nothing asked it to.
+      if (res.timedOut) {
+        reasons.push(`A ${event} hook timed out after ${Math.round(HOOK_TIMEOUT_MS / 1000)}s and was stopped.`)
+        if (blocking && event !== 'Stop') blocked = true
         continue
       }
       const directive = parseDirective(res.stdout)

@@ -5,6 +5,7 @@ import type { ConversationWorktree, RepoInfo, WorktreeRemoval } from '@shared/ag
 import { isSafeGitRef } from '@shared/git'
 import { parseWorktreePorcelain } from './git'
 import { GIT_ENV, hardenedGitArgs } from './gitRead'
+import { findGitEntry } from './gitEntry'
 import { lspManager } from './lsp/manager'
 
 /**
@@ -58,6 +59,7 @@ const EMPTY_REPO: RepoInfo = {
   currentBranch: null,
   unborn: false,
   branches: [],
+  defaultBranch: null,
   isLinkedWorktreeRoot: false,
   exists: false
 }
@@ -110,7 +112,8 @@ export function worktreePath(
 export async function getRepoInfo(
   workspace: string,
   exec: GitRun = runGit,
-  exists: (p: string) => boolean = existsSync
+  exists: (p: string) => boolean = existsSync,
+  gitEntry: (dir: string) => string | null = findGitEntry
 ): Promise<RepoInfo> {
   // A missing directory isn't a non-repo folder — it's gone. Report that distinctly
   // (and skip the git spawn, which would only fail with ENOENT on the cwd anyway).
@@ -129,8 +132,9 @@ export async function getRepoInfo(
     const ws = normPath(workspace)
     isLinkedWorktreeRoot = entries.slice(1).some((e) => normPath(e.path) === ws)
   } catch {
-    // The path exists but isn't inside a git repo — a valid plain workspace.
-    return { ...EMPTY_REPO, exists: true }
+    // The path exists but isn't inside a git repo — a valid plain workspace. Unless a
+    // `.git` is there after all: then it's a repository git can't open.
+    return gitEntry(workspace) ? { ...EMPTY_REPO, exists: true, unreadable: true } : { ...EMPTY_REPO, exists: true }
   }
   let currentBranch: string | null = null
   let unborn = false
@@ -160,7 +164,24 @@ export async function getRepoInfo(
   } catch {
     // best-effort — an empty list just means no base suggestions
   }
-  return { isRepo: true, root, currentBranch, unborn, branches, isLinkedWorktreeRoot, exists: true }
+  let originHead = ''
+  try {
+    originHead = (await exec(['symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD'], workspace)).trim()
+  } catch {
+    // no origin, or origin/HEAD was never set: fall back to the conventional names
+  }
+  const defaultBranch = pickDefaultBranch(originHead, branches)
+  return { isRepo: true, root, currentBranch, unborn, branches, defaultBranch, isLinkedWorktreeRoot, exists: true }
+}
+
+/**
+ * The local branch that is the repo's mainline: the one `origin/HEAD` points at
+ * (`origin/main` → `main`), else `main`, else `master`, and only when it exists
+ * locally (the base picker lists local branches). null when none does. Pure.
+ */
+export function pickDefaultBranch(originHead: string, branches: string[]): string | null {
+  const fromOrigin = originHead.startsWith('origin/') ? originHead.slice('origin/'.length) : ''
+  return [fromOrigin, 'main', 'master'].find((b) => b && branches.includes(b)) ?? null
 }
 
 /** Append the worktrees-ignore line to `<repoRoot>/.git/info/exclude` if absent. Best-effort. */

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { HOOK_ENV_PAYLOAD_MAX_BYTES, matchingHooks, runHooks } from './hooks'
+import { HOOK_ENV_PAYLOAD_MAX_BYTES, HOOK_TIMEOUT_MS, matchingHooks, runHooks } from './hooks'
 import type { Hook } from '@shared/types'
 import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../sandbox'
 
@@ -54,14 +54,51 @@ function runnerFrom(
     return {
       stdout: r.stdout ?? '',
       stderr: r.stderr ?? '',
-      exitCode: r.exitCode ?? 0,
-      timedOut: false,
+      exitCode: r.exitCode === undefined ? 0 : r.exitCode,
+      timedOut: r.timedOut ?? false,
       sandboxed: true
     }
   }
 }
 
 const sig = new AbortController().signal
+
+describe('runHooks: a hook that runs out of time', () => {
+  const hung = { exitCode: null, timedOut: true, stdout: '{"decision":"approve"}' }
+
+  it('gives each hook a bounded timeout', async () => {
+    const seen: SandboxRunOptions[] = []
+    await runHooks([{ event: 'PostToolUse', matcher: '*', command: 'h' }], 'PostToolUse', { tool: 't', input: {} }, '/ws', sig, runnerFrom({}, seen))
+    expect(seen[0]?.timeoutMs).toBe(HOOK_TIMEOUT_MS)
+  })
+
+  it('fails a guard closed, says it timed out, and ignores its partial output', async () => {
+    const r = await runHooks(
+      [{ event: 'PreToolUse', matcher: '*', command: 'slow' }],
+      'PreToolUse',
+      { tool: 'write_file', input: {} },
+      '/ws',
+      sig,
+      runnerFrom({ slow: hung })
+    )
+    expect(r.blocked).toBe(true)
+    expect(r.approved).toBe(false)
+    expect(r.message).toMatch(/PreToolUse hook timed out after 60s/)
+  })
+
+  it('does not keep the turn going when a Stop hook hangs', async () => {
+    const r = await runHooks(
+      [{ event: 'Stop', matcher: '*', command: 'slow' }],
+      'Stop',
+      { tool: 'Stop', input: {} },
+      '/ws',
+      sig,
+      runnerFrom({ slow: hung })
+    )
+    expect(r.blocked).toBe(false)
+    expect(r.message).toMatch(/Stop hook timed out/)
+  })
+})
 
 describe('runHooks', () => {
   it('no matching hooks → not blocked, not approved, no spawn', async () => {

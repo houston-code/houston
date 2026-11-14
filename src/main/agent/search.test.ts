@@ -327,3 +327,52 @@ describe('runRipgrep output decoding', () => {
     expect(res.matches).toEqual(['a.ts:1: café'])
   })
 })
+
+describe('runRipgrep early stop', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'houston-fake-rg-stop-')))
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  // A stand-in ripgrep that runs `body` and exits only if `body` makes it.
+  const fakeRg = (body: string, hang = true): string => {
+    const p = join(dir, 'rg')
+    writeFileSync(p, `#!${process.execPath}\n${body}\n${hang ? 'setInterval(() => {}, 1000)\n' : ''}`)
+    chmodSync(p, 0o755)
+    return p
+  }
+
+  it.skipIf(process.platform === 'win32')('stops ripgrep once max lines are in, returning the same prefix', async () => {
+    // Blank lines don't count toward max, and a line split across writes counts once.
+    // The stand-in never exits, so this resolves only because the search stopped it.
+    const rg = fakeRg(
+      'process.stdout.write("./a.ts:1: one\\n\\nb.ts:2")\n' +
+        'setTimeout(() => process.stdout.write(": two\\nc.ts:3: three\\nd.ts:4: four\\n"), 50)'
+    )
+    const res = await runRipgrep(rg, 'x', dir, '.', 2)
+    expect(res).toEqual({ matches: ['a.ts:1: one', 'b.ts:2: two'] })
+  })
+
+  it.skipIf(process.platform === 'win32')('never reports the stop it caused as an error', async () => {
+    const rg = fakeRg(
+      'process.stderr.write("some/file: Permission denied\\n")\n' +
+        "process.on('SIGTERM', () => process.exit(2))\n" +
+        'process.stdout.write("a.ts:1: x\\n")'
+    )
+    const res = await runRipgrep(rg, 'x', dir, '.', 1)
+    expect(res).toEqual({ matches: ['a.ts:1: x'] })
+  })
+
+  it.skipIf(process.platform === 'win32')('still surfaces a code-2 exit that produced no matches', async () => {
+    const rg = fakeRg('process.stderr.write("regex parse error\\n"); process.exit(2)', false)
+    const res = await runRipgrep(rg, '(', dir, '.', 5)
+    expect(res).toEqual({ matches: [], error: 'regex parse error' })
+  })
+
+  it.skipIf(process.platform === 'win32')('returns every line when there are fewer than max', async () => {
+    const rg = fakeRg('process.stdout.write("a.ts:1: x\\nb.ts:2: y\\n")', false)
+    const res = await runRipgrep(rg, 'x', dir, '.', 5)
+    expect(res).toEqual({ matches: ['a.ts:1: x', 'b.ts:2: y'] })
+  })
+})

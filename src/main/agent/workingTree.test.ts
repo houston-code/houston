@@ -366,3 +366,35 @@ describe.skipIf(!hasGit)('collectWorkingTreeStats', () => {
     })
   }, GIT_TIMEOUT)
 })
+
+describe.skipIf(!hasGit)('a repository git cannot open', () => {
+  /** A linked worktree whose admin `commondir` file is gone, so git can't open it. */
+  function brokenWorktree(): string {
+    const dir = freshRepo()
+    commit(dir)
+    const wt = join(dir, 'wt')
+    git(dir, 'worktree', 'add', '-q', wt)
+    rmSync(join(dir, '.git', 'worktrees', 'wt', 'commondir'))
+    return wt
+  }
+
+  it('is reported with git\'s reason, in the full set and the badge counts', async () => {
+    const wt = brokenWorktree()
+    const changes = await collectWorkingTreeChanges(wt)
+    expect(changes.isRepo).toBe(false)
+    // git's wording varies by version ("not a git repository", "gitfile does not point to a
+    // valid repository"); either way it is git's reason, without the fatal: prefix.
+    expect(changes.unreadable).toMatch(/repositor/)
+    expect(changes.unreadable).not.toMatch(/^fatal:/)
+    const stats = await collectWorkingTreeStats(wt)
+    expect(stats).toMatchObject({ isRepo: false, unreadable: changes.unreadable })
+  })
+
+  it('is not claimed for a plain folder', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-plain-'))
+    dirs.push(dir)
+    const changes = await collectWorkingTreeChanges(dir)
+    expect(changes.isRepo).toBe(false)
+    expect(changes.unreadable).toBeUndefined()
+  })
+})

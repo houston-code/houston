@@ -80,6 +80,10 @@ interface Span {
   end: number
   /** Common leading indent of the matched window; set only for fuzzy matches. */
   indent?: string
+  /** Leading indent of the window's first line; set only for fuzzy matches. */
+  firstIndent?: string
+  /** Common leading indent of the window's lines after the first; set only for fuzzy matches. */
+  restIndent?: string
 }
 
 interface Replacement {
@@ -184,7 +188,13 @@ function windowSpans(
       const start = starts[i]
       let end = starts[i + L - 1] + lines[i + L - 1].length
       if (oldHadTrailingNewline && body[end] === '\n') end += 1
-      spans.push({ start, end, indent: commonIndent(window) })
+      spans.push({
+        start,
+        end,
+        indent: commonIndent(window),
+        firstIndent: leadingIndent(window[0]),
+        restIndent: commonIndent(window.slice(1))
+      })
       i += L // don't let matches overlap
     } else {
       i += 1
@@ -236,11 +246,45 @@ function spliceRaw(raw: string, replacements: Replacement[]): string {
   return out + raw.slice(prevRaw)
 }
 
+/**
+ * Re-indent the replacement for one fuzzy span. Normally the whole block is re-based
+ * from `oldBase` onto the window's common indent. But a model often starts
+ * `old_string` mid-line, copying from the first token of an indented line, while the
+ * lines after it carry their absolute indent. The first line's missing indent then
+ * says nothing about the block's base, and re-basing from it would shift every later
+ * line by the first line's indent. So when the old text's first line is unindented
+ * but the window's is not, the later lines are re-based on their own (old lines 2..n
+ * against window lines 2..n), and the first replacement line takes the window's
+ * first-line indent, since the splice starts at the line's beginning.
+ */
+function reindentFor(span: Span, oldLines: string[], newLines: string[], oldBase: string): string[] {
+  const fileBase = span.indent ?? ''
+  const first = oldLines[0]
+  if (
+    oldLines.length < 2 ||
+    first.trim() === '' ||
+    leadingIndent(first) !== '' ||
+    !span.firstIndent
+  ) {
+    return reindent(newLines, oldBase, fileBase)
+  }
+  const [head, ...rest] = newLines
+  const headLine = head.trim() === '' ? head : span.firstIndent + head.slice(leadingIndent(head).length)
+  return [headLine, ...reindent(rest, commonIndent(oldLines.slice(1)), span.restIndent ?? '')]
+}
+
 /** The file text a match runs against: BOM split off, line endings normalized to LF. */
 interface Prepared {
   hasBom: boolean
   /** The content without its BOM, line endings as on disk. */
   raw: string
+  /** Whether `raw` holds any CRLF, so `body` was normalized from it. */
+  normalized: boolean
+  /**
+   * Whether CRLF is the file's dominant line ending (strictly more CRLF than bare-LF
+   * terminators), which is what an inserted replacement is encoded with. A stray
+   * CRLF line in an LF file must not make an edit insert CRLF lines, and vice versa.
+   */
   crlf: boolean
   /** `raw` with CRLF normalized to LF; every span offset is into this. */
   body: string
@@ -251,8 +295,11 @@ function prepare(content: string): Prepared {
   const raw = hasBom ? content.slice(1) : content
   // Match in normalized-LF space so CRLF separators are never split across a span
   // boundary, but splice back into RAW so untouched lines keep their original endings.
-  const crlf = raw.includes('\r\n')
-  return { hasBom, raw, crlf, body: crlf ? raw.replace(/\r\n/g, '\n') : raw }
+  const normalized = raw.includes('\r\n')
+  const body = normalized ? raw.replace(/\r\n/g, '\n') : raw
+  const crlfCount = normalized ? raw.length - body.length : 0
+  const crlf = crlfCount > countNewlines(body) - crlfCount
+  return { hasBom, raw, normalized, crlf, body }
 }
 
 /** Number of `\n` in `s[from, to)`. */
@@ -273,9 +320,9 @@ function locate(
   newString: string,
   replaceAll: boolean
 ): Omit<EditResult, 'strippedLineNumbers'> | null {
-  const { body, crlf } = p
-  const oldLf = crlf ? oldString.replace(/\r\n/g, '\n') : oldString
-  const newLf = crlf ? newString.replace(/\r\n/g, '\n') : newString
+  const { body, normalized, crlf } = p
+  const oldLf = normalized ? oldString.replace(/\r\n/g, '\n') : oldString
+  const newLf = normalized ? newString.replace(/\r\n/g, '\n') : newString
 
   const oldHadTrailingNewline = oldLf.endsWith('\n')
   const oldLines = (oldHadTrailingNewline ? oldLf.slice(0, -1) : oldLf).split('\n')
@@ -313,7 +360,9 @@ function locate(
     }
 
     // Fuzzy spans carry the file block's indent; re-base the replacement onto it.
-    const texts = spans.map((s) => joinLf(s.indent !== undefined ? reindent(newLines, oldBase, s.indent) : newLines))
+    const texts = spans.map((s) =>
+      joinLf(s.indent !== undefined ? reindentFor(s, oldLines, newLines, oldBase) : newLines)
+    )
     const replacements: Replacement[] = spans.map((s, i) => ({
       start: s.start,
       end: s.end,
