@@ -28,6 +28,94 @@ export function describeTool(item: ToolItem): ToolDescription {
   return describeToolCall(item.name, item.args, { summary: item.summary, shorten: shortenPath })
 }
 
+// ---- What an approval asks ------------------------------------------------
+
+/**
+ * Tools whose one-line header already names the whole request (a path, a pattern, a
+ * URL, a PR number), or whose row shows the rest inline (a plan's list, a gallery).
+ */
+const HEADER_SAYS_ALL = new Set([
+  'read_file',
+  'list_dir',
+  'glob',
+  'git_status',
+  'git_diff',
+  'search_files',
+  'ast_grep',
+  'read_shell_output',
+  'kill_shell',
+  'web_fetch',
+  'view_localhost',
+  'web_search',
+  'todo_write',
+  'pr_sweep',
+  'show_images',
+  'render_mockup',
+  'review_changes',
+  'gh_pr_list',
+  'gh_pr_view',
+  'gh_pr_checks',
+  'gh_pr_checkout',
+  'gh_issue_list',
+  'gh_issue_view',
+  'gh_run_list',
+  'gh_run_view',
+  'list_scheduled_runs',
+  'cancel_scheduled_run',
+  'recall_history',
+  'recall_memory',
+  'memory_delete',
+  'skill'
+])
+
+/** A GitHub write's long-form text (a body, a comment), shown after its other fields. */
+const GH_TEXT_FIELDS = new Set(['body', 'comment'])
+
+/** "delete_branch" as "Delete branch". */
+function fieldLabel(key: string): string {
+  const words = key.replace(/_/g, ' ').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/**
+ * A GitHub write's fields, one per line ("Title: Fix the parser"), then its body or
+ * comment in full. The PR or issue number is left out: the header already shows it.
+ */
+function ghRequestText(args: Record<string, unknown>): string | null {
+  const fields: string[] = []
+  const texts: string[] = []
+  for (const [key, value] of Object.entries(args)) {
+    if (key === 'number' || value === undefined || value === null || value === '') continue
+    if (GH_TEXT_FIELDS.has(key) && typeof value === 'string') {
+      texts.push(value)
+      continue
+    }
+    const shown =
+      typeof value === 'string' ? value : typeof value === 'boolean' ? (value ? 'yes' : 'no') : JSON.stringify(value)
+    fields.push(`${fieldLabel(key)}: ${shown}`)
+  }
+  const parts = [fields.join('\n'), ...texts].filter((p) => p.trim() !== '')
+  return parts.length > 0 ? parts.join('\n\n') : null
+}
+
+/**
+ * What an approval card spells out under its one-line header, as plain text: the
+ * whole command for a shell call, the title and text a GitHub write will post, and
+ * the arguments of an MCP tool or any other tool whose header leaves something out.
+ * Null when the header already says it all, or when the row shows the change as a
+ * diff (`hasDiff`).
+ */
+export function approvalRequestText(item: ToolItem, opts: { hasDiff: boolean }): string | null {
+  if (opts.hasDiff) return null
+  const args = item.args ?? {}
+  if (item.name === 'run_shell') {
+    return typeof args.command === 'string' && args.command.trim() ? args.command : null
+  }
+  if (HEADER_SAYS_ALL.has(item.name)) return null
+  if (item.name.startsWith('gh_')) return ghRequestText(args)
+  return Object.keys(args).length > 0 ? JSON.stringify(args, null, 2) : null
+}
+
 // ---- Grouping ------------------------------------------------------------
 
 export type RenderNode =
@@ -113,7 +201,9 @@ export type ToolRun =
  * Collapse consecutive `read_file` calls inside a group into one aggregate run, so
  * a burst of reads renders as a single "Read N files" row instead of N rows. A lone
  * read stays a normal row, and every other tool — edits, shells, searches — keeps
- * its own row so its diff or output is never hidden behind a count.
+ * its own row so its diff or output is never hidden behind a count. A read waiting
+ * on the user's approval (a credential file always asks) keeps its own row too, since
+ * that row holds the prompt the run is waiting on.
  */
 export function foldReadRuns(items: ToolItem[]): ToolRun[] {
   const runs: ToolRun[] = []
@@ -127,7 +217,7 @@ export function foldReadRuns(items: ToolItem[]): ToolRun[] {
   }
 
   for (const item of items) {
-    if (item.name === 'read_file') {
+    if (item.name === 'read_file' && item.status !== 'awaiting-approval') {
       if (!reads) reads = []
       reads.push(item)
       continue

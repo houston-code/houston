@@ -3833,6 +3833,11 @@ h6.md-h {
   font-family: var(--mono);
   font-size: 12px;
 }
+/* A waiting approval's header is the whole request: wrap it instead of clipping. */
+.tool-row__target--whole {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .tool-row__spacer {
   flex: 1;
   min-width: 8px;
@@ -4087,6 +4092,29 @@ button.finding__head:focus-visible,
   border-radius: 4px;
   padding: 0 4px;
   line-height: 15px;
+}
+/* The request being approved, in full (a shell command, a comment's body, an MCP
+   tool's arguments): wrapped, and scrolling once it is long. */
+.tool-row__approval-request {
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 14em;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-row__approval-request:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .tool-row__approval-note {
   flex-basis: 100%;
