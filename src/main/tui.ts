@@ -5069,6 +5069,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
+    // Set once a text delta has relabelled the spinner, so the rest of the reply
+    // doesn't relabel it on every delta; any other event clears it.
+    let saysResponding = false
 
     const send = (e: AgentEvent): void => {
       // Attention signals ride the event stream itself, so anything that blocks the
@@ -5081,11 +5084,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
       if (e.type === 'text') {
         retryStreak = 0 // the request got through
+        // The reply is streaming: whatever the spinner said before (a tool that has
+        // finished, Thinking) is over. Same word the desktop app's status bar uses.
+        if (!saysResponding) {
+          deps.io.setSpinnerLabel?.('Responding')
+          saysResponding = true
+        }
         const s = md.push(e.delta)
         if (s) roundShown = true
         deps.io.out(s)
         return
       }
+      saysResponding = false
       // A discarded round's unfinished block is dropped unrendered, never flushed:
       // its redo will print the whole reply again.
       if (e.type === 'turn_discarded') md.discard()

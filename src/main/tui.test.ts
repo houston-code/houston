@@ -2724,6 +2724,38 @@ describe('runTui', () => {
     expect(t.spinner).toEqual(['start:Working', 'label:Thinking', 'label:Read', 'stop'])
   })
 
+  // The tool's verb stayed up while the next reply streamed, so a finished command
+  // looked like it was still running.
+  it('drops a finished tool from the spinner, and says Responding once the reply streams', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'run_shell', args: { command: 'ls' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_result', callId: 'c1', name: 'run_shell', ok: true, output: 'a' },
+      { runId: 'x', type: 'reasoning', delta: 'so' },
+      { runId: 'x', type: 'text', delta: 'Done' },
+      { runId: 'x', type: 'text', delta: ' here.' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.spinner).toEqual(['start:Working', 'label:Run', 'label:Working', 'label:Thinking', 'label:Responding', 'stop'])
+  })
+
+  it('keeps a parallel batch on the spinner until its last call is done', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'read_file', args: { path: 'a' } },
+      { runId: 'x', type: 'tool_start', callId: 'c2', name: 'run_shell', args: { command: 'ls' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_result', callId: 'c1', name: 'read_file', ok: true, output: 'a' },
+      { runId: 'x', type: 'tool_result', callId: 'c2', name: 'run_shell', ok: true, output: 'b' },
+      { runId: 'x', type: 'text', delta: 'Both done.' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.spinner).toEqual(['start:Working', 'label:Read', 'label:Run', 'label:Working', 'label:Responding', 'stop'])
+  })
+
   it('persists composer submissions to history, not approval answers', async () => {
     const { d } = deps([
       { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
