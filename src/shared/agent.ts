@@ -354,12 +354,19 @@ export interface ChatRequest {
    * (native Anthropic always sends its own breakpoints).
    */
   explicitCacheControl?: boolean
+  /**
+   * A routing hint for the provider's prompt cache: the same on every request of one
+   * conversation (or one subagent's run), different between them, and already a hash
+   * (`promptCacheKeyFor`), never an id. Sent as `prompt_cache_key` on OpenAI's own
+   * Responses endpoint, which documents it; ignored by the other adapters.
+   */
+  promptCacheKey?: string
   signal?: AbortSignal
 }
 
 /** One search through the model provider's own server-side web-search tool. */
 export interface ProviderWebSearchRequest {
-  /** The model that runs the search (the run's current model). */
+  /** The model that runs the search: the provider's small model, else the run's current model. */
   model: string
   query: string
   /** Most hits to return (already clamped to 1 to 10 by the caller). */
@@ -369,7 +376,7 @@ export interface ProviderWebSearchRequest {
    * Called with what each search request billed, when the API reported it, before
    * its reply is parsed: a search-tool error arrives inside a billed 200 reply, so
    * the usage is reported even when the search then fails. The search runs a full
-   * model request on the run's model, so the loop folds this into the run's cost.
+   * model request on `model`, so the loop folds this into the run's cost.
    */
   onUsage?: (usage: ProviderWebSearchUsage) => void
 }

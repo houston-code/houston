@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { ModelCaps } from '@shared/types'
 
 /**
@@ -33,4 +34,15 @@ import type { ModelCaps } from '@shared/types'
 export function needsExplicitCacheControl(model: string, caps?: ModelCaps): boolean {
   if (caps?.cacheWritePrice === undefined || caps.cacheWritePrice <= 0) return false
   return /claude|qwen|gemini/i.test(model)
+}
+
+/**
+ * The `prompt_cache_key` for a run's requests (see `ChatRequest.promptCacheKey`): a hash
+ * of the conversation (and, for a subagent, its dispatch), so the requests of one
+ * conversation share a cache-routing bucket and other conversations, whose prompts open
+ * with the same system prompt and tools, spread across others instead of all landing in
+ * one. The id itself never leaves the machine.
+ */
+export function promptCacheKeyFor(...parts: string[]): string {
+  return createHash('sha256').update(`houston-prompt-cache\0${parts.join('\0')}`).digest('hex').slice(0, 32)
 }

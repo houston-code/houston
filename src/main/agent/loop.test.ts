@@ -59,6 +59,7 @@ import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
 import { idleTimeoutFetch } from '../providers/idle-fetch'
+import { promptCacheKeyFor } from '../providers/caching'
 import { startFlakySseServer, type Hiccup } from '../test/flaky-sse-server'
 import { memoryStore } from './memoryStore'
 import { COMPACTION_SUMMARY_PREFIX } from './compaction'
@@ -12706,6 +12707,115 @@ describe('nativeWebSearchFor', () => {
     // The provider's per-search fee rides along: one search on the Claude API.
     expect(onUsage).toHaveBeenCalledWith(usage, 'claude-x', 0.01)
   })
+
+  it("runs the search on the provider's small model when there is one, billed to that model", async () => {
+    const usage = { inputTokens: 100, outputTokens: 10, searches: 1 }
+    const webSearch = vi.fn(async (req: ProviderWebSearchRequest) => {
+      req.onUsage?.(usage)
+      return { hits: [{ url: 'https://example.test' }] }
+    })
+    const onUsage = vi.fn()
+    const signal = new AbortController().signal
+    const entry = nativeWebSearchFor(
+      { provider: { ...scripted([]), webSearch }, providerId: 'anthropic', model: 'claude-x', smallModel: 'claude-small' },
+      signal,
+      onUsage
+    )
+    const r = await entry.nativeWebSearch!.search('q', 3)
+    expect(r.hits[0].url).toBe('https://example.test')
+    expect(webSearch).toHaveBeenCalledTimes(1)
+    expect(webSearch).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-small', query: 'q', maxResults: 3, signal }))
+    // Billed to the small model, with the provider's per-search fee for its one search.
+    expect(onUsage).toHaveBeenCalledWith(usage, 'claude-small', 0.01)
+  })
+
+  it("runs the search again on the route's model when the small model fails", async () => {
+    const webSearch = vi.fn(async (req: ProviderWebSearchRequest) => {
+      if (req.model === 'claude-small') throw Object.assign(new Error('model does not support web search'), { status: 400 })
+      return { hits: [{ url: 'https://example.test/' + req.model }] }
+    })
+    const entry = nativeWebSearchFor(
+      { provider: { ...scripted([]), webSearch }, providerId: 'anthropic', model: 'claude-x', smallModel: 'claude-small' },
+      new AbortController().signal
+    )
+    const r = await entry.nativeWebSearch!.search('q', 3)
+    expect(webSearch.mock.calls.map(([req]) => req.model)).toEqual(['claude-small', 'claude-x'])
+    expect(r.hits[0].url).toBe('https://example.test/claude-x')
+  })
+
+  it("stays on the route's model with no small model", async () => {
+    const webSearch = vi.fn(async (_req: ProviderWebSearchRequest) => ({ hits: [] }))
+    const entry = nativeWebSearchFor(
+      { provider: { ...scripted([]), webSearch }, providerId: 'anthropic', model: 'claude-x', smallModel: null },
+      new AbortController().signal
+    )
+    await entry.nativeWebSearch!.search('q', 3)
+    expect(webSearch.mock.calls.map(([req]) => req.model)).toEqual(['claude-x'])
+  })
+
+  it('does not retry on another model once the run is stopped', async () => {
+    const ctl = new AbortController()
+    const webSearch = vi.fn(async () => {
+      ctl.abort()
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' })
+    })
+    const entry = nativeWebSearchFor(
+      { provider: { ...scripted([]), webSearch }, providerId: 'anthropic', model: 'claude-x', smallModel: 'claude-small' },
+      ctl.signal
+    )
+    await expect(entry.nativeWebSearch!.search('q', 3)).rejects.toThrow()
+    expect(webSearch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('prompt cache key', () => {
+  /** Dispatch one subagent (which reads a file, then reports), then finish; returns every request. */
+  async function dispatchOnce(conversationId?: string): Promise<ChatRequest[]> {
+    writeFileSync(join(ws, 'notes.txt'), 'hello')
+    const turns: ProviderStreamEvent[][] = [
+      [
+        { type: 'tool_call', call: { id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read notes.txt' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [
+        { type: 'tool_call', call: { id: 's1', name: 'read_file', arguments: { path: 'notes.txt' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'it says hello' }, { type: 'done', stopReason: 'end_turn' }],
+      [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+    ]
+    const requests: ChatRequest[] = []
+    let i = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        requests.push(req)
+        for (const ev of turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]) yield ev
+      }
+    }
+    await run({ policy: 'full-auto', provider, ...(conversationId ? { conversationId } : {}) })
+    return requests
+  }
+
+  it("keys the run's requests by conversation, and the subagent's by its dispatch", async () => {
+    const requests = await dispatchOnce('conv-cache-key')
+    expect(requests).toHaveLength(4)
+    const [main1, sub1, sub2, main2] = requests
+    expect(main1.promptCacheKey).toBe(promptCacheKeyFor('conv-cache-key'))
+    expect(main2.promptCacheKey).toBe(main1.promptCacheKey)
+    expect(sub1.promptCacheKey).toBe(promptCacheKeyFor('conv-cache-key', 'd1'))
+    expect(sub2.promptCacheKey).toBe(sub1.promptCacheKey)
+    expect(sub1.promptCacheKey).not.toBe(main1.promptCacheKey)
+    // A hash, never the conversation id itself.
+    for (const r of requests) expect(r.promptCacheKey).not.toContain('conv-cache-key')
+  })
+
+  it('keys a run with no conversation by the run, the same on each of its requests', async () => {
+    const requests = await dispatchOnce()
+    const keys = new Set(requests.map((r) => r.promptCacheKey))
+    expect([...keys].every((k) => typeof k === 'string' && /^[0-9a-f]{32}$/.test(k))).toBe(true)
+    expect(requests[0].promptCacheKey).toBe(requests[3].promptCacheKey)
+    expect(keys.size).toBe(2)
+  })
 })
 
 describe('provider-run web search cost', () => {
@@ -12907,6 +13017,40 @@ describe('side requests on the provider\'s small model', () => {
     expect(readerModels.at(-1)).toBe('claude-opus-5-5')
     const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'read_file') as { output: string }
     expect(result.output).toContain('The page says hello.')
+  })
+
+  it("runs the provider's own web search on the small model and bills it there", async () => {
+    h.providerModels = [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    Object.assign(h.settings, { webReads: 'allow' })
+    try {
+      const webSearch = vi.fn(async (req: ProviderWebSearchRequest) => {
+        req.onUsage?.({ inputTokens: 9000, outputTokens: 90, searches: 1 })
+        return { hits: [{ url: 'https://example.test/a', title: 'A' }] }
+      })
+      let n = 0
+      const provider: Provider = {
+        webSearch,
+        async *streamChat() {
+          if (n++ === 0) {
+            yield { type: 'tool_call', call: { id: 's1', name: 'web_search', arguments: { query: 'widgets' } } }
+            yield { type: 'done', stopReason: 'tool_use' }
+          } else {
+            yield { type: 'text', text: 'done' }
+            yield { type: 'done', stopReason: 'end_turn' }
+          }
+        }
+      }
+      const r = await run({ provider, policy: 'full-auto', model: 'claude-opus-5-5' })
+      expect(webSearch.mock.calls.map(([req]) => req.model)).toEqual(['claude-haiku-5-5'])
+      const search = (r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]).find(
+        (u) => u.outputTokens === 90
+      )
+      expect(search!.model).toBe('claude-haiku-5-5')
+      // The small model's tokens plus the provider's fee for the one search it ran.
+      expect(search!.cost).toBeCloseTo(turnCostUsd('claude-haiku-5-5', 9000, 90) + 0.01, 10)
+    } finally {
+      delete h.settings.webReads
+    }
   })
 
   it('keeps every side request on the run\'s model when set to', async () => {

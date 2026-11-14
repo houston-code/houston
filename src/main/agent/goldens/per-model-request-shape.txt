@@ -8,6 +8,7 @@ is a line-level diff against the first (anthropic) block.
 host caps: {"reasoning":true}
 reasoning: effort=medium capable=true summary=- verbosity=-
 explicitCacheControl: false
+promptCacheKey: 211fde8887bf7fb5b377417670520814
 tools: 20
 usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":5072},"cost":0.003,"inputTokens":1000,"model":"claude-sonnet-5","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
@@ -17,6 +18,7 @@ system prompt vs claude-sonnet-5 baseline:
 host caps: -
 reasoning: effort=medium capable=- summary=- verbosity=-
 explicitCacheControl: false
+promptCacheKey: 211fde8887bf7fb5b377417670520814
 tools: 20
 usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":5072},"cost":0.00315,"inputTokens":1000,"model":"gpt-5.2","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
@@ -27,6 +29,7 @@ system prompt vs claude-sonnet-5 baseline:
 host caps: -
 reasoning: effort=medium capable=- summary=- verbosity=-
 explicitCacheControl: false
+promptCacheKey: 211fde8887bf7fb5b377417670520814
 tools: 20
 usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":5072},"cost":0,"costUnknown":true,"inputTokens":1000,"model":"llama3.3","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:

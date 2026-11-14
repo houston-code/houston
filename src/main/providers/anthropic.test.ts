@@ -163,19 +163,136 @@ describe('markMessagesCacheBreakpoint', () => {
     expect(content[1].cache_control).toEqual({ type: 'ephemeral' })
   })
 
-  it('only marks the most recent message', () => {
+  it('only marks the most recent message and the tail of the request before it', () => {
     const messages: Anthropic.MessageParam[] = [
       { role: 'user', content: 'first' },
       { role: 'assistant', content: 'reply' },
-      { role: 'user', content: 'second' }
+      { role: 'user', content: 'second' },
+      { role: 'assistant', content: 'reply again' },
+      { role: 'user', content: 'third' }
     ]
     markMessagesCacheBreakpoint(messages)
     expect(typeof messages[0].content).toBe('string') // untouched
-    expect(Array.isArray(messages[2].content)).toBe(true) // breakpoint here
+    expect(typeof messages[1].content).toBe('string')
+    expect(typeof messages[3].content).toBe('string')
+    // Where the previous request ended (and wrote its cache entry), then the moving edge.
+    expect(messages[2].content).toEqual([{ type: 'text', text: 'second', cache_control: { type: 'ephemeral' } }])
+    expect(messages[4].content).toEqual([{ type: 'text', text: 'third', cache_control: { type: 'ephemeral' } }])
+  })
+
+  it('marks only the last message of a conversation with no reply yet', () => {
+    const messages: Anthropic.MessageParam[] = [{ role: 'user', content: 'first' }]
+    markMessagesCacheBreakpoint(messages)
+    expect(messages[0].content).toEqual([{ type: 'text', text: 'first', cache_control: { type: 'ephemeral' } }])
+  })
+
+  it('anchors on the last tool result of the previous request, not on the reply or its calls', () => {
+    const messages = toAnthropicMessages(
+      [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read_file', arguments: {} }] },
+        { role: 'tool', content: 'A', toolCallId: 'a', toolName: 'read_file' },
+        {
+          role: 'assistant',
+          content: 'two more',
+          toolCalls: [
+            { id: 'b', name: 'read_file', arguments: {} },
+            { id: 'c', name: 'read_file', arguments: {} }
+          ]
+        },
+        { role: 'tool', content: 'B', toolCallId: 'b', toolName: 'read_file' },
+        { role: 'tool', content: 'C', toolCallId: 'c', toolName: 'read_file' }
+      ],
+      false
+    )
+    markMessagesCacheBreakpoint(messages)
+    const marked = messages.flatMap((m, i) =>
+      blocksOf(m).flatMap((b, j) => (b.cache_control ? [`${i}:${j}:${String(b.tool_use_id ?? b.type)}`] : []))
+    )
+    expect(marked).toEqual(['2:0:a', '4:1:c'])
   })
 
   it('is a no-op on an empty list', () => {
     expect(() => markMessagesCacheBreakpoint([])).not.toThrow()
+  })
+})
+
+describe('anthropic cache breakpoints across a tool loop', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  it('sends no prompt cache key: the Messages API routes on the breakpoints', async () => {
+    const body = await captureRequest({ model: 'claude-sonnet-5', promptCacheKey: 'abc123' })
+    expect(JSON.stringify(body)).not.toContain('abc123')
+    expect(JSON.stringify(lastRequestOptions())).not.toContain('abc123')
+  })
+
+  /** Every block carrying cache_control in a request body, as `where:id`. */
+  function breakpoints(body: Record<string, unknown>): string[] {
+    const out: string[] = []
+    for (const t of (body.tools as Array<Record<string, unknown>> | undefined) ?? []) {
+      if (t.cache_control) out.push(`tool:${String(t.name)}`)
+    }
+    for (const s of (body.system as Array<Record<string, unknown>> | undefined) ?? []) {
+      if (s.cache_control) out.push('system')
+    }
+    const messages = body.messages as Anthropic.MessageParam[]
+    messages.forEach((m, i) =>
+      blocksOf(m).forEach((b, j) => {
+        if (b.cache_control) out.push(`message:${i}:${j}`)
+      })
+    )
+    return out
+  }
+
+  /**
+   * The request as the API hashes it for the cache: markers dropped (they place
+   * entries, they are not content) and a bare string as the text block it stands for.
+   */
+  function hashed(messages: Anthropic.MessageParam[]): unknown {
+    return JSON.parse(
+      JSON.stringify(messages.map((m) => ({ role: m.role, content: blocksOf(m) })), (k, v) =>
+        k === 'cache_control' ? undefined : v
+      )
+    )
+  }
+
+  it('keeps 4 breakpoints, the 4th on the previous request\'s last block, as a big parallel batch lands', async () => {
+    const tools = [
+      { name: 'read_file', description: 'read', parameters: { type: 'object' } },
+      { name: 'glob', description: 'glob', parameters: { type: 'object' } }
+    ]
+    const history: ChatMessage[] = [{ role: 'user', content: 'audit the repo' }]
+    const bodies: Record<string, unknown>[] = []
+    // Iterations of 1, 12 and 15 parallel calls: each batch adds far more than 20 blocks.
+    for (const n of [1, 12, 15, 2]) {
+      bodies.push(await captureRequest({ model: 'claude-sonnet-5', system: 'sys', tools, messages: [...history] }))
+      const calls = Array.from({ length: n }, (_, i) => ({ id: `t${history.length}-${i}`, name: 'read_file', arguments: { i } }))
+      history.push({ role: 'assistant', content: `batch of ${n}`, toolCalls: calls })
+      for (const c of calls) history.push({ role: 'tool', content: `result ${c.id}`, toolCallId: c.id, toolName: 'read_file' })
+    }
+    bodies.push(await captureRequest({ model: 'claude-sonnet-5', system: 'sys', tools, messages: [...history] }))
+
+    for (let k = 0; k < bodies.length; k++) {
+      const marks = breakpoints(bodies[k])
+      // Never past the API's limit of 4 per request.
+      expect(marks.length).toBeLessThanOrEqual(4)
+      expect(marks.slice(0, 2)).toEqual(['tool:glob', 'system'])
+      const messages = bodies[k].messages as Anthropic.MessageParam[]
+      const lastIdx = messages.length - 1
+      expect(marks.at(-1)).toBe(`message:${lastIdx}:${blocksOf(messages[lastIdx]).length - 1}`)
+      if (k === 0) {
+        expect(marks).toHaveLength(3)
+        continue
+      }
+      expect(marks).toHaveLength(4)
+      // The 4th sits on exactly the block the previous request put its moving breakpoint on...
+      const prev = bodies[k - 1].messages as Anthropic.MessageParam[]
+      const prevLast = prev.length - 1
+      expect(marks[2]).toBe(`message:${prevLast}:${blocksOf(prev[prevLast]).length - 1}`)
+      // ...and everything up to it is the previous request unchanged, so the entry it
+      // wrote there is read back however much this iteration added after it.
+      expect(hashed(messages.slice(0, prev.length))).toEqual(hashed(prev))
+    }
   })
 })
 

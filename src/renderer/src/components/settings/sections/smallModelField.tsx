@@ -6,7 +6,7 @@ const AUTOMATIC = '__automatic__'
 
 /**
  * Which model a provider's side requests use: chat titles, compaction summaries,
- * next-message suggestions, and reading flagged web pages. `undefined` from
+ * next-message suggestions, provider-run web searches, and reading flagged web pages. `undefined` from
  * `onChange` means "Automatic" (the setting is removed).
  */
 export function SmallModelField({
@@ -30,8 +30,8 @@ export function SmallModelField({
     <label className="field">
       <span>
         Model for side tasks: chat titles, conversation summaries, suggested next messages,
-        and reading web pages flagged as possible prompt injection. If it fails, the
-        chat&apos;s own model takes over.
+        web searches run by the provider, and reading web pages flagged as possible prompt
+        injection. If it fails, the chat&apos;s own model takes over.
       </span>
       <select
         aria-label={`Model for side tasks (${provider.label})`}

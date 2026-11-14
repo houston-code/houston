@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatMessage, Provider } from '@shared/agent'
-import { COMPACTION_SUMMARY_PREFIX, estimateTokens } from './compaction'
+import { COMPACTION_SUMMARY_PREFIX, estimateTokens, summaryMaxTokens } from './compaction'
 
 // Hoisted holders the mocks read, so each test can swap conversation/provider.
 const h = vi.hoisted(() => ({
@@ -10,13 +10,15 @@ const h = vi.hoisted(() => ({
   // loop-compaction state was cleared when (and only when) the log is rewritten.
   compactionSet: [] as unknown[],
   provider: null as Provider | null,
+  // The provider's config, when a test needs more than the default (a small model).
+  cfg: null as Record<string, unknown> | null,
   // The live run on the chat, if any (the loop's activeRunForConversation).
   activeRun: null as string | null
 }))
 
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
 vi.mock('../agentHost', () => ({
-  getProvider: () => ({ id: 'anthropic', kind: 'anthropic', models: [] })
+  getProvider: () => h.cfg ?? { id: 'anthropic', kind: 'anthropic', models: [] }
 }))
 vi.mock('./loop', () => ({ activeRunForConversation: () => h.activeRun }))
 vi.mock('../logger', () => ({ log: { warn: () => {}, info: () => {}, error: () => {} } }))
@@ -40,6 +42,7 @@ afterEach(() => {
   h.saved = null
   h.compactionSet = []
   h.provider = null
+  h.cfg = null
   vi.restoreAllMocks()
 })
 
@@ -395,5 +398,79 @@ describe('compactConversationNow', () => {
       }
     }
     expect(await compactConversationNow('d7', 'anthropic', 'claude-test')).toMatchObject({ ok: false, reason: 'running' })
+  })
+
+  describe('which model writes the summary', () => {
+    /** A provider config with a chat model and a small one, both with known windows. */
+    function withSmallModel(smallModel: string, smallWindow = 200_000): void {
+      h.cfg = {
+        id: 'anthropic',
+        kind: 'anthropic',
+        smallModel,
+        models: [
+          { id: 'claude-test', caps: { contextWindow: 200_000 } },
+          { id: 'claude-small', caps: { contextWindow: smallWindow } }
+        ]
+      }
+    }
+
+    /** A provider that summarizes, recording each request's model and output cap. */
+    function recording(fail?: (model: string) => boolean): { model: string; maxTokens?: number }[] {
+      const seen: { model: string; maxTokens?: number }[] = []
+      h.provider = {
+        async *streamChat(req) {
+          seen.push({ model: req.model, maxTokens: req.maxTokens })
+          if (fail?.(req.model)) {
+            yield { type: 'error', message: 'model not found', status: 404 }
+            return
+          }
+          yield { type: 'text', text: `SUMMARY by ${req.model}` }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      return seen
+    }
+
+    it("writes every chunk on the provider's small model, sized to its window", async () => {
+      withSmallModel('claude-small', 400_000)
+      h.conv = { id: 's1', workspace: '/w', messages: bigConversation(3, 80_000) }
+      const seen = recording()
+      const res = await compactConversationNow('s1', 'anthropic', 'claude-test')
+      expect(res.ok).toBe(true)
+      expect(seen.length).toBeGreaterThan(1)
+      expect(seen.every((r) => r.model === 'claude-small')).toBe(true)
+      expect(seen[0].maxTokens).toBe(summaryMaxTokens(400_000))
+      expect(res.messages![0].content).toContain('SUMMARY by claude-small')
+    })
+
+    it("falls back to the chat's model for a chunk the small model fails", async () => {
+      withSmallModel('claude-small')
+      h.conv = { id: 's2', workspace: '/w', messages: bigConversation(2, 40_000) }
+      const seen = recording((model) => model === 'claude-small')
+      const res = await compactConversationNow('s2', 'anthropic', 'claude-test')
+      expect(res.ok).toBe(true)
+      expect(seen.map((r) => r.model)).toEqual(['claude-small', 'claude-test'])
+      expect(seen[1].maxTokens).toBe(summaryMaxTokens(200_000))
+      expect(res.messages![0].content).toContain('SUMMARY by claude-test')
+    })
+
+    it("uses the chat's model for a chunk too big for the small model's window", async () => {
+      withSmallModel('claude-small', 60_000)
+      h.conv = { id: 's3', workspace: '/w', messages: bigConversation(2, 40_000) }
+      const seen = recording()
+      const res = await compactConversationNow('s3', 'anthropic', 'claude-test')
+      expect(res.ok).toBe(true)
+      expect(seen.length).toBeGreaterThan(0)
+      expect(seen.every((r) => r.model === 'claude-test')).toBe(true)
+    })
+
+    it("stays on the chat's model when the provider is set to use it for side requests", async () => {
+      withSmallModel('')
+      h.conv = { id: 's4', workspace: '/w', messages: bigConversation(2, 40_000) }
+      const seen = recording()
+      const res = await compactConversationNow('s4', 'anthropic', 'claude-test')
+      expect(res.ok).toBe(true)
+      expect(seen.map((r) => r.model)).toEqual(['claude-test'])
+    })
   })
 })

@@ -126,6 +126,30 @@ describe('anthropicWebSearch', () => {
     expect(always).toHaveBeenCalledTimes(1 + MAX_SEARCH_RESUMES)
   })
 
+  it('runs a model that thinks unprompted at the lowest effort, with room for the summary', async () => {
+    const create = vi.fn(async () => ({ content: anthropicReply }))
+    for (const model of ['claude-haiku-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5']) {
+      create.mockClear()
+      await anthropicWebSearch({ messages: { create } }, { model, query: 'q', maxResults: 3 })
+      const [body] = create.mock.calls[0] as unknown as [Record<string, unknown>]
+      expect(body.thinking, model).toEqual({ type: 'adaptive', display: 'omitted' })
+      expect(body.output_config, model).toEqual({ effort: 'low' })
+      expect(body.max_tokens, model).toBe(4096)
+    }
+  })
+
+  it('sends no thinking to a model that only thinks when asked, under the small cap', async () => {
+    const create = vi.fn(async () => ({ content: anthropicReply }))
+    for (const model of ['claude-haiku-4-5', 'claude-opus-4-8', 'claude-sonnet-4-6']) {
+      create.mockClear()
+      await anthropicWebSearch({ messages: { create } }, { model, query: 'q', maxResults: 3 })
+      const [body] = create.mock.calls[0] as unknown as [Record<string, unknown>]
+      expect(body, model).not.toHaveProperty('thinking')
+      expect(body, model).not.toHaveProperty('output_config')
+      expect(body.max_tokens, model).toBe(1024)
+    }
+  })
+
   it('reports what the request billed, cache tokens folded into the input total', async () => {
     const create = vi.fn(async () => ({
       content: anthropicReply,

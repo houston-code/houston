@@ -359,6 +359,37 @@ describe('responses max_output_tokens', () => {
   })
 })
 
+describe('responses prompt_cache_key', () => {
+  beforeEach(() => h.create.mockReset())
+
+  async function paramsFor(req: Partial<ChatRequest>, baseURL?: string): Promise<Record<string, unknown>> {
+    h.create.mockResolvedValue(streamOf([{ type: 'response.completed', response: {} }]))
+    const provider = createResponsesProvider('k', baseURL)
+    for await (const _ of provider.streamChat({
+      model: 'gpt-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      ...req
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      void _
+    }
+    return h.create.mock.calls[0][0] as Record<string, unknown>
+  }
+
+  it("sends the request's cache key on OpenAI's own endpoint", async () => {
+    expect(await paramsFor({ promptCacheKey: 'abc123' })).toMatchObject({ prompt_cache_key: 'abc123' })
+  })
+
+  it('sends none when the caller has no key for the request', async () => {
+    expect(await paramsFor({})).not.toHaveProperty('prompt_cache_key')
+  })
+
+  it('sends none to a gateway that speaks the Responses wire format', async () => {
+    expect(await paramsFor({ promptCacheKey: 'abc123' }, 'https://gateway.example.test/v1')).not.toHaveProperty(
+      'prompt_cache_key'
+    )
+  })
+})
+
 describe('responses usage reporting', () => {
   beforeEach(() => h.create.mockReset())
 

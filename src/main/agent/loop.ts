@@ -79,7 +79,7 @@ import { log } from '../logger'
 import { runQuarantineExtraction } from './untrusted'
 import { smallModelFor, withSmallModel } from '@shared/smallModel'
 import { createProvider } from '../providers'
-import { needsExplicitCacheControl } from '../providers/caching'
+import { needsExplicitCacheControl, promptCacheKeyFor } from '../providers/caching'
 import { isOllamaProvider, ollamaContextLengthCached, ollamaContextNotice } from '../providers/ollama'
 
 /** How long a run waits on Ollama for the context it runs a model with. */
@@ -416,9 +416,14 @@ interface Route extends SelectedModel {
 /**
  * The `nativeWebSearch` tool-context entry for a route whose provider runs web search
  * itself (empty otherwise). Retried on a transient failure like any provider call.
+ *
+ * `smallModel` (from `smallModelFor`) runs the search when given, like the other side
+ * requests: the search is a one-shot summary on the critical path of the tool call, so a
+ * flagship model only made it slower and dearer. A search that fails on it runs again on
+ * the route's model.
  */
 export function nativeWebSearchFor(
-  route: Pick<Route, 'provider' | 'model' | 'providerId'>,
+  route: Pick<Route, 'provider' | 'model' | 'providerId'> & { smallModel?: string | null },
   signal: AbortSignal,
   onUsage?: (usage: TokenUsage, model: string, feeUsd: number) => void
 ): Pick<ToolContext, 'nativeWebSearch'> {
@@ -429,18 +434,31 @@ export function nativeWebSearchFor(
   return {
     nativeWebSearch: {
       label: getProvider(route.providerId)?.label ?? 'the model provider',
-      search: async (query, maxResults) => {
-        // The search is a full model request on `model`; report what each attempt billed
-        // (a failed search can still be a billed reply) so the run's cost and its cost
-        // ceiling count it, with the per-search fee for the searches it says it ran.
-        const report = onUsage
-          ? (u: ProviderWebSearchUsage) => onUsage(u, model, (u.searches ?? 0) * perSearch)
-          : undefined
-        return withProviderRetry(
-          () => provider.webSearch!({ model, query, maxResults, signal, ...(report ? { onUsage: report } : {}) }),
-          { signal }
+      search: async (query, maxResults) =>
+        withSmallModel(
+          route.smallModel ?? null,
+          model,
+          (searchModel) => {
+            // The search is a full model request on `searchModel`; report what each attempt
+            // billed (a failed search can still be a billed reply) so the run's cost and its
+            // cost ceiling count it, with the per-search fee for the searches it says it ran.
+            const report = onUsage
+              ? (u: ProviderWebSearchUsage) => onUsage(u, searchModel, (u.searches ?? 0) * perSearch)
+              : undefined
+            return withProviderRetry(
+              () =>
+                provider.webSearch!({
+                  model: searchModel,
+                  query,
+                  maxResults,
+                  signal,
+                  ...(report ? { onUsage: report } : {})
+                }),
+              { signal }
+            )
+          },
+          signal
         )
-      }
     }
   }
 }
@@ -2915,13 +2933,20 @@ export async function startRun(
           getSecret: getKey,
           searchProvider: settings.searchProvider,
           ...nativeWebSearchFor(
-            { provider: primaryRoute.provider, providerId: req.providerId, model },
+            {
+              provider: primaryRoute.provider,
+              providerId: req.providerId,
+              model,
+              smallModel: smallModelFor(providerConfig, model)
+            },
             subSignal,
             (u, m, fee) => recordSideRequestUsage(u, m, undefined, fee)
           ),
           collectSecrets: () => knownSecrets
         },
         explicitCacheControl: needsExplicitCacheControl(model, modelCaps),
+        // Its own cache-routing bucket: its prompt opens differently from the parent's.
+        promptCacheKey: promptCacheKeyFor(conversationId ?? runId, callId),
         // The subagent's tool outputs ship to the provider from ITS transcript,
         // which never passes flushResult — scrub them with the run-scoped redactor.
         redact,
@@ -3255,10 +3280,13 @@ export async function startRun(
       collectSecrets: () => knownSecrets,
       searchProvider: settings.searchProvider,
       // The model provider's own web search, used when no search key is set. Follows
-      // the fallback route like quarantineExtract: it runs on whichever model is
-      // serving the run now, billed to that provider's key.
-      // Priced with the route's own caps: after a hop the backup's provider may differ.
-      ...nativeWebSearchFor(route, abort.signal, (u, m, fee) => recordSideRequestUsage(u, m, route.caps, fee)),
+      // the fallback route like quarantineExtract: it runs on whichever provider is
+      // serving the run now, billed to that provider's key. On the primary route the
+      // provider's small model runs it, with the run's own model as the fallback.
+      // Priced with the caps of the model that ran it: after a hop the backup's differ.
+      ...nativeWebSearchFor({ ...route, smallModel: sideSmallModel() }, abort.signal, (u, m, fee) =>
+        recordSideRequestUsage(u, m, sideModelCaps(m), fee)
+      ),
       // Reads flagged web content on the run's own model, but with no tools and no
       // history — so the page has nothing to act through and nothing to override.
       // Follows the fallback route (provider and model move together here, like the
@@ -4462,6 +4490,7 @@ export async function startRun(
             reasoningSummary,
             verbosity,
             explicitCacheControl: route.explicitCacheControl,
+            promptCacheKey: promptCacheKeyFor(conversationId ?? runId),
             ...(outputCapRaised ? raisedOutputCap(route.model) : {}),
             signal: abort.signal
           })) {

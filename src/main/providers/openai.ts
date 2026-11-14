@@ -104,11 +104,27 @@ function mapFinishReason(reason: string | null | undefined, hadToolCalls: boolea
 
 const EPHEMERAL = { type: 'ephemeral' as const }
 
+/** Put a breakpoint on a user or tool message's last content part; other roles are left alone. */
+function markLastPart(message: OpenAIMessage | undefined): void {
+  if (!message || (message.role !== 'user' && message.role !== 'tool')) return
+  if (typeof message.content === 'string') {
+    ;(message as { content: unknown }).content = [
+      { type: 'text', text: message.content, cache_control: EPHEMERAL }
+    ]
+  } else if (Array.isArray(message.content) && message.content.length > 0) {
+    ;(message.content[message.content.length - 1] as { cache_control?: typeof EPHEMERAL }).cache_control =
+      EPHEMERAL
+  }
+}
+
 /**
  * Add Anthropic-style prompt-cache breakpoints to a built Chat Completions
- * request: one on the system message (covers the static tools+system prefix)
- * and one on the last user/tool message (the moving edge, so each turn of the
- * loop reuses everything before it). Mirrors `markMessagesCacheBreakpoint` in
+ * request: one on the system message (covers the static tools+system prefix),
+ * one on the last user/tool message (the moving edge, so each turn of the loop
+ * reuses everything before it), and one on the message just before the newest
+ * assistant reply, where the previous request ended and wrote its entry, so an
+ * iteration that adds more blocks than the upstream's lookback window still
+ * reads the earlier prefix. Mirrors `markMessagesCacheBreakpoint` in
  * anthropic.ts; aggregator hosts translate the parts through to the upstream.
  *
  * Only called for routes gated by `needsExplicitCacheControl` — the fields are
@@ -123,18 +139,14 @@ export function markOpenAICacheBreakpoints(messages: OpenAIMessage[]): void {
     ]
   }
   // The loop's last message is always user or tool (the model replies to it);
-  // anything else means an unusual caller, where skipping the moving breakpoint
+  // anything else means an unusual caller, where skipping the moving breakpoints
   // is safe — the system breakpoint above still caches the static prefix.
   const last = messages[messages.length - 1]
   if (!last || (last.role !== 'user' && last.role !== 'tool')) return
-  if (typeof last.content === 'string') {
-    ;(last as { content: unknown }).content = [
-      { type: 'text', text: last.content, cache_control: EPHEMERAL }
-    ]
-  } else if (Array.isArray(last.content) && last.content.length > 0) {
-    ;(last.content[last.content.length - 1] as { cache_control?: typeof EPHEMERAL }).cache_control =
-      EPHEMERAL
-  }
+  markLastPart(last)
+  let reply = messages.length - 1
+  while (reply > 0 && messages[reply].role !== 'assistant') reply--
+  if (reply > 0) markLastPart(messages[reply - 1])
 }
 
 /**

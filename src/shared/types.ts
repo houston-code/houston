@@ -194,8 +194,9 @@ export interface ProviderConfig {
   models: ModelOption[]
   defaultModel?: string
   /**
-   * The model side requests run on: chat titles, compaction summaries, next-message
-   * suggestions, and the isolated reader for flagged web content. Absent means the
+   * The model side requests run on: chat titles, compaction summaries (automatic and
+   * `/compact`), next-message suggestions, the provider's own web search, and the
+   * isolated reader for flagged web content. Absent means the
    * provider's curated cheap sibling (`SMALL_MODELS` in model-facts.ts) when it is in
    * `models` and cheaper than the chat's model; `''` means always the chat's model.
    * A failed side request on it is retried on the chat's model. See `smallModelFor`.

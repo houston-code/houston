@@ -270,7 +270,11 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         ...(req.maxTokens ? { max_output_tokens: req.maxTokens } : {}),
         ...(tools ? { tools } : {}),
         ...(reasoning ? { reasoning } : {}),
-        ...(req.verbosity ? { text: { verbosity: req.verbosity } } : {})
+        ...(req.verbosity ? { text: { verbosity: req.verbosity } } : {}),
+        // Keeps a conversation's requests in one cache-routing bucket instead of every
+        // chat sharing the one their common opening hashes to. OpenAI's own endpoint
+        // only: a gateway speaking this wire format may reject a field it doesn't know.
+        ...(req.promptCacheKey && !baseURL ? { prompt_cache_key: req.promptCacheKey } : {})
       }
 
       // Reasoning summaries are gated on organization verification, and that's a property of
