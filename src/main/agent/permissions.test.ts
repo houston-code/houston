@@ -13,6 +13,8 @@ import {
   patchSubjectPaths,
   permissionSubject,
   persistedRules,
+  shellAllowCoversTripwires,
+  shellCwdOutsideRoots,
   shellDiscardsWork,
   shellReferencesExternalPath,
   shellRulePatterns,
@@ -1745,7 +1747,8 @@ describe('a saved "Always allow" covers only the approved target', () => {
     expect(matchRule(star, 'run_shell', 'rm "*"', ROOTS)).toBe('allow')
     expect(matchRule(star, 'run_shell', 'rm *', ROOTS)).toBeNull()
     const tilde = saved('run_shell', { command: "rm -rf '~'" })
-    expect(tilde).toEqual([{ action: 'allow', tool: 'run_shell', match: "rm -rf '~'" }])
+    // `rm -rf` of a directory tree discards work, so it is saved exact (see shellRulePatterns).
+    expect(tilde).toEqual([{ action: 'allow', tool: 'run_shell', match: "rm -rf '~'", exact: true }])
     expect(matchRule(tilde, 'run_shell', 'rm -rf ~', ROOTS)).toBeNull()
     expect(matchRule(tilde, 'run_shell', 'rm -rf ~/.ssh', ROOTS)).toBeNull()
     expect(matchRule(saved('run_shell', { command: "rm -rf 'build ~'" }), 'run_shell', 'rm -rf build ~', ROOTS)).toBeNull()
@@ -1774,7 +1777,8 @@ describe('a saved "Always allow" covers only the approved target', () => {
   it('run_shell: approving a command with an empty quoted word does not allow it without one', () => {
     // `'' rm -rf /` runs nothing, so it looks harmless to approve; its rule must not cover `rm -rf /`.
     const noop = saved('run_shell', { command: "'' rm -rf /" })
-    expect(noop).toEqual([{ action: 'allow', tool: 'run_shell', match: "'' rm -rf /" }])
+    // It names `/`, outside the workspace, so it is saved exact (see shellRulePatterns).
+    expect(noop).toEqual([{ action: 'allow', tool: 'run_shell', match: "'' rm -rf /", exact: true }])
     expect(matchRule(noop, 'run_shell', "'' rm -rf /", ROOTS)).toBe('allow')
     for (const cmd of ['rm -rf /', 'rm -rf / x', '"rm" -rf /', 'cd /work/project && rm -rf /']) {
       expect(matchRule(noop, 'run_shell', cmd, ROOTS)).toBeNull()
@@ -1792,7 +1796,8 @@ describe('a saved "Always allow" covers only the approved target', () => {
     // bash passes find a lone " " here, so it errors and deletes nothing; its rule must
     // not allow `find . -delete`, nor that spelled with a trailing backslash bash drops.
     const noop = saved('run_shell', { command: 'find . -delete \\ ' })
-    expect(noop).toEqual([{ action: 'allow', tool: 'run_shell', match: 'find . -delete \\ ' }])
+    // `find -delete` discards work, so it is saved exact (see shellRulePatterns).
+    expect(noop).toEqual([{ action: 'allow', tool: 'run_shell', match: 'find . -delete \\ ', exact: true }])
     expect(matchRule(noop, 'run_shell', 'find . -delete \\ ', ROOTS)).toBe('allow')
     for (const cmd of ['find . -delete', 'find . -delete \\', 'find . -delete x', 'cd /work/project && find . -delete']) {
       expect(matchRule(noop, 'run_shell', cmd, ROOTS)).toBeNull()
@@ -2350,7 +2355,7 @@ describe('cleanupPermissionRules', () => {
 
   it('drops an allow covered by a LATER broader allow', () => {
     const rules: PermissionRule[] = [
-      allow('run_shell', 'ls -la "../Source Files/"'),
+      allow('run_shell', 'ls -la "Source Files/"'),
       allow('run_shell', 'npm run'),
       allow('run_shell', 'ls -la')
     ]
@@ -2360,12 +2365,25 @@ describe('cleanupPermissionRules', () => {
     ])
   })
 
+  it('keeps an allow that names a tripwire a broader allow does not cover', () => {
+    // `ls -la` matches `ls -la "../Source Files/"` but, naming no path outside, no longer
+    // lets it run unasked (see shellAllowCoversTripwires); the narrow rule still does.
+    const rules: PermissionRule[] = [allow('run_shell', 'ls -la "../Source Files/"'), allow('run_shell', 'ls -la')]
+    expect(cleanupPermissionRules(rules)).toEqual(rules)
+    const exactPush = { ...allow('run_shell', 'git push --force origin x'), exact: true }
+    expect(cleanupPermissionRules([allow('run_shell', 'git push'), exactPush])).toEqual([
+      allow('run_shell', 'git push'),
+      exactPush
+    ])
+  })
+
   it('keeps a narrow allow when a deny or ask overlaps it, even if a later allow covers it', () => {
     for (const gate of [deny('run_shell', 'ls -la /secret*'), { action: 'ask' as const, tool: 'run_shell', match: 'ls -la /secret*' }]) {
       const rules: PermissionRule[] = [allow('run_shell', 'ls -la /secret/ok'), gate, allow('run_shell', 'ls -la')]
       const cleaned = cleanupPermissionRules(rules)
       expect(cleaned).toEqual(rules)
-      expect(matchRule(cleaned, 'run_shell', 'ls -la /secret/ok')).toBe('allow')
+      // A deny wins wherever it sits; an ask after the allow is shadowed by it.
+      expect(matchRule(cleaned, 'run_shell', 'ls -la /secret/ok')).toBe(gate.action === 'deny' ? 'deny' : 'allow')
     }
   })
 
@@ -2636,5 +2654,253 @@ describe('parseTightenOnlyRules', () => {
       match: `cmd${i}`
     }))
     expect(parseTightenOnlyRules({ permissionRules: many }, 3)).toHaveLength(3)
+  })
+})
+
+describe('a deny always wins, wherever it sits', () => {
+  const ROOTS = ['/work/project']
+
+  it('a user deny still denies after "Always allow" prepends an allow for the same target', () => {
+    // "Always allow" splices its rule in above the user's older rules.
+    const userRules = [deny('write_file', 'secret*')]
+    const withAllow = [...persistedRules('allow', 'write_file', { path: 'secret.txt' }, ROOTS), ...userRules]
+    expect(withAllow[0]).toEqual({ action: 'allow', tool: 'write_file', match: 'secret.txt', exact: true })
+    expect(matchRule(withAllow, 'write_file', 'secret.txt', ROOTS)).toBe('deny')
+    const shell = [...persistedRules('allow', 'run_shell', { command: 'git push origin x' }, ROOTS), deny('run_shell', 'git push*')]
+    expect(matchRule(shell, 'run_shell', 'git push origin x', ROOTS)).toBe('deny')
+    const fetch = [allow('web_fetch', 'https://x.example'), deny('web_fetch', 'https://x.example/*')]
+    expect(matchRule(fetch, 'web_fetch', 'https://x.example/a', ROOTS)).toBe('deny')
+  })
+
+  it('otherwise the first matching allow or ask decides, in order', () => {
+    expect(matchRule([allow('run_shell', 'git push'), ask('run_shell', 'git *')], 'run_shell', 'git push x', ROOTS)).toBe('allow')
+    expect(matchRule([ask('run_shell', 'git *'), allow('run_shell', 'git push')], 'run_shell', 'git push x', ROOTS)).toBe('ask')
+    expect(matchRule([allow('read_file', 'a.txt'), ask('read_file', '*')], 'read_file', 'a.txt', ROOTS)).toBe('allow')
+    expect(matchRule([ask('read_file', '*'), allow('read_file', 'a.txt')], 'read_file', 'a.txt', ROOTS)).toBe('ask')
+  })
+
+  it('an existing allow no longer reads as covering a target a deny refuses', () => {
+    const rules = [allow('write_file', '*'), deny('write_file', 'secret*')]
+    expect(alreadyAllowedAsRule(rules, 'write_file', 'secret.txt', ROOTS)).toBe(false)
+  })
+})
+
+describe('deny and ask rules cover every file-editing tool', () => {
+  const ROOTS = ['/work/project']
+  const EDITORS = ['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'notebook_edit']
+
+  it.each(EDITORS)('a deny on write_file blocks %s on the same path', (tool) => {
+    expect(matchRule([deny('write_file', 'src/secret/**')], tool, 'src/secret/key.ts', ROOTS)).toBe('deny')
+    expect(matchRule([deny('write_file', 'src/secret/**')], tool, 'src/other.ts', ROOTS)).toBeNull()
+  })
+
+  it.each(EDITORS)('a deny or ask on %s covers write_file too', (tool) => {
+    expect(matchRule([deny(tool, 'src/secret/**')], 'write_file', 'src/secret/key.ts', ROOTS)).toBe('deny')
+    expect(matchRule([ask(tool, 'src/secret/**')], 'write_file', 'src/secret/key.ts', ROOTS)).toBe('ask')
+  })
+
+  it('a patch touching a denied file is denied, whichever edit tool the deny names', () => {
+    const patch = envelope('*** Update File: src/ok.ts', '@@', '-a', '+b', '*** Update File: src/secret/key.ts', '@@', '-a', '+b')
+    const subject = permissionSubject('apply_patch', { patch })
+    expect(matchRule([deny('write_file', 'src/secret/**')], 'apply_patch', subject, ROOTS)).toBe('deny')
+    const rules = [deny('edit_file', 'src/secret/**'), allow('apply_patch', '*')]
+    expect(matchRule(rules, 'apply_patch', subject, ROOTS)).toBe('deny')
+  })
+
+  it('an allow stays on the one tool it names', () => {
+    expect(matchRule([allow('write_file', 'src/**')], 'edit_file', 'src/a.ts', ROOTS)).toBeNull()
+    expect(matchRule([allow('write_file', 'src/**')], 'apply_patch', 'src/a.ts', ROOTS)).toBeNull()
+  })
+
+  it('a rule for another kind of tool is not widened', () => {
+    expect(matchRule([deny('read_file', 'src/**')], 'write_file', 'src/a.ts', ROOTS)).toBeNull()
+    expect(matchRule([deny('write_file', 'src/**')], 'read_file', 'src/a.ts', ROOTS)).toBeNull()
+  })
+})
+
+describe('shellAllowCoversTripwires', () => {
+  const ROOTS = ['/work/project']
+
+  it('a saved prefix does not cover a command that discards work or leaves the workspace', () => {
+    const push = persistedRules('allow', 'run_shell', { command: 'git push origin x' }, ROOTS)
+    expect(push).toEqual([allow('run_shell', 'git push')])
+    expect(matchRule(push, 'run_shell', 'git push --force', ROOTS)).toBe('allow')
+    expect(shellAllowCoversTripwires(push, 'git push --force', ROOTS)).toBe(false)
+    expect(shellAllowCoversTripwires(push, 'git push origin +main', ROOTS)).toBe(false)
+    const diff = [allow('run_shell', 'git diff')]
+    expect(shellAllowCoversTripwires(diff, 'git diff --no-index /dev/null ~/.ssh/id_rsa', ROOTS)).toBe(false)
+    const ssh = [allow('run_shell', 'ssh myhost')]
+    expect(shellAllowCoversTripwires(ssh, "ssh myhost 'cat ~/.ssh/id_rsa'", ROOTS)).toBe(false)
+    expect(shellAllowCoversTripwires([allow('run_shell', '*')], 'rm -rf src', ROOTS)).toBe(false)
+  })
+
+  it('an exact rule, or a pattern naming the dangerous part, covers it', () => {
+    const exact: PermissionRule[] = [{ ...allow('run_shell', 'git push --force origin x'), exact: true }]
+    expect(shellAllowCoversTripwires(exact, 'git push --force origin x', ROOTS)).toBe(true)
+    expect(shellAllowCoversTripwires(exact, 'git push --force origin y', ROOTS)).toBe(false)
+    expect(shellAllowCoversTripwires([allow('run_shell', 'git push --force*')], 'git push --force origin y', ROOTS)).toBe(true)
+    expect(shellAllowCoversTripwires([allow('run_shell', 'cat ~/.ssh/*')], 'cat ~/.ssh/config', ROOTS)).toBe(true)
+    // A pattern naming one tripwire doesn't cover the other.
+    expect(shellAllowCoversTripwires([allow('run_shell', 'rm -rf src*')], 'rm -rf src ~/x', ROOTS)).toBe(false)
+  })
+
+  it('every tripping sub-command needs its own covering rule', () => {
+    const rules = [allow('run_shell', 'git status'), allow('run_shell', 'git push')]
+    expect(shellAllowCoversTripwires(rules, 'git status && git push --force', ROOTS)).toBe(false)
+    const named = [allow('run_shell', 'git status'), { ...allow('run_shell', 'git push --force'), exact: true }]
+    expect(shellAllowCoversTripwires(named, 'git status && git push --force', ROOTS)).toBe(true)
+  })
+
+  it('returns false when no sub-command trips anything on its own', () => {
+    expect(shellAllowCoversTripwires([allow('run_shell', 'git status')], 'git status', ROOTS)).toBe(false)
+  })
+
+  it('"Always allow" on a tripping command saves it whole and exact, and not as already covered', () => {
+    const forced = persistedRules('allow', 'run_shell', { command: 'cd /work/project && git push --force origin x' }, ROOTS)
+    expect(forced).toEqual([{ action: 'allow', tool: 'run_shell', match: 'git push --force origin x', exact: true }])
+    // The old `git push` prefix matches it, but doesn't cover its tripwire.
+    const prefix = [allow('run_shell', 'git push')]
+    expect(alreadyAllowedAsRule(prefix, 'run_shell', 'git push --force origin x', ROOTS)).toBe(false)
+    expect(alreadyAllowedAsRule(forced, 'run_shell', 'git push --force origin x', ROOTS)).toBe(true)
+    expect(alreadyAllowedAsRule(prefix, 'run_shell', 'git push origin y', ROOTS)).toBe(true)
+    const outside = persistedRules('allow', 'run_shell', { command: 'git diff --no-index /dev/null ~/.ssh/id_rsa' }, ROOTS)
+    expect(outside).toEqual([
+      { action: 'allow', tool: 'run_shell', match: 'git diff --no-index /dev/null ~/.ssh/id_rsa', exact: true }
+    ])
+  })
+
+  it('a program that runs whatever follows it is saved whole and exact', () => {
+    for (const command of [
+      'ssh myhost uptime',
+      'eval make build',
+      'bash script.sh',
+      'docker run --rm node:22 npm test',
+      'podman exec web ls',
+      'docker compose exec web ls',
+      'kubectl exec pod -- ls',
+      'kubectl debug node/x'
+    ]) {
+      expect(persistedRules('allow', 'run_shell', { command }, ROOTS)).toEqual([
+        { action: 'allow', tool: 'run_shell', match: command, exact: true }
+      ])
+    }
+    const ssh = persistedRules('allow', 'run_shell', { command: 'ssh myhost uptime' }, ROOTS)
+    expect(matchRule(ssh, 'run_shell', "ssh myhost 'rm -rf ~'", ROOTS)).toBeNull()
+    // An ordinary docker verb still generalizes.
+    expect(shellRulePatterns('docker ps -a', ROOTS)).toEqual(['docker ps'])
+  })
+})
+
+describe('workspace-escape check, unnamed directories and climbs', () => {
+  const ROOTS = ['/work/project']
+
+  it('a directory change whose words do not name the directory escapes', () => {
+    for (const cmd of ['cd', 'cd && cat x', 'cd -', 'popd', 'pushd', 'cd "$DIR"', 'cd .[.]', 'if true; then cd; fi', 'builtin cd']) {
+      expect(shellReferencesExternalPath(cmd, ROOTS)).toBe(true)
+    }
+    for (const cmd of ['cd src', 'cd /work/project/src && ls', 'pushd src', 'echo cd']) {
+      expect(shellReferencesExternalPath(cmd, ROOTS)).toBe(false)
+    }
+  })
+
+  it('$PWD reads as the working directory, and $OLDPWD as outside', () => {
+    for (const cmd of ['cat $PWD/../x', 'cat ${PWD}/../../etc/passwd', 'ls $OLDPWD', 'cat ${OLDPWD}/x', 'cp x --to=$OLDPWD']) {
+      expect(shellReferencesExternalPath(cmd, ROOTS)).toBe(true)
+    }
+    for (const cmd of ['cat $PWD/src/a.ts', 'ls ${PWD}', 'echo $PWDX/..x']) {
+      expect(shellReferencesExternalPath(cmd, ROOTS)).toBe(false)
+    }
+  })
+
+  it('a glob or brace part that may expand to `..` climbs', () => {
+    for (const cmd of ['cat .[.]/x', 'cat ..?/x', 'cat .*/x', 'cat {..,x}/y', 'cat src/../.[.]/x']) {
+      expect(shellReferencesExternalPath(cmd, ROOTS)).toBe(true)
+    }
+    for (const cmd of ['cat ./*.json', 'wc -l src/*.ts', "grep '.*error' log.txt", 'ls */*.js']) {
+      expect(shellReferencesExternalPath(cmd, ROOTS)).toBe(false)
+    }
+  })
+
+  it('shellCwdOutsideRoots: a session cwd outside the roots (but not a scratch dir) counts', () => {
+    expect(shellCwdOutsideRoots('/work/project', ROOTS)).toBe(false)
+    expect(shellCwdOutsideRoots('/work/project/src', ROOTS)).toBe(false)
+    expect(shellCwdOutsideRoots(tmpdir(), ROOTS)).toBe(false)
+    expect(shellCwdOutsideRoots('/', ROOTS)).toBe(true)
+    expect(shellCwdOutsideRoots(homedir(), ROOTS)).toBe(true)
+    expect(shellCwdOutsideRoots('/work/project-other', ROOTS)).toBe(true)
+  })
+})
+
+describe('shellDiscardsWork, checkout of paths and ref deletion', () => {
+  it('git checkout of a tree-ish and paths discards', () => {
+    for (const cmd of [
+      'git checkout HEAD src',
+      'git checkout main~1 a.ts b.ts',
+      "git checkout '*.ts'",
+      'git checkout --pathspec-from-file=list'
+    ]) {
+      expect(shellDiscardsWork(cmd)).toBe(true)
+    }
+  })
+
+  it('git checkout of a name that exists in the workspace discards; a branch does not', () => {
+    const exists = (p: string): boolean => p === 'src' || p === 'README.md'
+    expect(shellDiscardsWork('git checkout src', exists)).toBe(true)
+    expect(shellDiscardsWork('cd x && git checkout README.md', exists)).toBe(true)
+    for (const cmd of [
+      'git checkout main',
+      'git checkout -b feat origin/main',
+      'git checkout -B x HEAD~1',
+      'git checkout -',
+      'git checkout --track origin/x'
+    ]) {
+      expect(shellDiscardsWork(cmd, exists)).toBe(false)
+    }
+    // Without a way to tell, a lone name reads as a branch.
+    expect(shellDiscardsWork('git checkout src')).toBe(false)
+  })
+
+  it('git update-ref -d and --stdin discard', () => {
+    expect(shellDiscardsWork('git update-ref -d refs/heads/x')).toBe(true)
+    expect(shellDiscardsWork('git update-ref --stdin < cmds')).toBe(true)
+    expect(shellDiscardsWork('git update-ref refs/heads/x HEAD')).toBe(false)
+  })
+})
+
+describe('URL rules, respelled servers', () => {
+  const ROOTS = ['/work/project']
+  const blocked = [deny('web_fetch', 'https://blocked.example/*')]
+
+  it.each([
+    'https://blocked.example:443/x',
+    'https://blocked.example./x',
+    'https://blocked.example../x',
+    'https://u@blocked.example/x',
+    'https://u:p@blocked.example:443/x',
+    'HTTPS://Blocked.Example/x',
+    'https://%62locked.example/x',
+    'https://blocked.example/a/../x'
+  ])('a deny on the site still denies %s', (url) => {
+    expect(matchRule(blocked, 'web_fetch', url, ROOTS)).toBe('deny')
+  })
+
+  it('the host the fetch reaches decides, not text in the user name', () => {
+    const evil = [deny('web_fetch', 'https://evil.example/*')]
+    expect(matchRule(evil, 'web_fetch', 'https://good.example@evil.example/x', ROOTS)).toBe('deny')
+    expect(matchRule([allow('web_fetch', 'https://good.example')], 'web_fetch', 'https://good.example@evil.example/x', ROOTS)).toBeNull()
+    expect(matchRule(evil, 'web_fetch', 'https://evil.example\\@good.example/', ROOTS)).toBe('deny')
+  })
+
+  it('a pattern written with the default port or a trailing dot reads the same', () => {
+    expect(matchRule([deny('web_fetch', 'https://blocked.example:443/*')], 'web_fetch', 'https://blocked.example/x', ROOTS)).toBe('deny')
+    expect(matchRule([deny('web_fetch', 'https://blocked.example./*')], 'web_fetch', 'https://blocked.example/x', ROOTS)).toBe('deny')
+  })
+
+  it('a different port or host is still a different site', () => {
+    expect(matchRule(blocked, 'web_fetch', 'https://blocked.example:8443/x', ROOTS)).toBeNull()
+    expect(matchRule(blocked, 'web_fetch', 'https://blocked.example.org/x', ROOTS)).toBeNull()
+    expect(matchRule([allow('web_fetch', 'https://x.example:8443')], 'web_fetch', 'https://x.example/a', ROOTS)).toBeNull()
+    const exact: PermissionRule[] = [{ ...allow('web_fetch', 'https://x.example'), exact: true }]
+    expect(matchRule(exact, 'web_fetch', 'https://x.example', ROOTS)).toBe('allow')
   })
 })

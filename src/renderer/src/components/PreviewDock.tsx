@@ -4,6 +4,7 @@ import { MAX_PREVIEW_PANES } from '@shared/preview'
 import { normalizeManualUrl, selectPreviewPanes } from '../lib/preview'
 import { copyText } from '../lib/clipboard'
 import { describeShell } from '../lib/taskLabel'
+import { PanelResizer, type PanelSize } from './PanelResizer'
 
 /**
  * The right-hand dock. With `onTabChange` it has tabs: Tasks (the background-tasks
@@ -67,6 +68,7 @@ export function PreviewDock({
   servers,
   occluded,
   onResizeMouseDown,
+  size,
   onClose,
   tab = 'preview',
   onTabChange,
@@ -82,6 +84,8 @@ export function PreviewDock({
   /** An overlay (modal, palette, find bar) is on top — hide the native views. */
   occluded: boolean
   onResizeMouseDown: (e: React.MouseEvent) => void
+  /** The panel's width, for the resizer's keyboard and double-click controls. */
+  size?: PanelSize
   onClose: () => void
   /** Which tab the dock shows. Defaults to Preview. */
   tab?: DockTab
@@ -243,11 +247,11 @@ export function PreviewDock({
 
   return (
     <aside className="preview-dock" ref={dockRef} aria-label={onTabChange ? 'Side panel' : 'Preview'}>
-      <div
+      <PanelResizer
         className="preview-dock__resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize preview panel"
+        label={onTabChange ? 'Resize side panel' : 'Resize preview panel'}
+        edge="left"
+        size={size}
         onMouseDown={onResizeMouseDown}
       />
       <header className="preview-dock__header">
@@ -464,11 +468,17 @@ export function PreviewDock({
             }}
             aria-label="Add a localhost URL to preview"
             aria-invalid={draftError}
+            aria-describedby={draftError ? 'preview-dock-add-error' : undefined}
           />
           <button type="submit" className="btn btn--sm" disabled={!draft.trim()}>
             Add
           </button>
         </form>
+        {draftError && (
+          <p className="preview-dock__add-error" id="preview-dock-add-error" role="alert">
+            Only localhost addresses (localhost, 127.0.0.1, [::1]) or a port number can be previewed.
+          </p>
+        )}
       </div>
 
       {onTabChange && (

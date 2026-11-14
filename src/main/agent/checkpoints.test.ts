@@ -9,7 +9,9 @@ import {
   mkdirSync,
   statSync,
   symlinkSync,
-  utimesSync
+  utimesSync,
+  realpathSync,
+  renameSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -31,6 +33,7 @@ import {
   revertRunsGuarded
 } from './checkpoints'
 import { setUserDataDir, resetUserDataDir } from '../userData'
+import { setContainedWriteRaceHookForTests } from './safeWrite'
 
 let ws: string
 
@@ -669,6 +672,35 @@ describe('checkpoints', () => {
         expect(await reapplyCheckpoint('run-sym')).toBe(0)
         expect(existsSync(join(outside, 'x.txt'))).toBe(false)
       } finally {
+        rmSync(outside, { recursive: true, force: true })
+      }
+    })
+
+    it('refuses to restore or redo through a symlink swapped in AFTER the containment re-check', async () => {
+      // restoreCheckpoint re-checks containment, then writes; a sandboxed shell can swap
+      // the folder in between. The race hook runs in exactly that gap.
+      const outside = realpathSync(mkdtempSync(join(tmpdir(), 'houston-cp-outside-')))
+      try {
+        mkdirSync(join(ws, 'sub'))
+        writeFileSync(join(ws, 'sub', 'x.txt'), 'original')
+        await recordOriginal('run-race', [ws], 'sub/x.txt')
+        writeFileSync(join(ws, 'sub', 'x.txt'), 'agent')
+        await recordResult('run-race', [ws], 'sub/x.txt')
+        writeFileSync(join(outside, 'x.txt'), 'OUTSIDE')
+
+        let swapped = false
+        setContainedWriteRaceHookForTests(() => {
+          if (swapped) return
+          swapped = true
+          renameSync(join(ws, 'sub'), join(ws, 'sub.moved'))
+          symlinkSync(outside, join(ws, 'sub'), 'dir')
+        })
+        expect(await restoreCheckpoint('run-race')).toBe(0)
+        expect(readFileSync(join(outside, 'x.txt'), 'utf8')).toBe('OUTSIDE')
+        expect(await reapplyCheckpoint('run-race')).toBe(0)
+        expect(readFileSync(join(outside, 'x.txt'), 'utf8')).toBe('OUTSIDE')
+      } finally {
+        setContainedWriteRaceHookForTests(null)
         rmSync(outside, { recursive: true, force: true })
       }
     })

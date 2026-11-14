@@ -2,14 +2,20 @@ import { describe, expect, it } from 'vitest'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
 import {
+  autoSectionId,
   autoSections,
   buildSidebarSections,
+  collapsedAfterGroupDelete,
   dateBucket,
   descendantsOf,
   dropIndexForY,
+  filterByLabels,
   nestSpawned,
   newGroupId,
-  reorderedIds
+  reorderedIds,
+  sidebarChatOrder,
+  sidebarSections,
+  type SidebarLayoutInput
 } from './chatGroups'
 
 function conv(id: string, updatedAt: number, extra: Partial<ConversationMeta> = {}): ConversationMeta {
@@ -91,6 +97,20 @@ describe('buildSidebarSections', () => {
     expect(sections.find((s) => s.kind === 'ungrouped')?.collapsed).toBe(false)
   })
 
+  it('never collapses the header-less Ungrouped list when no group exists', () => {
+    const [section] = buildSidebarSections([conv('a', 1)], [], { ungrouped: true })
+    expect(section).toMatchObject({ kind: 'ungrouped', collapsed: false, headless: true })
+    const withGroup = buildSidebarSections([conv('a', 1)], [{ id: 'g1', name: 'G' }], { ungrouped: true })
+    expect(withGroup.find((s) => s.kind === 'ungrouped')).toMatchObject({ collapsed: true })
+    expect(withGroup.find((s) => s.kind === 'ungrouped')?.headless).toBeUndefined()
+  })
+
+  it('drops the Ungrouped collapse once the last group is deleted, and only then', () => {
+    expect(collapsedAfterGroupDelete({ ungrouped: true, pinned: true }, 0)).toEqual({ pinned: true })
+    expect(collapsedAfterGroupDelete({ ungrouped: true }, 1)).toEqual({ ungrouped: true })
+    expect(collapsedAfterGroupDelete(undefined, 0)).toBeUndefined()
+  })
+
   it('defaults built-in sections to expanded when no collapsed state is given', () => {
     const sections = buildSidebarSections([conv('a', 1, { pinned: true }), conv('b', 1)], [])
     expect(sections.every((s) => !s.collapsed)).toBe(true)
@@ -116,6 +136,89 @@ describe('buildSidebarSections', () => {
       []
     )
     expect(sections[0].conversations.map((c) => c.id)).toEqual(['n', 'a', 'b'])
+  })
+})
+
+describe('sidebarSections and the order the rows show in', () => {
+  const layout = (over: Partial<SidebarLayoutInput> = {}): SidebarLayoutInput => ({
+    conversations: [],
+    groups: [],
+    collapsedSections: {},
+    search: '',
+    chatStatus: {},
+    currentId: null,
+    ...over
+  })
+  const ids = (list: ConversationMeta[]): string[] => list.map((c) => c.id)
+  const child = (id: string, parent: string, t: number): ConversationMeta =>
+    conv(id, t, { spawnedFrom: { conversationId: parent, title: parent } })
+
+  it('goes Pinned, then each group, then Ungrouped, in manual order, spawned chats under their parent', () => {
+    const input = layout({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [
+        conv('newest', 9),
+        conv('pin', 1, { pinned: true }),
+        conv('w2', 3, { groupId: 'g1', order: 1 }),
+        conv('w1', 2, { groupId: 'g1', order: 0 }),
+        conv('p', 5),
+        child('k', 'p', 6)
+      ]
+    })
+    expect(ids(sidebarChatOrder(sidebarSections(input), new Set(), null))).toEqual([
+      'pin',
+      'w1',
+      'w2',
+      'newest',
+      'p',
+      'k'
+    ])
+  })
+
+  it('leaves out a collapsed section and a folded parent, unless it holds the open chat', () => {
+    const input = layout({
+      groups: [{ id: 'g1', name: 'Work', collapsed: true }],
+      conversations: [conv('w', 9, { groupId: 'g1' }), conv('p', 5), child('k', 'p', 6), conv('x', 1)]
+    })
+    const sections = sidebarSections(input)
+    expect(ids(sidebarChatOrder(sections, new Set(['p']), null))).toEqual(['p', 'x'])
+    expect(ids(sidebarChatOrder(sections, new Set(['p']), 'k'))).toEqual(['p', 'k', 'x'])
+  })
+
+  it('puts chats wanting attention first when unread-first is on', () => {
+    const input = layout({
+      unreadFirst: true,
+      conversations: [conv('a', 3), conv('b', 2), conv('c', 1)],
+      chatStatus: { c: { running: false, pending: [], unread: { since: 1, outcome: 'done' } } }
+    })
+    expect(ids(sidebarChatOrder(sidebarSections(input), new Set(), null))).toEqual(['c', 'a', 'b'])
+    // The open chat is being looked at, so its unread mark doesn't count.
+    expect(ids(sidebarChatOrder(sidebarSections({ ...input, currentId: 'c' }), new Set(), 'c'))).toEqual([
+      'a',
+      'b',
+      'c'
+    ])
+  })
+
+  it('opens every section while searching', () => {
+    const input = layout({
+      search: 'x',
+      collapsedSections: { pinned: true },
+      conversations: [conv('p', 1, { pinned: true }), conv('a', 2)]
+    })
+    expect(sidebarSections(input).every((s) => !s.collapsed)).toBe(true)
+    expect(sidebarSections({ ...input, search: '' })[0].collapsed).toBe(true)
+  })
+
+  it('follows the automatic sections when grouping by date', () => {
+    const now = new Date(2026, 2, 15, 12).getTime()
+    const input = layout({
+      groupBy: 'date',
+      now,
+      collapsedSections: { 'auto:date:older': true },
+      conversations: [conv('old', new Date(2026, 1, 1).getTime()), conv('today', now - 1000)]
+    })
+    expect(ids(sidebarChatOrder(sidebarSections(input), new Set(), null))).toEqual(['today'])
   })
 })
 
@@ -274,6 +377,12 @@ describe('automatic sections', () => {
     expect(dateBucket(at(8, 23), now)).toBe('auto:date:older')
   })
 
+  it("names the section a chat lands in by its folder, or by its latest activity's date", () => {
+    expect(autoSectionId(conv('a', at(15), { workspace: '/code/app' }), 'folder', now)).toBe('auto:folder:/code/app')
+    expect(autoSectionId(conv('a', at(1)), 'date', now)).toBe('auto:date:older')
+    expect(autoSectionId(conv('a', at(1)), 'date', now, () => at(15))).toBe('auto:date:today')
+  })
+
   it('groups by date newest first and skips empty ranges', () => {
     const sections = autoSections([conv('old', at(1)), conv('t', at(15)), conv('w', at(10))], 'date', now)
     expect(sections.map((s) => [s.name, s.conversations.map((c) => c.id)])).toEqual([
@@ -333,5 +442,113 @@ describe('automatic sections', () => {
       ['auto', 'Today', false, ['t']],
       ['auto', 'Older', true, ['o']]
     ])
+  })
+})
+
+describe('label filters', () => {
+  const groups: ChatGroup[] = [{ id: 'g1', name: 'Work' }]
+  const chats = [
+    conv('bug', 5, { groupId: 'g1', labels: ['l-bug'] }),
+    conv('both', 4, { groupId: 'g1', labels: ['l-bug', 'l-wip'] }),
+    conv('wip', 3, { groupId: 'g1', labels: ['l-wip'] }),
+    conv('plain', 2, { groupId: 'g1' }),
+    conv('loose', 1, { labels: ['l-wip'] })
+  ]
+  const ids = (list: ConversationMeta[]): string[] => list.map((c) => c.id)
+
+  it('leaves every section whole when nothing is filtered, and lists the labels it carries', () => {
+    const [work, ungrouped] = buildSidebarSections(chats, groups)
+    expect(ids(work.conversations)).toEqual(['bug', 'both', 'wip', 'plain'])
+    expect(work).toMatchObject({ total: 4, labelFilter: [] })
+    expect(work.labelIds.sort()).toEqual(['l-bug', 'l-wip'])
+    expect(ungrouped.labelIds).toEqual(['l-wip'])
+  })
+
+  it('keeps the chats carrying any of the section’s labels, in their usual order', () => {
+    const [work] = buildSidebarSections(chats, groups, {}, undefined, undefined, { g1: ['l-bug'] })
+    expect(ids(work.conversations)).toEqual(['bug', 'both'])
+    expect(work).toMatchObject({ total: 4, labelFilter: ['l-bug'] })
+    // The labels on offer still come from the whole section, not just what passed.
+    expect(work.labelIds.sort()).toEqual(['l-bug', 'l-wip'])
+    const [either] = buildSidebarSections(chats, groups, {}, undefined, undefined, { g1: ['l-bug', 'l-wip'] })
+    expect(ids(either.conversations)).toEqual(['bug', 'both', 'wip'])
+  })
+
+  it('filters each section on its own', () => {
+    const sections = buildSidebarSections(chats, groups, {}, undefined, undefined, { ungrouped: ['l-bug'] })
+    expect(ids(sections[0].conversations)).toEqual(['bug', 'both', 'wip', 'plain'])
+    expect(sections[1]).toMatchObject({ kind: 'ungrouped', total: 1, conversations: [] })
+  })
+
+  it('keeps a filtered group on screen even when nothing in it matches', () => {
+    const [work] = buildSidebarSections(chats, groups, {}, undefined, undefined, { g1: ['l-none'] })
+    expect(work).toMatchObject({ kind: 'group', total: 4, conversations: [] })
+  })
+
+  it('filters pinned and automatic sections by their own ids', () => {
+    const pinned = buildSidebarSections(
+      [conv('p1', 2, { pinned: true, labels: ['x'] }), conv('p2', 1, { pinned: true })],
+      [],
+      {},
+      undefined,
+      undefined,
+      { pinned: ['x'] }
+    )
+    expect(ids(pinned[0].conversations)).toEqual(['p1'])
+    const auto = buildSidebarSections(
+      [conv('a', 2, { labels: ['x'] }), conv('b', 1)],
+      [],
+      {},
+      undefined,
+      { by: 'folder', now: 10 },
+      { 'auto:folder:/ws': ['x'] }
+    )
+    expect(auto[0]).toMatchObject({ id: 'auto:folder:/ws', total: 2 })
+    expect(ids(auto[0].conversations)).toEqual(['a'])
+  })
+
+  it('keeps a parent whose spawned chat matches, with its whole tree', () => {
+    const tree = [
+      conv('parent', 3),
+      conv('child', 2, { spawnedFrom: { conversationId: 'parent', title: 'parent' }, labels: ['x'] }),
+      conv('other', 1)
+    ]
+    // A group gives Ungrouped its header, and with it the filter control.
+    const section = buildSidebarSections(tree, [{ id: 'g', name: 'G' }], {}, undefined, undefined, {
+      ungrouped: ['x']
+    }).find((s) => s.kind === 'ungrouped')!
+    expect(ids(section.conversations)).toEqual(['parent'])
+    expect(ids(section.children.parent)).toEqual(['child'])
+    expect(section.labelIds).toEqual(['x'])
+  })
+
+  it('never filters the header-less chat list, which has no control to clear its filter', () => {
+    const [section] = buildSidebarSections([conv('a', 2, { labels: ['x'] }), conv('b', 1)], [], {}, undefined, undefined, {
+      ungrouped: ['x']
+    })
+    expect(section.headless).toBe(true)
+    expect(ids(section.conversations)).toEqual(['a', 'b'])
+    expect(section.labelFilter).toEqual([])
+  })
+
+  it('leaves chats a label filter hides out of the keyboard order, but not while searching', () => {
+    const layout: SidebarLayoutInput = {
+      conversations: [conv('a', 3, { groupId: 'g', labels: ['x'] }), conv('b', 2, { groupId: 'g' }), conv('c', 1)],
+      groups: [{ id: 'g', name: 'G' }],
+      collapsedSections: {},
+      search: '',
+      chatStatus: {},
+      currentId: null,
+      labelFilters: { g: ['x'] }
+    }
+    expect(ids(sidebarChatOrder(sidebarSections(layout), new Set(), null))).toEqual(['a', 'c'])
+    expect(ids(sidebarChatOrder(sidebarSections({ ...layout, search: 'q' }), new Set(), null))).toEqual(['a', 'b', 'c'])
+  })
+
+  it('filterByLabels passes everything for an empty filter and ignores chats with no labels', () => {
+    const list = [conv('a', 1, { labels: ['x'] }), conv('b', 1)]
+    expect(filterByLabels(list, [], {})).toBe(list)
+    expect(ids(filterByLabels(list, ['x'], {}))).toEqual(['a'])
+    expect(ids(filterByLabels(list, ['y'], {}))).toEqual([])
   })
 })

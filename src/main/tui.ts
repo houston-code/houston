@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { UnreadOutcome } from '@shared/chatStatus'
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_LABEL,
@@ -18,6 +18,7 @@ import {
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
+import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
 import { HOOK_TIMEOUT_MAX_S, HOOK_TIMEOUT_MIN_S, HOOK_TIMEOUT_MS } from './agent/hooks'
 import { appendUserTurn } from './agent/userTurn'
 import {
@@ -36,10 +37,12 @@ import { formatReadinessLines, planVerifySteps, readinessOk } from '@shared/plan
 import { diffStat, type FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
+  commandHasRunOptions,
   mergeCommands,
   resolveCommand,
   type Command
 } from '@shared/commands'
+import { resolveModelArg } from '@shared/modelArg'
 import {
   agentTurn,
   commandTurn,
@@ -65,7 +68,8 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { throttleNotice } from '@shared/rateLimit'
+import { quotaIsLow, quotaStatusText, throttleNotice, type ProviderQuota } from '@shared/rateLimit'
+import { providerQuota } from './providers/quota'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
@@ -133,6 +137,14 @@ import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 import { isSubagentTool, splitSubagentReport, SubagentTermLines } from '@shared/subagents'
 import { formatElapsed } from '@shared/elapsed'
+import {
+  registryDelivery,
+  registryInstallOptions,
+  type RegistryGetResult,
+  type RegistrySearchResult,
+  type RegistryServer
+} from '@shared/mcpRegistry'
+import { draftInputKey, applyDraftInputs, freeServerId, serverProblem } from '@shared/mcpCatalog'
 
 /**
  * Interactive terminal mode: a stay-resident REPL you converse with directly in
@@ -176,6 +188,8 @@ export interface TuiOptions {
    * used only while no theme is saved: a `/theme` choice always wins.
    */
   detectedTheme?: ThemeName
+  /** `--add-dir`: extra directories (absolute) the session's runs may work in; `/add-dir` adds more. */
+  addDirs?: string[]
   /**
    * The first bad flag value (`--approval nonsense`). runTui reports it and exits
    * with a usage error before anything runs, rather than silently ignoring it.
@@ -208,6 +222,7 @@ export function parseTuiArgs(
   let continueSession = false
   let resumeId: string | undefined
   let usageError: string | undefined
+  const addDirs: string[] = []
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
@@ -243,6 +258,12 @@ export function parseTuiArgs(
       const { value, next } = flagValue(argv, i)
       resumeId = value
       i = next
+    } else if (name === '--add-dir') {
+      const { value, next } = flagValue(argv, i)
+      const added = resolveAddDir(value, defaultCwd)
+      if ('error' in added) usageError ??= `--add-dir: ${added.error}`
+      else if (!addDirs.includes(added.dir)) addDirs.push(added.dir)
+      i = next
     }
   }
 
@@ -255,8 +276,43 @@ export function parseTuiArgs(
     color: true,
     ...(continueSession ? { continueSession } : {}),
     ...(resumeId ? { resumeId } : {}),
+    ...(addDirs.length ? { addDirs } : {}),
     ...(usageError !== undefined ? { usageError } : {})
   }
+}
+
+/**
+ * Run `/add-dir`: add `path` to the session's directories (the next turn's runs may
+ * work there, as with Settings' additional directories, until the session ends), or
+ * list them when no path is given. Returns the line to print.
+ */
+export function applyAddDir(dirs: string[], path: string, base: string): string {
+  if (!path) {
+    return dirs.length
+      ? `· directories added this session: ${dirs.join(', ')}`
+      : '· no directories added this session; /add-dir <path> adds one'
+  }
+  const added = resolveAddDir(path, base)
+  if ('error' in added) return `· /add-dir ${added.error}`
+  if (dirs.includes(added.dir)) return `· ${added.dir} is already added`
+  dirs.push(added.dir)
+  return `· added ${added.dir} for this session: the agent can read and edit it from the next message`
+}
+
+/**
+ * A directory for `--add-dir` or `/add-dir`, resolved against `base` (where the
+ * command was typed, or the session's folder) and checked to exist.
+ */
+export function resolveAddDir(value: string | undefined, base: string): { dir: string } | { error: string } {
+  const v = value?.trim()
+  if (!v) return { error: 'needs the path of a directory, like ../shared' }
+  const dir = isAbsolute(v) ? v : resolvePath(base, v)
+  try {
+    if (statSync(dir).isDirectory()) return { dir }
+  } catch {
+    // reported below
+  }
+  return { error: `${JSON.stringify(v)} is not a directory` }
 }
 
 // --- Rendering ---------------------------------------------------------------
@@ -460,10 +516,10 @@ export function renderApprovalPrompt(
         : ev.sensitiveWrite
           ? `\n${paint('⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)', 'yellow', 'bold')}`
           : ''
-  // Until the run has a shell-network grant, "allow" runs the command offline; say
-  // which answer also grants network before the user picks, not after it fails.
+  // Until the chat has a shell-network grant, every answer runs the command offline;
+  // say so before the user picks, and that network is a separate question.
   const offline = ev.shellOffline
-    ? `\n${paint('  Runs without network. Choose "Allow for run" to also allow network for this run.', 'dim')}`
+    ? `\n${paint('  Runs without network. If it needs the network, Houston asks before allowing it.', 'dim')}`
     : ''
   // A network grant reaches one destination; say which before the user picks it.
   const scope = ev.networkScope
@@ -907,6 +963,8 @@ export interface StatusState {
   contextTokens: number
   /** The checked-out git branch, or null outside a repository (or on a detached HEAD). */
   branch?: string | null
+  /** The rate-limit quota the provider reported on its latest response, when it sent one. */
+  quota?: ProviderQuota
 }
 
 /** A path under the home folder written from `~` (`~/code/app`); any other path as is. */
@@ -939,6 +997,8 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
   parts.push(formatUsd(s.cost.cost))
   const ctx = renderContextUsage(s.contextTokens, s.model, paint)
   if (ctx) parts.push(ctx)
+  const quota = quotaStatusText(s.quota)
+  if (quota) parts.push(paint(quota, quotaIsLow(s.quota) ? 'yellow' : 'dim'))
   return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
 }
 
@@ -1161,8 +1221,8 @@ export function renderUndoResult(files: number, paint: Painter): string {
 export function renderCheckpoint(cp: CheckpointInfo | null, paint: Painter): string {
   if (!cp) return paint('· no changes from this chat to undo yet', 'dim')
   return cp.reverted
-    ? paint(`· the last turn's ${cp.files} file change(s) are already undone (/redo puts them back)`, 'dim')
-    : paint(`· /undo would revert ${cp.files} file(s) changed by the last turn`, 'dim')
+    ? paint(`· the last turn's ${plural(cp.files, 'file change')} ${cp.files === 1 ? 'is' : 'are'} already undone (/redo puts ${cp.files === 1 ? 'it' : 'them'} back)`, 'dim')
+    : paint(`· /undo would revert ${plural(cp.files, 'file')} changed by the last turn`, 'dim')
 }
 
 /**
@@ -1514,6 +1574,11 @@ export async function planDecisionFor(
   }
 }
 
+/** "1 message", "3 messages": a count with its noun, no "(s)". */
+export function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
 function truncate(s: string, max: number): string {
   // Count/slice by code point so a cut never lands inside a surrogate pair (which
   // would emit a broken half-character). `.length`/`.slice` work in code units.
@@ -1576,6 +1641,8 @@ export type SlashResult =
   | { kind: 'reasoning'; effort?: ReasoningEffort; asDefault?: boolean }
   /** Turn vim keys in the composer on or off (/vim). */
   | { kind: 'vim'; on?: boolean }
+  /** `/add-dir <path>` adds a session directory; a bare `/add-dir` lists them. */
+  | { kind: 'add-dir'; path: string }
   /** Revert (or restore) the files the last turn changed (/undo, /redo). */
   | { kind: 'undo'; redo: boolean }
   /**
@@ -1612,7 +1679,14 @@ export type SlashResult =
    * A template command (custom `.houston/commands` or first-party `/review`) or
    * `/agent`: run the prompt as a turn, recorded as the command the user typed.
    */
-  | ({ kind: 'prompt' } & InvokedTurn)
+  | ({
+      kind: 'prompt'
+      /**
+       * A custom command whose frontmatter changes how its turn runs (model, effort,
+       * agent, allowed-tools): the driver prepares it in full before sending.
+       */
+      command?: { cmd: Command; args: string }
+    } & InvokedTurn)
   | { kind: 'unknown'; name: string }
   | { kind: 'not-a-command' }
 
@@ -1621,7 +1695,10 @@ export type SlashResult =
  * never the prompt behind it (that's what the model reads, not the user).
  */
 export function invocationEcho(inv: PromptInvocation): string {
-  return inv.detail ? `· ${inv.label}: ${inv.detail}` : `· running ${inv.label}`
+  // The label and detail can come from a repository's own files (a command's or a
+  // skill's description), so they never reach the terminal with escape sequences.
+  const label = stripControlChars(inv.label)
+  return inv.detail ? `· ${label}: ${stripControlChars(inv.detail)}` : `· running ${label}`
 }
 
 /**
@@ -1699,6 +1776,8 @@ export function parseSlashCommand(
       if (isReasoningEffort(a)) return { kind: 'reasoning', effort: a, ...(asDefault ? { asDefault } : {}) }
       return { kind: 'reasoning' } // no/invalid arg → the driver reports the current one
     }
+    case 'add-dir':
+      return { kind: 'add-dir', path: arg.trim() }
     case 'vim': {
       const a = arg.trim().toLowerCase()
       if (a === 'on') return { kind: 'vim', on: true }
@@ -1801,6 +1880,7 @@ export function parseSlashCommand(
       // custom `.houston/commands`). A match runs its expanded prompt as a turn.
       const cmd = resolveCommand(commands, name)
       const turn = cmd ? commandTurn(cmd, arg, line) : null
+      if (turn && cmd && commandHasRunOptions(cmd)) return { kind: 'prompt', ...turn, command: { cmd, args: arg } }
       if (turn) return { kind: 'prompt', ...turn }
       return { kind: 'unknown', name }
     }
@@ -1818,32 +1898,7 @@ export function splitDefaultFlag(arg: string): { rest: string; asDefault: boolea
   return { rest: words.filter((w) => w !== '--default').join(' '), asDefault }
 }
 
-/**
- * Resolve a `/model` argument into a provider + model. Accepts `providerId`,
- * `providerId/model`, or a bare model id that a configured provider offers.
- */
-export function resolveModelArg(
-  arg: string,
-  settings: AppSettings
-): { providerId: string; model: string } | null {
-  const slash = arg.indexOf('/')
-  if (slash >= 0) {
-    const providerId = arg.slice(0, slash)
-    const model = arg.slice(slash + 1)
-    const p = settings.providers.find((pr) => pr.id === providerId)
-    if (p && model) return { providerId, model }
-    return null
-  }
-  const byProvider = settings.providers.find((p) => p.id === arg)
-  if (byProvider) {
-    const model = byProvider.defaultModel ?? byProvider.models[0]?.id
-    if (model) return { providerId: byProvider.id, model }
-    return null
-  }
-  const owner = settings.providers.find((p) => p.models.some((m) => m.id === arg))
-  if (owner) return { providerId: owner.id, model: arg }
-  return null
-}
+export { resolveModelArg }
 
 export const HELP_TEXT = [
   'Commands:',
@@ -1876,6 +1931,7 @@ export const HELP_TEXT = [
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
+  '  /add-dir [path]       let the agent work in another folder this session (alone: list them)',
   '  /undo, /redo          revert (or restore) the files the last turn changed',
   '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
   '  /changes              what is different in the working tree (also /diff)',
@@ -1885,6 +1941,7 @@ export const HELP_TEXT = [
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
   '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
+  '  /mcp search <query>   search the MCP Registry; /mcp add-from-registry <name> reviews one to add',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
   '  /image [path]         attach an image from your clipboard, or a file',
@@ -1984,6 +2041,10 @@ export type SettingsAction =
   | { op: 'login'; index: number }
   /** Forget a remote MCP server's OAuth tokens (/mcp logout <n>). /mcp only. */
   | { op: 'logout'; index: number }
+  /** Search the MCP Registry (/mcp search <query>; empty lists all). /mcp only. */
+  | { op: 'search'; query: string }
+  /** Review and add a registry entry by its full name (/mcp add-from-registry <name>). /mcp only. */
+  | { op: 'registry-add'; name: string }
   | { op: 'usage' }
 
 /** Parse the argument of /hooks or /mcp into an action. Bare command → list. */
@@ -1991,6 +2052,8 @@ export function parseSettingsAction(arg: string): SettingsAction {
   const [verb, ...rest] = arg.trim().split(/\s+/).filter(Boolean)
   if (!verb) return { op: 'list' }
   if (verb === 'add') return { op: 'add' }
+  if (verb === 'search') return { op: 'search', query: rest.join(' ') }
+  if (verb === 'add-from-registry') return rest.length === 1 ? { op: 'registry-add', name: rest[0] } : { op: 'usage' }
   const indexed = (op: 'remove' | 'login' | 'logout' | 'tools'): SettingsAction => {
     const n = Number.parseInt(rest[0] ?? '', 10)
     if (Number.isInteger(n) && n >= 1) return { op, index: n }
@@ -2747,6 +2810,11 @@ export interface TuiIo {
   onSteer?: (handler: (text: string) => boolean) => void
   takeQueued?: () => string[]
   /**
+   * Take (and clear) the line typed while the agent was working but not yet sent:
+   * it opens the next composer, rather than being thrown away when the turn ends.
+   */
+  takeDraft?: () => string
+  /**
    * Register a handler for Shift-Tab (cycle the approval mode). Fires at the
    * composer and mid-run alike; the driver decides what cycling means.
    */
@@ -2771,6 +2839,8 @@ export interface TuiIo {
 
 export interface TuiDeps {
   getSettings: () => AppSettings
+  /** Run just before the farewell on a clean exit (the host waits on background sessions). */
+  beforeExit?: () => Promise<void>
   startRun: (
     req: AgentRunRequest,
     send: (e: AgentEvent) => void,
@@ -2842,6 +2912,11 @@ export interface TuiDeps {
   }
   /** Live per-server connection status for `/mcp` (from the MCP manager). */
   mcpStatuses?: () => McpServerStatus[]
+  /** Read-only MCP Registry client for `/mcp search` and `/mcp add-from-registry`. Absent ⇒ unavailable. */
+  mcpRegistry?: {
+    search: (query: string, cursor?: string) => Promise<RegistrySearchResult>
+    get: (name: string) => Promise<RegistryGetResult>
+  }
   /**
    * Whether this host persists secret VALUES (headers / stdio env) from settings
    * saves. False on the standalone CLI, whose store keeps only the keys — the
@@ -3000,7 +3075,11 @@ export interface TuiDeps {
    */
   wake?: {
     register: (tryWake: (conversationId: string) => boolean) => void
-    take: (conversationId: string) => string | null
+    /**
+     * The note's text, or the note with its {@link ChatMessage.taintSource} (a note
+     * quoting spawned sessions' reports), which the turn's message keeps.
+     */
+    take: (conversationId: string) => string | Pick<ChatMessage, 'content' | 'taintSource'> | null
   }
   /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
@@ -3082,14 +3161,28 @@ export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {
  * id (like headless), so nothing is persisted and turns can't collide.
  */
 /** Pluralized summary of a project's elevating config, e.g. "2 hooks, 1 MCP server". */
-export function summarizeElevated(c: { allowRules: unknown[]; hooks: unknown[]; mcpServers: unknown[] }): string {
+export function summarizeElevated(c: {
+  allowRules: unknown[]
+  hooks: unknown[]
+  mcpServers: unknown[]
+  commands?: unknown[]
+}): string {
+  const commands = c.commands?.length ?? 0
   return [
     c.allowRules.length ? `${c.allowRules.length} allow rule${c.allowRules.length === 1 ? '' : 's'}` : '',
     c.hooks.length ? `${c.hooks.length} hook${c.hooks.length === 1 ? '' : 's'}` : '',
-    c.mcpServers.length ? `${c.mcpServers.length} MCP server${c.mcpServers.length === 1 ? '' : 's'}` : ''
+    c.mcpServers.length ? `${c.mcpServers.length} MCP server${c.mcpServers.length === 1 ? '' : 's'}` : '',
+    commands ? `${commands} command${commands === 1 ? '' : 's'} that pre-approve${commands === 1 ? 's' : ''} tools` : ''
   ]
     .filter(Boolean)
     .join(', ')
+}
+
+/** Which of the project's files define its elevating config, for the trust prompt. */
+export function elevatedSource(c: { allowRules: unknown[]; hooks: unknown[]; mcpServers: unknown[]; commands?: unknown[] }): string {
+  const settings = c.allowRules.length > 0 || c.hooks.length > 0 || c.mcpServers.length > 0
+  if (!c.commands?.length) return '.houston/settings.json'
+  return settings ? '.houston/settings.json and .houston/commands' : '.houston/commands'
 }
 
 /**
@@ -3117,9 +3210,9 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
 
   deps.io.out(
     `\n${paint(state === 'changed' ? 'This project’s trusted configuration changed.' : 'This project asks for extra permissions.', 'cyan')}\n` +
-      `  Its .houston/settings.json defines ${summarizeElevated(cfg.elevated)}.\n` +
+      `  It defines ${summarizeElevated(cfg.elevated)} (in ${elevatedSource(cfg.elevated)}).\n` +
       paint(
-        '  Hooks and MCP servers run as you, and allow rules auto-approve matching actions.\n' +
+        '  Hooks and MCP servers run as you, and allow rules and pre-approving commands auto-approve matching actions.\n' +
           '  Only trust folders whose authors you trust; until then Houston ignores them.\n',
         'dim'
       )
@@ -3233,6 +3326,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
 
   // Mutable session state. providerId/model may be null until a provider is set up:
   // an interactive session never ejects for a missing key (see below).
+  // Directories added for this session (`--add-dir`, `/add-dir`), sent with every run.
+  const sessionAddDirs: string[] = [...(opts.addDirs ?? [])]
   let providerId: string | null
   let model: string | null
   const resolved = resolveHeadlessModel(settings, opts)
@@ -3371,6 +3466,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let verbose = settings.tuiVerbose === true
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
+  // A line half-typed while a turn ran (never sent with Enter): the next composer opens with it.
+  let halfDraft = ''
   // What a run hands back unsent: steers it accepted but ended before reading
   // (`steers_returned`), and, when the user interrupted it, the follow-ups typed
   // while it ran. Nothing typed is dropped: after an interrupt it comes back as the
@@ -3404,6 +3501,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
   // What filled the context on the last main round, for /context (estimated parts).
   let contextParts: ContextParts | null = null
+  // What belongs to the chat on screen rather than the session: the staged /image, the
+  // context meter and the run /undo falls back to. Reset whenever another chat (or a
+  // fresh one) takes its place, or the status bar, /context and /undo act on the old one.
+  const resetChatState = (): void => {
+    pendingImages = []
+    contextTokens = 0
+    contextParts = null
+    lastRunId = null
+  }
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
 
@@ -3445,7 +3551,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // command once the turn ends.
   deps.io.onSteer?.((text) => {
     if (!activeRunId) return false
-    const slash = parseSlashCommand(text.trim(), deps.getSettings(), customCommands)
+    const slash = parseSlashCommand(text.trim(), deps.getSettings(), templateCommands)
     if (slash.kind !== 'not-a-command' && slash.kind !== 'unknown') return false
     return deps.steerRun?.(activeRunId, text) ?? false
   })
@@ -3541,7 +3647,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       conversationId = entry!.id
       messages = conv.messages
       deps.io.out(
-        paint(`· continuing "${entry!.title}" (${messages.length} message(s))\n`, 'dim')
+        paint(`· continuing "${entry!.title}" (${plural(messages.length, 'message')})\n`, 'dim')
       )
       const recap = renderRecap(messages, paint, { width: columns() })
       if (recap) deps.io.out(`${recap}\n`)
@@ -3599,10 +3705,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     messages = []
     conversationId = null
     persistedSettings = null
-    pendingImages = []
-    contextTokens = 0
-    contextParts = null // /context must not show the deleted chat
-    lastRunId = null // /undo must not restore files from the deleted chat's run
+    resetChatState() // /context and /undo must not act on the deleted chat
   }
 
   /**
@@ -3675,7 +3778,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             return `Delete "${title}"? It's the chat you're in: you'll be in a new chat. This cannot be undone.`
           }
           const msgs = messagesOf(o.value)
-          const count = msgs ? ` and its ${msgs.length} message(s)` : ''
+          const count = msgs ? ` and its ${plural(msgs.length, 'message')}` : ''
           return `Delete "${title}"${count}? This cannot be undone.`
         }
       })
@@ -3778,7 +3881,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       `${
         providerId && model
           ? renderStatusLine(
-              { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens, branch },
+              {
+                providerId,
+                model,
+                policy,
+                cwd: opts.cwd,
+                cost: sessionCost,
+                contextTokens,
+                branch,
+                quota: providerQuota(providerId)
+              },
               columns(),
               paint
             )
@@ -3802,16 +3914,26 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (pendingQueued.length) {
       // Typed while the last turn ran. Dispatch it instead of prompting: waiting for
       // an Enter they already pressed would be the exact tax queueing removes.
-      raw = pendingQueued.join('\n\n')
-      pendingQueued = []
+      // A command among them runs as itself, one entry per pass: joined, "/compact" then
+      // "/cost" became one message the second command vanished into, and a steer
+      // followed by "/plan" reached the model as text.
+      if (pendingQueued.some((q) => /^[/!#]/.test(q.trim()))) {
+        raw = pendingQueued[0]
+        pendingQueued = pendingQueued.slice(1)
+      } else {
+        raw = pendingQueued.join('\n\n')
+        pendingQueued = []
+      }
       deps.io.out(`${composerPrompt(policy, paint)}${raw}\n`)
     } else if (deps.io.readComposer) {
       // A thunk, not a string: Shift-Tab can change the policy WHILE this read is
       // open, and the prompt has to say what will actually happen when you hit Enter.
       const draft = restoreDraft
       restoreDraft = ''
+      const half = halfDraft
+      halfDraft = ''
       if (draft) deps.io.out(paint('· not sent (the turn was interrupted): back in the prompt to edit or send\n', 'dim'))
-      const text = await deps.io.readComposer(() => composerPrompt(policy, paint), draft || undefined, {
+      const text = await deps.io.readComposer(() => composerPrompt(policy, paint), draft || half || undefined, {
         // Read on each redraw: what the keyword would do on this chat's model right now.
         ultrathinkEffect: () =>
           ultrathinkEffect(
@@ -3860,12 +3982,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Background work finished while the composer was idle: its news is this turn's
     // input. Taken now, not when it arrived, so a draft typed meanwhile still wins.
     let wakeTurn = false
+    // What the wake note carries from outside (see ChatMessage.taintSource), kept on
+    // the turn's message so the memory taint rule still sees it.
+    let wakeTaint: string | undefined
     if (wakeRequested) {
       wakeRequested = false
-      const note = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      const taken = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      const note = typeof taken === 'string' ? taken : (taken?.content ?? null)
       if (note) {
         raw = note
         wakeTurn = true
+        if (taken && typeof taken === 'object') wakeTaint = taken.taintSource
         deps.io.out(paint('· background work finished; continuing on its own\n', 'dim'))
       } else if (raw === null && !resetComposer) continue
     }
@@ -3876,6 +4003,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Set when this turn's text is a prompt Houston wrote for a command (/review,
     // /agent): saved on the message so every client shows the command, not the prompt.
     let invokedAs: PromptInvocation | undefined
+    // A custom command's per-turn model, effort and pre-approved tools (its
+    // frontmatter): this one turn only, never saved as the chat's settings.
+    let turnRun: PreparedCommandRun | null = null
     // Persist composer submissions (commands included) for cross-restart recall;
     // approval/question answers go through a different read and aren't saved.
     if (!wakeTurn) deps.persistHistory?.(text)
@@ -3958,9 +4088,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         messages = []
         conversationId = null // next turn starts (and persists) a fresh conversation
         persistedSettings = null // stored meta belongs to the old conversation
-        pendingImages = [] // don't carry a staged /image into the fresh conversation
-        contextTokens = 0 // the context meter belongs to the old conversation
-        contextParts = null
+        resetChatState()
         deps.io.out(paint('· conversation cleared\n', 'dim'))
         continue
       }
@@ -4009,7 +4137,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         conversationId = id
         messages = conv.messages
-        deps.io.out(paint(`· resumed: ${messages.length} message(s)\n`, 'dim'))
+        resetChatState()
+        deps.io.out(paint(`· resumed: ${plural(messages.length, 'message')}\n`, 'dim'))
         const recap = renderRecap(messages, paint, { width: columns() })
         if (recap) deps.io.out(`${recap}\n`)
         const ended = runEndNotice(messages)
@@ -4033,7 +4162,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const target = result.path ?? defaultExportName(title, at, result.format)
         try {
           const written = deps.writeExport(target, content)
-          deps.io.out(paint(`· exported ${messages.length} message(s) to ${written}\n`, 'dim'))
+          deps.io.out(paint(`· exported ${plural(messages.length, 'message')} to ${written}\n`, 'dim'))
         } catch (e) {
           deps.io.out(paint(`· couldn't export: ${(e as Error).message}\n`, 'yellow'))
         }
@@ -4074,7 +4203,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const title = currentTitle() ?? 'this chat'
         // discardPending: type-ahead must not answer a question about deleting.
         const ans = await deps.io.readLine(
-          paint(`Delete "${title}" and its ${messages.length} message(s)? This cannot be undone. [y/N] `, 'yellow'),
+          paint(`Delete "${title}" and its ${plural(messages.length, 'message')}? This cannot be undone. [y/N] `, 'yellow'),
           { discardPending: true }
         )
         if (!/^y(es)?$/i.test(ans?.trim() ?? '')) {
@@ -4160,6 +4289,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         renderSettingsOverview(deps, paint)
         continue
       }
+      if (result.kind === 'add-dir') {
+        deps.io.out(paint(`${applyAddDir(sessionAddDirs, result.path, opts.cwd)}\n`, 'dim'))
+        continue
+      }
       if (result.kind === 'vim') {
         const on = result.on ?? deps.getSettings().tuiEditor !== 'vim'
         if (!deps.updateSettings) {
@@ -4225,12 +4358,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const stillRunning = list.find((x) => x.id === id)?.running
         conversationId = id
         messages = conv.messages
+        resetChatState()
         adoptChatSettings(conv)
         deps.io.out(
           paint(
             stillRunning
-              ? `· opened a running session (${messages.length} message(s) so far); it keeps going in the background\n`
-              : `· opened: ${messages.length} message(s)\n`,
+              ? `· opened a running session (${plural(messages.length, 'message')} so far); it keeps going in the background\n`
+              : `· opened: ${plural(messages.length, 'message')}\n`,
             'dim'
           )
         )
@@ -4283,8 +4417,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // The meter measured the log before the undo; the next turn reports the real size.
           contextTokens = 0
           contextParts = null
-          const left = res.conflicts.length ? `; left ${res.conflicts.length} file(s) that changed since: ${res.conflicts.join(', ')}` : ''
-          deps.io.out(paint(`· undid the rewind (${res.reapplied} file(s) put back${left})\n`, 'dim'))
+          const left = res.conflicts.length ? `; left ${plural(res.conflicts.length, 'file')} that changed since: ${res.conflicts.join(', ')}` : ''
+          deps.io.out(paint(`· undid the rewind (${plural(res.reapplied, 'file')} put back${left})\n`, 'dim'))
           continue
         }
         const points = rewindPoints(messages)
@@ -4369,7 +4503,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           : await deps.checkpoint.undo(runId)
         deps.io.out(
           result.redo
-            ? paint(`· put back ${files} file(s) the last turn had changed\n`, 'dim')
+            ? paint(`· put back ${plural(files, 'file')} the last turn had changed\n`, 'dim')
             : `${renderUndoResult(files, paint)}\n`
         )
         continue
@@ -4582,7 +4716,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         if (res.ok && res.messages) {
           messages = res.messages
-          deps.io.out(paint(`· compacted ${res.summarized} earlier message(s)\n`, 'dim'))
+          // The meter measured the log before it was summarized; the next turn reports
+          // the real size, as after a rewind.
+          contextTokens = 0
+          contextParts = null
+          deps.io.out(paint(`· compacted ${plural(res.summarized, 'earlier message')}\n`, 'dim'))
         } else if (res.ok) {
           deps.io.out(
             paint(
@@ -4596,6 +4734,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· compaction cancelled; nothing changed\n', 'dim'))
         } else {
           deps.io.out(paint(`· couldn't compact: ${res.error ?? 'unknown error'}\n`, 'yellow'))
+        }
+        // A line sent while it compacted was queued (there was no run to steer): send it
+        // next, as /btw does, rather than after the user's next turn. A cancel hands it
+        // back as the draft instead, and a line still being typed stays a draft.
+        const typedWhile = deps.io.takeQueued?.() ?? []
+        const halfTyped = deps.io.takeDraft?.() ?? ''
+        if (res.reason === 'cancelled') {
+          restoreDraft = [restoreDraft, ...typedWhile, halfTyped].filter(Boolean).join('\n\n')
+        } else {
+          pendingQueued = [...pendingQueued, ...typedWhile]
+          if (halfTyped) halfDraft = [halfDraft, halfTyped].filter(Boolean).join('\n\n')
         }
         continue
       }
@@ -4644,12 +4793,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             deps.io.stopSpinner?.()
             deps.io.out(paint('\n^C side chat stopped\n', 'dim'))
           } else if (turn.answer !== undefined) {
-            deps.io.out(`${paint('side chat (not added to this chat):', 'dim')}\n${turn.answer.trim()}\n`)
+            // The model's answer, rendered as a reply is: markdown, wrapped, and with its
+            // control characters dropped (line by line, so its lines stay).
+            const clean = turn.answer.trim().split('\n').map(stripControlChars).join('\n')
+            const body = renderMarkdownAnsi(clean, { paint, width: columns() })
+            deps.io.out(`${paint('side chat (not added to this chat):', 'dim')}\n${body}\n`)
           } else {
-            deps.io.out(paint(`· side chat failed: ${turn.error ?? 'no answer'}\n`, 'red'))
+            deps.io.out(paint(`· side chat failed: ${stripControlChars(turn.error ?? 'no answer')}\n`, 'red'))
           }
         } catch (e) {
-          deps.io.out(paint(`· side chat failed: ${(e as Error).message}\n`, 'red'))
+          deps.io.out(paint(`· side chat failed: ${stripControlChars((e as Error).message)}\n`, 'red'))
         } finally {
           stopSideChat = null
           deps.io.stopSpinner?.()
@@ -4657,9 +4810,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // A line typed while the side chat worked was queued (there was no run to
         // steer): send it as the next turn, or after a stop, offer it as the draft.
         const typed = deps.io.takeQueued?.() ?? []
-        if (typed.length) {
-          if (stopped) restoreDraft = [restoreDraft, ...typed].filter(Boolean).join('\n\n')
-          else pendingQueued = [...pendingQueued, ...typed]
+        const halfTyped = deps.io.takeDraft?.() ?? ''
+        if (stopped) restoreDraft = [restoreDraft, ...typed, halfTyped].filter(Boolean).join('\n\n')
+        else {
+          pendingQueued = [...pendingQueued, ...typed]
+          if (halfTyped) halfDraft = [halfDraft, halfTyped].filter(Boolean).join('\n\n')
         }
         continue
       }
@@ -4724,9 +4879,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // run its expanded prompt as a normal turn. Fall through — don't `continue`.
         // The typed line is already on screen; one dim line says what it runs, and
         // the prompt itself stays out of the scrollback.
+        if (result.command) {
+          const prepared = await prepareCommandRun(result.command.cmd, result.command.args, text, {
+            settings: deps.getSettings(),
+            trusted: await workspaceTrusted(opts.cwd, deps.getSettings().trustedFolders).catch(() => false)
+          })
+          if (prepared && !prepared.ok) {
+            deps.io.out(paint(`· ${stripControlChars(prepared.error)}\n`, 'yellow'))
+            continue
+          }
+          if (prepared) {
+            turnRun = prepared.run
+            result = { kind: 'prompt', ...prepared.run.turn }
+          }
+        }
         text = result.text
         invokedAs = result.invokedAs
         deps.io.out(paint(`${invocationEcho(result.invokedAs)}\n`, 'dim'))
+        for (const note of turnRun?.notes ?? []) deps.io.out(paint(`· ${stripControlChars(note)}\n`, 'dim'))
       } else {
         // 'handled' — informational commands print here where the state lives.
         handleInfoCommand(
@@ -4763,7 +4933,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       role: 'user',
       content: text,
       ...(pendingImages.length ? { images: pendingImages } : {}),
-      ...(invokedAs ? { invokedAs } : {})
+      ...(invokedAs ? { invokedAs } : {}),
+      ...(wakeTurn && wakeTaint ? { taintSource: wakeTaint } : {})
     })
     pendingImages = [] // consumed by this turn
     // Lazily open a persisted conversation on the first turn so the session
@@ -4801,13 +4972,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       runId,
       ...(conversationId ? { conversationId } : {}),
       workspace: opts.cwd,
-      providerId,
-      model,
+      providerId: turnRun?.model?.providerId ?? providerId,
+      model: turnRun?.model?.model ?? model,
       approvalPolicy: policy,
-      reasoningEffort: effort,
+      reasoningEffort: turnRun?.effort ?? effort,
+      ...(turnRun?.turnAllowRules?.length ? { turnAllowRules: turnRun.turnAllowRules } : {}),
       messages,
       // show_images results print as clickable file links (see renderImageLinks).
       imageLinks: true,
+      ...(sessionAddDirs.length ? { addDirs: [...sessionAddDirs] } : {}),
       ...(wakeTurn ? { wake: true } : {})
     }
     // Serialize interactive prompts (approvals/questions) so two readLine calls
@@ -4945,6 +5118,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           const tag = callTag(e.callId)
           liveCalls.delete(e.callId)
           parallelCalls.delete(e.callId)
+          // With no tool left running the model is writing again, so the spinner stops
+          // naming the last tool ("Run 45s").
+          if (liveCalls.size === 0) deps.io.setSpinnerLabel?.('Working')
           // The list was just drawn from the call's args; its result is only the
           // model-facing summary of what we already showed.
           if (todoCalls.delete(e.callId) && e.ok) {
@@ -5232,7 +5408,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`\n· ${limitNoticeText(e.reason)}\n`, 'yellow'))
           break
         case 'compaction':
-          deps.io.out(paint(`\n· compacted ${e.summarized} messages\n`, 'dim'))
+          deps.io.out(paint(`\n· compacted ${plural(e.summarized, 'message')}\n`, 'dim'))
           break
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension) — display-only, never
@@ -5356,8 +5532,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     const interrupted = interruptedQueued !== null
     returnedSteers = []
     interruptedQueued = null
-    if (interrupted) restoreDraft = unsent.join('\n\n')
-    else pendingQueued = unsent
+    // A line still being typed when the turn ended was never sent: it stays a draft.
+    const typing = deps.io.takeDraft?.() ?? ''
+    if (interrupted) restoreDraft = [...unsent, typing].filter(Boolean).join('\n\n')
+    else {
+      // Appended: entries still queued from before (one command per pass) go first.
+      pendingQueued = [...pendingQueued, ...unsent]
+      if (typing) halfDraft = [halfDraft, typing].filter(Boolean).join('\n\n')
+    }
 
     // A plan-mode turn hands off to execution through the present_plan flow: the agent
     // calls present_plan, the plan_ready case above renders it and collects an
@@ -5379,6 +5561,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       )
     )
   }
+  // Anything the host still has to finish (background sessions) prints its wait first.
+  await deps.beforeExit?.()
   deps.io.out(paint('\nBye.\n', 'dim'))
   return 0
 }
@@ -5543,7 +5727,9 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
     action.op === 'usage' ||
     action.op === 'login' ||
     action.op === 'logout' ||
-    action.op === 'tools'
+    action.op === 'tools' ||
+    action.op === 'search' ||
+    action.op === 'registry-add'
   ) {
     // login/logout/tools are /mcp verbs; on /hooks they just fall to usage.
     deps.io.out(paint('usage: /hooks   ·   /hooks add   ·   /hooks remove <n>\n', 'yellow'))
@@ -5595,6 +5781,88 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
 }
 
 /**
+ * `/mcp search` results. Registry text is the publisher's, already stripped of
+ * control characters by the normalizer; it is printed as data and never sent anywhere.
+ */
+export function renderRegistryResults(servers: RegistryServer[], query: string, paint: Painter): string {
+  if (!servers.length) return paint(query ? `· no MCP Registry servers match "${query}"` : '· the MCP Registry listed no servers', 'dim')
+  const lines = [paint(`MCP Registry${query ? `: "${query}"` : ''}`, 'bold')]
+  servers.forEach((s, i) => {
+    lines.push(`  ${i + 1}) ${paint(s.name, 'cyan')}${s.version ? `  v${s.version}` : ''}${s.status && s.status !== 'active' ? paint(`  (${s.status})`, 'yellow') : ''}`)
+    if (s.description) lines.push(`     ${s.description}`)
+    lines.push(paint(`     ${registryDelivery(s)}`, 'dim'))
+    if (s.repositoryUrl) lines.push(paint(`     ${s.repositoryUrl}`, 'dim'))
+  })
+  lines.push(paint('Add one with /mcp add-from-registry <name>. It is saved switched off.', 'dim'))
+  return lines.join('\n')
+}
+
+/**
+ * /mcp add-from-registry <name>: convert the entry's first installable local package
+ * (pinned npx, uvx or docker) into a stdio server, ask for its variables, show it,
+ * and add it switched off on a yes. Remote entries need headers, which the terminal
+ * can't store, so they are pointed at the desktop app.
+ */
+async function addFromRegistry(name: string, servers: McpServerConfig[], deps: TuiDeps, paint: Painter): Promise<void> {
+  if (!deps.mcpRegistry) return void deps.io.out(paint('· the MCP Registry is unavailable in this client\n', 'dim'))
+  const res = await deps.mcpRegistry.get(name)
+  if (!res.ok) return void deps.io.out(paint(`· ${res.error}\n`, 'yellow'))
+  const options = registryInstallOptions(res.server)
+  const local = options.find((o) => o.kind === 'stdio' && 'draft' in o)
+  if (!local || !('draft' in local)) {
+    const why = options.find((o) => o.kind === 'stdio' && 'unsupported' in o)
+    if (why && 'unsupported' in why) deps.io.out(paint(`· ${why.label}: ${why.unsupported}\n`, 'yellow'))
+    deps.io.out(
+      paint(
+        options.some((o) => o.kind === 'remote' && 'draft' in o)
+          ? '· this server is remote: add it in the desktop app (Settings > MCP Servers > Browse registry)\n'
+          : '· no package here that Houston can install\n',
+        'yellow'
+      )
+    )
+    return
+  }
+  const draft = local.draft
+  const id = freeServerId(draft.server.id, servers.map((s) => s.id))
+  deps.io.out(`${paint(draft.name, 'bold')}  ${paint(`from ${draft.publisher}`, 'dim')}\n`)
+  if (draft.note) deps.io.out(paint(`${draft.note}\n`, 'dim'))
+  if (draft.needs) deps.io.out(paint(`Needs ${draft.needs} installed.\n`, 'dim'))
+  deps.io.out(`${paint('command:', 'dim')} ${draft.server.command} ${(draft.server.args ?? []).join(' ')}\n`)
+  const argsAns = await deps.io.readLine('arguments (space-separated; Enter keeps them as shown): ')
+  if (argsAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+  const args = argsAns.trim() ? argsAns.trim().split(/\s+/) : (draft.server.args ?? [])
+  const readSecret = deps.io.readSecret ?? deps.io.readLine
+  const values: Record<string, string> = {}
+  for (const input of draft.inputs ?? []) {
+    const what = [input.description, input.default && !input.required ? `empty uses ${input.default}` : ''].filter(Boolean).join('; ')
+    if (what) deps.io.out(paint(`  ${input.name}: ${what}\n`, 'dim'))
+    const label = `${input.name}${input.required ? '' : ' (optional, Enter to skip)'}${input.secret ? ' (hidden)' : ''}: `
+    const v = await (input.secret ? readSecret(label) : deps.io.readLine(label))
+    if (v === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    values[draftInputKey(input)] = v
+  }
+  const built = { ...applyDraftInputs({ ...draft.server, id, args }, draft.inputs ?? [], values), name: id, enabled: false }
+  const problem = serverProblem(built, servers.map((s) => s.id))
+  if (problem) return void deps.io.out(paint(`· not added: ${problem}\n`, 'yellow'))
+  const envNote = built.env ? `  env: ${Object.keys(built.env).join(', ')}` : ''
+  deps.io.out(`\n${paint('server:', 'dim')} ${id}  [stdio, switched off]  ${built.command} ${(built.args ?? []).join(' ')}${envNote}\n`)
+  const ok = await deps.io.readLine('Add this server? [y/N] ', { discardPending: true })
+  if (parseApprovalAnswer(ok ?? '').decision !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
+  deps.updateSettings?.({ mcpServers: [...servers, built] })
+  deps.io.out(
+    paint(
+      `· added ${id}, switched off. Switch it on in the desktop app, or set "enabled": true for it in settings.json.\n`,
+      'dim'
+    )
+  )
+  if (built.env && deps.canStoreHeaderSecrets === false) {
+    deps.io.out(
+      paint(`· this terminal cannot store env values; put them in cli-headers.json under the scope "mcp-env:${id}"\n`, 'yellow')
+    )
+  }
+}
+
+/**
  * /mcp: list (with live connection status), add (guided, stdio only), remove, or
  * OAuth sign-in/out for a remote server. Persists via deps.updateSettings. The
  * add flow never collects a URL or auth headers; remote servers are added in the
@@ -5607,7 +5875,7 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
   if (action.op === 'usage') {
     deps.io.out(
       paint(
-        'usage: /mcp   ·   /mcp add   ·   /mcp tools <n>   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>\n',
+        'usage: /mcp   ·   /mcp add   ·   /mcp tools <n>   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>   ·   /mcp search <query>   ·   /mcp add-from-registry <name>\n',
         'yellow'
       )
     )
@@ -5618,6 +5886,14 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
     deps.io.out(
       paint('Remote (URL) servers: add them in the desktop app, then sign in with /mcp login <n> if needed.\n', 'dim')
     )
+    return
+  }
+
+  if (action.op === 'search') {
+    if (!deps.mcpRegistry) return void deps.io.out(paint('· the MCP Registry is unavailable in this client\n', 'dim'))
+    const res = await deps.mcpRegistry.search(action.query)
+    if (!res.ok) return void deps.io.out(paint(`· ${res.error}\n`, 'yellow'))
+    deps.io.out(`${renderRegistryResults(res.page.servers, action.query.trim(), paint)}\n`)
     return
   }
 
@@ -5684,6 +5960,8 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
     deps.io.out(paint(`· removed MCP server ${action.index} (${removed.name ?? removed.id}). Applies on your next message.\n`, 'dim'))
     return
   }
+
+  if (action.op === 'registry-add') return addFromRegistry(action.name, servers, deps, paint)
 
   // op === 'add' — local stdio servers only.
   deps.io.out(paint('Add a local (stdio) MCP server. For remote servers, use the desktop app (then /mcp login here if needed).\n', 'dim'))

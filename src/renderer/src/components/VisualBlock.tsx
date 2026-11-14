@@ -240,15 +240,26 @@ function HtmlFrame({ html, startNow }: { html: string; startNow: boolean }): JSX
 /**
  * A fenced block rendered as a visual (see lib/visuals.ts), with the source a click
  * away. A block still streaming shows as code until its closing fence arrives, so a
- * half-written diagram never flickers through errors.
+ * half-written diagram never flickers through errors. One whose reply ended without
+ * closing it (Stop mid-diagram, or a missing fence) stays plain code.
  */
-export function VisualBlock({ kind, block }: { kind: VisualKind; block: CodeBlockData }): JSX.Element {
+export function VisualBlock({
+  kind,
+  block,
+  streaming = false
+}: {
+  kind: VisualKind
+  block: CodeBlockData
+  /** More of the reply is still arriving, so an unclosed block may yet close. */
+  streaming?: boolean
+}): JSX.Element {
   const settings = useVisualsSettings()
   const [view, setView] = useState<'rendered' | 'code'>(kind === 'html' ? 'code' : 'rendered')
   const label = kind === 'html-visual' ? 'html visual' : block.lang
   const toggle = <ViewToggle view={view} onChange={setView} />
 
   if (!block.closed) {
+    if (!streaming) return <CodeBlock lang={block.lang} value={block.value} label={label} />
     return <CodeBlock lang={block.lang} value={block.value} label={label} actions={<Note>Rendering when complete</Note>} />
   }
 

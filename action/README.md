@@ -249,13 +249,19 @@ steer the model. The action is built around that:
   profile outside the checkout and outside the sandbox's writable temp directories.
 - **The action does the writes.** The model never posts or pushes. After a `fix-ci` or
   `implement` run the action refuses to continue if the run changed `.git/config`, a hook,
-  or `.git/info/attributes`, or moved `HEAD` (a commit of its own would skip the checks
-  that follow); runs git with hooks disabled; refuses to post or push anything that
-  contains the job's API key or tokens; and pushes only a new branch under `branch-prefix`,
-  never the branch it started from or the default branch. The push credential is
+  `.git/info/attributes`, or a file that points git at other settings (`commondir`,
+  `config.worktree`, anything under `.git/worktrees/`), or moved `HEAD` (a commit of its
+  own would skip the checks that follow); runs git with hooks disabled, and an explicit git
+  directory; refuses to post or push anything that contains the
+  job's API key or tokens (including the base64 form a checkout credential takes in git
+  config); and pushes only a new branch under `branch-prefix`, never the branch it started
+  from or the default branch. The push credential is
   passed to git through its environment, never in a URL or `.git/config`.
 - **Least-privilege tokens.** The examples start from `permissions: {}` and grant each job
-  only what its mode needs, and check out with `persist-credentials: false`.
+  only what its mode needs, and check out with `persist-credentials: false`. `respond`,
+  `review` and `task` refuse to start when the checkout's git config holds an
+  `http.*.extraheader` (a persisted credential), since the model can read that config
+  and the run posts its text.
 
 Things to know:
 

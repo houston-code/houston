@@ -127,6 +127,19 @@ describe('createSpawnBackend', () => {
     expect(result.worktree).toBeUndefined()
   })
 
+  it('marks the seeded message with the taint it was handed, and only then', async () => {
+    const tainted = fakeDeps()
+    await createSpawnBackend(tainted.deps).spawn({ ...baseInput, taintSource: 'web_fetch' })
+    const seeded = tainted.calls.seeded[0].messages.at(-1)
+    expect(seeded).toMatchObject({ role: 'user', content: baseInput.prompt, taintSource: 'web_fetch' })
+    // The run starts from the marked log, so its memory writes ask.
+    expect(tainted.calls.runs[0].req.messages.at(-1)?.taintSource).toBe('web_fetch')
+
+    const clean = fakeDeps()
+    await createSpawnBackend(clean.deps).spawn(baseInput)
+    expect(clean.calls.seeded[0].messages.at(-1)).not.toHaveProperty('taintSource')
+  })
+
   it("stores the parent's policy and effort on the child, and runs it under them", async () => {
     const { deps, calls } = fakeDeps()
     await createSpawnBackend(deps).spawn({ ...baseInput, approvalPolicy: 'plan', reasoningEffort: 'low' })

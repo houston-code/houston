@@ -48,6 +48,8 @@ describe('providers list', () => {
     expect(out).toContain('no key needed') // ollama
     expect(out).toContain('Available to add')
     expect(out).toContain('openrouter')
+    // Each host's blurb follows a colon, not a dash.
+    expect(out).not.toContain('\u2014')
   })
 
   it('marks a required-but-missing key as NO KEY', async () => {

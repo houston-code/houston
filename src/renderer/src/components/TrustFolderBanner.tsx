@@ -88,9 +88,17 @@ export function TrustFolderBanner({
   const parts = [
     c.allowRules ? `${c.allowRules} allow rule${c.allowRules === 1 ? '' : 's'}` : '',
     c.hooks ? `${c.hooks} hook${c.hooks === 1 ? '' : 's'}` : '',
-    c.mcpServers ? `${c.mcpServers} MCP server${c.mcpServers === 1 ? '' : 's'}` : ''
+    c.mcpServers ? `${c.mcpServers} MCP server${c.mcpServers === 1 ? '' : 's'}` : '',
+    c.commands ? `${c.commands} command${c.commands === 1 ? '' : 's'} that pre-approve${c.commands === 1 ? 's' : ''} tools` : ''
   ].filter(Boolean)
   const summary = parts.join(', ')
+  // Where the elevating config lives: the settings file, the commands folder, or both.
+  const settingsPart = c.allowRules > 0 || c.hooks > 0 || c.mcpServers > 0
+  const source = !c.commands
+    ? '.houston/settings.json'
+    : settingsPart
+      ? '.houston/settings.json and .houston/commands'
+      : '.houston/commands'
 
   return (
     <section className="git-init-banner trust-banner" role="region" aria-labelledby="trust-banner-title">
@@ -105,8 +113,10 @@ export function TrustFolderBanner({
         </p>
         <p className="git-init-banner__text">
           {status.state === 'changed'
-            ? `The allow rules, hooks, or MCP servers in this project’s .houston/settings.json changed since you trusted it (now: ${summary}). They stay off until you trust it again.`
-            : `Its .houston/settings.json defines ${summary}. Hooks and MCP servers run as you, and allow rules auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.`}
+            ? `The extra permissions in this project’s ${source} changed since you trusted it (now: ${summary}). They stay off until you trust it again.`
+            : c.commands
+              ? `It defines ${summary} (in ${source}). Hooks and MCP servers run as you, and allow rules and pre-approving commands auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.`
+              : `Its .houston/settings.json defines ${summary}. Hooks and MCP servers run as you, and allow rules auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.`}
         </p>
         <div className="git-init-banner__actions">
           <button

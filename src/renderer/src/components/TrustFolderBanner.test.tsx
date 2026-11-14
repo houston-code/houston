@@ -38,6 +38,18 @@ describe('TrustFolderBanner', () => {
     expect(screen.getByRole('button', { name: 'Never for this folder' })).toBeInTheDocument()
   })
 
+  it("names commands that pre-approve tools, and where they live", async () => {
+    installApi({ state: 'undecided', counts: { allowRules: 0, hooks: 0, mcpServers: 0, commands: 2 } })
+    const { unmount } = render(<TrustFolderBanner {...props()} />)
+    expect(await screen.findByText(/2 commands that pre-approve tools \(in \.houston\/commands\)/)).toBeInTheDocument()
+    unmount()
+    installApi({ state: 'changed', counts: { allowRules: 1, hooks: 0, mcpServers: 0, commands: 1 } })
+    render(<TrustFolderBanner {...props()} />)
+    expect(
+      await screen.findByText(/\.houston\/settings\.json and \.houston\/commands changed since you trusted it \(now: 1 allow rule, 1 command that pre-approves tools\)/)
+    ).toBeInTheDocument()
+  })
+
   it('shows the changed variant when trust drifted', async () => {
     installApi({ state: 'changed', counts: { allowRules: 0, hooks: 2, mcpServers: 1 } })
     render(<TrustFolderBanner {...props()} />)

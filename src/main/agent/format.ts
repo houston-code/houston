@@ -143,6 +143,48 @@ export interface ToolRunOptions {
   env?: NodeJS.ProcessEnv
   /** Path-existence check for the default PATH probe. */
   exists?: (p: string) => boolean
+  /**
+   * Project roots whose own tool installs ({@link projectBinDirs}) are searched before
+   * PATH, so the project's pinned prettier, eslint or ruff is the one that runs.
+   */
+  roots?: string[]
+}
+
+/**
+ * The directories a project installs its own tools into, in lookup order: each root's
+ * `node_modules/.bin`, then its `.venv` and `venv` virtualenvs, then the virtualenv the
+ * user activated (`$VIRTUAL_ENV`). Windows virtualenvs keep executables in `Scripts`.
+ */
+export function projectBinDirs(roots: readonly string[], env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+  const joinP = joinFor(platform)
+  const venvBin = platform === 'win32' ? 'Scripts' : 'bin'
+  const dirs: string[] = []
+  for (const root of roots) {
+    dirs.push(joinP(root, 'node_modules', '.bin'), joinP(root, '.venv', venvBin), joinP(root, 'venv', venvBin))
+  }
+  if (env.VIRTUAL_ENV) dirs.push(joinP(env.VIRTUAL_ENV, venvBin))
+  return dirs
+}
+
+/**
+ * `bin` from the project's own install dirs ({@link projectBinDirs}), or null. Pure
+ * name only, like {@link resolveBinaryPath}. On Windows the extensionless npm shim and
+ * `.exe` are accepted (what Git Bash runs), never `.cmd`.
+ */
+export function projectLocalBin(bin: string, opts: ToolRunOptions = {}): string | null {
+  if (!bin || bin.includes('/') || bin.includes('\\')) return null
+  const env = opts.env ?? process.env
+  const platform = opts.platform ?? process.platform
+  const exists = opts.exists ?? existsSync
+  const joinP = joinFor(platform)
+  const suffixes = platform === 'win32' ? WIN_BASH_EXTENSIONS : ['']
+  for (const dir of projectBinDirs(opts.roots ?? [], env, platform)) {
+    for (const ext of suffixes) {
+      const candidate = joinP(dir, bin + ext)
+      if (exists(candidate)) return candidate
+    }
+  }
+  return null
 }
 
 /** The default tool resolver for `platform`: what the sandbox shell can run. */
@@ -161,7 +203,16 @@ function toolResolver(opts: ToolRunOptions, platform: NodeJS.Platform): (bin: st
  */
 export function canRunTool(bin: string, opts: ToolRunOptions = {}): boolean {
   if ((opts.shellSyntax ?? backendShellSyntax()) === 'cmd') return false
-  return toolResolver(opts, opts.platform ?? process.platform)(bin) !== null
+  return localResolver(opts)(bin) !== null || toolResolver(opts, opts.platform ?? process.platform)(bin) !== null
+}
+
+/**
+ * The project-local lookup, unless a test injected its own resolver (which then
+ * stands for the whole lookup).
+ */
+function localResolver(opts: ToolRunOptions): (bin: string) => string | null {
+  if (opts.resolveBin || opts.hasBin) return () => null
+  return (b) => projectLocalBin(b, opts)
 }
 
 /**
@@ -186,12 +237,20 @@ export function planToolRun<T extends FileTool>(
 ): { tool: T; command: string } | null {
   if ((opts.shellSyntax ?? backendShellSyntax()) === 'cmd') return null
   const platform = opts.platform ?? process.platform
+  const command = (tool: T, exe: string): string => [exe, ...tool.args(absPath)].map(shellQuote).join(' ')
+  // The project's own install wins over any PATH copy, across candidates too: a
+  // project that pins black in its venv should not be formatted by a global ruff.
+  // It always runs by its path, since the shell's PATH doesn't hold those dirs.
+  const local = localResolver(opts)
+  for (const tool of candidates) {
+    const resolved = local(tool.bin)
+    if (resolved) return { tool, command: command(tool, platform === 'win32' ? resolved.replace(/\\/g, '/') : resolved) }
+  }
   const resolve = toolResolver(opts, platform)
   for (const tool of candidates) {
     const resolved = resolve(tool.bin)
     if (!resolved) continue
-    const exe = platform === 'win32' ? resolved.replace(/\\/g, '/') : tool.bin
-    return { tool, command: [exe, ...tool.args(absPath)].map(shellQuote).join(' ') }
+    return { tool, command: command(tool, platform === 'win32' ? resolved.replace(/\\/g, '/') : tool.bin) }
   }
   return null
 }
@@ -253,7 +312,7 @@ export async function formatFile(relPath: string, opts: FormatOptions): Promise<
 
   const candidates = FORMATTERS[extKey(abs)]
   if (!candidates) return { formatted: false }
-  const plan = planToolRun(candidates, abs, opts)
+  const plan = planToolRun(candidates, abs, { ...opts, roots })
   if (!plan) return { formatted: false }
   const { tool: formatter, command } = plan
 

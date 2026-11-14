@@ -17,7 +17,7 @@ import {
 } from './agent/scheduler'
 import type { RunOutcome } from '@shared/runEnd'
 import { spawnSession, isSpawnBackendConfigured } from './agent/spawn'
-import { isApprovalPolicy } from '@shared/types'
+import { isApprovalPolicy, leastPermissivePolicy, type ApprovalPolicy } from '@shared/types'
 import { isReasoningEffort } from '@shared/agent'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
@@ -599,6 +599,25 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
 }
 
 /**
+ * The approval policy a fired occurrence runs under: the one stored at creation,
+ * capped at the user's default mode NOW. A schedule keeps firing unattended long after
+ * the chat that made it, so the mode that chat happened to be in (full auto, say) must
+ * not outlive the user turning their default down. The store is a file on disk: an
+ * unknown stored policy would fail open downstream, so it is coerced to the most
+ * restrictive, and an unreadable default counts as `ask`.
+ */
+export function firedPolicy(stored: unknown, currentDefaultPolicy: () => ApprovalPolicy): ApprovalPolicy {
+  const base: ApprovalPolicy = isApprovalPolicy(stored) ? stored : 'plan'
+  let cap: unknown
+  try {
+    cap = currentDefaultPolicy()
+  } catch {
+    cap = undefined
+  }
+  return leastPermissivePolicy(base, isApprovalPolicy(cap) ? cap : 'ask')
+}
+
+/**
  * The production `fire`: start the occurrence as a background session through
  * the spawn seam — the same path `spawn_session` takes, so fired runs get the
  * live-session concurrency cap and show up as ordinary conversations. Kept here
@@ -606,7 +625,9 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
  */
 export function fireViaSpawn(
   /** How a chat's latest run ended, from its log; undefined when the chat is gone. */
-  outcomeOf: (conversationId: string) => RunOutcome | undefined
+  outcomeOf: (conversationId: string) => RunOutcome | undefined,
+  /** The user's default approval mode now (Settings), read at each fire. */
+  currentDefaultPolicy: () => ApprovalPolicy
 ): (s: ScheduledRunInfo) => Promise<ScheduledFire> {
   return async (s) => {
     if (!isSpawnBackendConfigured()) {
@@ -620,11 +641,10 @@ export function fireViaSpawn(
       prompt: s.prompt,
       providerId: s.providerId,
       model: s.model,
-      // The store is a file on disk: an unknown policy would fail open downstream,
-      // so coerce it to the most restrictive, and drop an unknown effort.
-      approvalPolicy: isApprovalPolicy(s.approvalPolicy) ? s.approvalPolicy : 'plan',
+      approvalPolicy: firedPolicy(s.approvalPolicy, currentDefaultPolicy),
       ...(isReasoningEffort(s.reasoningEffort) ? { reasoningEffort: s.reasoningEffort } : {}),
-      workspace: s.workspace
+      workspace: s.workspace,
+      ...(typeof s.taintSource === 'string' && s.taintSource ? { taintSource: s.taintSource } : {})
     })
     const { conversationId } = result
     // A chat deleted mid-run had its run killed with it.

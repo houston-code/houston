@@ -48,9 +48,10 @@ Open source under the [Apache License 2.0](LICENSE).
   `multi_edit`, `apply_patch`, `notebook_edit`, `list_dir`, `glob`, `search_files`,
   `ast_grep`, `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`,
   `gh_pr_*` (pull requests), `todo_write`, `pr_sweep`, and `ask_user` to actually
-  do the work, not just describe it. When a turn is all
-  reads (e.g. open five files at once), they run **concurrently**; anything that
-  writes, runs a command, or needs approval stays sequential. Edits are matched
+  do the work, not just describe it. Reads the agent asks for together (e.g. open
+  five files at once) run **concurrently**, in a subagent too, even after an edit
+  in the same step (they wait for it to land first); anything that writes, runs a
+  command, or needs approval runs on its own, in order. Edits are matched
   **resiliently**: if the model's snippet drifts from the file by indentation or
   whitespace, Houston still locates and applies it instead of failing, and shows the
   model the lines it actually changed. Reads come back **line-numbered**, and the
@@ -1229,7 +1230,13 @@ What maps to what:
   deny). "Always allow" saves a permission rule, exactly as in the app. A plan from
   Plan mode is accepted or sent back the same way.
 - **Streaming**: replies, reasoning, tool calls (with before/after diffs for edits),
-  the todo list as a plan, and context and cost usage.
+  the todo list as a plan, and context and cost usage. Each prompt's reply also
+  carries the turn's token totals (input, output, and cached input).
+- **Launch flags** set defaults for a client that never changes them, such as a
+  benchmark runner or a CI job: `--approval <policy>` (or `--full-auto`) for the mode
+  new sessions start in, `--effort <level>` for their reasoning effort, and
+  `--max-turns <n>` for a hard step cap on every prompt. For example,
+  `houston --acp --full-auto --effort high --max-turns 1000`.
 - **Questions and MCP input requests** show as forms when the editor supports them;
   otherwise they resolve the way headless mode does, so a run never waits forever.
 - **MCP servers** the editor passes for a session are added for that session only.
@@ -1384,15 +1391,17 @@ the agent loop and UI never depend on a specific provider.
 - **Tool execution is sandboxed where the OS allows it.** `run_shell` runs under
   Seatbelt (`sandbox-exec`) on macOS and bubblewrap on Linux: filesystem reads
   allowed, writes restricted to the project + temp dirs, network denied until you
-  grant it (in *full auto*, a once-per-chat card after a command first fails for lack
-  of network; "Allow for run" on a shell approval; or `--allow-shell-network` on a
-  headless run). Granted network is confined to a
+  grant it (a once-per-chat question after a command first fails for lack of network,
+  in every mode; approving a shell command never grants network; or
+  `--allow-shell-network` on a headless run). Granted network is confined to a
   per-domain egress allowlist: direct sockets stay blocked and traffic flows through
   a local proxy that permits package registries, VCS hosts, and domains you add in
   Settings. Windows has no equivalent, so shell commands there run unconfined and
   always ask (see [docs/sandboxing.md](docs/sandboxing.md)).
 - **File tools are contained** to the workspace in code: any path that resolves
-  outside the project roots, including through a symlink, is rejected.
+  outside the project roots, including through a symlink, is rejected, and the check
+  is repeated at the write itself, so a symlink a running shell swaps onto the path
+  can't redirect it.
 - **Human in the loop.** Writes and shell commands require approval unless you
   opt into a more autonomous policy. A new install starts in *full auto* only where
   the OS sandbox confines shell commands (macOS, Linux with bubblewrap), and in *ask*

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import type { ConversationWorktree, RepoInfo, WorktreeRemoval } from '@shared/agent'
 import { isSafeGitRef } from '@shared/git'
@@ -217,6 +217,42 @@ export function pickDefaultBranch(originHead: string, branches: string[]): strin
   return [fromOrigin, 'main', 'master'].find((b) => b && branches.includes(b)) ?? null
 }
 
+/** Whether `p` exists as a symbolic link (not followed). */
+function isSymlink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Create `<repoRoot>/.houston/worktrees` and require that it really sits inside the
+ * repo. A committed `.houston` or `.houston/worktrees` symlink (`-> ../../..`) would
+ * otherwise send `git worktree add` to check a branch out anywhere the link points,
+ * outside the project and outside what the sandbox treats as the workspace.
+ */
+function ensureWorktreesDir(repoRoot: string): void {
+  const realRoot = realpathSync(repoRoot)
+  // One level at a time, checking each before going deeper, so nothing (not even an
+  // empty folder) is created through a link that leads out of the repo.
+  let dir = repoRoot
+  for (const part of WORKTREES_SUBDIR.split(sep)) {
+    dir = join(dir, part)
+    if (!existsSync(dir) && !isSymlink(dir)) mkdirSync(dir)
+    let real: string
+    try {
+      real = realpathSync(dir)
+    } catch {
+      throw new Error(`${WORKTREES_SUBDIR} is a broken link, so no worktree was created there.`)
+    }
+    const rel = relative(realRoot, real)
+    if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      throw new Error(`${WORKTREES_SUBDIR} links outside the repository, so no worktree was created there.`)
+    }
+  }
+}
+
 /** Append the worktrees-ignore line to `<repoRoot>/.git/info/exclude` if absent. Best-effort. */
 function ensureExcluded(repoRoot: string, exec: GitRun): Promise<void> {
   return exec(['rev-parse', '--git-common-dir'], repoRoot)
@@ -226,6 +262,9 @@ function ensureExcluded(repoRoot: string, exec: GitRun): Promise<void> {
       const dir = isAbsolute(commonDir) ? commonDir : join(repoRoot, commonDir)
       const infoDir = join(dir, 'info')
       const excludePath = join(infoDir, 'exclude')
+      // A link here (planted by anything that could write the git dir) would steer the
+      // append at a file elsewhere: leave the exclude alone rather than follow it.
+      if (isSymlink(infoDir) || isSymlink(excludePath)) return
       let current = ''
       try {
         current = readFileSync(excludePath, 'utf8')
@@ -290,7 +329,7 @@ export async function createWorktree(
     )
   }
   const path = worktreePath(repo.root, slugifyBranch(branch))
-  mkdirSync(join(repo.root, WORKTREES_SUBDIR), { recursive: true })
+  ensureWorktreesDir(repo.root)
   await ensureExcluded(repo.root, exec)
   const args = ['worktree', 'add', '-b', branch, path]
   if (input.base) args.push(input.base)

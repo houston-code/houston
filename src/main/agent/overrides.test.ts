@@ -21,22 +21,31 @@ describe('conversation overrides', () => {
   it('remembers a grant so a later turn of the same conversation inherits it', () => {
     grantConversationOverride(CONV, 'write', false)
     const next = overrideForConversation(CONV)
-    expect(next.kinds.has('write')).toBe(true)
+    expect(next.grants.has('write')).toBe(true)
     expect(next.unsandboxedShell).toBe(false)
   })
 
   it('is per-kind: granting one kind does not grant another', () => {
     grantConversationOverride(CONV, 'network', false)
     const next = overrideForConversation(CONV)
-    expect(next.kinds.has('network')).toBe(true)
-    expect(next.kinds.has('shell')).toBe(false)
-    expect(next.kinds.has('mcp')).toBe(false)
+    expect(next.grants.has('network')).toBe(true)
+    expect(next.grants.has('shell')).toBe(false)
+    expect(next.grants.has('mcp')).toBe(false)
   })
 
-  it('accumulates kinds across grants', () => {
+  it('keeps tool- and server-scoped keys apart from the kind they share', () => {
+    grantConversationOverride(CONV, 'write', false)
+    grantConversationOverride(CONV, 'mcp:alpha', false)
+    const next = overrideForConversation(CONV)
+    expect(next.grants.has('tool:schedule_run')).toBe(false)
+    expect(next.grants.has('mcp:beta')).toBe(false)
+    expect(next.grants.has('mcp:alpha')).toBe(true)
+  })
+
+  it('accumulates grant keys across grants', () => {
     grantConversationOverride(CONV, 'write', false)
     grantConversationOverride(CONV, 'shell', false)
-    expect(overrideForConversation(CONV).kinds).toEqual(new Set(['write', 'shell']))
+    expect(overrideForConversation(CONV).grants).toEqual(new Set(['write', 'shell']))
   })
 
   it('records unconfined-shell consent and keeps it sticky', () => {
@@ -50,10 +59,10 @@ describe('conversation overrides', () => {
   it('returns a copy — mutating it does not leak back into the store', () => {
     grantConversationOverride(CONV, 'write', false)
     const snapshot = overrideForConversation(CONV)
-    snapshot.kinds.add('shell')
+    snapshot.grants.add('shell')
     snapshot.unsandboxedShell = true
     const fresh = overrideForConversation(CONV)
-    expect(fresh.kinds.has('shell')).toBe(false)
+    expect(fresh.grants.has('shell')).toBe(false)
     expect(fresh.unsandboxedShell).toBe(false)
   })
 

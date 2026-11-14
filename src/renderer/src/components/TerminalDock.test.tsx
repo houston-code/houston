@@ -97,6 +97,26 @@ describe('TerminalDock', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  it('names its tabs and moves between them with the arrow keys', async () => {
+    renderDock()
+    await screen.findByTestId('view-t1')
+    await act(async () => {
+      screen.getByLabelText('New terminal').click()
+    })
+    await screen.findByTestId('view-t2')
+    expect(screen.getByRole('tablist', { name: 'Terminals' })).toBeInTheDocument()
+    const [first, second] = screen.getAllByRole('tab')
+    expect(second).toHaveAttribute('aria-selected', 'true')
+    expect([first.tabIndex, second.tabIndex]).toEqual([-1, 0])
+    expect(second).toHaveAttribute('aria-controls', 'terminal-pane-t2')
+    expect(screen.getByRole('tabpanel', { name: 'Terminal 2' })).toBeInTheDocument()
+    fireEvent.keyDown(second, { key: 'ArrowRight' })
+    expect(first).toHaveAttribute('aria-selected', 'true')
+    expect(document.activeElement).toBe(first)
+    fireEvent.keyDown(first, { key: 'End' })
+    expect(second).toHaveAttribute('aria-selected', 'true')
+  })
+
   it('reports not-focused to main while hidden (so ⌘W closes the window)', async () => {
     renderDock({ visible: false })
     await act(async () => {})

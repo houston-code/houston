@@ -1,5 +1,63 @@
 import type { ApprovalPolicy } from '@shared/types'
+import { parseMcpToolName } from '@shared/mcp'
 import type { ToolDef, ToolKind } from './tools'
+
+/**
+ * Tools whose "Allow for run" grant is their own rather than their kind's. Each starts
+ * something that keeps acting without the user: a scheduled run that fires unattended
+ * for as long as the schedule exists, a background session, a writable subagent that
+ * edits and runs shell commands on its own. Approving one ordinary file write is not
+ * consent to any of those, so a write-kind grant must not cover them (and a grant on
+ * one of them must not cover ordinary writes either).
+ */
+const OWN_GRANT_TOOLS: ReadonlySet<string> = new Set(['schedule_run', 'spawn_session', 'dispatch_writable_agent'])
+
+/**
+ * The key an "Allow for run" grant is recorded and checked under (RunState.override,
+ * ConversationOverride.grants). One helper for both sides, so a grant always means
+ * exactly what the check reads it as.
+ *
+ * - The tools in {@link OWN_GRANT_TOOLS}: `tool:<name>`, a grant of their own.
+ * - An MCP tool (`mcp__<serverId>__<tool>`): `mcp:<serverId>`, per SERVER. Each server
+ *   is a separate program the user connected for its own reasons; consenting to one
+ *   server's calls never extends to another's.
+ * - Everything else: its kind (`read`, `write`, `shell`, ...), as before. Network calls
+ *   don't reach here: their grant is per destination (see networkDestination).
+ */
+export function grantKey(toolName: string, kind: ToolKind): string {
+  if (OWN_GRANT_TOOLS.has(toolName)) return `tool:${toolName}`
+  const mcp = parseMcpToolName(toolName)
+  if (mcp) return `mcp:${mcp.serverId}`
+  return kind
+}
+
+/**
+ * Tools that start an agent which runs shell commands without asking, so they prompt
+ * wherever shell does (every mode but full auto) even though their kind is `write`.
+ * A writable subagent runs sandboxed `run_shell` on its own; in auto-edit, which asks
+ * for every shell command, auto-approving the dispatch would hand the agent the shell
+ * the mode withholds. Its own grant (see {@link grantKey}) or an allow rule clears it.
+ */
+const RUNS_SHELL_TOOLS: ReadonlySet<string> = new Set(['dispatch_writable_agent'])
+
+/** Whether this tool starts an agent that runs shell commands unprompted (see RUNS_SHELL_TOOLS). */
+export function startsShellAgent(toolName: string): boolean {
+  return RUNS_SHELL_TOOLS.has(toolName)
+}
+
+/**
+ * Tools that launch a new session whose first message the model writes: a background
+ * session now, or one per occurrence of a schedule. That message arrives in the new
+ * session as a USER turn, with no tool call behind it to show it came from outside
+ * text, so in a conversation that has read outside text these are a way to launder
+ * an injected instruction into a session that trusts it. See `taintedLaunch`.
+ */
+const LAUNCH_TOOLS: ReadonlySet<string> = new Set(['schedule_run', 'spawn_session'])
+
+/** Whether this tool launches a session seeded with model-written text (see LAUNCH_TOOLS). */
+export function launchesSession(toolName: string): boolean {
+  return LAUNCH_TOOLS.has(toolName)
+}
 
 /**
  * In plan mode the agent is read-only: it researches and proposes a plan but may
@@ -69,7 +127,10 @@ export interface ApprovalInputs {
   ruleAction: RuleAction
   policy: ApprovalPolicy
   kind: ToolKind
-  /** Generic "Allow for run" set by an earlier approval this run. */
+  /**
+   * "Allow for run" set by an earlier approval this run, under this call's
+   * {@link grantKey} (or, for a network call, its destination).
+   */
   override: boolean
   /** Whether the active sandbox backend OS-confines shell execution on this host. */
   shellSandboxed: boolean
@@ -107,6 +168,41 @@ export interface ApprovalInputs {
    * from outside (see memoryTaintSource). Defaults to false.
    */
   memoryTainted?: boolean
+  /**
+   * Whether this call launches a session seeded with model-written text (see
+   * {@link launchesSession}) from a conversation that has taken in text from outside
+   * (see memoryTaintSource). Defaults to false.
+   */
+  taintedLaunch?: boolean
+  /**
+   * Whether this call starts an agent that runs shell commands unprompted (see
+   * {@link startsShellAgent}). Defaults to false.
+   */
+  startsShellAgent?: boolean
+  /**
+   * Whether one of the USER's own PreToolUse hooks approved this call (a project-tier
+   * hook's approve never counts, and neither does any approve when a managed or
+   * project `ask` rule matched: the loop passes false then). Clears only the prompt
+   * the mode or a user `ask` rule would show, never a hard check (see
+   * {@link ApprovalDecision.hard}). Defaults to false.
+   */
+  hookApproved?: boolean
+}
+
+/** What {@link decideApproval} decided for one call. */
+export interface ApprovalDecision {
+  mustApprove: boolean
+  /** The prompt is about running unconfined shell (the card carries the warning). */
+  unsandboxedShell: boolean
+  /**
+   * The prompt comes from a check that holds in every mode (a workspace-escaping or
+   * work-discarding shell command, a credential read or write, a memory write or a
+   * session launch in a conversation that took in outside text, unconfined shell
+   * without the per-run unconfined consent), not from the mode or a user rule. A
+   * PreToolUse hook's approve can't clear one: a hook is automation, and these checks
+   * exist for the user to see the call. False when there is no prompt.
+   */
+  hard: boolean
 }
 
 /**
@@ -158,48 +254,66 @@ export interface ApprovalInputs {
  * injected instruction would go to persist, and the user seeing the save is the
  * check that stops it.
  *
+ * Launching a session (`taintedLaunch`: schedule_run, spawn_session) from such a
+ * conversation is held to the same rule. The model writes the new session's first
+ * message, which that session reads as the user's own words with no tainting call in
+ * its log, and a schedule repeats it unattended. So an instruction planted in fetched
+ * text could otherwise start a session that acts on it (and saves it to memory)
+ * without the user ever seeing it.
+ *
+ * A writable subagent (`startsShellAgent`) asks wherever shell asks, every mode but
+ * full auto, though its kind is `write`: it runs shell commands without asking.
+ *
+ * A PreToolUse hook that approves (`hookApproved`, the user's own hooks only) clears
+ * the prompt the mode or a user `ask` rule would show, and nothing else: every check
+ * above that holds in every mode (`hard` on the result) still asks.
+ *
  * A network call that only reads (`networkRead`) runs without asking in full auto: the
  * per-destination prompt exists to stop data leaving or something being published, and
  * a GitHub list or view does neither. A permission
  * `ask` or `deny` rule still applies first, and every other policy still asks.
  */
-export function decideApproval(inputs: ApprovalInputs): {
-  mustApprove: boolean
-  unsandboxedShell: boolean
-} {
+export function decideApproval(inputs: ApprovalInputs): ApprovalDecision {
+  const d = baseDecision(inputs)
+  // A user hook's approve stands in for the user's click on an ordinary prompt only.
+  if (d.mustApprove && inputs.hookApproved && !d.hard) return { ...d, mustApprove: false }
+  return d
+}
+
+function baseDecision(inputs: ApprovalInputs): ApprovalDecision {
   const { ruleAction, policy, kind, override, shellSandboxed, shellUnsandboxedOverride } = inputs
+  const ask = (hard: boolean, unsandboxedShell = false): ApprovalDecision => ({
+    mustApprove: true,
+    unsandboxedShell,
+    hard
+  })
+  const pass: ApprovalDecision = { mustApprove: false, unsandboxedShell: false, hard: false }
 
   if (kind === 'shell' && !shellSandboxed) {
     // An `ask` rule (any tier) wins over the per-run unconfined-shell consent;
     // `unsandboxedShell` stays true so the prompt still carries the unconfined banner.
     // So does a command that discards work: consent to run unconfined isn't consent to
-    // reset the project.
-    if (ruleAction === 'ask' || inputs.shellDiscardsWork) return { mustApprove: true, unsandboxedShell: true }
-    return { mustApprove: !shellUnsandboxedOverride, unsandboxedShell: true }
+    // reset the project. Running unconfined at all without that consent is hard: a
+    // hook's approve is automation, not the conscious consent the banner asks for.
+    const hard = !!inputs.shellDiscardsWork || !shellUnsandboxedOverride
+    if (ruleAction === 'ask' || inputs.shellDiscardsWork) return ask(hard, true)
+    return shellUnsandboxedOverride ? { ...pass, unsandboxedShell: true } : ask(true, true)
   }
-  if (inputs.memoryTainted) return { mustApprove: true, unsandboxedShell: false }
-  if (ruleAction === 'allow') return { mustApprove: false, unsandboxedShell: false }
-  if (ruleAction === 'ask') return { mustApprove: true, unsandboxedShell: false }
+  if (inputs.memoryTainted || inputs.taintedLaunch) return ask(true)
+  if (ruleAction === 'allow') return pass
+  // The checks that hold in every mode, short of an allow rule (handled above).
   // A workspace-escaping shell command always prompts (a generic override or
-  // full-auto doesn't cover it); only an explicit allow-rule, handled above, can.
-  // The same goes for one that can throw away work in the project.
-  if (kind === 'shell' && (inputs.shellEscapesWorkspace || inputs.shellDiscardsWork)) {
-    return { mustApprove: true, unsandboxedShell: false }
-  }
-  // A read of a credential file always prompts too — unless the user already granted
-  // a read override for this run ("allow for run"), which a generic override on the
-  // read kind is; an explicit allow-rule was handled above.
-  if (kind === 'read' && inputs.sensitiveRead && !override) {
-    return { mustApprove: true, unsandboxedShell: false }
-  }
-  if ((kind === 'write' || kind === 'shell') && inputs.sensitiveWrite && !override) {
-    return { mustApprove: true, unsandboxedShell: false }
-  }
-  if (kind === 'network' && inputs.networkRead && policy === 'full-auto') {
-    return { mustApprove: false, unsandboxedShell: false }
-  }
-  return {
-    mustApprove: needsApproval(policy, kind, override, shellSandboxed),
-    unsandboxedShell: false
-  }
+  // full-auto doesn't cover it); so does one that can throw away work in the project.
+  // A read of a credential file always prompts too, unless the user already granted
+  // a read override for this run ("allow for run"); likewise a change to one.
+  const hardCheck =
+    (kind === 'shell' && (!!inputs.shellEscapesWorkspace || !!inputs.shellDiscardsWork)) ||
+    (kind === 'read' && !!inputs.sensitiveRead && !override) ||
+    ((kind === 'write' || kind === 'shell') && !!inputs.sensitiveWrite && !override)
+  if (ruleAction === 'ask') return ask(hardCheck)
+  if (hardCheck) return ask(true)
+  if (kind === 'network' && inputs.networkRead && policy === 'full-auto') return pass
+  // A writable subagent runs shell commands on its own, so it asks wherever shell does.
+  if (inputs.startsShellAgent && policy !== 'full-auto' && !override) return ask(false)
+  return needsApproval(policy, kind, override, shellSandboxed) ? ask(false) : pass
 }

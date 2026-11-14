@@ -78,7 +78,11 @@ export function ElicitationCard({
             <FieldInput field={f} value={values[f.name] ?? ''} onChange={(v) => setValue(f.name, v)} />
           </label>
         ))}
-        {error && <div className="elicitation__error">{error}</div>}
+        {error && (
+          <div className="elicitation__error" role="alert">
+            {error}
+          </div>
+        )}
         <div className="elicitation__actions">
           <button className="btn btn--sm btn--accent" type="submit">
             Submit

@@ -101,8 +101,9 @@ dropped.
   incrementally and you can continue by sending a new message; true auto-resume
   of an in-flight run needs persisted run state and a reconnect state machine.
 
-- **Parallel execution for write/shell tools.** Today only all-read turns run
-  concurrently. *Why deferred:* concurrent writes/commands need conflict handling
+- **Parallel execution for write/shell tools.** Today only reads run concurrently
+  (each run of reads between other calls is one batch). *Why deferred:* concurrent
+  writes/commands need conflict handling
   and a concurrent (rather than sequential) approval UI.
 
 - **Additional build targets.** The cross-platform execution backends and builds have

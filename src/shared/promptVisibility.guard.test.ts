@@ -94,8 +94,8 @@ describe('prompt visibility guard', () => {
   // Every renderer call that starts or queues a turn.
   const RENDERER_SEND_SITES: Record<string, { count: number; why: string }> = {
     'renderer/src/App.tsx': {
-      count: 15,
-      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" + project-card /init + Changes-view review-comment invocations, the mid-run steer, its idle send, and its off-chat queue (user text), and Retry on the last reply (resends that user message as it was, keeping its invokedAs)'
+      count: 16,
+      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + main-prepared custom command (onRunCommand) + proposal "Do it here" + side-chat "Send to main" + project-card /init + Changes-view review-comment invocations, the mid-run steer, its idle send, and its off-chat queue (user text), and Retry on the last reply (resends that user message as it was, keeping its invokedAs)'
     },
     'renderer/src/components/Composer.tsx': { count: 3, why: 'the /review invocation and two sends of composer text' },
     'renderer/src/hooks/useChat.ts': {
@@ -116,11 +116,16 @@ describe('prompt visibility guard', () => {
   })
 
   it('builds first-party prompts only through promptInvocation', () => {
-    // The prompt sources: the review template and the /agent dispatch wording.
+    // The prompt sources: the review template, the /agent dispatch wording (also
+    // what a custom command's `agent` frontmatter sends), and the /<skill-name>
+    // template, which reaches a turn only as a command template through commandTurn.
     // tui.ts only re-exports agentInvocationPrompt for older importers.
-    expect(occurrences(['main', 'renderer/src', 'shared'], /\b(REVIEW_TEMPLATE|agentInvocationPrompt)\b/)).toEqual({
+    expect(
+      occurrences(['main', 'renderer/src', 'shared'], /\b(REVIEW_TEMPLATE|agentInvocationPrompt|skillCommandTemplate)\b/)
+    ).toEqual({
       'shared/commands.ts': 3,
-      'shared/promptInvocation.ts': 2,
+      'shared/promptInvocation.ts': 3,
+      'main/agent/skills.ts': 2,
       'main/tui.ts': 2
     })
     // A ship action's prompt is read only by shipTurn; the renderer's other

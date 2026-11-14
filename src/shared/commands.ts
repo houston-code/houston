@@ -3,6 +3,7 @@
  * commands are prompt templates loaded from `.houston/commands/*.md` in the
  * workspace. Pure helpers live here so main + renderer share one definition.
  */
+import type { ReasoningEffort } from './agent'
 
 export interface Command {
   name: string
@@ -17,10 +18,29 @@ export interface Command {
   autoRun?: boolean
   /** Menu heading the command is listed under; custom commands have none. */
   group?: CommandGroup
-  /** What may follow the name, shown dimmed beside it (for example `[name]`). */
+  /**
+   * What may follow the name, shown dimmed beside it (for example `[name]`). A
+   * custom command sets it with its `argument-hint` frontmatter.
+   */
   args?: string
+  /**
+   * Where a custom command was loaded from: the workspace's `.houston/commands`
+   * (`project`, untrusted unless the folder is) or the user's `~/.houston/commands`.
+   */
+  source?: 'project' | 'user'
   /** `/<skill-name>`: runs a skill (listed under its own heading). */
   skill?: boolean
+  /** Custom-command frontmatter `model`: the model this one turn runs on. */
+  model?: string
+  /** Custom-command frontmatter `effort`: the thinking effort for this one turn. */
+  effort?: ReasoningEffort
+  /** Custom-command frontmatter `agent`: dispatch the expanded prompt to this subagent. */
+  agent?: string
+  /**
+   * Custom-command frontmatter `allowed-tools`, as written: tools pre-approved for
+   * this one turn, in permission-rule syntax (`read_file`, `run_shell(git status*)`).
+   */
+  allowedTools?: string
 }
 
 /** Menu headings, in the order the menu shows them. Custom commands come last. */
@@ -193,6 +213,16 @@ export function mergeCommands(builtin: Command[], custom: Command[]): Command[] 
 }
 
 /**
+ * Whether a custom command sets a frontmatter option that changes how its turn runs
+ * (model, effort, agent, allowed-tools). The desktop composer can't express those by
+ * filling the message box, so such a command runs straight away, prepared by the
+ * main process.
+ */
+export function commandHasRunOptions(cmd: Command): boolean {
+  return Boolean(cmd.model || cmd.effort || cmd.agent || cmd.allowedTools)
+}
+
+/**
  * The first-party `/review` command's prompt. Shared so every client (GUI + TUI)
  * runs the exact same adversarial-review turn from one definition.
  */
@@ -296,6 +326,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'add-dir', group: 'Terminal', args: '[path]',
+    description: 'Let the agent work in another folder this session (/add-dir alone lists them)',
+    clients: ['tui']
+  },
+  {
     name: 'verbose', group: 'Terminal',
     description: "Show each tool's full output as it runs",
     clients: ['tui']
@@ -356,7 +391,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   {
     name: 'mcp', group: 'Extend',
-    description: 'List MCP servers (add, remove, login, logout)',
+    description: 'List MCP servers (add, remove, login, logout, registry search)',
     clients: ['gui', 'tui'],
     gui: { description: 'Manage MCP servers in Settings' }
   },
@@ -431,6 +466,7 @@ export function builtinCommands(client: CommandClient): Command[] {
  */
 const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   vim: 'the app\'s composer has no vim mode',
+  'add-dir': 'in the app, add folders the agent may use under Settings, Workspace, Additional folders',
   verbose: 'in the app, open a tool row to see its full output',
   output: 'in the app, open a tool row to see its full output',
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',

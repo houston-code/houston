@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { AppSettings, EnvKeyOffer, ProviderConfig } from '@shared/types'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
+import { ipcErrorMessage } from '../lib/ipcError'
 
 /**
  * Inline "Connect a model" step of the get-started checklist: pick a provider, paste
@@ -63,12 +64,9 @@ const LOCAL_HINT: Record<string, string> = {
 
 /**
  * An error from main arrives wrapped as "Error invoking remote method '<channel>':
- * Error: <message>". Show only the provider's message.
+ * Error: <message>". Show only the provider's message (see lib/ipcError).
  */
-export function ipcErrorMessage(e: unknown): string {
-  const msg = e instanceof Error ? e.message : String(e)
-  return msg.replace(/^Error invoking remote method '[^']*':\s*(?:\w*Error:\s*)?/, '')
-}
+export { ipcErrorMessage }
 
 export interface ConnectModelProps {
   settings: AppSettings
