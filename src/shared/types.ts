@@ -957,6 +957,14 @@ export interface AppSettings {
    * HOUSTON_SCREEN_READER=1. Absent = off.
    */
   tuiScreenReader?: boolean
+  /**
+   * Which attention signals the terminal sends when a run needs you or finishes while
+   * you are away (/notify): 'auto' the bell plus the terminal's notification (OSC 9 and
+   * OSC 777), 'osc' the notification only, 'bell' the bell only, 'off' neither. The
+   * window title updates in every mode. Absent = 'auto', or 'off' when
+   * `desktopNotifications` is false.
+   */
+  tuiNotify?: 'auto' | 'osc' | 'bell' | 'off'
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /** User-defined chat labels, in display order. */

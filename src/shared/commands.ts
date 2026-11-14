@@ -336,6 +336,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'notify', group: 'Terminal', args: '[auto|osc|bell|off]',
+    description: 'Choose the bell and notification sent when a run needs you',
+    clients: ['tui']
+  },
+  {
     name: 'screen-reader', group: 'Terminal', args: '[on|off]',
     description: 'Plain lines for a screen reader: no redraws, numbered choices',
     clients: ['tui']
@@ -498,6 +503,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   vim: 'the app\'s composer has no vim mode',
   'add-dir': 'in the app, add folders the agent may use under Settings, Workspace, Additional folders',
   'reduce-motion': 'the app follows your system\'s reduce motion setting',
+  notify: 'in the app, notifications and sounds are under Settings > General > Notifications',
   'screen-reader': 'the app works with your screen reader as it is, and Settings has Read replies to screen readers',
   verbose: 'in the app, open a tool row to see its full output',
   output: 'in the app, open a tool row to see its full output',

@@ -118,8 +118,18 @@ import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tu
 import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
 import { renderUsageReport } from './tui-usage'
 import type { UsageReport } from '@shared/usageReport'
-import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
-import { workspaceLabel } from '@shared/notify'
+import {
+  signalFor,
+  idleTitle,
+  idleReminderSpec,
+  resolveNotifyMode,
+  describeNotifyMode,
+  isNotifyMode,
+  NOTIFY_MODES,
+  type NotifyMode,
+  type TerminalSignal
+} from './tui-notify'
+import { workspaceLabel, type NotifySpec } from '@shared/notify'
 import {
   REWIND_MODE_INFO,
   rewindConfirmText,
@@ -1687,6 +1697,8 @@ export type SlashResult =
   | { kind: 'reduce-motion'; on?: boolean }
   /** Turn screen-reader mode on or off (/screen-reader); bare toggles. */
   | { kind: 'screen-reader'; on?: boolean }
+  /** Show or set which attention signals fire (/notify [auto|osc|bell|off]). */
+  | { kind: 'notify'; mode?: NotifyMode; invalid?: string }
   /** Revert (or restore) the files the last turn changed (/undo, /redo). */
   | { kind: 'undo'; redo: boolean }
   /**
@@ -1835,6 +1847,11 @@ export function parseSlashCommand(
       if (a === 'on') return { kind: 'vim', on: true }
       if (a === 'off') return { kind: 'vim', on: false }
       return { kind: 'vim' } // bare /vim toggles
+    }
+    case 'notify': {
+      const a = arg.trim().toLowerCase()
+      if (!a) return { kind: 'notify' }
+      return isNotifyMode(a) ? { kind: 'notify', mode: a } : { kind: 'notify', invalid: arg.trim() }
     }
     case 'screen-reader': {
       const a = arg.trim().toLowerCase()
@@ -2013,6 +2030,7 @@ export const HELP_TEXT = [
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
   '  /add-dir [path]       let the agent work in another folder this session (alone: list them)',
+  '  /notify [mode]        bell and notification when it needs you: auto | osc | bell | off',
   '  /screen-reader [on|off]  plain lines for screen readers, numbered choices',
   '  /reduce-motion [on|off]  a still activity line instead of the spinner',
   '  /undo, /redo          revert (or restore) the files the last turn changed',
@@ -3050,6 +3068,12 @@ export interface TuiIo {
    */
   signal?: (sig: TerminalSignal) => void
   /**
+   * A turn just finished: if the user is away, send `spec` once more after `ms`
+   * (default about a minute) unless they type or come back to the window first.
+   * Replaces any reminder already armed. Optional; absent off-TTY and in tests.
+   */
+  remindIfIdle?: (spec: NotifySpec, mode: NotifyMode, ms?: number) => void
+  /**
    * Take (and clear) the messages typed while the agent was working, for dispatch
    * as the next turn. Absent off-TTY / in tests, where nothing is queued.
    */
@@ -3780,11 +3804,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Short project label, folded into titles/notifications so two terminals in two
   // projects are tellable apart at a glance.
   const workspaceName = workspaceLabel(opts.cwd)
-  // Read once: hooks, MCP servers and trust are re-read by the loop each turn, but
-  // this notification toggle is snapshotted here — re-reading it per event would
-  // cost a settings load on every streamed token, and changing it mid-session is
-  // niche enough to be the one setting that genuinely wants a restart.
-  const notifyEnabled = settings.desktopNotifications !== false
+  // Which attention signals fire (/notify). Read once rather than per event (that
+  // would cost a settings load on every streamed token); /notify changes it live.
+  let notifyMode: NotifyMode = resolveNotifyMode(settings)
   // Show each tool's full output as it runs (/verbose). Off by default: the
   // transcript is a conversation, and most results are noise until they aren't.
   // Remembered across sessions once chosen.
@@ -4741,7 +4763,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'settings') {
-        renderSettingsOverview(deps, paint, { reduceMotion, screenReader })
+        renderSettingsOverview(deps, paint, { reduceMotion, screenReader, notifyMode })
         continue
       }
       if (result.kind === 'add-dir') {
@@ -4788,6 +4810,26 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             reduceMotion
               ? '· reduced motion on: the activity line holds still and its timer updates every few seconds\n'
               : '· reduced motion off: the spinner animates again\n',
+            'dim'
+          )
+        )
+        continue
+      }
+      if (result.kind === 'notify') {
+        if (result.invalid !== undefined) {
+          deps.io.out(
+            paint(`· unknown notification mode "${stripControlChars(result.invalid)}" (use ${NOTIFY_MODES.join(' | ')})\n`, 'yellow')
+          )
+          continue
+        }
+        if (result.mode) {
+          notifyMode = result.mode
+          deps.updateSettings?.({ tuiNotify: notifyMode })
+        }
+        deps.io.out(
+          paint(
+            `· notifications${result.mode ? ' →' : ':'} ${notifyMode}, ${describeNotifyMode(notifyMode)}\n` +
+              (result.mode ? '' : `  /notify ${NOTIFY_MODES.join(' | ')} to change it\n`),
             'dim'
           )
         )
@@ -5576,8 +5618,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // terminal without touching the renderer below.
       const sig = signalFor(e, workspaceName)
       // The title is ambient (it just describes the tab) so it is always set; the
-      // bell + notification honor the user's existing "notify me" setting.
-      if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
+      // bell and notification follow /notify (which defaults to the "notify me" setting).
+      if (sig) deps.io.signal?.(notifyMode !== 'off' ? { ...sig, mode: notifyMode } : sig.title ? { title: sig.title } : {})
+      // A finished turn nobody has come back to gets one more nudge later.
+      if (e.type === 'done' && sig?.alert && notifyMode !== 'off') {
+        deps.io.remindIfIdle?.(idleReminderSpec(workspaceName), notifyMode)
+      }
       // Anything but more reasoning ends the thought in progress.
       if (e.type !== 'reasoning') {
         endThought(e.type === 'turn_discarded')
@@ -6278,7 +6324,7 @@ function handleInfoCommand(
 function renderSettingsOverview(
   deps: TuiDeps,
   paint: Painter,
-  live: { reduceMotion: boolean; screenReader: boolean }
+  live: { reduceMotion: boolean; screenReader: boolean; notifyMode: NotifyMode }
 ): void {
   const path = deps.settingsPath?.() ?? '(unknown)'
   const lines = [
@@ -6294,6 +6340,7 @@ function renderSettingsOverview(
     `    ${paint('/memory', 'cyan')}  saved memories  ·  /memory show|edit|pin|forget <n>  ·  /memory on|off`,
     '',
     '  This terminal:',
+    `    notifications:  ${live.notifyMode}, ${describeNotifyMode(live.notifyMode)}  (/notify ${NOTIFY_MODES.join('|')})`,
     `    screen reader:  ${live.screenReader ? 'on' : 'off'}  (/screen-reader on|off)`,
     `    reduced motion: ${live.reduceMotion || live.screenReader ? 'on' : 'off'}${
       live.screenReader && !live.reduceMotion ? ' (with screen-reader mode)' : ''

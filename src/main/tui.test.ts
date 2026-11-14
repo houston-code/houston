@@ -4870,6 +4870,48 @@ describe('attention signals', () => {
     expect(t.signals.some((s) => s.title)).toBe(true)
   })
 
+  it('arms one idle reminder when a turn finishes, in the chosen mode', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { tuiNotify: 'bell' })
+    const t = signalIo(['go', null])
+    const reminders: Array<[string, string]> = []
+    t.io.remindIfIdle = (spec, mode) => reminders.push([spec.body, mode])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(reminders).toEqual([['Houston is waiting for your next message', 'bell']])
+    expect(t.signals.filter((s) => s.alert).every((s) => (s as { mode?: string }).mode === 'bell')).toBe(true)
+  })
+
+  it('/notify off silences alerts and the reminder, but the title still updates', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = signalIo(['/notify off', 'go', null])
+    const reminders: string[] = []
+    t.io.remindIfIdle = (spec) => reminders.push(spec.body)
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui(opts, d)
+    expect(patches).toContainEqual({ tuiNotify: 'off' })
+    expect(t.text()).toContain('window title still updates')
+    expect(t.signals.some((s) => s.alert)).toBe(false)
+    expect(t.signals.some((s) => s.title)).toBe(true)
+    expect(reminders).toEqual([])
+  })
+
+  it('/notify shows the mode, rejects an unknown one, and /settings lists it', async () => {
+    const s = {} as AppSettings
+    expect(parseSlashCommand('/notify', s)).toEqual({ kind: 'notify' })
+    expect(parseSlashCommand('/notify OSC', s)).toEqual({ kind: 'notify', mode: 'osc' })
+    expect(parseSlashCommand('/notify loud', s)).toEqual({ kind: 'notify', invalid: 'loud' })
+    const { d } = deps([], { desktopNotifications: false })
+    const t = signalIo(['/notify', '/notify loud', '/settings', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // The shared notify-me switch being off makes the terminal default to off.
+    expect(t.text()).toContain('notifications: off')
+    expect(t.text()).toContain('unknown notification mode "loud"')
+    expect(t.text()).toContain('notifications:  off')
+  })
+
   it('does not signal for ordinary streaming', async () => {
     const { d } = deps([
       { runId: 'x', type: 'text', delta: 'hello' },

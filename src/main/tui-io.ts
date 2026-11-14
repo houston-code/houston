@@ -2,6 +2,7 @@ import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node
 import { StringDecoder } from 'node:string_decoder'
 import { spinnerFrame, type TuiIo, type Painter, type ImagePasteRequest, type ImagePasteResult } from './tui'
 import { visibleWidth, stripControlChars } from './tui-wrap'
+import type { NotifySpec } from '@shared/notify'
 import { findUltrathink, ultrathinkHint, type KeywordRange, type UltrathinkEffect } from '@shared/ultrathink'
 import {
   createPickerSession,
@@ -23,7 +24,7 @@ import {
   DISABLE_MODIFIED_KEYS,
   type DecoderState
 } from './tui-keys'
-import { bellSequence, notifySequence, titleSequence, type TerminalSignal } from './tui-notify'
+import { alertSequence, IDLE_REMINDER_MS, titleSequence, type NotifyMode, type TerminalSignal } from './tui-notify'
 import { REDUCED_MOTION_REFRESH_MS, STATIC_SPINNER_GLYPH, plainText } from './tui-a11y'
 import {
   initialPagerState,
@@ -146,6 +147,8 @@ export interface TerminalIoDeps {
   paint?: Painter
   /** Schedule a repeating tick; returns a canceller. Injectable for tests. */
   schedule?: (fn: () => void, ms: number) => () => void
+  /** Schedule a one-shot callback; returns a canceller. Injectable for tests. */
+  timeout?: (fn: () => void, ms: number) => () => void
   /** Clock for the elapsed timer. Defaults to Date.now. */
   now?: () => number
   /** readline Tab-completer (slash commands + @-files). Wired at the entry point. */
@@ -344,6 +347,41 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   const noteFocus = (on: boolean): void => {
     sawFocusEvent = true
     focused = on
+    // Back at the window: whatever we would have reminded them of is in front of them.
+    if (on) disarmReminder()
+  }
+  const timeout =
+    deps.timeout ??
+    ((fn: () => void, ms: number): (() => void) => {
+      const id = setTimeout(fn, ms)
+      // A pending reminder must never be what keeps the process alive.
+      id.unref?.()
+      return () => clearTimeout(id)
+    })
+
+  // --- Idle reminder: a turn finished while the user was away, and they still have
+  // not come back. One more nudge, once, after IDLE_REMINDER_MS; any keystroke or a
+  // focus-in cancels it. Focus reporting stays on while it is armed, so coming back
+  // to the window can cancel it even at an idle composer.
+  let cancelReminder: (() => void) | null = null
+  const reminderReportsFocus = (): boolean => stdin.isTTY === true
+  function disarmReminder(): void {
+    if (!cancelReminder) return
+    cancelReminder()
+    cancelReminder = null
+    // The streaming watcher owns focus reporting while a turn runs.
+    if (reminderReportsFocus() && !watching) rawWrite(DISABLE_FOCUS_REPORTING)
+  }
+  const armReminder = (spec: NotifySpec, mode: NotifyMode, ms: number): void => {
+    disarmReminder()
+    if (mode === 'off' || !userIsAway()) return
+    if (reminderReportsFocus() && !watching) rawWrite(ENABLE_FOCUS_REPORTING)
+    const cancel = timeout(() => {
+      if (cancelReminder !== cancel) return
+      if (userIsAway()) rawWrite(alertSequence(spec, mode))
+      disarmReminder()
+    }, ms)
+    cancelReminder = cancel
   }
 
   let pending: ((line: string | null) => void) | null = null
@@ -512,6 +550,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     const chunk = decodeChunk(data)
     const r = decodeInput(chunk, watchDec)
     watchDec = r.state
+    if (r.keys.some((k) => k.type !== 'focus')) disarmReminder()
     // A paste here is as untrusted as one in the composer: its tail must not be
     // able to submit or fire actions.
     const g = sanitizePastedKeys(r.keys, lastPasteAt, now())
@@ -628,7 +667,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     if (!watching) return
     watching = false
     try {
-      rawWrite(DISABLE_FOCUS_REPORTING)
+      // An armed idle reminder still wants focus reports (see armReminder).
+      if (!cancelReminder) rawWrite(DISABLE_FOCUS_REPORTING)
       stdin.removeListener('data', onWatchData)
       stdin.pause()
     } catch {
@@ -783,6 +823,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         str: string,
         key: { name?: string; ctrl?: boolean } | undefined
       ): void => {
+        disarmReminder()
         const k = key ?? {}
         if (k.ctrl && k.name === 'c') return finish(null) // cancel
         if (k.ctrl && k.name === 'd') return finish(buf.length ? buf : null) // EOF: submit or cancel
@@ -938,6 +979,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       function onData(data: Buffer | string): void {
         const r = decodeInput(decodeChunk(data), dec)
         dec = r.state
+        if (r.keys.some((k) => k.type !== 'focus')) disarmReminder()
         // A paste body can end paste mode early with its own end marker; keys after it
         // must not submit or act (see sanitizePastedKeys).
         const guarded = sanitizePastedKeys(r.keys, lastPasteAt, now())
@@ -1361,6 +1403,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         const chunk = decodeChunk(data)
         const r = decodeInput(chunk, dec)
         dec = r.state
+        if (r.keys.some((k) => k.type !== 'focus')) disarmReminder()
         // A paste body is attacker-controlled and can end paste mode early with its
         // own ESC[201~; without this, the bytes it puts after that marker would run
         // as real keys (submitting the turn, quitting, spawning $EDITOR).
@@ -1717,8 +1760,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     signal: (sig: TerminalSignal) => {
       if (sig.title) rawWrite(titleSequence(sig.title))
-      if (sig.alert && userIsAway()) rawWrite(bellSequence() + notifySequence(sig.alert))
+      if (sig.alert && userIsAway()) rawWrite(alertSequence(sig.alert, sig.mode ?? 'auto'))
     },
+    remindIfIdle: (spec, mode, ms = IDLE_REMINDER_MS) => armReminder(spec, mode, ms),
     onInterrupt: (handler) => {
       // Debounce: a single Ctrl-C can surface via more than one path (the streaming
       // watcher vs. readline's own 'SIGINT'); collapse those near-simultaneous fires
@@ -1743,6 +1787,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       rl.pause()
     },
     startSpinner: (label) => {
+      // A turn is running again, so nothing is waiting on the user any more.
+      disarmReminder()
       spinnerLabel = label
       spinnerStart = now()
       tick = 0

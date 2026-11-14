@@ -1983,3 +1983,114 @@ describe('screen-reader mode', () => {
     io.stopSpinner!()
   })
 })
+
+describe('notification modes and the idle reminder', () => {
+  const alert = { title: 'Houston', body: 'Finished' }
+  const reminder = { title: 'Houston', body: 'Houston is waiting for your next message' }
+
+  function harness() {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let timers: Array<{ fn: () => void; ms: number }> = []
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => clock,
+      schedule: () => () => {},
+      timeout: (fn, ms) => {
+        const t = { fn, ms }
+        timers.push(t)
+        return () => {
+          timers = timers.filter((x) => x !== t)
+        }
+      }
+    })
+    return {
+      io,
+      stdin,
+      text: () => written.join(''),
+      clear: () => (written.length = 0),
+      pending: () => timers.map((t) => t.ms),
+      fire: () => {
+        const due = timers
+        timers = []
+        due.forEach((t) => t.fn())
+      },
+      tick: (ms = 500) => {
+        clock += ms
+      }
+    }
+  }
+
+  it('sends only what the mode asks for', () => {
+    const t = harness()
+    t.io.signal!({ alert, mode: 'bell' })
+    expect(t.text()).toBe('\x07')
+    t.clear()
+    t.io.signal!({ alert, mode: 'osc' })
+    // No bell in front: the only BELs are the OSC terminators.
+    expect(t.text().startsWith('\x1b]9;Houston: Finished')).toBe(true)
+    expect(t.text()).toContain(']777;notify;')
+  })
+
+  it('reminds once, about a minute after a turn ends unwatched', () => {
+    const t = harness()
+    t.io.remindIfIdle!(reminder, 'auto')
+    expect(t.pending()).toEqual([60_000])
+    // It asks for focus reports, so coming back can cancel it.
+    expect(t.text()).toContain('[?1004h')
+    t.clear()
+    t.fire()
+    expect(t.text()).toContain('\x07')
+    expect(t.text()).toContain('Houston is waiting for your next message')
+    expect(t.text()).toContain('[?1004l')
+    expect(t.pending()).toEqual([])
+  })
+
+  it('a keystroke at the composer cancels it', async () => {
+    const t = harness()
+    t.io.remindIfIdle!(reminder, 'bell')
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('h')
+    expect(t.pending()).toEqual([])
+    t.clear()
+    t.fire()
+    expect(t.text()).not.toContain('\x07')
+    t.tick()
+    t.stdin.push('\r')
+    await read
+  })
+
+  it('coming back to the window cancels it, and a focused window never arms it', async () => {
+    const t = harness()
+    t.io.remindIfIdle!(reminder, 'auto')
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x1b[I') // focus in
+    expect(t.pending()).toEqual([])
+    t.io.remindIfIdle!(reminder, 'auto')
+    expect(t.pending()).toEqual([])
+    t.tick()
+    t.stdin.push('\r')
+    await read
+  })
+
+  it('a new turn cancels it, and off never arms it', () => {
+    const t = harness()
+    t.io.remindIfIdle!(reminder, 'osc')
+    t.io.startSpinner!('Working')
+    expect(t.pending()).toEqual([])
+    t.io.stopSpinner!()
+    t.io.remindIfIdle!(reminder, 'off')
+    expect(t.pending()).toEqual([])
+  })
+
+  it('arming again replaces the earlier reminder rather than stacking', () => {
+    const t = harness()
+    t.io.remindIfIdle!(reminder, 'auto')
+    t.io.remindIfIdle!(reminder, 'auto', 1000)
+    expect(t.pending()).toEqual([1000])
+  })
+})

@@ -712,9 +712,10 @@ safe subset in place. In the desktop app:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/add-dir`, `/vim`, `/screen-reader`, `/reduce-motion`,
-`/verbose`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`, `/proposals`,
-`/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`. Typed in the
+**Terminal-only commands.** `/add-dir`, `/vim`, `/notify`, `/screen-reader`,
+`/reduce-motion`, `/verbose`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
+`/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`.
+Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
 
@@ -1641,10 +1642,25 @@ waiting. The interactive terminal tells you, two ways:
 error, a finished turn, and a pull request opened or merged. Ordinary progress is
 quiet, and stopping a run yourself never pings you (you're obviously there).
 
-- Turning off notifications in Settings turns off the bell and notification here too.
-  The title still updates.
+- **One reminder.** If a turn finishes while you're away and you still haven't typed
+  anything a minute later, it sends one more: "Houston is waiting for your next
+  message". Typing or coming back to the window cancels it, and it fires at most once
+  per turn.
 - Notifications use the terminal's own channel, so they need no extra tools. Not every
   terminal supports them; the bell works everywhere.
+
+**Choosing the signals.** `/notify` shows the current mode, and `/notify <mode>`
+changes it and remembers it. `/settings` shows it too.
+
+| Mode | Sends |
+| --- | --- |
+| `auto` | the bell and the terminal's notification (the default) |
+| `osc` | the terminal's notification only, no bell |
+| `bell` | the bell only |
+| `off` | neither; the window title still updates |
+
+Until you pick a mode, turning off notifications in the desktop app's Settings means
+`off` here too.
 
 **In the desktop app**, a native notification fires for the same events while
 Houston isn't the focused window, and clicking it opens that chat. Settings >
