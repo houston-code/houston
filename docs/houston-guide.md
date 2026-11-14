@@ -1945,6 +1945,12 @@ project's agent wins if both use the same name.
 - **Writable** (`write: true`) subagents are dispatched with `dispatch_writable_agent`,
   which asks for approval because it grants write access. One approval covers the
   whole delegated task's local actions, confined to the project.
+- **Its report comes with evidence.** A writable subagent works under the same rules
+  as the main agent about tests: it never deletes, skips, or weakens one to pass, and
+  never calls unchecked work tested. Its report reaches the main agent followed by
+  what its tools actually ran and changed (each command with its exit code, and the
+  files it edited), so a claim like "all tests pass" can be checked against the
+  commands behind it.
 
 ### Permissions still apply
 
@@ -2009,6 +2015,8 @@ A subagent works under the same step budget as the main agent:
   things out or making edits, up to the same hard limit, with the same loop detection
 - near the end it's told to wrap up, and its last step can't run tools, so it always
   ends with a report of what it has
+- loop detection sees what the main agent's does: the same file read again with
+  nothing changed, and a file edited back and forth between the same versions
 - a custom agent's `max_turns` replaces all of this with a fixed limit
 - a review's agents keep the base budget without extending, since a review runs many
   at once
@@ -2024,7 +2032,7 @@ A subagent works under the same step budget as the main agent:
 - **Cheaper legwork.** A dispatch can pass `model` to run one-off work on a cheaper
   sibling model.
 - **One level of nesting.** A dispatched agent may dispatch its own nested read-only
-  researchers (never writable, and no deeper).
+  researchers (never writable, and no deeper). They run one at a time.
 
 ### Running one yourself
 

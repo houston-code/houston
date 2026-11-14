@@ -200,7 +200,7 @@ import { afterWrite, captureBeforeWrite, type WriteSeamTarget } from './lsp/writ
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
 import { egressEndpointsForRun, registerEgressRun } from './egress'
 import { formatFile } from './format'
-import { MAX_SUBAGENT_DEPTH, runSubAgent } from './subagent'
+import { MAX_SUBAGENT_DEPTH, delegatedEvidenceSummary, runSubAgent, type DelegatedCommand } from './subagent'
 import { SubagentRecorder, type SubagentHandle } from './subagentRecorder'
 import {
   limitSubagentHistory,
@@ -2639,6 +2639,9 @@ export async function startRun(
       // This agent's record, started once runSubAgent has assembled its system prompt.
       let handle: SubagentHandle | undefined
       let ending: { status: SubagentStatus; outcome: SubagentOutcome; budget: SubagentBudget } | undefined
+      // What a writable agent's tools ran and changed, for the evidence note on its result.
+      const ranCommands: DelegatedCommand[] = []
+      const changedFiles: string[] = []
       const result = await runSubAgent({
         // Pinned to the run's configured provider, not the fallback route: a
         // dispatch's `model` override is validated against `req.providerId`'s
@@ -2673,8 +2676,21 @@ export async function startRun(
               gateUnconfinedShell,
               // Delegated commands and edits belong on this turn's receipt, credited
               // to the agent that ran them.
-              recordEvidence: (e: EvidenceDraft) => recordEvidence(e, credit),
-              recordFiles: (paths: string[]) => run.evidence.recordFiles(workspace, paths, credit)
+              recordEvidence: (e: EvidenceDraft) => {
+                recordEvidence(e, credit)
+                if (e.kind === 'shell') {
+                  ranCommands.push({
+                    command: redact(e.command),
+                    exitCode: e.exitCode,
+                    timedOut: e.timedOut,
+                    background: e.background
+                  })
+                }
+              },
+              recordFiles: (paths: string[]) => {
+                run.evidence.recordFiles(workspace, paths, credit)
+                changedFiles.push(...paths.map((p) => redact(p)))
+              }
             }
           : {}),
         // Permission rules + the sensitive-read prompt on every local call, either tier.
@@ -2821,14 +2837,20 @@ export async function startRun(
         ...(storedId ? { resumeId: storedId } : {})
       })
 
+      // A writable agent's report is its own account; follow it with what its tools
+      // actually ran and changed, so a claim like "tests pass" can be checked against
+      // the commands behind it. An aborted dispatch reports nothing further.
+      const evidenced =
+        writable && !abort.signal.aborted ? `${result}\n\n${delegatedEvidenceSummary(ranCommands, changedFiles)}` : result
+
       // Tell the model how to follow up. Only when a transcript was stored — an
       // aborted run, or one that failed before its first step, isn't resumable, and
       // nested dispatches never are.
       if (storedId) {
         const tool = writable ? 'dispatch_writable_agent' : 'dispatch_agent'
-        return `${result}\n\n${resumeNote(storedId, tool)}`
+        return `${evidenced}\n\n${resumeNote(storedId, tool)}`
       }
-      return result
+      return evidenced
     }
 
     // Full auto runs shell commands offline until the user allows network for the chat.

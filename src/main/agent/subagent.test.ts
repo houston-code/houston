@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import type { SubagentStatus, SubagentStep } from '@shared/subagents'
 import { createSecretRedactor } from './redact'
-import { runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
+import { delegatedEvidenceSummary, runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
 import { idleTimeoutFetch } from '../providers/idle-fetch'
@@ -572,6 +572,10 @@ describe('runSubAgent', () => {
       })
       expect(sink.system).toMatch(/never delete, skip, or weaken a test to make it pass/i)
       expect(sink.system).toMatch(/never describe work you did not verify as tested/i)
+      expect(sink.system).toMatch(/never special-case test inputs/i)
+      expect(sink.system).toMatch(/if a test looks wrong, say so/i)
+      expect(sink.system).toMatch(/a command that failed to start, doesn't count/i)
+      expect(sink.system).toMatch(/something unrelated was already broken, leave it and mention it/i)
     })
 
     it('routes an unconfined run_shell through the gate and returns its output', async () => {
@@ -903,6 +907,21 @@ describe('progress, resume, and nesting', () => {
       signal: new AbortController().signal
     })
     expect(without.tools).not.toContain('dispatch_agent')
+  })
+
+  it('does not promise nested agents run in parallel (they run one at a time)', async () => {
+    const sink = { system: '', messages: [] as ChatMessage[][] }
+    await runSubAgent({
+      provider: recordingProvider([[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]], sink),
+      model: 'm',
+      workspace: ws,
+      prompt: 'x',
+      signal: new AbortController().signal,
+      dispatchNested: async () => 'nested report'
+    })
+    expect(sink.system).toContain('dispatch_agent')
+    expect(sink.system).not.toMatch(/parallel/i)
+    expect(sink.system).toContain('Nested agents run one at a time')
   })
 
   it('routes a nested dispatch through the injected dispatcher', async () => {
@@ -1551,5 +1570,41 @@ describe('a request that outgrows the context window', () => {
     // The agent no longer sees a.txt, so an edit to it needs a fresh read first.
     expect(resultOf(transcript, 'e1')).toMatch(/You have not read a\.txt yet/)
     expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe(`start\n${'A'.repeat(1500)}\n`)
+  })
+})
+
+describe('delegatedEvidenceSummary', () => {
+  const cmd = (command: string, exitCode: number | null, extra: Partial<{ timedOut: boolean; background: boolean }> = {}) => ({
+    command,
+    exitCode,
+    timedOut: false,
+    background: false,
+    ...extra
+  })
+
+  it('lists each command with how it ended, and the files changed once each', () => {
+    const text = delegatedEvidenceSummary(
+      [cmd('npm test', 1), cmd('npm test', 0), cmd('sleep 99', null, { timedOut: true }), cmd('npm run dev', null, { background: true }), cmd('kill 1', null)],
+      ['a.ts', 'b.ts', 'a.ts']
+    )
+    expect(text).toContain(
+      'Commands run: `npm test` exited 1; `npm test` exited 0; `sleep 99` timed out; `npm run dev` started in the background; `kill 1` was stopped.'
+    )
+    expect(text).toContain('Files changed: a.ts, b.ts.')
+  })
+
+  it('says none for an agent that ran and changed nothing', () => {
+    expect(delegatedEvidenceSummary([], [])).toContain('Commands run: none.\nFiles changed: none.')
+  })
+
+  it('keeps the latest commands and caps long lists and lines', () => {
+    const many = Array.from({ length: 14 }, (_, i) => cmd(`step ${i}`, 0))
+    const files = Array.from({ length: 25 }, (_, i) => `f${i}.ts`)
+    const text = delegatedEvidenceSummary([...many, cmd(`echo ${'x'.repeat(400)}\nsecond line`, 0)], files)
+    expect(text).toContain('Commands run: 5 earlier, then `step 5` exited 0')
+    expect(text).not.toContain('`step 4`')
+    expect(text).toMatch(/`echo x{155}\.\.\.` exited 0\./)
+    expect(text).toContain('f19.ts, and 5 more.')
+    expect(text).not.toContain('f20.ts')
   })
 })
