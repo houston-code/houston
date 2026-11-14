@@ -291,6 +291,7 @@ import {
   takeChildReports
 } from '../conversations'
 import { waitForBackground } from './waitFor'
+import { BackgroundAgents, backgroundAgentsNote, backgroundReportText, backgroundStartedText } from './backgroundAgents'
 import {
   buildPinnedMessages,
   latestTodos,
@@ -1340,6 +1341,9 @@ export async function startRun(
   }
 
   const abort = new AbortController()
+  // Subagents dispatched with background: true. Stop aborts them with the run, and the
+  // run's end stops any still going (see the finally below).
+  const backgroundAgents = new BackgroundAgents(abort.signal)
   // Seed "Allow for run" consent from any the user granted earlier in this
   // conversation, so it carries across turns rather than resetting each message.
   const seededOverride = overrideForConversation(conversationId)
@@ -1505,6 +1509,20 @@ export async function startRun(
     else messages.push(note)
     persist(messages)
     emit({ type: 'notice', message: backgroundEventsNotice(events) })
+  }
+  // Finished background agents the model hasn't been told about: their reports, as one
+  // note at the end of the window. True when there was anything to tell.
+  const deliverBackgroundAgents = (): boolean => {
+    const finished = backgroundAgents.takeFinished()
+    const note = backgroundAgentsNote(finished)
+    if (!note) return false
+    messages.push(note)
+    persist(messages)
+    emit({
+      type: 'notice',
+      message: `Background agent${finished.length === 1 ? '' : 's'} finished: ${finished.map((a) => `${a.id} "${a.label}"`).join(', ')}`
+    })
+    return true
   }
   // Scrubs an unexpected error's message before it reaches the client (see the catch
   // below). Swapped for the run's secret redactor once that is built.
@@ -2569,8 +2587,11 @@ export async function startRun(
       depth: number
       /** For a nested agent: its parent's record, and the parent's step that dispatched it. */
       parent?: { recordId: string; step?: number }
+      /** The signal it runs under: the run's, or a background agent's (see BackgroundAgents). */
+      signal?: AbortSignal
     }): Promise<string> => {
       const { callId, opts, writable, depth } = input
+      const dispatchSignal = input.signal ?? abort.signal
       const agent = opts.agent ? agentsByName.get(opts.agent) : undefined
       if (opts.agent && !agent) return `Unknown agent: ${opts.agent}`
       if (writable && agent && agent.write !== true) {
@@ -2691,7 +2712,7 @@ export async function startRun(
         model,
         workspace,
         prompt: opts.prompt,
-        signal: abort.signal,
+        signal: dispatchSignal,
         reachable: () => providerReached,
         systemOverride,
         tools: allowedTools,
@@ -2745,7 +2766,7 @@ export async function startRun(
           searchProvider: settings.searchProvider,
           ...nativeWebSearchFor(
             { provider: primaryRoute.provider, providerId: req.providerId, model },
-            abort.signal,
+            dispatchSignal,
             recordSideRequestUsage
           ),
           collectSecrets: () => knownSecrets
@@ -2827,7 +2848,8 @@ export async function startRun(
                   opts: { prompt: nestedPrompt, agent: nestedAgent, model: nestedModel, description: nestedDescription },
                   writable: false,
                   depth: depth + 1,
-                  ...(handle ? { parent: { recordId: handle.id, step: stepIndex } } : {})
+                  ...(handle ? { parent: { recordId: handle.id, step: stepIndex } } : {}),
+                  signal: dispatchSignal
                 })
             }
           : {}),
@@ -2871,7 +2893,7 @@ export async function startRun(
       })
 
       handle?.end({
-        status: ending?.status ?? (abort.signal.aborted ? 'aborted' : 'error'),
+        status: ending?.status ?? (dispatchSignal.aborted ? 'aborted' : 'error'),
         ...(ending ? { outcome: ending.outcome, budget: ending.budget } : {}),
         report: result,
         ...(storedId ? { resumeId: storedId } : {})
@@ -2881,7 +2903,7 @@ export async function startRun(
       // actually ran and changed, so a claim like "tests pass" can be checked against
       // the commands behind it. An aborted dispatch reports nothing further.
       const evidenced =
-        writable && !abort.signal.aborted ? `${result}\n\n${delegatedEvidenceSummary(ranCommands, changedFiles)}` : result
+        writable && !dispatchSignal.aborted ? `${result}\n\n${delegatedEvidenceSummary(ranCommands, changedFiles)}` : result
 
       // Tell the model how to follow up. Only when a transcript was stored — an
       // aborted run, or one that failed before its first step, isn't resumable, and
@@ -2891,6 +2913,38 @@ export async function startRun(
         return `${evidenced}\n\n${resumeNote(storedId, tool)}`
       }
       return evidenced
+    }
+
+    /**
+     * Start a dispatch in the background: the call returns at once with an id, and the
+     * agent's report comes later (deliverBackgroundAgents or wait_for). Same dispatch,
+     * gates and budget as a foreground one; only its signal is the background one.
+     */
+    const startBackgroundAgent = (callId: string, opts: DispatchAgentOptions, writable: boolean): string => {
+      if (opts.resume) {
+        return 'background: true starts a new agent; it can\'t resume one. Resume it in the foreground, or dispatch a new background agent.'
+      }
+      const label = opts.description?.trim() || (writable ? 'Writable subagent' : 'Research subagent')
+      const started = backgroundAgents.start(
+        { callId, label, writable },
+        (signal) => runDispatch({ callId, opts: { ...opts, background: false }, writable, depth: 1, signal }),
+        () => attachBackgroundRecords(callId)
+      )
+      return 'refused' in started ? started.refused : backgroundStartedText(started)
+    }
+
+    /**
+     * Save a finished background agent's record on its dispatch call's result, as a
+     * foreground dispatch's is, replacing the snapshot saved while it still worked. If
+     * the result hasn't been saved yet, the flush takes the record as usual.
+     */
+    const attachBackgroundRecords = (callId: string): void => {
+      const msg = messages.find((m) => m.role === 'tool' && m.toolCallId === callId)
+      if (!msg) return
+      const records = subagentRecorder.take(callId)
+      if (!records) return
+      msg.subagents = records
+      persist(messages)
     }
 
     // Full auto runs shell commands offline until the user allows network for the chat.
@@ -3106,8 +3160,10 @@ export async function startRun(
       // Reaching the writable path means the dispatch_writable_agent call was
       // already approved (kind:'write'), so the subagent works autonomously
       // within the project sandbox.
-      dispatchSubAgent: (opts) => runDispatch({ callId, opts, writable: false, depth: 1 }),
-      dispatchWritableSubAgent: (opts) => runDispatch({ callId, opts, writable: true, depth: 1 }),
+      dispatchSubAgent: (opts) =>
+        opts.background ? Promise.resolve(startBackgroundAgent(callId, opts, false)) : runDispatch({ callId, opts, writable: false, depth: 1 }),
+      dispatchWritableSubAgent: (opts) =>
+        opts.background ? Promise.resolve(startBackgroundAgent(callId, opts, true)) : runDispatch({ callId, opts, writable: true, depth: 1 }),
       dispatchReview: (base, paths, effort, model, context) => {
         // An explicit model runs the whole review — dimension reviewers and
         // skeptical verifiers alike — on that (usually cheaper) sibling, billed
@@ -3248,6 +3304,12 @@ export async function startRun(
       waitFor: (id: string, seconds: number) =>
         waitForBackground(id, seconds, {
           signal: abort.signal,
+          agent: (agentId) => {
+            const a = backgroundAgents.get(agentId)
+            return a && { done: a.done, label: a.label, ...(a.done ? { report: backgroundReportText(a) } : {}) }
+          },
+          onAgentsChanged: (fn) => backgroundAgents.onChange(fn),
+          agentSeen: (agentId) => backgroundAgents.markDelivered(agentId),
           shell: (shellId) => {
             const s = shellWaitState(shellId, conversationId, workspace)
             return s && { ...s, command: redact(s.command), tail: s.tail.map((l) => redact(l)) }
@@ -3880,6 +3942,9 @@ export async function startRun(
         if (steers.some((st) => hasUltrathink(st.text))) run.ultrathink = true
         persist(messages)
       }
+
+      // Background agents that finished since the last step: their reports, as a note.
+      deliverBackgroundAgents()
 
       // News from background work that arrived while this turn ran: a shell exited,
       // printed a watched line, or a spawned session finished. Same boundary as steers,
@@ -4548,6 +4613,23 @@ export async function startRun(
         // writes its answer is exactly when someone steers.
         if (run.steering.length) continue
 
+        // Background agents whose reports the model hasn't had: wait for the ones still
+        // working (Stop ends the wait), then loop once more with their reports, so the
+        // turn never ends on work nobody reported.
+        if (backgroundAgents.hasUndelivered()) {
+          if (backgroundAgents.workingCount > 0) {
+            const n = backgroundAgents.workingCount
+            emit({ type: 'notice', message: `Waiting for ${n} background agent${n === 1 ? '' : 's'} to finish` })
+            await backgroundAgents.waitAll(abort.signal)
+            if (abort.signal.aborted) {
+              await backgroundAgents.settle()
+              emit({ type: 'done', stopReason: 'aborted' })
+              return
+            }
+          }
+          if (deliverBackgroundAgents()) continue
+        }
+
         emit({ type: 'done', stopReason })
         return
       }
@@ -4647,7 +4729,12 @@ export async function startRun(
           ok: r.ok
         })
         // What the call's subagents did, saved with the result (display-only).
-        const subagents = subagentRecorder.take(r.call.id)
+        // A background agent still working is saved as it stands (so a chat reopened
+        // mid-turn shows its record), and replaced by the finished record when it is
+        // done (see attachBackgroundRecords).
+        const subagents = backgroundAgents.isWorkingCall(r.call.id)
+          ? subagentRecorder.peek(r.call.id)
+          : subagentRecorder.take(r.call.id)
         messages.push({
           role: 'tool',
           content: output,
@@ -5447,6 +5534,9 @@ export async function startRun(
       fail('unexpected', { message: scrubError(`The turn stopped on an unexpected error: ${detail}`) })
     }
   } finally {
+    // A background agent never outlives its run: stop any still working (an error or a
+    // Stop elsewhere ended the turn), letting each record end before the run is gone.
+    await backgroundAgents.settle()
     // This run's MCP servers no longer count as in use (see liveRuns in mcp/manager).
     releaseMcpRun(runId)
     // A turn stopped mid-tool — the user hit Stop, or an exception unwound after

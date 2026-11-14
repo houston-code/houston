@@ -9904,7 +9904,7 @@ describe('session proposals, forked spawns, and finished-child reports', () => {
     const r = await run({ conversationId: parent.id, provider, policy: 'full-auto' })
     const content = (id: string): string => String(r.messages.find((m) => m.role === 'tool' && m.toolCallId === id)?.content ?? '')
     expect(content('w1')).toMatch(/^Session "[^"]*" finished\..*"Docs written for \/auth\."/)
-    expect(content('w2')).toMatch(/^No background shell or spawned session/)
+    expect(content('w2')).toMatch(/^No background agent, shell, or spawned session/)
     // Delivered once: nothing left for the next turn's inbox.
     expect(takeChildReports(parent.id)).toEqual([])
     expect(r.messages.some((m) => m.role === 'user' && m.content.includes('Sessions you started have ended'))).toBe(false)
@@ -11609,7 +11609,7 @@ describe('background news delivery', () => {
       ]
     })
     const waited = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'w1')
-    expect(waited?.content).toMatch(/^No background shell or spawned session with id zzzz in this chat/)
+    expect(waited?.content).toMatch(/^No background agent, shell, or spawned session with id zzzz in this chat/)
     // A read-kind tool: no approval prompt.
     expect(r.events.some((e) => e.type === 'tool_approval')).toBe(false)
   })
@@ -11638,4 +11638,198 @@ describe('background news delivery', () => {
     )
     expect(wakeBlocker('conv-bg-streak')).toBe('held')
   })
+})
+
+describe('background subagents', () => {
+  type Script = (req: ChatRequest, n: number) => ProviderStreamEvent[] | Promise<ProviderStreamEvent[]>
+  /** Routes subagent requests (by their system prompt) and main-agent requests to separate scripts. */
+  function routed(main: Script, sub: Script): { provider: Provider; mainRequests: ChatRequest[] } {
+    const mainRequests: ChatRequest[] = []
+    let m = 0
+    let s = 0
+    return {
+      mainRequests,
+      provider: {
+        async *streamChat(req) {
+          const isSub = /You are an? (research|implementation) subagent/.test(req.system ?? '')
+          if (!isSub) mainRequests.push(JSON.parse(JSON.stringify({ ...req, signal: undefined })) as ChatRequest)
+          const events = await (isSub ? sub(req, s++) : main(req, m++))
+          for (const e of events) yield e
+        }
+      }
+    }
+  }
+  const call = (id: string, name: string, args: Record<string, unknown>): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name, arguments: args } },
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const say = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn' }
+  ]
+  const toolText = (r: RunResult, id: string): string =>
+    String(r.messages.find((m) => m.role === 'tool' && m.toolCallId === id)?.content ?? '')
+
+  it('returns at once with an id, and wait_for hands over the report', async () => {
+    let release: () => void = () => {}
+    const released = new Promise<void>((r) => (release = r))
+    const { provider, mainRequests } = routed(
+      (_req, n) => {
+        if (n === 0) return call('d1', 'dispatch_agent', { description: 'Find auth', prompt: 'where is auth?', background: true })
+        if (n === 1) {
+          release()
+          return call('w1', 'wait_for', { id: 'bg1', timeout_seconds: 20 })
+        }
+        return say('done')
+      },
+      // The subagent answers only after the main agent has moved on.
+      async () => {
+        await released
+        return say('Auth lives in src/auth.ts.')
+      }
+    )
+    const r = await run({ provider, policy: 'full-auto' })
+    expect(toolText(r, 'd1')).toMatch(/^Started background agent bg1 \("Find auth"\)/)
+    expect(toolText(r, 'w1')).toMatch(/^Background agent bg1 \("Find auth"\) has finished\. Its report:\n\nAuth lives in src\/auth\.ts\./)
+    // Told once: no note repeats what wait_for returned.
+    expect(r.messages.some((m) => m.role === 'user' && /background agents? you started ha(s|ve) finished/i.test(m.content))).toBe(false)
+    // Its record is saved on the dispatch call's result once it finished.
+    const saved = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'd1')?.subagents
+    expect(saved?.map((s) => [s.label, s.status])).toEqual([['Find auth', 'done']])
+    // While it worked, the saved result already carried its record as it stood.
+    const midTurn = mainRequests[1]!.messages.find((m) => m.role === 'tool' && m.toolCallId === 'd1')?.subagents
+    expect(midTurn?.map((s) => [s.label, s.status])).toEqual([['Find auth', 'running']])
+  }, 30_000)
+
+  it('delivers the report as a note at a later step, with the record streaming after the call returned', async () => {
+    let release: () => void = () => {}
+    const released = new Promise<void>((r) => (release = r))
+    writeFileSync(join(ws, 'a.txt'), 'a')
+    let subDone: () => void = () => {}
+    const subFinished = new Promise<void>((r) => (subDone = r))
+    const { provider, mainRequests } = routed(
+      async (_req, n) => {
+        if (n === 0) return call('d1', 'dispatch_agent', { description: 'Scan', prompt: 'scan', background: true })
+        if (n === 1) {
+          release()
+          // Let the agent finish while this step's tool runs, so the next step carries the note.
+          await subFinished
+          return call('r1', 'read_file', { path: 'a.txt' })
+        }
+        return say('all done')
+      },
+      async () => {
+        await released
+        setTimeout(subDone, 20)
+        return say('Scan found nothing.')
+      }
+    )
+    const r = await run({ provider, policy: 'full-auto' })
+    const resultAt = r.events.findIndex((e) => e.type === 'tool_result' && e.callId === 'd1')
+    const endAt = r.events.findIndex((e) => e.type === 'subagent_end' && e.parentCallId === 'd1')
+    expect(resultAt).toBeGreaterThanOrEqual(0)
+    expect(endAt).toBeGreaterThan(resultAt)
+    const sawNote = mainRequests.some((q) =>
+      q.messages.some(
+        (m) => m.role === 'user' && m.content.includes('Background agent bg1 ("Scan") has finished. Its report:\n\nScan found nothing.')
+      )
+    )
+    expect(sawNote).toBe(true)
+    expect(r.events.some((e) => e.type === 'notice' && e.message === 'Background agent finished: bg1 "Scan"')).toBe(true)
+    expect(r.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'all done' })
+  }, 30_000)
+
+  it('waits for a still-working agent before the turn ends, then continues with its report', async () => {
+    let release: () => void = () => {}
+    const released = new Promise<void>((r) => (release = r))
+    const { provider, mainRequests } = routed(
+      (_req, n) => {
+        if (n === 0) return call('d1', 'dispatch_agent', { description: 'Slow', prompt: 'slow', background: true })
+        if (n === 1) {
+          setTimeout(release, 50)
+          return say('I will wait for it.')
+        }
+        return say('Got the report.')
+      },
+      async () => {
+        await released
+        return say('Slow result.')
+      }
+    )
+    const r = await run({ provider, policy: 'full-auto' })
+    expect(r.events.some((e) => e.type === 'notice' && e.message === 'Waiting for 1 background agent to finish')).toBe(true)
+    expect(mainRequests).toHaveLength(3)
+    expect(mainRequests[2]!.messages.at(-1)?.content).toContain('Slow result.')
+    expect(r.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Got the report.' })
+    expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+  }, 30_000)
+
+  it('Stop ends a background agent along with the turn', async () => {
+    const runId = 'run-bg-stop'
+    const { provider } = routed(
+      (_req, n) => (n === 0 ? call('d1', 'dispatch_agent', { description: 'Forever', prompt: 'x', background: true }) : say('waiting')),
+      // Never answers on its own: only the abort ends it, failing the request the way a
+      // real aborted stream does.
+      (req) =>
+        new Promise<ProviderStreamEvent[]>((_resolve, reject) => {
+          const fail = (): void => reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }))
+          if (req.signal?.aborted) fail()
+          req.signal?.addEventListener('abort', fail, { once: true })
+        })
+    )
+    h.provider = provider
+    const events: AgentEvent[] = []
+    await startRun(
+      { runId, workspace: ws, providerId: 'anthropic', model: 'claude-test', approvalPolicy: 'full-auto', messages: [{ role: 'user', content: 'go' }] },
+      (e) => {
+        events.push(e)
+        if (e.type === 'notice' && e.message.startsWith('Waiting for 1 background agent')) setTimeout(() => cancelRun(runId), 0)
+      }
+    )
+    expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
+    const end = events.find((e) => e.type === 'subagent_end' && e.parentCallId === 'd1')
+    expect(end && end.type === 'subagent_end' ? end.update.status : undefined).toBe('aborted')
+  }, 30_000)
+
+  it('refuses background with resume, and a start past the cap', async () => {
+    const dispatch = (id: string): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'dispatch_agent', arguments: { description: id, prompt: 'p', background: true } }
+    })
+    const { provider } = routed(
+      (_req, n) =>
+        n === 0
+          ? [
+              {
+                type: 'tool_call',
+                call: { id: 'r0', name: 'dispatch_agent', arguments: { description: 'x', prompt: 'p', background: true, resume: 'ag1' } }
+              },
+              dispatch('a1'),
+              dispatch('a2'),
+              dispatch('a3'),
+              dispatch('a4'),
+              dispatch('a5'),
+              { type: 'done', stopReason: 'tool_use' }
+            ]
+          : say('ok'),
+      () => say('report')
+    )
+    const r = await run({ provider, policy: 'full-auto' })
+    expect(toolText(r, 'r0')).toMatch(/can't resume one/)
+    expect(['a1', 'a2', 'a3', 'a4'].every((id) => toolText(r, id).startsWith('Started background agent'))).toBe(true)
+    expect(toolText(r, 'a5')).toMatch(/^4 background agents are already working/)
+  }, 30_000)
+
+  it('keeps the writable dispatch approval: a background writable agent still asks first', async () => {
+    const { provider } = routed(
+      (_req, n) =>
+        n === 0 ? call('d1', 'dispatch_writable_agent', { description: 'Write', prompt: 'write out.txt', background: true }) : say('ok'),
+      (_req, n) => (n === 0 ? call('w1', 'write_file', { path: 'out.txt', content: 'from bg' }) : say('wrote it'))
+    )
+    const r = await run({ provider, policy: 'ask', onApproval: (_id, decide) => decide('allow') })
+    const approvals = r.events.filter((e) => e.type === 'tool_approval')
+    expect(approvals.map((a) => ('name' in a ? a.name : ''))).toEqual(['dispatch_writable_agent'])
+    expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('from bg')
+    expect(r.messages.some((m) => m.role === 'user' && m.content.includes('Background agent bg1 ("Write") has finished'))).toBe(true)
+  }, 30_000)
 })

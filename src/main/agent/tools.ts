@@ -158,6 +158,8 @@ export interface DispatchAgentOptions {
   model?: string
   /** Id of a stored subagent to resume (shown at the end of its earlier report). */
   resume?: string
+  /** Return at once with an id; the report arrives later (a note, or wait_for). */
+  background?: boolean
 }
 
 export interface ToolContext {
@@ -2393,12 +2395,12 @@ const waitForTool: ToolDef = {
   summarize: (a) => `Wait for ${str(a, 'id') || 'background work'}`,
   schema: {
     name: WAIT_FOR_NAME,
-    description: `Wait until a background shell (run_shell with background: true) or a session you started with spawn_session finishes, then get its result: a shell's exit code and last lines, or a session's outcome and the start of its answer. Use it when you have nothing useful to do until that work is done, instead of polling read_shell_output or ending your turn. Waits at most timeout_seconds (default ${WAIT_FOR_DEFAULT_SECONDS}, max ${WAIT_FOR_MAX_SECONDS}); if it is still running then, you are told so and can wait again. The user can stop the wait with Stop.`,
+    description: `Wait until a background agent (a dispatch with background: true), a background shell (run_shell with background: true), or a session you started with spawn_session finishes, then get its result: an agent's report, a shell's exit code and last lines, or a session's outcome and the start of its answer. Use it when you have nothing useful to do until that work is done, instead of polling read_shell_output or ending your turn. Waits at most timeout_seconds (default ${WAIT_FOR_DEFAULT_SECONDS}, max ${WAIT_FOR_MAX_SECONDS}); if it is still running then, you are told so and can wait again. The user can stop the wait with Stop.`,
     parameters: objectSchema(
       {
         id: {
           type: 'string',
-          description: 'The shell id run_shell returned, or the session id spawn_session returned.'
+          description: 'The agent id a background dispatch returned, the shell id run_shell returned, or the session id spawn_session returned.'
         },
         timeout_seconds: {
           type: 'number',
@@ -2410,7 +2412,7 @@ const waitForTool: ToolDef = {
   },
   async execute(args, ctx) {
     const id = str(args, 'id').trim()
-    if (!id) throw new Error('id is required: a shell id from run_shell or a session id from spawn_session.')
+    if (!id) throw new Error('id is required: an agent id from a background dispatch, a shell id from run_shell, or a session id from spawn_session.')
     if (!ctx.waitFor) throw new Error('Waiting on background work is not available in this context.')
     return ctx.waitFor(id, waitSeconds(args.timeout_seconds))
   }
@@ -3135,6 +3137,20 @@ const skillTool: ToolDef = {
   }
 }
 
+/**
+ * The dispatch tools' `background` parameter. Kept short: dispatch_agent is sent on
+ * every request, and the result of a background start says how its report comes back.
+ */
+const BACKGROUND_PARAM = {
+  type: 'boolean',
+  description: 'Optional: true returns an id at once; the report comes later.'
+} as const
+
+/** Whether a dispatch asked for `background` (a boolean, or the string the model sometimes sends). */
+function backgroundArg(args: Record<string, unknown>): boolean {
+  return args.background === true || args.background === 'true'
+}
+
 const dispatchAgent: ToolDef = {
   kind: 'read', // spawns a read-only subagent — no side effects, no approval needed
   summarize: (a) => `Subagent: ${str(a, 'description') || 'research task'}`,
@@ -3163,7 +3179,8 @@ const dispatchAgent: ToolDef = {
           type: 'string',
           description:
             'Optional: the id of a subagent from an earlier dispatch in this chat (shown at the end of its report, e.g. "ag1"). Continues that agent, and `prompt` becomes your follow-up message to it. Ids last for the app session.'
-        }
+        },
+        background: BACKGROUND_PARAM
       },
       ['description', 'prompt']
     )
@@ -3177,7 +3194,8 @@ const dispatchAgent: ToolDef = {
       description: str(args, 'description') || undefined,
       agent: str(args, 'agent') || undefined,
       model: str(args, 'model') || undefined,
-      resume: str(args, 'resume') || undefined
+      resume: str(args, 'resume') || undefined,
+      ...(backgroundArg(args) ? { background: true } : {})
     })
   }
 }
@@ -3218,7 +3236,8 @@ const dispatchWritableAgent: ToolDef = {
           type: 'string',
           description:
             'Optional: the id of a writable subagent from an earlier dispatch in this chat (shown at the end of its report). Continues that agent, and `prompt` becomes your follow-up message to it. Ids last for the app session.'
-        }
+        },
+        background: BACKGROUND_PARAM
       },
       ['description', 'prompt']
     )
@@ -3234,7 +3253,8 @@ const dispatchWritableAgent: ToolDef = {
       description: str(args, 'description') || undefined,
       agent: str(args, 'agent') || undefined,
       model: str(args, 'model') || undefined,
-      resume: str(args, 'resume') || undefined
+      resume: str(args, 'resume') || undefined,
+      ...(backgroundArg(args) ? { background: true } : {})
     })
   }
 }

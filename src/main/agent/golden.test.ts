@@ -685,7 +685,9 @@ const OVERHEAD_BUDGET_TOKENS: Record<string, number> = {
   desktop: 9_300,
   cli: 8_700,
   headless: 8_400,
-  'plan-mode': 10_000
+  // 10_050: background dispatch (dispatch_agent's `background` flag, ~30 tokens) is
+  // most useful for read-only research, which is what plan mode does.
+  'plan-mode': 10_050
 }
 
 describe('fixed per-request overhead', () => {

@@ -172,8 +172,8 @@ describe('waitForBackground: spawned sessions', () => {
   it("refuses a session this chat didn't start, and an unknown id", async () => {
     const w = world()
     w.running.add('c2')
-    expect(await waitForBackground('c2', 60, w.deps)).toMatch(/^No background shell or spawned session with id c2 in this chat/)
-    expect(await waitForBackground('nope', 60, w.deps)).toMatch(/^No background shell or spawned session/)
+    expect(await waitForBackground('c2', 60, w.deps)).toMatch(/^No background agent, shell, or spawned session with id c2 in this chat/)
+    expect(await waitForBackground('nope', 60, w.deps)).toMatch(/^No background agent, shell, or spawned session/)
   })
 })
 

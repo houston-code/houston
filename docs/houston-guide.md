@@ -2056,6 +2056,24 @@ A subagent works under the same step budget as the main agent:
 - **One level of nesting.** A dispatched agent may dispatch its own nested read-only
   researchers (never writable, and no deeper). They run one at a time.
 
+### Background agents
+
+A dispatch can pass `background: true` to run the agent while the main agent keeps
+working, instead of waiting for its report.
+
+- **It returns at once** with an id (like `bg1`). The agent's report arrives as a
+  Houston note at the main agent's next step, or the main agent can wait for it with
+  `wait_for`.
+- **Same rules as any dispatch.** A writable one still asks for approval when it is
+  dispatched, its permission rules and consent prompts work the same, and it counts
+  toward the run's cost limit. At most 4 work at once; it can't be combined with
+  `resume`.
+- **You see it live.** Its row streams its steps as usual, in every client, and the
+  finished record is saved with the chat.
+- **It never outlives the turn.** If the main agent finishes while one is still
+  working, Houston waits for it (a notice says so) and hands over its report before
+  the turn ends. **Stop** stops it along with the turn.
+
 ### Running one yourself
 
 `/agent <name> <task>` hands a job to one of your agents directly, instead of
@@ -2115,11 +2133,12 @@ The agent doesn't have to keep checking on its background commands:
   idle,** it continues on its own in a new turn that opens with a Houston note (it
   shows as a notice, not as a message from you). Spawned sessions that finish wake
   their parent chat the same way.
-- **Waiting on purpose.** When the agent has nothing to do until a background command
-  or a session it spawned finishes, it can wait for it with `wait_for` instead of
-  checking again and again. A wait lasts at most 10 minutes (5 by default); if the work
-  is still going, the agent is told and can wait again or move on. **Stop** ends the
-  wait. What a wait returns isn't repeated as a note at the next step.
+- **Waiting on purpose.** When the agent has nothing to do until a background command,
+  a background agent, or a session it spawned finishes, it can wait for it with
+  `wait_for` instead of checking again and again. A wait lasts at most 10 minutes (5 by
+  default); if the work is still going, the agent is told and can wait again or move
+  on. **Stop** ends the wait. What a wait returns isn't repeated as a note at the next
+  step.
 
 What doesn't wake a chat:
 
