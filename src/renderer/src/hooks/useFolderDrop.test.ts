@@ -63,14 +63,30 @@ describe('useFolderDrop', () => {
     expect(open).not.toHaveBeenCalled()
   })
 
-  it('still opens a folder dropped on the composer', () => {
+  it('leaves a folder or any other file dropped on the composer to the composer', () => {
+    // The composer attaches files and explains that a folder can't be attached; opening
+    // it as the project as well handled the one drop twice.
+    const card = document.createElement('div')
+    card.className = 'composer__card'
+    document.body.appendChild(card)
+    const notes = new File(['# notes'], 'notes.md', { type: 'text/markdown' })
+    const open = vi.fn()
+    renderHook(() => useFolderDrop(open, (f) => (f === notes ? '/home/me/notes.md' : pathFor(f))))
+    act(() => {
+      window.dispatchEvent(dragEvent('drop', [folder], card))
+      window.dispatchEvent(dragEvent('drop', [notes], card))
+    })
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('still opens a folder dropped outside the composer', () => {
     const card = document.createElement('div')
     card.className = 'composer__card'
     document.body.appendChild(card)
     const open = vi.fn()
     renderHook(() => useFolderDrop(open, pathFor))
     act(() => {
-      window.dispatchEvent(dragEvent('drop', [folder], card))
+      window.dispatchEvent(dragEvent('drop', [folder], document.body))
     })
     expect(open).toHaveBeenCalledWith(['/home/me/proj'])
   })

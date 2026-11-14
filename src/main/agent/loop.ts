@@ -75,6 +75,10 @@ import { runQuarantineExtraction } from './untrusted'
 import { smallModelFor, withSmallModel } from '@shared/smallModel'
 import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
+import { isOllamaProvider, ollamaContextLengthCached, ollamaContextNotice } from '../providers/ollama'
+
+/** How long a run waits on Ollama for the context it runs a model with. */
+const OLLAMA_PROBE_TIMEOUT_MS = 3000
 import { buildSystemPrompt, promptId } from './prompt'
 import { createLiveOutput } from './liveOutput'
 import { applyRunOverrides } from './run-overrides'
@@ -99,6 +103,7 @@ import {
   staleWriteRefusal,
   SHELL_NETWORK_DECLINED_NOTE,
   SHELL_NETWORK_GRANTED_NOTE,
+  BROWSER_SESSION_NAME,
   egressHostAllowedNote,
   egressHostDeclinedNote,
   egressHostUnattendedNote,
@@ -157,6 +162,7 @@ import {
   fullAutoNetworkRead,
   matchRule,
   networkDestination,
+  browserSessionDestination,
   permissionSubject,
   persistedRules,
   isSensitiveWrite,
@@ -222,6 +228,7 @@ import {
 } from './subagentSessions'
 import { reviewWorkspaceChanges, type ReviewHistory } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
+import { BrowserSession, browserBackendOrNull, isBrowserBackendConfigured } from './browserSession'
 import { isMockupBackendConfigured, mockupBackend } from './mockupRender'
 import { withModelImages } from './modelImages'
 import { listenersOnPort } from './portOwner'
@@ -238,9 +245,17 @@ import {
   scheduleCreate,
   scheduleList
 } from './scheduler'
+import { autoBranchFor, getRepoInfo, houstonWorktreeHome } from './worktree'
 import { matchingHooks, notificationFor, runHooks, type HookOutcome, type HookSession } from './hooks'
 import { loadAgents, type CustomAgent } from './agents'
-import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
+import { findSkill, loadSkills, pathTriggeredSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
+import {
+  blockingRestriction,
+  notedSkillNames,
+  skillPathNote,
+  skillRestrictionRefusal,
+  type SkillRestriction
+} from './skillSpec'
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
@@ -1396,6 +1411,8 @@ export async function startRun(
   // Drops the run's egress token (see registerEgressRun) when the run ends, however
   // it ends, so the proxy stops honoring this chat's host grants for a dead run.
   let releaseEgressRun: (() => void) | undefined
+  // The run's browser_session page (desktop only), closed with the run.
+  let browserSession: BrowserSession | undefined
   // The class (and log detail) of the error `emit` is about to send; set by `fail`.
   let failing: { cls: RunEndClass; detail?: string } | undefined
   // The model serving the run, for the log line; moves with a fallback hop.
@@ -1722,6 +1739,7 @@ export async function startRun(
     // can't call.
     const builtinDefs = builtinToolset({
       localhostCapture: localhostCaptureAvailable,
+      browserSession: isBrowserBackendConfigured(),
       // Only the desktop app draws image results as a gallery; in a terminal client
       // show_images and render_mockup would be a list of file names.
       imageGallery: req.imageGallery === true,
@@ -1760,6 +1778,12 @@ export async function startRun(
       await loadSkills(workspace),
       builtinNames
     )
+    // Skills loaded this turn whose `allowed-tools` narrow what runs (see skillSpec.ts).
+    // They only ever narrow: with two active, a tool must be allowed by both.
+    const skillRestrictions: SkillRestriction[] = []
+    // Skills whose `paths:` globs surfaced them already in this conversation, so each
+    // is mentioned once (an earlier run's notes count too).
+    const notedSkills = notedSkillNames(messages.filter((m) => m.role === 'user').map((m) => m.content))
     // Local plugins (.houston/plugins/*.js) register observational lifecycle
     // hooks. They are executable JS run in-process and `vm` is not a security
     // boundary, so they are NEVER auto-run for an opened repo — only when the user
@@ -2128,6 +2152,10 @@ export async function startRun(
     // Persistent shell state for this run: `cd` and exported env carry between
     // foreground run_shell calls so the agent gets "same terminal" behavior.
     const shellSession = createShellSession(workspace)
+    // The same for browser_session: one page per run, opened on its first `open`
+    // (nothing launches until then) and closed in the run's `finally`.
+    const browserBackend = browserBackendOrNull()
+    if (browserBackend) browserSession = new BrowserSession(browserBackend)
     // Watches the roots' exec-capable git state across this run's shell commands,
     // its writable subagents' included (see gitGuard.ts).
     const gitGuard = new GitGuard(gitGuardRoots)
@@ -3217,6 +3245,7 @@ export async function startRun(
       // Undefined on the CLI (no backend wired) so the view_localhost guard reads
       // cleanly; the tool is already filtered out of the schema set above.
       captureLocalhost: localhostCaptureAvailable ? captureLocalhost : undefined,
+      ...(browserSession ? { browserSession } : {}),
       renderMockup: mockupBackend() ?? undefined,
       portListeners: (port) => listenersOnPort(port),
       // The recall tool reads the full, un-compacted log. Return a shallow copy so a
@@ -3230,24 +3259,49 @@ export async function startRun(
         : {}),
       // Back the `skill` tool: resolve a skill name to its full instructions (or a
       // note listing what's available) from the skills loaded for this run.
-      useSkill: (name) => resolveSkillInstructions(workspace, skills, name),
+      useSkill: async (name) => {
+        const text = await resolveSkillInstructions(workspace, skills, name)
+        const skill = findSkill(skills, name)
+        if (skill?.allowedTools?.length && !skillRestrictions.some((r) => r.skill === skill.name)) {
+          skillRestrictions.push({ skill: skill.name, allowedTools: skill.allowedTools })
+        }
+        return text
+      },
       // Back `spawn_session` when a backend is wired (desktop only). Fills in the
       // run-scoped fields the tool doesn't take: provider/model, the workspace, and
       // `run.policy` (read live) so the spawned session inherits the parent's CURRENT
       // approval policy — never more permissive.
       ...(spawnAvailable
         ? {
-            spawnSession: ({
+            spawnSession: async ({
               context,
+              sameCheckout,
               ...input
             }: {
               title?: string
               prompt: string
               worktree?: { branch: string; base?: string }
+              sameCheckout?: boolean
               context?: SessionContext
-            }) =>
-              engineSpawnSession({
+            }) => {
+              // In a git repository a spawned session gets its own worktree unless the
+              // agent opted out, as a started proposal does: two sessions writing one
+              // checkout overwrite each other's changes. It branches from what this chat
+              // has checked out (its own worktree's branch, say), not the main checkout.
+              let worktree = input.worktree
+              if (!worktree && !sameCheckout) {
+                const repo = await getRepoInfo(workspace)
+                // A repository with no commits yet has nothing to branch from.
+                if (repo.isRepo && !repo.unborn) {
+                  worktree = {
+                    branch: autoBranchFor(input.title || input.prompt.split('\n')[0]!),
+                    ...(repo.currentBranch ? { base: repo.currentBranch } : {})
+                  }
+                }
+              }
+              return engineSpawnSession({
                 ...input,
+                ...(worktree ? { worktree } : {}),
                 providerId: req.providerId,
                 model: req.model,
                 approvalPolicy: run.policy,
@@ -3257,7 +3311,8 @@ export async function startRun(
                 // A fork carries this chat's history up to (not including) the turn
                 // that is handing off, which is still mid-call.
                 ...(context === 'fork' ? { history: forkableHistory(messages) } : {})
-              }),
+              })
+            },
             // Bound proposals: a few per turn, and never the same title twice in a
             // chat, so a run can't bury the user in cards.
             proposeSession: ({ title }: { title: string }) => {
@@ -3289,7 +3344,9 @@ export async function startRun(
                   model: req.model,
                   approvalPolicy: run.policy,
                   ...(run.effort !== undefined ? { reasoningEffort: run.effort } : {}),
-                  workspace
+                  // A chat's own worktree is disposable; the schedule outlives it, so it
+                  // targets the same folder in the main checkout.
+                  workspace: houstonWorktreeHome(workspace)
                 }),
               list: () => scheduleList(),
               cancel: (id: string) => scheduleCancel(id)
@@ -3307,6 +3364,8 @@ export async function startRun(
       // ask_user blocks on a human; keep it sequential so its prompt never appears
       // in the middle of a concurrent read batch.
       if (call.name === ASK_USER_NAME) return false
+      // A call an active skill refuses goes the sequential way, where it is refused.
+      if (blockingRestriction(skillRestrictions, call.name)) return false
       const tool = lookupTool(call.name)
       if (!tool) return false
       const ruleAction = matchRun(call.name, permissionSubject(call.name, call.arguments))
@@ -3468,6 +3527,8 @@ export async function startRun(
       costCeilingUsd: settings.costCeilingUsd
     })
     let cumulativeCostUsd = 0
+    // Whether this run has checked the context an Ollama server runs its model with.
+    let ollamaContextChecked = false
     let landed = false
     // A run that is still landing file writes, or still finding things out, gets more
     // room instead of a wrap-up (see shouldExtend): `budget.maxIterations` grows in
@@ -3688,13 +3749,16 @@ export async function startRun(
             // Report a retry in here the same way the turn loop does. Compaction can be
             // forced mid-turn, so without this a summary riding out a blip is just a run
             // sitting silent for the length of the backoff.
-            (attempt, err, max) =>
+            (attempt, err, max) => {
+              const message = redact(describeProviderError(err))
+              log.info(`run ${runId}: summary request retry ${attempt}${max !== undefined ? `/${max}` : ''} on ${serving.providerId}/${model}: ${message}`)
               emit({
                 type: 'retry',
                 attempt,
                 ...(max !== undefined ? { max } : {}),
-                message: redact(describeProviderError(err))
-              }),
+                message
+              })
+            },
             () => providerReached,
             (u) => recordSideRequestUsage(u, model, caps)
           )
@@ -4003,6 +4067,25 @@ export async function startRun(
 
       let sendMessages = buildWindow()
 
+      // Ollama runs a model with the context it was loaded with, not the model's own,
+      // and cuts a longer prompt from the front without an error. Check once per run,
+      // on the first request (later ones only grow), and say so with the fix.
+      if (!ollamaContextChecked) {
+        ollamaContextChecked = true
+        const cfg = getProvider(route.providerId)
+        if (cfg && isOllamaProvider(cfg) && cfg.baseUrl) {
+          const probe = await ollamaContextLengthCached(
+            cfg.baseUrl,
+            route.model,
+            AbortSignal.any([abort.signal, AbortSignal.timeout(OLLAMA_PROBE_TIMEOUT_MS)])
+          ).catch(() => null)
+          const needed = estimateTokens(system, sendMessages) + toolTokens
+          if (probe && probe.contextLength < needed) {
+            emit({ type: 'notice', message: ollamaContextNotice(route.model, probe.contextLength, needed) })
+          }
+        }
+      }
+
       // Re-read the thinking controls fresh each model turn rather than using the
       // run-start `settings` snapshot, so changing the reasoning level mid-run takes
       // effect on the next turn. This mirrors the live approval policy; the natural
@@ -4253,6 +4336,10 @@ export async function startRun(
           const max = retries.reportedMax
           const waitMs = retryDelayMs(e, attempt + 1)
           const throttle = throttleInfo(e, waitMs)
+          log.info(
+            `run ${runId}: provider retry ${attempt + 1}${max !== undefined ? `/${max}` : ''} on ` +
+              `${serving.providerId}/${serving.model} in ${waitMs}ms: ${redact(reason)}`
+          )
           emit({
             type: 'retry',
             attempt: attempt + 1,
@@ -4941,6 +5028,11 @@ export async function startRun(
           // Attributed to the managed tier when it originates there (see ruleDenialText).
           output = ruleDenialText(call.name, call.arguments)
           ok = false
+        } else if (blockingRestriction(skillRestrictions, call.name)) {
+          // An active skill's `allowed-tools` leaves this tool out: refused before any
+          // hook or approval, the way a deny rule is. It can only narrow, never allow.
+          output = skillRestrictionRefusal(blockingRestriction(skillRestrictions, call.name)!, call.name)
+          ok = false
         } else if (isBlockedByPlan(run.policy, tool)) {
           output =
             'Blocked: Houston is in Plan mode (read-only). Do not modify files, run commands, or change remote/PR state. Finish your plan and present it; the user will switch off Plan mode to let you carry it out.'
@@ -5049,7 +5141,14 @@ export async function startRun(
             // call so a remote changed mid-chat gets a key (and a prompt) of its own.
             const ghRepoCall = tool.kind === 'network' && call.name.startsWith('gh_')
             const ghRepo = ghRepoCall ? await ghRepoKey(workspace) : null
-            const netDest = tool.kind === 'network' ? networkDestination(call.name, execArgs, ghRepo) : null
+            // A browser_session call reaches the page the session is on, which only the
+            // run knows, so it is keyed from that (an open, from its own URL).
+            const netDest =
+              tool.kind !== 'network'
+                ? null
+                : call.name === BROWSER_SESSION_NAME
+                  ? browserSessionDestination(execArgs, browserSession?.currentUrl() ?? null)
+                  : networkDestination(call.name, execArgs, ghRepo)
             const kindOverride =
               netDest !== null ? run.networkHosts.has(netDest) : run.override.has(tool.kind)
             const { mustApprove, unsandboxedShell } = decideApproval({
@@ -5422,6 +5521,14 @@ export async function startRun(
         return
       }
       if (observeStall()) return
+      // A skill whose `paths:` globs match a file this step touched is named to the
+      // model once, as a note after the results: the prompt and everything before it
+      // stay byte-identical, so the provider cache keeps them.
+      const pathNote = skillPathNote(pathTriggeredSkills(skills, workspace, toolCalls, notedSkills))
+      if (pathNote) {
+        messages.push(systemNoteMessage(pathNote))
+        persist(messages)
+      }
     }
 
     // Fell off the end of the iteration budget — the agent stopped mid-task rather
@@ -5443,6 +5550,8 @@ export async function startRun(
   } finally {
     // This run's MCP servers no longer count as in use (see liveRuns in mcp/manager).
     releaseMcpRun(runId)
+    // The browser_session page lives exactly as long as the run.
+    browserSession?.close()
     // A turn stopped mid-tool — the user hit Stop, or an exception unwound after
     // the assistant `tool_use` was persisted but before its result — would leave a
     // dangling tool call that makes the conversation un-continuable. Pair any

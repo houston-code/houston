@@ -90,6 +90,11 @@ export interface ReasoningBlock {
    * an `id` without it is a dangling reference to a response we never stored.
    */
   encryptedContent?: string
+  /**
+   * Chat Completions hosts that return structured reasoning (OpenRouter): the reply's
+   * `reasoning_details`, whole, sent back verbatim on later requests.
+   */
+  details?: Array<Record<string, unknown>>
 }
 
 /** A non-image document (e.g. a PDF) attached to a message, base64-encoded. */

@@ -44,18 +44,42 @@ export function sanitizeServerId(id: string): string {
 }
 
 /**
+ * Parse a textarea of "Name: value" lines into a map, plus the non-blank lines that
+ * could not be read (no separator, or nothing before it), so an editor can keep and
+ * flag them instead of silently dropping them. Keys and values are trimmed.
+ *
+ * Headers split on the first `:`. Environment variables (`env`) also take the
+ * `NAME=value` form a shell or `.env` file uses, splitting on whichever of `=` and
+ * `:` comes first: a variable name never contains either, while a value often does
+ * (`DATABASE_URL=postgres://u:p@h`).
+ */
+export function parseKeyValueLines(
+  text: string,
+  opts: { env?: boolean } = {}
+): { values: Record<string, string>; invalid: string[] } {
+  const values: Record<string, string> = {}
+  const invalid: string[] = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    const colon = line.indexOf(':')
+    const equals = opts.env ? line.indexOf('=') : -1
+    const idx = colon === -1 ? equals : equals === -1 ? colon : Math.min(colon, equals)
+    const key = idx > 0 ? line.slice(0, idx).trim() : ''
+    if (!key) {
+      invalid.push(line.trim())
+      continue
+    }
+    values[key] = line.slice(idx + 1).trim()
+  }
+  return { values, invalid }
+}
+
+/**
  * Parse a textarea of "Name: value" lines into an HTTP headers map. Blank lines
  * and lines without a colon are skipped; keys/values are trimmed.
  */
 export function parseHeaderLines(text: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const line of text.split('\n')) {
-    const idx = line.indexOf(':')
-    if (idx <= 0) continue
-    const key = line.slice(0, idx).trim()
-    if (key) out[key] = line.slice(idx + 1).trim()
-  }
-  return out
+  return parseKeyValueLines(text).values
 }
 
 // ---- Elicitation (server asks the user for input mid-call) ----

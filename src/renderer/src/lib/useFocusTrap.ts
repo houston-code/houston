@@ -61,3 +61,34 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, onClose: () => 
     // the trap arms once per mount and survives parent re-renders (see docblock).
   }, [ref])
 }
+
+/**
+ * Give Escape inside `ref` (an inline editor in a dialog: a draft form, a pasted-text
+ * panel) to that editor, so it cancels the editor rather than closing the whole
+ * dialog and discarding the draft with it. The listener sits on the editor, which
+ * the keydown reaches before the dialog's trap above it. `onEscape` returns false to
+ * let the key through (nothing to cancel), and the dialog closes as usual.
+ */
+export function useEscapeWithin(ref: RefObject<HTMLElement | null>, onEscape: () => boolean | void): void {
+  const onEscapeRef = useRef(onEscape)
+  onEscapeRef.current = onEscape
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.isComposing || e.defaultPrevented) return
+      const dialog = el.closest<HTMLElement>('[role="dialog"]')
+      if (onEscapeRef.current() === false) return
+      e.preventDefault()
+      e.stopPropagation()
+      // Cancelling usually unmounts the editor along with the focused field; keep
+      // focus in the dialog so the next Escape (and Tab) still reach it.
+      requestAnimationFrame(() => {
+        const active = document.activeElement
+        if (dialog?.isConnected && (!active || active === document.body)) dialog.focus()
+      })
+    }
+    el.addEventListener('keydown', onKeyDown)
+    return () => el.removeEventListener('keydown', onKeyDown)
+  }, [ref])
+}

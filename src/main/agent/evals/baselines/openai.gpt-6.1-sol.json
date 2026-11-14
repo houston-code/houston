@@ -9,7 +9,7 @@
     "cache-stale-after-outage": 0.3333333333333333,
     "callbacks-to-promises": 1,
     "ci-flake-or-bug": 1,
-    "concurrent-edits-diverge": 0.6666666666666666,
+    "concurrent-edits-diverge": 0.3333333333333333,
     "crlf-sales-report": 1,
     "extraction-job-stuck": 1,
     "file-names-with-spaces": 1,

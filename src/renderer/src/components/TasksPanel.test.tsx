@@ -194,6 +194,38 @@ describe('TasksPanel', () => {
     expect(screen.getByText('Shell · Started just now · backend/')).toBeInTheDocument()
   })
 
+  it('reads a terminal that exited non-zero as failed, and a stopped shell without the failure mark', () => {
+    setup([
+      { ...terminal, status: 'error', exitCode: 2, finishedAt: NOW },
+      { ...failed, id: 'dddd4444', exitCode: null, finishedAt: NOW }
+    ])
+    expect(screen.getByText('Terminal · Failed (exit 2) just now')).toBeInTheDocument()
+    const stopped = screen.getByText('Shell · Stopped just now').closest('.tasks__row') as HTMLElement
+    expect(stopped.querySelector('.tasks__status--stopped')).not.toBeNull()
+    expect(stopped.querySelector('.tasks__status--error')).toBeNull()
+    const term = screen.getByText(/Terminal · Failed/).closest('.tasks__row') as HTMLElement
+    expect(term.querySelector('.tasks__status--error')).not.toBeNull()
+  })
+
+  it('moves "Started just now" on to "Running for 2m" while the tab shows', () => {
+    vi.useFakeTimers()
+    let clock = NOW
+    const props = {
+      onStop: vi.fn(async () => 'killed' as const),
+      onOpenPreview: vi.fn(),
+      onGoToChat: vi.fn(),
+      onOpenTerminal: vi.fn(),
+      onClearFinished: vi.fn()
+    }
+    render(<TasksPanel tasks={[{ ...server, startedAt: NOW }]} active now={() => clock} {...props} />)
+    expect(screen.getByText('Shell · Started just now · backend/')).toBeInTheDocument()
+    clock = NOW + 2 * 60_000
+    act(() => {
+      vi.advanceTimersByTime(30_000)
+    })
+    expect(screen.getByText('Shell · Running for 2m · backend/')).toBeInTheDocument()
+  })
+
   it('says so when the Stop request itself fails', async () => {
     const p = setup([server])
     p.onStop.mockRejectedValueOnce(new Error('ipc down') as never)

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { AppSettings, ModelOption, ProviderConfig } from '@shared/types'
 import { summarizeFetch, type FetchSummary } from '@shared/model-listing'
 import {
@@ -26,7 +26,8 @@ import {
   type CatalogEntry
 } from '@shared/provider-catalog'
 import { isMacPlatform } from '../../../lib/shortcuts'
-import { HeadersField, ModelsField, SettingsSection } from '../fields'
+import { useEscapeWithin } from '../../../lib/useFocusTrap'
+import { HeadersField, ModelsField, NumberField, SettingsSection } from '../fields'
 import { VerifySuggestion } from './verifySuggestion'
 import { SmallModelField } from './smallModelField'
 import type { SettingsCtx } from '../context'
@@ -215,7 +216,14 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           {p.kind !== 'vertex' && (
             <label className="field">
               <span>API key</span>
-              <div className="field__row">
+              {/* A form, so Enter in the box saves the key. */}
+              <form
+                className="field__row"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (keyInputs[p.id]?.trim()) void saveKey(p.id)
+                }}
+              >
                 <input
                   type="password"
                   placeholder={
@@ -231,14 +239,15 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   }
                 />
                 <button
+                  type="submit"
                   className="btn btn--sm"
-                  disabled={busy === p.id}
-                  onClick={() => saveKey(p.id)}
+                  disabled={busy === p.id || !keyInputs[p.id]?.trim()}
                 >
                   Save
                 </button>
                 {p.hasKey && (
                   <button
+                    type="button"
                     className="btn btn--sm btn--danger"
                     disabled={busy === p.id}
                     onClick={() => removeKey(p.id)}
@@ -246,7 +255,7 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                     Remove
                   </button>
                 )}
-              </div>
+              </form>
             </label>
           )}
 
@@ -294,6 +303,13 @@ export function AddProviderSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
   const [newLabel, setNewLabel] = useState('')
   const [newUrl, setNewUrl] = useState('')
+  // Escape in a half-filled custom endpoint clears it rather than closing Settings.
+  const endpointRef = useRef<HTMLDivElement>(null)
+  useEscapeWithin(endpointRef, () => {
+    if (!newLabel && !newUrl) return false
+    setNewLabel('')
+    setNewUrl('')
+  })
 
   // Known-host catalog for the "Add a provider" picker. Platform-filtered (e.g. the
   // Apple-Silicon oMLX preset is hidden off macOS); hosts already present are shown
@@ -373,7 +389,7 @@ export function AddProviderSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
         </select>
       </label>
 
-      <div className="add-endpoint">
+      <div className="add-endpoint" ref={endpointRef}>
         <input
           placeholder="Custom label (e.g. My vLLM)"
           value={newLabel}
@@ -480,20 +496,11 @@ export function ContextWindowSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
           (~4 bytes ≈ 1 token). Stops one runaway command from flooding the context
           window.
         </span>
-        <input
-          type="number"
+        <NumberField
           min={1000}
           step={1000}
           value={settings.shellOutputMaxBytes ?? DEFAULT_SHELL_OUTPUT_MAX_BYTES}
-          onChange={(e) =>
-            setSettings((s) => ({
-              ...s,
-              shellOutputMaxBytes: Math.max(
-                1000,
-                Math.floor(Number(e.target.value) || 0)
-              )
-            }))
-          }
+          onChange={(n) => setSettings((s) => ({ ...s, shellOutputMaxBytes: n }))}
         />
       </label>
     </SettingsSection>
@@ -513,15 +520,14 @@ export function LoopControlSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           reminded to finish or summarize, so it lands cleanly instead of being cut off
           mid-edit.
         </span>
-        <input
-          type="number"
+        <NumberField
           min={1}
           step={1}
           value={settings.maxIterations ?? DEFAULT_MAX_ITERATIONS}
-          onChange={(e) =>
+          onChange={(n) =>
             setSettings((s) => ({
               ...s,
-              maxIterations: Math.max(1, Math.floor(Number(e.target.value) || 0)),
+              maxIterations: n,
               // Pin the keep-going switch to what it showed, so setting a cap
               // never silently turns extension off (see autoExtendTurnsEnabled).
               autoExtendTurns: autoExtendTurnsEnabled(s)
@@ -546,17 +552,11 @@ export function LoopControlSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
       {autoExtendTurnsEnabled(settings) && (
         <label className="field">
           <span>Never run a single turn past this many steps, however productive.</span>
-          <input
-            type="number"
+          <NumberField
             min={1}
             step={10}
             value={settings.maxIterationsCeiling ?? DEFAULT_ITERATION_CEILING}
-            onChange={(e) =>
-              setSettings((s) => ({
-                ...s,
-                maxIterationsCeiling: Math.max(1, Math.floor(Number(e.target.value) || 0))
-              }))
-            }
+            onChange={(n) => setSettings((s) => ({ ...s, maxIterationsCeiling: n }))}
           />
         </label>
       )}
@@ -784,7 +784,13 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   <span className="provider__key-ok pill pill--ok">key set ✓</span>
                 )}
               </span>
-              <div className="field__row">
+              <form
+                className="field__row"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (keyInputs[selected.keyId]?.trim()) void saveKey(selected.keyId)
+                }}
+              >
                 <input
                   type="password"
                   placeholder={keySet ? '•••••••• (stored)' : selected.keyPlaceholder}
@@ -794,14 +800,15 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   }
                 />
                 <button
+                  type="submit"
                   className="btn btn--sm"
-                  disabled={busy === selected.keyId}
-                  onClick={() => saveKey(selected.keyId)}
+                  disabled={busy === selected.keyId || !keyInputs[selected.keyId]?.trim()}
                 >
                   Save
                 </button>
                 {keySet && (
                   <button
+                    type="button"
                     className="btn btn--sm btn--danger"
                     disabled={busy === selected.keyId}
                     onClick={() => removeKey(selected.keyId)}
@@ -809,7 +816,7 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                     Remove
                   </button>
                 )}
-              </div>
+              </form>
               <p className="set-section__desc">
                 Get a key at{' '}
                 <a href={selected.keyUrl} target="_blank" rel="noreferrer">

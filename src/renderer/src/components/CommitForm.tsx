@@ -14,6 +14,7 @@ export function CommitForm({
   conversationId = null,
   hasChanges,
   busy = false,
+  refreshSignal = 0,
   onChanged
 }: {
   workspace: string
@@ -23,6 +24,8 @@ export function CommitForm({
   hasChanges: boolean
   /** A run is going: committing under it would race its edits. */
   busy?: boolean
+  /** Bumped whenever the Changes view re-reads the working tree, to re-read the branch too. */
+  refreshSignal?: number
   /** A commit or push changed the repository; reload whatever shows it. */
   onChanged: () => void
 }): JSX.Element | null {
@@ -40,7 +43,7 @@ export function CommitForm({
   }, [workspace])
   useEffect(() => {
     void loadSync()
-  }, [loadSync, hasChanges])
+  }, [loadSync, hasChanges, refreshSignal])
 
   // A rejected call (the main process threw) still says what went wrong, rather than
   // leaving an unhandled rejection and a form that looks like nothing happened.
@@ -99,9 +102,10 @@ export function CommitForm({
 
   const canPush = Boolean(sync?.branch && (sync.upstream ? sync.ahead > 0 : sync.remote && sync.ahead > 0))
   if (!hasChanges && !canPush && !status) return null
+  const ahead = (sync?.ahead ?? 0).toLocaleString()
   const pushLabel = !sync?.upstream
     ? 'Publish branch'
-    : `Push ${sync.ahead} commit${sync.ahead === 1 ? '' : 's'}`
+    : `Push ${ahead} commit${sync.ahead === 1 ? '' : 's'}`
   const pushTitle = !sync?.upstream
     ? `Push ${sync?.branch ?? 'this branch'} to ${sync?.remote ?? 'the remote'} for the first time`
     : `Push ${sync.branch} to ${sync.upstream}`
@@ -156,7 +160,8 @@ export function CommitForm({
       {!hasChanges && canPush && (
         <div className="commit-form__row">
           <span className="commit-form__note">
-            {sync?.branch} has {sync?.ahead} commit{sync?.ahead === 1 ? '' : 's'} not on {sync?.upstream ?? 'the remote'}.
+            {sync?.branch} has {ahead} commit{sync?.ahead === 1 ? '' : 's'} not on{' '}
+            {sync?.upstream ?? sync?.remote ?? 'the remote'}.
           </span>
           <button type="button" className="btn btn--sm" onClick={() => void push()} disabled={!idle} title={pushTitle}>
             {working === 'push' ? 'Pushing…' : pushLabel}

@@ -43,7 +43,7 @@ import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps } from './
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
-import { loadCommands } from './agent/commands'
+import { loadSlashCommands } from './agent/commands'
 import { compactConversationNow } from './agent/compact'
 import {
   getConversationCheckpoint,
@@ -595,7 +595,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // already knew their names. Loaded once; the menu redraws on every keystroke and
   // must not touch the disk.
   let menuCommands: CommandSpec[] = [...COMMANDS]
-  void loadCommands(tui.cwd)
+  void loadSlashCommands(tui.cwd)
     .then((custom) => {
       menuCommands = mergeCommands(COMMANDS, custom).map((c) => ({
         name: c.name,
@@ -780,7 +780,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         }
       },
       // Custom slash commands from the workspace's .houston/commands (for /<name>).
-      commands: () => loadCommands(tui.cwd),
+      commands: () => loadSlashCommands(tui.cwd),
       // On-demand context compaction for the /compact command.
       compact: (id, providerId, model, opts) => compactConversationNow(id, providerId, model, opts),
       // Settings editing for /hooks and /mcp (writes the shared settings.json, 0600).
@@ -1099,7 +1099,7 @@ export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
           title: (id) => peekConversation(id)?.title
         },
         // The workspace's own slash commands, skills and agents, read fresh each time.
-        commands: (cwd) => loadCommands(cwd),
+        commands: (cwd) => loadSlashCommands(cwd),
         skills: async (cwd) => (await loadSkills(cwd)).map((k) => ({ name: k.name, description: k.description })),
         agents: async (cwd) => (await loadAgents(cwd)).map((a) => ({ name: a.name, description: a.description })),
         compact: (id, providerId, model) => compactConversationNow(id, providerId, model)

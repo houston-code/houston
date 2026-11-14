@@ -47,6 +47,16 @@ describe('issueReportBody', () => {
     expect(body).toContain('anthropic warn, openai warn')
   })
 
+  it('names recent crash dumps by file name only, and says they stay local', () => {
+    expect(body).not.toContain('### Crash reports')
+    const withDumps = issueReportBody(facts(), ['a1b2.dmp', 'c3d4.dmp'])
+    expect(withDumps).toContain('### Crash reports')
+    expect(withDumps).toContain('2 crash dumps on this computer recently: `a1b2.dmp`, `c3d4.dmp`.')
+    expect(withDumps).toContain('never sent')
+    expect(issueReportBody(facts(), ['one.dmp'])).toContain('a crash dump on this computer recently: `one.dmp`.')
+    expect(withDumps).not.toContain('\u2014')
+  })
+
   it('carries no detail text, paths, keys, or names the user chose', () => {
     for (const leak of [
       '/home/someone',
