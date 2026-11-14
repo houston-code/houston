@@ -16,11 +16,15 @@ describe('queueBarLabel', () => {
       '2 steering · the agent reads them before its next step'
     )
     expect(queueBarLabel([q('a', true), q('b')], true)).toBe(
-      '1 steering, 1 queued · steers land before the next step, the rest after this run'
+      '1 steering, 1 queued · the steer lands before the next step, the queued one after this run'
+    )
+    expect(queueBarLabel([q('a', true), q('b', true), q('c'), q('d')], true)).toBe(
+      '2 steering, 2 queued · steers land before the next step, the rest after this run'
     )
   })
 
   it('offers to send or clear what a stopped run left behind', () => {
     expect(queueBarLabel([q('a'), q('b')], false)).toBe('2 queued · the run stopped: send them now or clear them')
+    expect(queueBarLabel([q('a')], false)).toBe('1 queued · the run stopped: send it now or clear it')
   })
 })

@@ -84,6 +84,7 @@ import { isDirectory, LastChatStore, launchChat } from './lastChat'
 import { applyAppBadge, attentionCount, dotPng } from './appBadge'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
+import { providerQuotas } from './providers/quota'
 import {
   cancelRun,
   resolveApproval,
@@ -154,7 +155,7 @@ import {
 import { cancelCompaction, compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
-import { loadCommands } from './agent/commands'
+import { loadSlashCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
 import { registerCustomizeIpc } from './customizeIpc'
@@ -670,7 +671,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Scheduled runs: persist under userData, fire through the spawn backend just
   // wired above (a fired occurrence is an ordinary background session in the
   // sidebar). start() also catches up occurrences missed while the app was closed.
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome) })
+  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask') })
   setSchedulerBackend(scheduler)
   // Its catch-up run needs the provider keys, so not before the credential store is ready.
   afterReady(() => scheduler.start())
@@ -1031,7 +1032,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.commandsList, async (_event, workspace: string) => {
     if (!workspace) return []
     try {
-      return await loadCommands(realpathSync(workspace))
+      return await loadSlashCommands(realpathSync(workspace))
     } catch {
       return []
     }
@@ -1179,6 +1180,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.settingsTestKey, (_event, providerId: unknown, key: unknown) =>
     testProviderKey(providerId, key)
   )
+
+  // The quota each provider's latest response reported (its ratelimit headers), for a
+  // quota readout. In-memory and read-only: it carries no key or request content.
+  handle(IPC.providerQuotas, () => providerQuotas())
 
   // Preflight: does this local model support tool calling? Only meaningful for an
   // Ollama-style (openai-compatible) provider; anything else returns null (unknown)
@@ -1433,7 +1438,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return { deleted: true, worktree }
     }
   )
-  // Rename / pin / archive / move-to-group. Does not affect the recency ordering.
+  // Rename / pin / archive / move-to-group / set labels. Does not affect the recency ordering.
   // Archiving also removes the chat's worktree when that loses nothing (clean and
   // merged); awaited so the list the renderer re-reads next already shows the chat
   // back at its repo root.
@@ -1442,7 +1447,13 @@ export function registerIpc(ready?: Promise<unknown>): void {
     async (
       _event,
       id: string,
-      patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
+      patch: {
+        title?: string
+        pinned?: boolean
+        archived?: boolean
+        groupId?: string | null
+        labels?: string[]
+      }
     ) => {
       organizeConversation(id, patch)
       if (patch.archived !== true) return

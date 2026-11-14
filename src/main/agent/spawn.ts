@@ -130,6 +130,14 @@ export interface SpawnSessionInput {
    */
   startedBy?: 'agent' | 'user'
   /**
+   * Set when the text handed off may carry someone else's words: the spawning chat had
+   * taken in outside text (see memoryTaintSource), or a schedule created from such a
+   * chat fired. Names the source, and is stored on the seeded message
+   * ({@link ChatMessage.taintSource}) so the new session's memory writes and launches
+   * still ask: its first message reads as the user's, with no tainting call in its log.
+   */
+  taintSource?: string
+  /**
    * Called once when the session's background run settles, however it ended (its
    * outcome is then on the chat's log). Lets a scheduled run record how it went.
    */

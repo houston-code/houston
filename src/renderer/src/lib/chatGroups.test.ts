@@ -7,6 +7,7 @@ import {
   dateBucket,
   descendantsOf,
   dropIndexForY,
+  filterByLabels,
   nestSpawned,
   newGroupId,
   reorderedIds
@@ -333,5 +334,87 @@ describe('automatic sections', () => {
       ['auto', 'Today', false, ['t']],
       ['auto', 'Older', true, ['o']]
     ])
+  })
+})
+
+describe('label filters', () => {
+  const groups: ChatGroup[] = [{ id: 'g1', name: 'Work' }]
+  const chats = [
+    conv('bug', 5, { groupId: 'g1', labels: ['l-bug'] }),
+    conv('both', 4, { groupId: 'g1', labels: ['l-bug', 'l-wip'] }),
+    conv('wip', 3, { groupId: 'g1', labels: ['l-wip'] }),
+    conv('plain', 2, { groupId: 'g1' }),
+    conv('loose', 1, { labels: ['l-wip'] })
+  ]
+  const ids = (list: ConversationMeta[]): string[] => list.map((c) => c.id)
+
+  it('leaves every section whole when nothing is filtered, and lists the labels it carries', () => {
+    const [work, ungrouped] = buildSidebarSections(chats, groups)
+    expect(ids(work.conversations)).toEqual(['bug', 'both', 'wip', 'plain'])
+    expect(work).toMatchObject({ total: 4, labelFilter: [] })
+    expect(work.labelIds.sort()).toEqual(['l-bug', 'l-wip'])
+    expect(ungrouped.labelIds).toEqual(['l-wip'])
+  })
+
+  it('keeps the chats carrying any of the section’s labels, in their usual order', () => {
+    const [work] = buildSidebarSections(chats, groups, {}, undefined, undefined, { g1: ['l-bug'] })
+    expect(ids(work.conversations)).toEqual(['bug', 'both'])
+    expect(work).toMatchObject({ total: 4, labelFilter: ['l-bug'] })
+    // The labels on offer still come from the whole section, not just what passed.
+    expect(work.labelIds.sort()).toEqual(['l-bug', 'l-wip'])
+    const [either] = buildSidebarSections(chats, groups, {}, undefined, undefined, { g1: ['l-bug', 'l-wip'] })
+    expect(ids(either.conversations)).toEqual(['bug', 'both', 'wip'])
+  })
+
+  it('filters each section on its own', () => {
+    const sections = buildSidebarSections(chats, groups, {}, undefined, undefined, { ungrouped: ['l-bug'] })
+    expect(ids(sections[0].conversations)).toEqual(['bug', 'both', 'wip', 'plain'])
+    expect(sections[1]).toMatchObject({ kind: 'ungrouped', total: 1, conversations: [] })
+  })
+
+  it('keeps a filtered group on screen even when nothing in it matches', () => {
+    const [work] = buildSidebarSections(chats, groups, {}, undefined, undefined, { g1: ['l-none'] })
+    expect(work).toMatchObject({ kind: 'group', total: 4, conversations: [] })
+  })
+
+  it('filters pinned and automatic sections by their own ids', () => {
+    const pinned = buildSidebarSections(
+      [conv('p1', 2, { pinned: true, labels: ['x'] }), conv('p2', 1, { pinned: true })],
+      [],
+      {},
+      undefined,
+      undefined,
+      { pinned: ['x'] }
+    )
+    expect(ids(pinned[0].conversations)).toEqual(['p1'])
+    const auto = buildSidebarSections(
+      [conv('a', 2, { labels: ['x'] }), conv('b', 1)],
+      [],
+      {},
+      undefined,
+      { by: 'folder', now: 10 },
+      { 'auto:folder:/ws': ['x'] }
+    )
+    expect(auto[0]).toMatchObject({ id: 'auto:folder:/ws', total: 2 })
+    expect(ids(auto[0].conversations)).toEqual(['a'])
+  })
+
+  it('keeps a parent whose spawned chat matches, with its whole tree', () => {
+    const tree = [
+      conv('parent', 3),
+      conv('child', 2, { spawnedFrom: { conversationId: 'parent', title: 'parent' }, labels: ['x'] }),
+      conv('other', 1)
+    ]
+    const [section] = buildSidebarSections(tree, [], {}, undefined, undefined, { ungrouped: ['x'] })
+    expect(ids(section.conversations)).toEqual(['parent'])
+    expect(ids(section.children.parent)).toEqual(['child'])
+    expect(section.labelIds).toEqual(['x'])
+  })
+
+  it('filterByLabels passes everything for an empty filter and ignores chats with no labels', () => {
+    const list = [conv('a', 1, { labels: ['x'] }), conv('b', 1)]
+    expect(filterByLabels(list, [], {})).toBe(list)
+    expect(ids(filterByLabels(list, ['x'], {}))).toEqual(['a'])
+    expect(ids(filterByLabels(list, ['y'], {}))).toEqual([])
   })
 })

@@ -9,10 +9,14 @@
 // The hook fires once per (platform, arch) and copies exactly the right one, and it
 // THROWS if the sub-package is missing (electron-builder would only warn and ship a
 // broken app). The pure planners are unit-tested without ever packaging.
+//
+// The same hook then flips the Electron fuses (scripts/electron-fuses.mjs), which also
+// differ per platform and so can't use electron-builder's top-level `electronFuses`.
 
 import { copyFileSync, chmodSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { scrubNativePaths } from './scrub-native-paths.mjs'
+import { flipFusesForPack } from './electron-fuses.mjs'
 
 /**
  * Single source of truth for the per-(os,arch) vendored binary layout. Verified
@@ -100,4 +104,9 @@ export default async function afterPack(context) {
     const scrubbed = scrubNativePaths(unpacked, electronPlatformName, { root })
     console.log(`✓ scrubbed build paths from ${scrubbed.length} native binaries`)
   }
+
+  // Last, so the macOS ad-hoc re-sign it triggers covers everything changed above; still
+  // before electron-builder signs. See electron-fuses.mjs.
+  await flipFusesForPack(context)
+  console.log(`✓ flipped Electron fuses for ${electronPlatformName}`)
 }

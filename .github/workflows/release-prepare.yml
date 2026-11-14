@@ -231,13 +231,13 @@ jobs:
       # from the current closure, rather than shipping it stale.
       - name: Check THIRD-PARTY-NOTICES.md is current
         run: npm run notices:check
-      - name: Generate release notes
+      # The token-holding half of the notes: list this version's PRs and read each one with
+      # `gh`, into prs.json. Only first-party code runs here (git, gh, our own scripts, which
+      # import nothing from node_modules), so GH_TOKEN (contents: write) never shares an
+      # environment with the third-party SDK the AI generator loads in the next step.
+      - name: Collect the release's PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # When set, notes are AI-generated from the PR bodies; otherwise (or if the call
-          # fails) we fall back to the deterministic title-bucketing generator. Either way the
-          # notes land in the human-reviewed release PR before they ship.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
           git fetch --quiet --tags origin '+refs/heads/main:refs/remotes/origin/main'
@@ -252,6 +252,17 @@ jobs:
               || echo "::warning::Couldn't read PR #$n; it is left out of the draft notes."
           done
           node -e "const fs=require('fs');const l=fs.readFileSync('prs.jsonl','utf8').split('\n').filter(Boolean).map(JSON.parse);fs.writeFileSync('prs.json',JSON.stringify(l))"
+          rm -f prs.jsonl
+      # Writes the notes from prs.json with no GitHub token in reach: the AI generator loads
+      # @anthropic-ai/sdk (third-party code) and gets only the model key it needs.
+      - name: Generate release notes
+        env:
+          # When set, notes are AI-generated from the PR bodies; otherwise (or if the call
+          # fails) we fall back to the deterministic title-bucketing generator. Either way the
+          # notes land in the human-reviewed release PR before they ship.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
           if [ -n "$ANTHROPIC_API_KEY" ]; then
             if ! node scripts/ai-release-notes.mjs < prs.json > .release-section.md; then
               echo "::warning::AI note generation failed; falling back to the deterministic generator."
@@ -264,7 +275,7 @@ jobs:
           # Replace this version's section if the line already has one (an update), otherwise
           # insert it in version order.
           node scripts/changelog-upsert.mjs "$VERSION" .release-section.md CHANGELOG.md
-          rm -f prs.json prs.jsonl .release-section.md
+          rm -f prs.json .release-section.md
           # Each section opens with ONE summary sentence of at most 120 characters (it heads
           # the release notes and the in-app update notice). Release - publish refuses a summary
           # that misses, so flag it here for the PR reviewer.
@@ -276,7 +287,8 @@ jobs:
       # reopens its release PR with the PAT: the `reopened` event runs the checks on the new
       # commit, and the PR keeps its number and conversation. Neither token is persisted to
       # .git/config, and neither is in the environment of the earlier npm install /
-      # note-generation steps, which run third-party code.
+      # note-generation steps, which run third-party code (the workflow token reaches only
+      # "Collect the release's PRs", which runs gh and first-party scripts).
       - name: Open release PR
         env:
           PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -9,7 +9,8 @@ import {
   type SpawnSessionInput,
   type SpawnSessionResult
 } from './agent/spawn'
-import { parseContextArg, parseWorktreeArg } from './agent/tools'
+import { getTool, parseContextArg, parseWorktreeArg } from './agent/tools'
+import { memoryTaintSource } from './agent/memoryTools'
 import { autoBranchFor, getRepoInfo } from './agent/worktree'
 import { getConversation, setProposalState } from './conversations'
 
@@ -144,6 +145,12 @@ async function spawnProposal(
   const worktree =
     args.worktree ?? ((await deps.isGitRepo(conv.workspace)) ? { branch: autoBranchFor(args.title) } : undefined)
 
+  // The proposal's prompt is the model's words. When the proposing chat had read
+  // outside text, the new session must know it, or its first message (which reads as
+  // the user's) would launder an injected instruction past the memory taint rule.
+  // Starting it is the user's click, but that click approves the session, not every
+  // memory it might save from that text.
+  const taintSource = memoryTaintSource(conv.messages, (n) => getTool(n)?.kind, callId)
   const result = await deps.spawn({
     title: args.title,
     prompt: args.prompt,
@@ -155,6 +162,7 @@ async function spawnProposal(
     parentConversationId: conv.id,
     // The user's own click: exempt from the cap on agent-started sessions.
     startedBy: 'user',
+    ...(taintSource ? { taintSource } : {}),
     ...(worktree ? { worktree } : {}),
     ...(args.context === 'fork' ? { history: forkableHistory(conv.messages) } : {})
   })

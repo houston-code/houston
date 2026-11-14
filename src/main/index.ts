@@ -36,6 +36,7 @@ import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation }
 import { parseHeadlessArgs } from './headless'
 import { drainStdio } from './stdioDrain'
 import { parseTuiArgs } from './tui'
+import { parseAcpArgs } from './acp'
 import { runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from './terminalEntry'
 import { activeBackendId } from './sandbox'
 import { trustSystemCertificates } from './system-ca'
@@ -290,7 +291,13 @@ if (acp) {
   app.whenReady().then(async () => {
     trustSystemCertificates()
     await initSecrets()
-    const code = await runAcpEntry({ version: app.getVersion() })
+    const launch = parseAcpArgs(process.argv.slice(1))
+    if ('error' in launch) {
+      process.stderr.write(`Houston: ${launch.error}\n`)
+      app.exit(await flushBeforeExit(2))
+      return
+    }
+    const code = await runAcpEntry({ version: app.getVersion() }, launch)
     app.exit(await flushBeforeExit(code))
   })
 } else if (tui) {

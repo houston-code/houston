@@ -1158,6 +1158,35 @@ describe('sub-prompts and the picker after the composer', () => {
     expect(stdin.listenerCount('keypress')).toBeGreaterThan(0)
   })
 
+  it('a filtering picker takes typed keys, Backspace and Ctrl actions in order', async () => {
+    const stdin = fakeTty()
+    const written: string[] = []
+    const io = createTerminalIo({ stdin, createInterface: () => fakeRl().rl, write: (s) => written.push(s), columns: () => 80 })
+    const acted: string[] = []
+    const picked = io.select!({
+      title: 'Sessions',
+      filter: true,
+      actions: [{ id: 'rename', keys: ['ctrl-r'], input: { label: 'new title' } }],
+      onAction: async (req) => {
+        acted.push(`${req.value}:${req.text}`)
+        return { notice: 'renamed' }
+      },
+      options: [
+        { label: 'Alpha', value: 'a' },
+        { label: 'Beta', value: 'b' }
+      ]
+    })
+    stdin.push('bx')
+    stdin.push('\x7f') // Backspace: the filter is "b" again
+    stdin.push('\x12') // Ctrl-R on Beta
+    stdin.push('Z\r')
+    stdin.push('\r')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: 'b' })
+    expect(acted).toEqual(['b:Z'])
+    expect(written.join('')).toContain('filter: bx')
+    expect(written.join('')).toContain('· renamed')
+  })
+
   it('the composer joins a character split across two reads', async () => {
     const stdin = fakeTty()
     const io = createTerminalIo({ stdin, createInterface: () => fakeRl().rl, write: () => {}, columns: () => 80, now: () => 1000 })

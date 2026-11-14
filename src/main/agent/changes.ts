@@ -13,7 +13,7 @@ import { changeCurrentState, conversationChangeBases, writeChangeState, type Cha
 import { collectWorkingTreeChanges } from './workingTree'
 import { runGitCapture } from './gitRead'
 import { resolveInWorkspace } from './tools'
-import { writeFileAtomic } from '../atomic-write'
+import { removeFileContained, writeFileContained } from './safeWrite'
 
 /**
  * The Changes view's turn and chat scopes, and every revert it offers. Reverts run
@@ -128,7 +128,9 @@ async function revertInTree(req: ChangeRevertRequest, deps: RevertDeps): Promise
     if (!Buffer.from(text, 'utf8').equals(buf)) return fail(NOT_UTF8)
     const next = revertHunkText(text, hunk)
     if (next === null) return fail(STALE)
-    await writeFileAtomic(abs, next, st.mode & 0o777)
+    // Contained write (./safeWrite): a folder on the path swapped for a symlink since
+    // resolveInWorkspace checked it fails the write instead of redirecting it.
+    writeFileContained([root], abs, next, { followSymlink: false, display: file.path })
     return { ok: true }
   }
 
@@ -140,7 +142,7 @@ async function revertInTree(req: ChangeRevertRequest, deps: RevertDeps): Promise
   const removeFile = async (p: string): Promise<void> => {
     // rm on a symlink removes the link itself, never its target; never a directory.
     const st = await fs.lstat(p).catch(() => null)
-    if (st && !st.isDirectory()) await fs.rm(p, { force: true })
+    if (st && !st.isDirectory()) removeFileContained([root], p, { display: file.path })
   }
   switch (file.status) {
     case 'untracked':

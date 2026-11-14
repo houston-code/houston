@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatStatusMap } from '@shared/chatStatus'
 import type { ConversationMeta } from '@shared/agent'
-import type { ChatGroup } from '@shared/types'
+import type { ChatGroup, ChatLabel } from '@shared/types'
 import { Sidebar, type SidebarProps } from './Sidebar'
 
 function makeConv(overrides: Partial<ConversationMeta> = {}): ConversationMeta {
@@ -1562,5 +1562,204 @@ describe('Sidebar keyboard navigation', () => {
     search.focus()
     fireEvent.keyDown(search, { key: 'ArrowDown' })
     expect(document.activeElement).toBe(search)
+  })
+})
+
+describe('Sidebar: chat labels', () => {
+  const labels: ChatLabel[] = [
+    { id: 'l-bug', name: 'bug', color: 'red' },
+    { id: 'l-wip', name: 'wip', color: 'yellow' },
+    { id: 'l-rev', name: 'review', color: 'teal' }
+  ]
+  const labelProps = (overrides: Partial<SidebarProps> = {}): SidebarProps =>
+    baseProps({
+      labels,
+      labelFilters: {},
+      onSetSectionLabelFilter: vi.fn(),
+      onSetChatLabels: vi.fn(),
+      onCreateLabel: vi.fn().mockResolvedValue('l-new'),
+      onUpdateLabel: vi.fn(),
+      onDeleteLabel: vi.fn(),
+      ...overrides
+    })
+  const rowOf = (title: string): HTMLElement => screen.getByText(title).closest('.conv') as HTMLElement
+  const headOf = (name: string): HTMLElement => screen.getByText(name).closest('.section-head') as HTMLElement
+
+  it('shows a row’s labels as chips, folding the rest into +N, and says them to screen readers', () => {
+    render(
+      <Sidebar
+        {...labelProps({
+          conversations: [makeConv({ id: 'a', title: 'Alpha', labels: ['l-bug', 'gone', 'l-wip', 'l-rev'] })]
+        })}
+      />
+    )
+    const row = rowOf('Alpha')
+    // Chips follow the user's label order; an id with no label is skipped.
+    expect([...row.querySelectorAll('.label-chip')].map((c) => c.textContent)).toEqual(['bug', 'wip', '+1'])
+    expect(within(row).getByText('+1')).toHaveAttribute('title', 'review')
+    expect(row).toHaveAttribute('aria-label', expect.stringContaining('labels: bug, wip, review'))
+  })
+
+  it('ticks labels on and off from the row’s Labels submenu', () => {
+    const props = labelProps({ conversations: [makeConv({ id: 'a', title: 'Alpha', labels: ['l-bug'] })] })
+    render(<Sidebar {...props} />)
+    openConvMenu('Alpha')
+    openSubmenu('Labels')
+    expect(screen.getByRole('menuitemcheckbox', { name: 'bug' })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'wip' }))
+    expect(props.onSetChatLabels).toHaveBeenCalledWith('a', ['l-bug', 'l-wip'])
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'bug' }))
+    expect(props.onSetChatLabels).toHaveBeenCalledWith('a', [])
+  })
+
+  it('makes a new label from the Labels submenu and puts it on the chat', async () => {
+    const props = labelProps({ conversations: [makeConv({ id: 'a', title: 'Alpha', labels: ['l-bug'] })] })
+    render(<Sidebar {...props} />)
+    openConvMenu('Alpha')
+    openSubmenu('Labels')
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New label' }))
+    const input = screen.getByRole('textbox', { name: 'New label name' })
+    fireEvent.change(input, { target: { value: '  needs  docs ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onCreateLabel).toHaveBeenCalledWith('needs docs')
+    await waitFor(() => expect(props.onSetChatLabels).toHaveBeenCalledWith('a', ['l-bug', 'l-new']))
+  })
+
+  it('offers a section’s label filter only for the labels its chats carry', () => {
+    const props = labelProps({
+      groups: [
+        { id: 'g1', name: 'Work' },
+        { id: 'g2', name: 'Plain' }
+      ],
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha', groupId: 'g1', labels: ['l-bug'] }),
+        makeConv({ id: 'b', title: 'Beta', groupId: 'g1', labels: ['l-rev'] }),
+        makeConv({ id: 'c', title: 'Gamma', groupId: 'g2' })
+      ]
+    })
+    render(<Sidebar {...props} />)
+    expect(within(headOf('Plain')).queryByRole('button', { name: /by label/ })).toBeNull()
+    fireEvent.click(within(headOf('Work')).getByRole('button', { name: 'Filter Work by label' }))
+    const menu = screen.getByRole('menu', { name: 'Filter Work by label' })
+    expect(within(menu).getAllByRole('menuitemcheckbox').map((b) => b.textContent?.trim())).toEqual(['bug', 'review'])
+    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: 'review' }))
+    expect(props.onSetSectionLabelFilter).toHaveBeenCalledWith('g1', ['l-rev'])
+  })
+
+  it('shows only matching chats in a filtered section, with an “N of M” count, and clears', () => {
+    const props = labelProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      labelFilters: { g1: ['l-bug'] },
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha', groupId: 'g1', labels: ['l-bug'] }),
+        makeConv({ id: 'b', title: 'Beta', groupId: 'g1', labels: ['l-rev'] }),
+        makeConv({ id: 'c', title: 'Gamma', groupId: 'g1' })
+      ]
+    })
+    render(<Sidebar {...props} />)
+    expect(screen.getByText('Alpha')).toBeInTheDocument()
+    expect(screen.queryByText('Beta')).toBeNull()
+    expect(screen.queryByText('Gamma')).toBeNull()
+    const head = headOf('Work')
+    expect(within(head).getByText('1 of 3')).toBeInTheDocument()
+    const button = within(head).getByRole('button', { name: 'Filter Work by label, 1 selected' })
+    expect(button).toHaveClass('section-head__labels--on')
+    fireEvent.click(button)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Clear filter' }))
+    expect(props.onSetSectionLabelFilter).toHaveBeenCalledWith('g1', [])
+  })
+
+  it('says when a filter matches nothing, with a way to clear it', () => {
+    const props = labelProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      labelFilters: { g1: ['l-wip'] },
+      conversations: [makeConv({ id: 'a', title: 'Alpha', groupId: 'g1', labels: ['l-bug'] })]
+    })
+    render(<Sidebar {...props} />)
+    expect(screen.queryByText('Alpha')).toBeNull()
+    expect(screen.getByText(/No chats match this filter/)).toBeInTheDocument()
+    expect(screen.queryByText(/Drop a chat here/)).toBeNull()
+    // The filter's own label stays on offer, though no chat carries it any more.
+    fireEvent.click(within(headOf('Work')).getByRole('button', { name: /by label/ }))
+    expect(screen.getByRole('menuitemcheckbox', { name: 'wip' })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }))
+    expect(props.onSetSectionLabelFilter).toHaveBeenCalledWith('g1', [])
+  })
+
+  it('ignores label filters and hides their buttons while searching', () => {
+    render(
+      <Sidebar
+        {...labelProps({
+          search: 'a',
+          labelFilters: { ungrouped: ['l-bug'] },
+          conversations: [
+            makeConv({ id: 'a', title: 'Alpha', labels: ['l-rev'] }),
+            makeConv({ id: 'p', title: 'Pinned one', pinned: true, labels: ['l-rev'] })
+          ]
+        })}
+      />
+    )
+    expect(screen.getByText('Alpha')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /by label/ })).toBeNull()
+  })
+
+  it('a drop into a filtered section moves the chat in without reordering', () => {
+    const props = labelProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      labelFilters: { g1: ['l-bug'] },
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha', groupId: 'g1', labels: ['l-bug'] }),
+        makeConv({ id: 'b', title: 'Beta', groupId: 'g1', labels: ['l-bug'] }),
+        makeConv({ id: 'c', title: 'Gamma' })
+      ]
+    })
+    render(<Sidebar {...props} />)
+    // Within the section: no reorder, since hidden chats sit between the shown ones.
+    let dataTransfer = startConvDrag('Beta')
+    fireDrag('dragOver', sectionOf('Work'), dataTransfer, 0)
+    expect(document.querySelector('.conv-drop-line')).toBeNull()
+    fireDrag('drop', sectionOf('Work'), dataTransfer, 0)
+    // From outside: the chat moves into the group, and that's all.
+    dataTransfer = startConvDrag('Gamma')
+    fireDrag('drop', sectionOf('Work'), dataTransfer, 0)
+    expect(props.onReorder).not.toHaveBeenCalled()
+    expect(props.onMove).toHaveBeenCalledTimes(1)
+    expect(props.onMove).toHaveBeenCalledWith('c', 'g1')
+  })
+
+  it('manages labels from the filter menu: rename, recolor, delete, and add', async () => {
+    const props = labelProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })
+    render(<Sidebar {...props} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Filter chats' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Manage labels' }))
+    const dialog = screen.getByRole('dialog', { name: 'Manage labels' })
+
+    const name = within(dialog).getByRole('textbox', { name: 'Name of label bug' })
+    fireEvent.change(name, { target: { value: 'defect' } })
+    fireEvent.keyDown(name, { key: 'Enter' })
+    expect(props.onUpdateLabel).toHaveBeenCalledWith('l-bug', { name: 'defect' })
+
+    // A blank name isn't saved: the field goes back to the label's name.
+    const wip = within(dialog).getByRole('textbox', { name: 'Name of label wip' }) as HTMLInputElement
+    fireEvent.change(wip, { target: { value: '   ' } })
+    fireEvent.blur(wip)
+    expect(wip.value).toBe('wip')
+    expect(props.onUpdateLabel).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Color of bug: red. Change color' }))
+    expect(props.onUpdateLabel).toHaveBeenCalledWith('l-bug', { color: 'teal' })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete label review' }))
+    expect(props.onDeleteLabel).toHaveBeenCalledWith('l-rev')
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'New label' }))
+    await waitFor(() => expect(props.onCreateLabel).toHaveBeenCalledWith('New label'))
+  })
+
+  it('leaves labels out of the menus when the app does not offer them', () => {
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha', labels: ['l-bug'] })] })} />)
+    openConvMenu('Alpha')
+    expect(screen.queryByRole('menuitem', { name: 'Labels' })).toBeNull()
+    expect(rowOf('Alpha').querySelector('.label-chip')).toBeNull()
   })
 })

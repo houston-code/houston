@@ -11,6 +11,7 @@ import { createBedrockProvider, listBedrockModels } from './bedrock'
 import { createVertexProvider, listVertexModels } from './vertex'
 import { createAzureOpenAIProvider, listAzureOpenAIModels } from './azure'
 import { createFoundryProvider, listFoundryModels } from './foundry'
+import { withQuotaScope } from './quota'
 
 export class ProviderError extends Error {}
 
@@ -69,8 +70,16 @@ function requireAddress(
   )
 }
 
-/** Build a ready-to-use provider for a configured provider, pulling its key from the secrets store. */
+/**
+ * Build a ready-to-use provider for a configured provider, pulling its key from the
+ * secrets store. Its requests record the rate-limit quota they report under the
+ * provider's id (see quota.ts).
+ */
 export function createProvider(config: ProviderConfig): Provider {
+  return withQuotaScope(config.id, buildProvider(config))
+}
+
+function buildProvider(config: ProviderConfig): Provider {
   const key = getKey(config.id)
   const headers = resolveHeaders(config.id)
   if (config.requiresKey && !key) {

@@ -157,6 +157,23 @@ describe('command groups', () => {
     expect(byName.model.args).toBe('[name]')
     expect(byName.undo.args).toBeUndefined()
   })
+
+  it('describes what the desktop does where it differs from the terminal', () => {
+    const gui = Object.fromEntries(builtinCommands('gui').map((c) => [c.name, c]))
+    const tui = Object.fromEntries(builtinCommands('tui').map((c) => [c.name, c]))
+    expect(gui.settings.description).toBe('Open Settings, or one page of it')
+    expect(gui.settings.args).toBe('[page]')
+    expect(gui.theme.description).toBe('Open Appearance settings')
+    expect(gui.theme.args).toBeUndefined()
+    for (const name of ['memory', 'trust', 'mcp']) {
+      expect(gui[name].description, name).toContain('Settings')
+      expect(gui[name].description, name).not.toMatch(/forget|\(add|\(show/)
+    }
+    // The terminal keeps its own wording.
+    expect(tui.settings.description).toBe('Show a summary of your current settings')
+    expect(tui.theme.args).toBe('[name]')
+    expect(tui.memory.description).toContain('show, edit, pin')
+  })
 })
 
 describe('resolveCommand', () => {

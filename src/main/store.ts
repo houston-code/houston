@@ -615,9 +615,11 @@ export function setModelUnavailable(
 
 /**
  * Persist a permission rule from an in-prompt "Always allow" / "Always deny" choice.
- * Prepended so it wins over the user's existing (often broader) rules, and deduped so
- * repeated clicks don't pile up identical rules. Returns the updated settings (or the
- * current ones unchanged when the rule already exists).
+ * Prepended so it wins over the user's existing (often broader) allow and ask rules,
+ * and deduped so repeated clicks don't pile up identical rules. It never wins over a
+ * deny the user already has: a matching deny decides wherever it sits (see matchRule).
+ * Returns the updated settings (or the current ones unchanged when the rule already
+ * exists).
  */
 export function addPermissionRule(rule: PermissionRule): AppSettings {
   const current = getSettings().permissionRules ?? []

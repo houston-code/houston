@@ -21,7 +21,8 @@ import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../
  *
  * Events:
  * - PreToolUse: before a tool runs. Can block the call, auto-approve it (skip the
- *   approval prompt), or rewrite its input. Matcher globs the tool name.
+ *   mode's ordinary approval prompt, not a check that asks in every mode, and only
+ *   from the user's own hooks), or rewrite its input. Matcher globs the tool name.
  * - PostToolUse: after a tool runs; output is appended to the tool result so the
  *   agent sees it. Matcher globs the tool name.
  * - UserPromptSubmit: when the user submits a message, before the turn runs. Can
@@ -282,8 +283,18 @@ function parseDirective(stdout: string | undefined): HookDirective | null {
 export interface HookOutcome {
   /** A blocking event was vetoed (non-zero exit, or `{decision:"block"}`). For Stop, "force another turn". */
   blocked: boolean
-  /** A PreToolUse hook explicitly approved the call (and none blocked) — the approval prompt can be skipped. */
+  /**
+   * A PreToolUse hook explicitly approved the call (and none blocked). The loop lets
+   * this clear only an ordinary prompt, and only when a hook in {@link approvedBy} is
+   * the user's own (see decideApproval's `hookApproved`).
+   */
   approved: boolean
+  /**
+   * The hooks that returned `{decision:"approve"}`, by identity (the same objects the
+   * caller passed in), so the caller can tell a user hook from a project one. Empty
+   * unless {@link approved}.
+   */
+  approvedBy: Hook[]
   /** Combined feedback (directive reasons + plain stdout/stderr) for the agent to see. */
   message: string
   /** Extra context to inject into the conversation (concatenated across hooks). */
@@ -308,7 +319,7 @@ export async function runHooks(
   run: Runner = runSandboxed
 ): Promise<HookOutcome> {
   const matched = matchingHooks(hooks, event, ctx.tool)
-  if (matched.length === 0) return { blocked: false, approved: false, message: '' }
+  if (matched.length === 0) return { blocked: false, approved: false, approvedBy: [], message: '' }
 
   const blocking = BLOCKING_EVENTS.has(event)
   const observational = OBSERVATIONAL_EVENTS.has(event)
@@ -317,6 +328,7 @@ export async function runHooks(
   const systemMsgs: string[] = []
   let blocked = false
   let approved = false
+  const approvedBy: Hook[] = []
   let updatedInput: Record<string, unknown> | undefined
 
   // A hook that can't be given its input, or can't be launched, never throws out of
@@ -325,6 +337,7 @@ export async function runHooks(
   const failure = (what: string, e: unknown): HookOutcome => ({
     blocked: blocking,
     approved: false,
+    approvedBy: [],
     message: `${what}: ${e instanceof Error ? e.message : String(e)}`
   })
 
@@ -381,7 +394,10 @@ export async function runHooks(
         if (directive.systemMessage) systemMsgs.push(directive.systemMessage)
         if (directive.updatedInput) updatedInput = directive.updatedInput
         if (directive.decision === 'block') blocked = true
-        else if (directive.decision === 'approve') approved = true
+        else if (directive.decision === 'approve') {
+          approved = true
+          approvedBy.push(hook)
+        }
       } else {
         // Backward-compatible plain-text feedback (stdout + stderr).
         const out = [res.stdout?.trimEnd(), res.stderr?.trimEnd()].filter(Boolean).join('\n').trim()
@@ -400,6 +416,7 @@ export async function runHooks(
   return {
     blocked,
     approved,
+    approvedBy: approved ? approvedBy : [],
     message: reasons.join('\n').trim(),
     ...(contexts.length ? { additionalContext: contexts.join('\n\n') } : {}),
     ...(updatedInput ? { updatedInput } : {}),

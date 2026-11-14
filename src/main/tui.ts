@@ -65,7 +65,8 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { throttleNotice } from '@shared/rateLimit'
+import { quotaIsLow, quotaStatusText, throttleNotice, type ProviderQuota } from '@shared/rateLimit'
+import { providerQuota } from './providers/quota'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
@@ -106,10 +107,11 @@ import {
   parseExportArgs,
   renderPermissionRules,
   renderRecap,
+  sessionPreviewLines,
   type ExportFormat
 } from './tui-sessions'
 import { htmlToAnsi } from './syntax'
-import type { PickerSpec, PickerOutcome } from './tui-picker'
+import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
 import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
 import { workspaceLabel } from '@shared/notify'
 import {
@@ -908,6 +910,8 @@ export interface StatusState {
   contextTokens: number
   /** The checked-out git branch, or null outside a repository (or on a detached HEAD). */
   branch?: string | null
+  /** The rate-limit quota the provider reported on its latest response, when it sent one. */
+  quota?: ProviderQuota
 }
 
 /** A path under the home folder written from `~` (`~/code/app`); any other path as is. */
@@ -940,6 +944,8 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
   parts.push(formatCost(s.cost.cost, s.cost.costUnknown))
   const ctx = renderContextUsage(s.contextTokens, s.model, paint)
   if (ctx) parts.push(ctx)
+  const quota = quotaStatusText(s.quota)
+  if (quota) parts.push(paint(quota, quotaIsLow(s.quota) ? 'yellow' : 'dim'))
   return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
 }
 
@@ -1003,6 +1009,8 @@ export interface ResumeEntry {
   updatedAt: number
   /** Set when the desktop app has the chat unread: how its last turn ended. */
   unread?: UnreadOutcome
+  /** The folder the chat belongs to (shown when the picker lists every folder). */
+  workspace?: string
 }
 
 /** Persistence hooks, injected so the driver stays testable without a real store. */
@@ -1029,6 +1037,13 @@ export interface TuiPersist {
   get: (id: string) => ({ messages: ChatMessage[] } & ConversationSettingsPatch) | null
   /** Recent sessions in this folder whose title/content matches `query`. */
   search: (workspace: string, query: string) => ResumeEntry[]
+  /**
+   * Recent sessions in every folder, each with its `workspace`. Both absent: the
+   * resume picker has no "all folders" scope.
+   */
+  listAll?: () => ResumeEntry[]
+  /** Recent sessions in every folder whose title/content matches `query`. */
+  searchAll?: (query: string) => ResumeEntry[]
   /** Duplicate a conversation (fresh id, copied history); null if it can't be forked. */
   fork: (id: string) => { id: string } | null
   /** Give a conversation a title of the user's choosing. Absent ⇒ /rename is unavailable. */
@@ -1238,6 +1253,49 @@ export function runEndNotice(messages: ChatMessage[]): string | null {
   return noReply ? '· the last message got no reply: it was stopped' : '· the last run was stopped before it finished'
 }
 
+/** The desktop sidebar's state for a chat: failed in red, unread in blue, else nothing. */
+function unreadMark(c: ResumeEntry, paint: Painter): string {
+  return c.unread === 'error' ? `  ${paint('failed', 'red')}` : c.unread ? `  ${paint('● unread', 'blue')}` : ''
+}
+
+/** A chat's folder for the all-folders picker: home-relative, the last two segments. */
+export function sessionFolder(workspace: string | undefined, home = process.env.HOME): string {
+  if (!workspace) return ''
+  return shortCwd(stripControlChars(workspace).replace(/\\/g, '/'), home)
+}
+
+/**
+ * One row of the arrow-key `/resume` picker: the label (number and title, which the
+ * live filter matches) and the painted detail after it (when, unread state, folder,
+ * and a mark on the chat you're in). Pure.
+ */
+export function renderSessionRow(
+  c: ResumeEntry,
+  index: number,
+  opts: { now: number; paint: Painter; showFolder?: boolean; current?: boolean; home?: string }
+): { label: string; detail: string } {
+  const { paint } = opts
+  const num = index < 9 ? `${index + 1}.` : '  '
+  const title = stripControlChars(c.title) || 'New chat'
+  const folder = opts.showFolder ? sessionFolder(c.workspace, opts.home) : ''
+  const detail = [
+    `  ${paint(formatRelativeTime(c.updatedAt, opts.now), 'dim')}`,
+    unreadMark(c, paint),
+    opts.current ? `  ${paint('(this chat)', 'green')}` : '',
+    folder ? `  ${paint(folder, 'magenta')}` : ''
+  ].join('')
+  return { label: `${num} ${title}`, detail }
+}
+
+/** The arrow-key `/resume` picker's footer: every key it takes. */
+export function sessionPickerHint(o: { rename: boolean; remove: boolean; scope: boolean; all: boolean }): string {
+  const keys = ['↑/↓ move', 'enter open', '1-9 open row', 'type to filter']
+  if (o.rename) keys.push('ctrl-r rename')
+  if (o.remove) keys.push('ctrl-d or x delete')
+  if (o.scope) keys.push(o.all ? 'ctrl-a this folder' : 'ctrl-a all folders')
+  return [...keys, 'esc cancel'].join(' · ')
+}
+
 /** Render a numbered picker of recent conversations for `/resume`. */
 export function renderConversationList(convs: ResumeEntry[], now: number, paint: Painter): string {
   if (!convs.length) return paint('No saved sessions in this folder yet.', 'dim')
@@ -1245,9 +1303,7 @@ export function renderConversationList(convs: ResumeEntry[], now: number, paint:
   convs.forEach((c, i) => {
     const when = paint(formatRelativeTime(c.updatedAt, now), 'dim')
     // The same states the desktop sidebar shows: failed in red, unread in blue.
-    const mark =
-      c.unread === 'error' ? `  ${paint('failed', 'red')}` : c.unread ? `  ${paint('● unread', 'blue')}` : ''
-    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${c.title}  ${when}${mark}`)
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${stripControlChars(c.title)}  ${when}${unreadMark(c, paint)}`)
   })
   lines.push(paint('  Enter a number to resume, or anything else to cancel', 'dim'))
   return lines.join('\n')
@@ -1809,7 +1865,7 @@ export const HELP_TEXT = [
   '  /retry                run your last message again after a turn that failed',
   '  /review               adversarial review of your uncommitted changes',
   '  /init                 write or improve AGENTS.md, the instructions file for this project',
-  '  /resume [query]       list (or search) and reopen a saved session',
+  '  /resume [query]       pick a saved session to reopen (also /sessions): type to filter, 1-9 open a row, ctrl-r rename, ctrl-d or x delete, ctrl-a this folder or all folders',
   '  /spawned              list the background sessions the agent started; open one',
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
   '  /btw <question>       ask a quick side question; the answer stays out of this chat',
@@ -1871,7 +1927,8 @@ export const STARTUP_TIPS = [
   'Ctrl-R searches your earlier messages',
   'Ctrl-X Ctrl-E edits your message in $VISUAL or $EDITOR',
   'type while the agent works and press Enter to steer it',
-  'Shift-Enter or Ctrl-J starts a new line'
+  'Shift-Enter or Ctrl-J starts a new line',
+  '/resume filters saved chats as you type; Ctrl-A shows every folder'
 ]
 
 /**
@@ -2950,7 +3007,11 @@ export interface TuiDeps {
    */
   wake?: {
     register: (tryWake: (conversationId: string) => boolean) => void
-    take: (conversationId: string) => string | null
+    /**
+     * The note's text, or the note with its {@link ChatMessage.taintSource} (a note
+     * quoting spawned sessions' reports), which the turn's message keeps.
+     */
+    take: (conversationId: string) => string | Pick<ChatMessage, 'content' | 'taintSource'> | null
   }
   /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
@@ -3543,6 +3604,157 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         .join('')
   )
 
+  // After the chat you're in is deleted (/delete, or from the /resume picker): what
+  // was this chat's is dropped, and the next turn starts a fresh one.
+  const forgetDeletedChat = (): void => {
+    messages = []
+    conversationId = null
+    persistedSettings = null
+    pendingImages = []
+    contextTokens = 0
+    contextParts = null // /context must not show the deleted chat
+    lastRunId = null // /undo must not restore files from the deleted chat's run
+  }
+
+  /**
+   * The arrow-key `/resume` picker: rows filter live as you type (a title and content
+   * search), the highlighted chat is previewed under the list, Ctrl-R renames and
+   * Ctrl-D or `x` deletes in place, 1-9 open a row, and Ctrl-A switches between this
+   * folder and every folder. Resolves the chosen id, null on cancel, or undefined when
+   * the terminal can't show a picker (the caller falls back to the numbered list).
+   */
+  const pickSession = async (
+    persist: TuiPersist,
+    select: (spec: PickerSpec) => Promise<PickerOutcome>,
+    query: string,
+    initial: ResumeEntry[]
+  ): Promise<string | null | undefined> => {
+    const canScope = Boolean(persist.listAll && persist.searchAll)
+    let all = false
+    let deletedCurrent: string | null = null
+    const byId = new Map<string, ResumeEntry>()
+    // Each chat is read once per picker for its preview (and the delete question).
+    const read = new Map<string, ChatMessage[] | null>()
+    const messagesOf = (id: string): ChatMessage[] | null => {
+      if (!read.has(id)) {
+        try {
+          read.set(id, persist.get(id)?.messages ?? null)
+        } catch {
+          read.set(id, null)
+        }
+      }
+      return read.get(id) ?? null
+    }
+    const fetch = (q: string): ResumeEntry[] =>
+      all
+        ? q
+          ? persist.searchAll!(q)
+          : persist.listAll!()
+        : q
+          ? persist.search(opts.cwd, q)
+          : persist.list(opts.cwd)
+    const toOptions = (list: ResumeEntry[]): PickerOption[] => {
+      byId.clear()
+      const now = nowFn()
+      return list.map((c, i) => {
+        byId.set(c.id, c)
+        const row = renderSessionRow(c, i, { now, paint, showFolder: all, current: c.id === conversationId })
+        return { value: c.id, label: row.label, detail: row.detail }
+      })
+    }
+    const titleOf = (id: string | null): string =>
+      stripControlChars((id && byId.get(id)?.title) || '') || 'New chat'
+    const heading = (): string => (all ? 'Sessions in all folders' : 'Sessions in this folder')
+    const rows = (q: string): PickerOption[] => {
+      try {
+        return toOptions(fetch(q))
+      } catch {
+        return toOptions([])
+      }
+    }
+    const actions: PickerAction[] = []
+    if (persist.rename) {
+      actions.push({ id: 'rename', keys: ['ctrl-r'], input: { label: 'new title', initial: (o) => titleOf(o.value) } })
+    }
+    if (persist.remove) {
+      actions.push({
+        id: 'delete',
+        keys: ['ctrl-d', 'x'],
+        confirm: (o) => {
+          const title = titleOf(o.value)
+          if (o.value === conversationId) {
+            return `Delete "${title}"? It's the chat you're in: you'll be in a new chat. This cannot be undone.`
+          }
+          const msgs = messagesOf(o.value)
+          const count = msgs ? ` and its ${msgs.length} message(s)` : ''
+          return `Delete "${title}"${count}? This cannot be undone.`
+        }
+      })
+    }
+    if (canScope) actions.push({ id: 'scope', keys: ['ctrl-a'], global: true })
+    const hint = (): string =>
+      sessionPickerHint({ rename: !!persist.rename, remove: !!persist.remove, scope: canScope, all })
+    const outcome = await select({
+      title: heading(),
+      options: toOptions(initial),
+      filter: true,
+      initialQuery: query,
+      onQuery: rows,
+      digitCommits: true,
+      maxRows: 9,
+      empty: query ? 'no sessions match' : 'no saved sessions here yet',
+      hint: hint(),
+      actions,
+      preview: (o, width) => {
+        const c = byId.get(o.value)
+        if (!c) return []
+        return sessionPreviewLines(c, messagesOf(c.id), {
+          width,
+          paint,
+          when: formatRelativeTime(c.updatedAt, nowFn()),
+          ...(all && c.workspace ? { folder: sessionFolder(c.workspace) } : {})
+        })
+      },
+      onAction: (req) => {
+        if (req.id === 'scope') {
+          all = !all
+          // The hint names the other scope, so it changes too.
+          return {
+            options: rows(req.query.trim()),
+            title: heading(),
+            hint: hint(),
+            notice: all ? 'showing all folders' : 'showing this folder'
+          }
+        }
+        const id = req.value
+        if (!id) return { notice: 'nothing selected' }
+        const title = titleOf(id)
+        if (req.id === 'rename') {
+          const next = stripControlChars(req.text ?? '').trim()
+          if (!next || next === title) return { notice: 'title unchanged' }
+          persist.rename!(id, next)
+          return { options: rows(req.query.trim()), notice: `renamed to "${next}"` }
+        }
+        if (req.id === 'delete') {
+          persist.remove!(id)
+          read.delete(id)
+          if (id === conversationId) {
+            forgetDeletedChat()
+            deletedCurrent = title
+            return { options: rows(req.query.trim()), notice: `deleted "${title}", the chat you were in` }
+          }
+          return { options: rows(req.query.trim()), notice: `deleted "${title}"` }
+        }
+        return {}
+      }
+    })
+    // Say it in the transcript too: the picker's notice goes with the picker.
+    if (deletedCurrent) deps.io.out(paint(`· deleted "${deletedCurrent}"; this is a new chat\n`, 'dim'))
+    if (outcome.kind === 'commit') return outcome.value
+    if (outcome.kind === 'type') return undefined
+    return null
+  }
+
   for (;;) {
     // The update check resolves whenever it resolves; print it HERE, between turns,
     // where nothing else owns the screen. Writing it from the promise would land in
@@ -3577,7 +3789,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       `${
         providerId && model
           ? renderStatusLine(
-              { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens, branch },
+              {
+                providerId,
+                model,
+                policy,
+                cwd: opts.cwd,
+                cost: sessionCost,
+                contextTokens,
+                branch,
+                quota: providerQuota(providerId)
+              },
               columns(),
               paint
             )
@@ -3659,12 +3880,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Background work finished while the composer was idle: its news is this turn's
     // input. Taken now, not when it arrived, so a draft typed meanwhile still wins.
     let wakeTurn = false
+    // What the wake note carries from outside (see ChatMessage.taintSource), kept on
+    // the turn's message so the memory taint rule still sees it.
+    let wakeTaint: string | undefined
     if (wakeRequested) {
       wakeRequested = false
-      const note = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      const taken = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      const note = typeof taken === 'string' ? taken : (taken?.content ?? null)
       if (note) {
         raw = note
         wakeTurn = true
+        if (taken && typeof taken === 'object') wakeTaint = taken.taintSource
         deps.io.out(paint('· background work finished; continuing on its own\n', 'dim'))
       } else if (raw === null && !resetComposer) continue
     }
@@ -3776,11 +4002,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`· couldn't list sessions: ${(e as Error).message}\n`, 'dim'))
           continue
         }
-        deps.io.out(`${renderConversationList(convs, nowFn(), paint)}\n`)
-        if (!convs.length) continue
-        // discardPending like the other prompts, so type-ahead can't auto-select.
-        const ans = await deps.io.readLine('> ', { discardPending: true })
-        const id = ans === null ? null : parseResumeSelection(ans, convs)
+        // The arrow-key picker when the terminal has one: live filter, preview, and
+        // rename/delete in place. `undefined` means it isn't available here, so fall
+        // back to the numbered list and a typed answer.
+        let id: string | null | undefined
+        const canScope = Boolean(deps.persist.listAll && deps.persist.searchAll)
+        if (deps.io.select && (convs.length || canScope)) {
+          id = await pickSession(deps.persist, deps.io.select, query, convs)
+        }
+        if (id === undefined) {
+          deps.io.out(`${renderConversationList(convs, nowFn(), paint)}\n`)
+          if (!convs.length) continue
+          // discardPending like the other prompts, so type-ahead can't auto-select.
+          const ans = await deps.io.readLine('> ', { discardPending: true })
+          id = ans === null ? null : parseResumeSelection(ans, convs)
+        }
         if (!id) {
           deps.io.out(paint('· cancelled\n', 'dim'))
           continue
@@ -3876,13 +4112,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`· couldn't delete: ${(e as Error).message}\n`, 'yellow'))
           continue
         }
-        messages = []
-        conversationId = null
-        persistedSettings = null
-        pendingImages = []
-        contextTokens = 0
-        contextParts = null // /context must not show the deleted chat
-        lastRunId = null // /undo must not restore files from the deleted chat's run
+        forgetDeletedChat()
         deps.io.out(paint(`· deleted "${title}"; this is a new chat\n`, 'dim'))
         continue
       }
@@ -4558,7 +4788,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       role: 'user',
       content: text,
       ...(pendingImages.length ? { images: pendingImages } : {}),
-      ...(invokedAs ? { invokedAs } : {})
+      ...(invokedAs ? { invokedAs } : {}),
+      ...(wakeTurn && wakeTaint ? { taintSource: wakeTaint } : {})
     })
     pendingImages = [] // consumed by this turn
     // Lazily open a persisted conversation on the first turn so the session

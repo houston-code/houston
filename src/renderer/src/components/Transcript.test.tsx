@@ -671,6 +671,8 @@ describe('Transcript: staying at the latest message', () => {
     const { container, rerender } = render(view(first))
     const scroller = container.querySelector('.transcript') as HTMLElement
     flushFrames()
+    // At the bottom, then the reader scrolls up to read.
+    sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 300, top: 700 })
     sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 300, top: 0 })
     expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
 
@@ -749,6 +751,29 @@ describe('Transcript: staying at the latest message', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+
+  it('stays pinned when the chat grows beneath a view that did not move', () => {
+    const { container } = renderTranscript([userItem(), assistantItem()])
+    const scroller = container.querySelector('.transcript') as HTMLElement
+    flushFrames()
+    sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 300, top: 700 })
+    // A row below settles from its placeholder height to its real one, and a scroll
+    // event fires with the view where it was: the reader did not go anywhere.
+    sizeScroller(scroller, { scrollHeight: 1540, clientHeight: 300, top: 700 })
+    expect(screen.queryByRole('button', { name: '↓' })).not.toBeInTheDocument()
+    flushFrames()
+    expect(scroller.scrollTop).toBe(1540)
+    // The browser reports that jump as a scroll of its own (jsdom does not).
+    fireEvent.scroll(scroller)
+
+    // Scrolled up, the same growth leaves the reader where they are.
+    sizeScroller(scroller, { scrollHeight: 1540, clientHeight: 300, top: 900 })
+    expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
+    sizeScroller(scroller, { scrollHeight: 2000, clientHeight: 300, top: 900 })
+    flushFrames()
+    expect(scroller.scrollTop).toBe(900)
+    expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
   })
 
   it('stays pinned when layout pushes the view down, and catches up', () => {

@@ -59,6 +59,18 @@ encrypted-at-rest key storage) is described in the
 [docs/sandboxing.md](docs/sandboxing.md). Reports that account for that model are
 especially helpful.
 
+The packaged app is hardened against being started as something else by another
+program running as the same user. Its Electron fuses ignore the Node debugger flags
+(`--inspect`, `--inspect-brk`, and `SIGUSR1`) and `NODE_OPTIONS` on every platform,
+load the app only from `app.asar` with its integrity checked (macOS and Windows), and
+ignore `ELECTRON_RUN_AS_NODE` on macOS and Windows. Linux keeps `ELECTRON_RUN_AS_NODE`
+because the shell sandbox's network forwarder runs under it; Linux keyrings don't tie a
+secret to the program that stored it, so there it isn't what guards the keys. The macOS
+build is signed without the entitlement that would honor `DYLD_INSERT_LIBRARIES`. A way
+to run your own code inside a released Houston binary, or to read its stored keys under
+its identity, is in scope. The unpackaged development build (`npm run dev`) has none of
+these protections.
+
 The following are **expected behavior**, not vulnerabilities, because they follow
 directly from the tool's purpose and are gated by explicit user consent:
 
@@ -95,7 +107,9 @@ side effects aren't checkpointed. So a shell command that can throw away work in
 project (`git reset --hard`, a forced `git clean`, `git checkout -- .`, `rm -r` of
 anything but build output and dependencies, `find … -delete`, deleting a branch or
 stash, a forced or deleting `git push`) **asks in every mode**, full auto and "Allow
-for run" included; only an explicit `allow` rule for the command skips it. So does a
+for run" included; only an explicit `allow` rule for the command skips it (one that
+is exact for the command, or whose pattern names the destructive part itself, never a
+prefix such as `git push` that merely matches it). So does a
 command that destroys data the project doesn't hold and a checkpoint can't restore: a
 database reset or drop (`prisma migrate reset`, `rails db:drop`, `manage.py flush`,
 `dropdb`, or `DROP`/`TRUNCATE` SQL handed to a database client), removing Docker
@@ -131,6 +145,27 @@ if the isolated read fails, the content is withheld. GitHub text and search resu
 score as an attempt stay inline with a warning, because the agent needs their exact text.
 The scoring is a heuristic that can be worded around, so this is defense in depth behind
 the approval flow, not a guarantee that a model never acts on injected text.
+
+Once a conversation has taken in such text (or a subagent's or spawned session's
+report), the actions that would let an injected instruction outlive it **ask in every
+mode**, past allow rules and "Allow for run": saving or deleting a memory, and
+launching a session with `spawn_session` or `schedule_run`, whose first message the
+model writes and the new session would otherwise read as the user's. A session launched
+from such a conversation (a spawned one, each run of such a schedule, a proposal the
+user starts) carries that mark, so its own memory writes and launches ask too. A
+scheduled run never runs under a more autonomous mode than the user's current default,
+whatever mode the chat that created it was in.
+
+"Allow for run" is scoped so one approval doesn't widen into unrelated autonomy: it
+covers a tool kind for the chat, except that `schedule_run`, `spawn_session`, and
+`dispatch_writable_agent` each need their own grant, each MCP server is granted
+separately, and network egress is granted per destination. A writable subagent runs
+shell commands, so dispatching one asks wherever shell asks. A PreToolUse hook's
+`approve` stands in only for the ordinary prompt of the user's own mode or rules: it
+is ignored from a project's hooks, and it never skips a check that asks in every mode
+(a managed or project `ask` rule, a shell command that escapes the project or discards
+work, a credential read or write, a tainted memory write or launch, or unconfined shell
+before the user's per-run consent to it).
 
 Reports that demonstrate a way to **bypass** a control that is supposed to hold (for
 example, escaping the shell sandbox, writing outside the workspace without approval,

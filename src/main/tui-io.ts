@@ -4,10 +4,8 @@ import { spinnerFrame, type TuiIo, type Painter } from './tui'
 import { visibleWidth } from './tui-wrap'
 import { findUltrathink, ultrathinkHint, type KeywordRange, type UltrathinkEffect } from '@shared/ultrathink'
 import {
-  initialPickerState,
-  reducePicker,
-  renderPicker,
-  keyToPickerKey,
+  createPickerSession,
+  pickerKeyFor,
   type PickerSpec,
   type PickerOutcome
 } from './tui-picker'
@@ -1103,9 +1101,14 @@ function runPicker(
   if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return Promise.resolve({ kind: 'type' })
 
   return new Promise<PickerOutcome>((resolve) => {
-    let state = initialPickerState(spec)
+    // The model, the filter's row fetches and in-picker actions (rename, delete) all
+    // live in the session; this adapter only maps keys and redraws its region.
+    const session = createPickerSession(spec, paint)
     let prevRows = 0
     let done = false
+    // Keys are handled one at a time: an action may await, and a key arriving
+    // meanwhile must see the state it left.
+    let queue: Promise<void> = Promise.resolve()
 
     // readline keeps its own 'keypress' listener on stdin, and it runs whether or not
     // the interface is paused: left attached, Up/Down also walk readline's history and
@@ -1116,7 +1119,7 @@ function runPicker(
     const draw = (first: boolean): void => {
       // \r first: the up-move is counted from column 0 of the row under the picker.
       if (!first && prevRows > 0) write(`\r\x1b[${prevRows}A\x1b[0J`) // up N physical rows, erase to end
-      const lines = renderPicker(state, paint)
+      const lines = session.lines({ width: process.stdout.columns || 0, height: process.stdout.rows || 0 })
       // Count PHYSICAL rows, not logical lines: a rendered line wider than the terminal
       // wraps to several rows, so moving up by the logical count would under-count and
       // the picker would walk down the screen, leaving duplicated rows on each keypress.
@@ -1138,19 +1141,21 @@ function runPicker(
       resolve(outcome)
     }
     const onKey = (_str: string, key: { name?: string; sequence?: string; ctrl?: boolean }): void => {
-      try {
-        const pk = keyToPickerKey(key ?? {})
-        if (!pk) return
-        const { state: next, outcome } = reducePicker(state, pk)
-        state = next
-        if (outcome) finish(outcome)
-        else draw(false)
-      } catch {
-        // A redraw/write failure (e.g. a broken pipe) must not escape the keypress
-        // handler as an uncaughtException with the listener still attached and raw
-        // mode still on. Fall back to the typed prompt; finish() restores both.
-        finish({ kind: 'type' })
-      }
+      const pk = pickerKeyFor(spec, key ?? {})
+      if (!pk) return
+      queue = queue.then(async () => {
+        if (done) return
+        try {
+          const outcome = await session.press(pk)
+          if (outcome) finish(outcome)
+          else draw(false)
+        } catch {
+          // A redraw/write failure (e.g. a broken pipe) must not escape the keypress
+          // handler as an unhandled rejection with the listener still attached and raw
+          // mode still on. Fall back to the typed prompt; finish() restores both.
+          finish({ kind: 'type' })
+        }
+      })
     }
 
     try {

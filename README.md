@@ -274,7 +274,10 @@ Open source under the [Apache License 2.0](LICENSE).
   `model:` pins the agent to a
   (usually cheaper) sibling model from the current provider. Add a
   `.houston/skills/<name>/SKILL.md` to register a skill: its description is
-  surfaced to the agent, which reads the full instructions on demand. Agents,
+  surfaced to the agent, which reads the full instructions on demand. Skills in
+  the open Agent Skills format are read from `.agents/skills/` too, with their
+  `license`, `compatibility`, `metadata`, `allowed-tools` (which only ever narrows
+  the tools in use) and `paths:` triggers, and `/<skill-name>` runs one. Agents,
   skills, and custom commands in `~/.houston/` work in every project (a project's
   own wins a name clash). **Settings > Customize** lists them all, creates new
   ones from a template, opens them in your editor, switches them off and on, and
@@ -1229,7 +1232,13 @@ What maps to what:
   deny). "Always allow" saves a permission rule, exactly as in the app. A plan from
   Plan mode is accepted or sent back the same way.
 - **Streaming**: replies, reasoning, tool calls (with before/after diffs for edits),
-  the todo list as a plan, and context and cost usage.
+  the todo list as a plan, and context and cost usage. Each prompt's reply also
+  carries the turn's token totals (input, output, and cached input).
+- **Launch flags** set defaults for a client that never changes them, such as a
+  benchmark runner or a CI job: `--approval <policy>` (or `--full-auto`) for the mode
+  new sessions start in, `--effort <level>` for their reasoning effort, and
+  `--max-turns <n>` for a hard step cap on every prompt. For example,
+  `houston --acp --full-auto --effort high --max-turns 1000`.
 - **Questions and MCP input requests** show as forms when the editor supports them;
   otherwise they resolve the way headless mode does, so a run never waits forever.
 - **MCP servers** the editor passes for a session are added for that session only.
@@ -1392,7 +1401,9 @@ the agent loop and UI never depend on a specific provider.
   Settings. Windows has no equivalent, so shell commands there run unconfined and
   always ask (see [docs/sandboxing.md](docs/sandboxing.md)).
 - **File tools are contained** to the workspace in code: any path that resolves
-  outside the project roots, including through a symlink, is rejected.
+  outside the project roots, including through a symlink, is rejected, and the check
+  is repeated at the write itself, so a symlink a running shell swaps onto the path
+  can't redirect it.
 - **Human in the loop.** Writes and shell commands require approval unless you
   opt into a more autonomous policy. A new install starts in *full auto* only where
   the OS sandbox confines shell commands (macOS, Linux with bubblewrap), and in *ask*
@@ -1427,6 +1438,13 @@ the agent loop and UI never depend on a specific provider.
   Houston's own network tools refuse to send a request that carries one.
 - **Keys at rest** are encrypted via the OS credential store; only ciphertext is
   written to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
+- **The packaged app runs only its own code.** Its Electron fuses ignore `--inspect`
+  and `NODE_OPTIONS`, load the app only from an integrity-checked `app.asar`, and
+  (except on Linux, where the shell sandbox's network forwarder needs it) ignore
+  `ELECTRON_RUN_AS_NODE`; the macOS build doesn't accept `DYLD_*` variables. So
+  another program can't start Houston as a debugger or plain Node and run its own
+  code as Houston, which on macOS is what would let it ask the Keychain for
+  Houston's keys.
 
 Coding agents run model-authored commands. Treat *full auto* + network with the
 same caution you'd treat running untrusted code, and switch to *ask* or *auto-edit*
