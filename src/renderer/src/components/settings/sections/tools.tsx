@@ -27,7 +27,10 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           hook that exits non-zero makes the agent keep working).{' '}
           <strong>Notification</strong> runs when the agent waits for you (match a wait
           type such as <code>tool_approval</code>) and <strong>SessionEnd</strong> when
-          a run ends; both only observe. Context is in{' '}
+          a run ends; both only observe. <strong>SubagentStart</strong> /{' '}
+          <strong>SubagentStop</strong> run around a dispatched agent (match its name) and{' '}
+          <strong>PostCompact</strong> after a compaction; they can add context but never
+          block or approve. Context is in{' '}
           <code>$HOUSTON_TOOL_NAME</code> / <code>$HOUSTON_TOOL_INPUT</code> /{' '}
           <code>$HOUSTON_USER_PROMPT</code> (a value over 16 KB is in a temp file named
           by the same variable with <code>_FILE</code> added), and as one JSON object on
@@ -52,11 +55,20 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
             <option value="PreCompact">Compact</option>
             <option value="Notification">Notify</option>
             <option value="SessionEnd">End</option>
+            <option value="SubagentStart">Agent start</option>
+            <option value="SubagentStop">Agent stop</option>
+            <option value="PostCompact">After compact</option>
           </select>
           <input
             list="tool-names"
             className="rule__tool"
-            placeholder={h.event === 'Notification' ? 'wait type (or *)' : 'tool (or *)'}
+            placeholder={
+              h.event === 'Notification'
+                ? 'wait type (or *)'
+                : h.event === 'SubagentStart' || h.event === 'SubagentStop'
+                  ? 'agent name (or *)'
+                  : 'tool (or *)'
+            }
             value={h.matcher}
             onChange={(e) => patchHook(i, { matcher: e.target.value.trim() })}
           />

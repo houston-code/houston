@@ -410,6 +410,17 @@ export interface SubAgentOptions {
    * (`outcome`: cut short or empty is not), and the budget it used.
    */
   onEnd?: (end: { status: SubagentStatus; outcome: SubagentOutcome; budget: SubagentBudget }) => void
+  /**
+   * The dispatcher's SubagentStart / SubagentStop hooks. `start` runs before the agent's
+   * first step and may return context added to its task; `stop` runs once the agent has
+   * ended, by whatever path (a report, a stop, a limit, an abort, a thrown error), and
+   * may return context added to the report the dispatcher gets. Neither can stop or
+   * change what the agent is allowed to do.
+   */
+  lifecycleHooks?: {
+    start: () => Promise<string | undefined>
+    stop: (end: { status: SubagentStatus; report: string }) => Promise<string | undefined>
+  }
 }
 
 /** The note pushed before a subagent's last step: its tools won't run, so report now. */
@@ -498,6 +509,32 @@ const CONTEXT_LIMIT_NOTE = "[subagent stopped at the model's context limit; this
 
 /** Run a subagent loop to completion and return its final report text. */
 export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
+  const hooks = opts.lifecycleHooks
+  if (!hooks) return runSubAgentSteps(opts)
+  const startContext = await hooks.start().catch(() => undefined)
+  // Every exit of the steps below goes through finish/stop, which report onEnd; a
+  // throw has no status of its own and is reported as an error.
+  let status: SubagentStatus = 'error'
+  const onEnd: SubAgentOptions['onEnd'] = (end) => {
+    status = end.status
+    opts.onEnd?.(end)
+  }
+  let report: string
+  try {
+    report = await runSubAgentSteps({
+      ...opts,
+      prompt: startContext ? `${opts.prompt}\n\n${startContext}` : opts.prompt,
+      onEnd
+    })
+  } catch (e) {
+    await hooks.stop({ status: 'error', report: e instanceof Error ? e.message : String(e) }).catch(() => undefined)
+    throw e
+  }
+  const stopContext = await hooks.stop({ status, report }).catch(() => undefined)
+  return stopContext ? `${report}\n\n${stopContext}` : report
+}
+
+async function runSubAgentSteps(opts: SubAgentOptions): Promise<string> {
   const { provider, model, workspace, prompt, signal } = opts
   const writable = opts.writable === true
   // Whether this host OS-confines shell. When it doesn't, an unconfined command

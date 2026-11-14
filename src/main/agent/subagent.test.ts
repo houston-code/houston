@@ -1608,3 +1608,98 @@ describe('delegatedEvidenceSummary', () => {
     expect(text).not.toContain('f20.ts')
   })
 })
+
+describe('runSubAgent lifecycle hooks (SubagentStart / SubagentStop)', () => {
+  function recorder(start?: string, stop?: string) {
+    const calls: { start: number; stops: { status: SubagentStatus; report: string }[] } = { start: 0, stops: [] }
+    return {
+      calls,
+      hooks: {
+        start: async () => {
+          calls.start++
+          return start
+        },
+        stop: async (end: { status: SubagentStatus; report: string }) => {
+          calls.stops.push(end)
+          return stop
+        }
+      }
+    }
+  }
+
+  it('adds Start context to the task and Stop context to the report, once each', async () => {
+    const sink = { system: '', messages: [] as ChatMessage[][] }
+    const provider = recordingProvider([[{ type: 'text', text: 'Report.' }, { type: 'done', stopReason: 'end_turn' }]], sink)
+    const r = recorder('Note: CI is red.', 'Reviewed by a hook.')
+    const report = await runSubAgent({ provider, model: 'm', workspace: ws, prompt: 'Look around', signal: new AbortController().signal, lifecycleHooks: r.hooks })
+    expect(String(sink.messages[0][0].content)).toContain('Look around\n\nNote: CI is red.')
+    expect(report).toBe('Report.\n\nReviewed by a hook.')
+    expect(r.calls.start).toBe(1)
+    expect(r.calls.stops).toEqual([{ status: 'done', report: 'Report.' }])
+  })
+
+  it('runs Stop on an abort, with the abort status', async () => {
+    const ac = new AbortController()
+    ac.abort()
+    const r = recorder()
+    const statuses: SubagentStatus[] = []
+    await runSubAgent({
+      provider: scriptedProvider([]),
+      model: 'm',
+      workspace: ws,
+      prompt: 'x',
+      signal: ac.signal,
+      lifecycleHooks: r.hooks,
+      onEnd: (e) => statuses.push(e.status)
+    })
+    expect(r.calls.stops.map((s) => s.status)).toEqual(['aborted'])
+    // The dispatcher's own onEnd still hears it.
+    expect(statuses).toEqual(['aborted'])
+  })
+
+  it('runs Stop on a model error, with the error status', async () => {
+    const r = recorder()
+    await runSubAgent({
+      provider: scriptedProvider([[{ type: 'error', message: 'bad request' }]]),
+      model: 'm',
+      workspace: ws,
+      prompt: 'x',
+      signal: new AbortController().signal,
+      lifecycleHooks: r.hooks
+    })
+    expect(r.calls.stops.map((s) => s.status)).toEqual(['error'])
+  })
+
+  it('runs Stop exactly once when the provider throws', async () => {
+    const r = recorder()
+    const provider: Provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat(): AsyncGenerator<ProviderStreamEvent> {
+        throw new TypeError('adapter bug')
+      }
+    }
+    const out = runSubAgent({ provider, model: 'm', workspace: ws, prompt: 'x', signal: new AbortController().signal, lifecycleHooks: r.hooks })
+    await out.catch(() => {})
+    expect(r.calls.stops).toHaveLength(1)
+  })
+
+  it('a hook that fails adds nothing and never ends the agent', async () => {
+    const provider = scriptedProvider([[{ type: 'text', text: 'Fine.' }, { type: 'done', stopReason: 'end_turn' }]])
+    const report = await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'x',
+      signal: new AbortController().signal,
+      lifecycleHooks: {
+        start: async () => {
+          throw new Error('start hook broke')
+        },
+        stop: async () => {
+          throw new Error('stop hook broke')
+        }
+      }
+    })
+    expect(report).toBe('Fine.')
+  })
+})

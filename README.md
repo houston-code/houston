@@ -410,7 +410,8 @@ Open source under the [Apache License 2.0](LICENSE).
   *UserPromptSubmit*, *SessionStart*, *Stop* (keep the agent going until a check
   passes), and *PreCompact* hooks cover the rest of the turn, and observe-only
   *Notification* (the agent is waiting for you) and *SessionEnd* hooks let you react to
-  them; see the [guide](docs/houston-guide.md#hooks). Hooks run sandboxed to the project
+  them, and *SubagentStart*, *SubagentStop*, and *PostCompact* hooks can add context
+  around a subagent or a compaction; see the [guide](docs/houston-guide.md#hooks). Hooks run sandboxed to the project
   with 60 seconds each unless a hook sets its own `timeout`. The call's context is in
   `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT` (or, for an input over 16 KB, a temp file
   named by `$HOUSTON_TOOL_INPUT_FILE`), and as one JSON object on stdin.

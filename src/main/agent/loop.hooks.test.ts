@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   SYSTEM_NOTE_PREFIX,
   type AgentEvent,
+  type ChatRequest,
   type ChatMessage,
   type Provider,
   type ProviderStreamEvent,
@@ -730,5 +731,85 @@ describe('observational hooks in the loop (Notification, SessionEnd)', () => {
       tool_input: { path: 'a.txt' },
       cwd: realpathSync(ws)
     })
+  })
+})
+
+describe('context-only hooks in the loop (SubagentStart, SubagentStop, PostCompact)', () => {
+  it('PostCompact sees the summary and adds its context to it', async () => {
+    h.settings.hooks = [{ event: 'PostCompact', matcher: '*', command: 'post' }]
+    h.static = { post: { stdout: JSON.stringify({ additionalContext: 'KEEP: the deploy is frozen', decision: 'block' }) } }
+    const history: ChatMessage[] = []
+    for (let t = 0; t < 4; t++) {
+      history.push({ role: 'user', content: `old question ${t}` })
+      history.push({ role: 'assistant', content: `old answer ${t}` })
+    }
+    history.push({ role: 'user', content: 'current question' })
+    let mainCalls = 0
+    const seen: ChatMessage[][] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        if (req.maxTokens != null) {
+          yield { type: 'text', text: 'SUMMARY' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        mainCalls++
+        seen.push(req.messages as ChatMessage[])
+        if (mainCalls === 1) {
+          yield { type: 'error', message: 'prompt is too long: 212129 tokens > 200000 maximum' }
+          return
+        }
+        yield { type: 'text', text: 'recovered' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const { events } = await run({ provider, messages: history })
+    expect(events.some((e) => e.type === 'compaction')).toBe(true)
+    // A block decision can't undo the compaction or stop the run.
+    expect(events.at(-1)?.type).toBe('done')
+    const call = h.calls.find((c) => c.command === 'post')
+    expect(JSON.parse(call?.stdin ?? '{}')).toMatchObject({ hook_event_name: 'PostCompact', summary: 'SUMMARY' })
+    const afterCompaction = JSON.stringify(seen.at(-1))
+    expect(afterCompaction).toContain('SUMMARY')
+    expect(afterCompaction).toContain('KEEP: the deploy is frozen')
+  })
+
+  it('SubagentStart and SubagentStop run around a dispatch and add context, never blocking it', async () => {
+    h.settings.hooks = [
+      { event: 'SubagentStart', matcher: 'research', command: 'sa' },
+      { event: 'SubagentStop', matcher: '*', command: 'so' }
+    ]
+    h.static = {
+      sa: { stdout: JSON.stringify({ additionalContext: 'START-CONTEXT', decision: 'block' }), exitCode: 2 },
+      so: { stdout: JSON.stringify({ additionalContext: 'STOP-CONTEXT' }) }
+    }
+    const requests: ChatRequest[] = []
+    const turns: ProviderStreamEvent[][] = [
+      [
+        { type: 'tool_call', call: { id: 'd1', name: 'dispatch_agent', arguments: { description: 'find config', prompt: 'find the config' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'SUB-REPORT' }, { type: 'done', stopReason: 'end_turn' }],
+      [{ type: 'text', text: 'all done' }, { type: 'done', stopReason: 'end_turn' }]
+    ]
+    let i = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        requests.push(req)
+        for (const ev of turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' } as ProviderStreamEvent]) yield ev
+      }
+    }
+    const { messages } = await run({ provider, onApproval: (_id, decide) => decide('allow') })
+    // The subagent's task carries the Start context.
+    expect(String(requests[1].messages?.[0]?.content)).toBe('find the config\n\nSTART-CONTEXT')
+    // The parent gets the report with the Stop context.
+    const result = String(messages.find((m) => m.toolCallId === 'd1')?.content)
+    expect(result).toContain('SUB-REPORT')
+    expect(result).toContain('STOP-CONTEXT')
+    const start = JSON.parse(h.calls.find((c) => c.command === 'sa')?.stdin ?? '{}')
+    expect(start).toMatchObject({ hook_event_name: 'SubagentStart', agent_name: 'research', prompt: 'find the config' })
+    const stop = JSON.parse(h.calls.find((c) => c.command === 'so')?.stdin ?? '{}')
+    expect(stop).toMatchObject({ hook_event_name: 'SubagentStop', agent_name: 'research', agent_status: 'done' })
+    expect(stop.agent_report).toContain('SUB-REPORT')
   })
 })

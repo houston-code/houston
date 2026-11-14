@@ -2361,7 +2361,8 @@ console output.
 Hooks (Settings, *Hooks*) run your own shell commands at set points in the agent loop.
 Each hook names an event and, for tool events, a matcher glob on the tool name. A
 Notification hook's matcher globs the kind of wait instead (`tool_approval`,
-`tool_question`, `plan_ready`, `elicitation`). The other events match only an empty or
+`tool_question`, `plan_ready`, `elicitation`), and a SubagentStart or SubagentStop
+hook's globs the agent's name (a custom agent's name, else `research` or `writable`). The other events match only an empty or
 `*` matcher.
 
 ### Events
@@ -2376,6 +2377,14 @@ Notification hook's matcher globs the kind of wait instead (`tool_approval`,
 | **PreCompact** | before the conversation is compacted | fold context into the material being summarized, so it survives compaction |
 | **Notification** | when the agent stops to wait for you: an approval, a question, a plan to review, or an MCP server asking for input | observe only, e.g. play a sound or send yourself a desktop alert. It runs alongside the wait and can't answer it |
 | **SessionEnd** | once when a run ends, however it ended | observe only, e.g. log the session or clean up. Its `reason` is `completed`, `aborted`, `error`, or `limit` |
+
+| **SubagentStart** | when a dispatched subagent starts | add context to the subagent's task |
+| **SubagentStop** | when a dispatched subagent ends, however it ended (a report, a limit, a stop, an error) | add context to the report the agent gets back |
+| **PostCompact** | after a compaction lands | add context to the new summary, so it carries into the rest of the run |
+
+SubagentStart, SubagentStop, and PostCompact hooks can add context and show a
+`systemMessage`, but they can't block, approve, or rewrite anything, and a non-zero exit
+changes nothing.
 
 Notification and SessionEnd hooks only observe. Their exit code and any JSON they print
 change nothing: they can't block, approve, rewrite, or add context.
@@ -2453,6 +2462,10 @@ variables:
 | `prompt` | your message (UserPromptSubmit) |
 | `notification_type`, `message` | the kind of wait and a one-line description (Notification) |
 | `reason` | how the run ended (SessionEnd) |
+| `agent_name` | the subagent's name (SubagentStart, SubagentStop) |
+| `prompt` | the subagent's task (SubagentStart) |
+| `agent_status`, `agent_report` | how the subagent ended (`done`, `error`, `aborted`, `step-limit`, `stalled`) and the report it returned (SubagentStop) |
+| `summary` | the new summary (PostCompact) |
 
 Fields that don't apply to the event are left out. A hook that doesn't read stdin can
 ignore it.

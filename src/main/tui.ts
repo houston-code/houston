@@ -5334,7 +5334,7 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
   const evAns = await deps.io.readLine('event (number or name): ')
   if (evAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
   const matcherAns = await deps.io.readLine(
-    'matcher (tool name or glob, e.g. edit_file or *; for Notification a wait type such as tool_approval; blank = any): '
+    'matcher (tool name or glob, e.g. edit_file or *; a wait type such as tool_approval for Notification; an agent name for SubagentStart/SubagentStop; blank = any): '
   )
   if (matcherAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
   const cmdAns = await deps.io.readLine('command (shell to run): ')
