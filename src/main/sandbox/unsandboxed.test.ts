@@ -51,3 +51,35 @@ describe('UnsandboxedBackend', () => {
     expect(UnsandboxedBackend.confinesNetwork).toBe(false)
   })
 })
+
+// A real process: the input arrives on stdin and ends, so a reader like `cat` exits at once.
+describe.skipIf(process.platform === 'win32')('stdin input (real process)', () => {
+  it('passes the input to the command and closes stdin', async () => {
+    const { runWithBackend } = await import('./shared')
+    const res = await runWithBackend(UnsandboxedBackend, {
+      command: 'cat',
+      cwd: process.cwd(),
+      workspace: process.cwd(),
+      allowNetwork: false,
+      stdin: '{"hook_event_name":"Stop"}',
+      timeoutMs: 10_000
+    })
+    expect(res.timedOut).toBe(false)
+    expect(res.exitCode).toBe(0)
+    expect(res.stdout).toBe('{"hook_event_name":"Stop"}')
+  })
+
+  it('still exits cleanly when the command ignores its input', async () => {
+    const { runWithBackend } = await import('./shared')
+    const res = await runWithBackend(UnsandboxedBackend, {
+      command: 'true',
+      cwd: process.cwd(),
+      workspace: process.cwd(),
+      allowNetwork: false,
+      stdin: 'x'.repeat(1_000_000),
+      timeoutMs: 10_000
+    })
+    expect(res.timedOut).toBe(false)
+    expect(res.exitCode).toBe(0)
+  })
+})

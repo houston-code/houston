@@ -408,10 +408,12 @@ Open source under the [Apache License 2.0](LICENSE).
   rewrite it with a JSON reply), and a *PostToolUse* hook's output is fed back to the
   agent, e.g. auto-format after every edit, or run tests after a write.
   *UserPromptSubmit*, *SessionStart*, *Stop* (keep the agent going until a check
-  passes), and *PreCompact* hooks cover the rest of the turn; see the
-  [guide](docs/houston-guide.md#hooks). Hooks run sandboxed to the project; the call's context
-  is in `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT` (or, for an input over 16 KB,
-  a temp file named by `$HOUSTON_TOOL_INPUT_FILE`).
+  passes), and *PreCompact* hooks cover the rest of the turn, and observe-only
+  *Notification* (the agent is waiting for you) and *SessionEnd* hooks let you react to
+  them; see the [guide](docs/houston-guide.md#hooks). Hooks run sandboxed to the project
+  with 60 seconds each unless a hook sets its own `timeout`. The call's context is in
+  `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT` (or, for an input over 16 KB, a temp file
+  named by `$HOUSTON_TOOL_INPUT_FILE`), and as one JSON object on stdin.
 - **Plugins.** Drop a JS file in `.houston/plugins/` to register *observational*
   lifecycle hooks, `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage',
   fn)`, for logging, metrics, or notifications. Plugins are executable code, so they

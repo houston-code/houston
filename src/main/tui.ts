@@ -18,6 +18,7 @@ import {
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
+import { HOOK_TIMEOUT_MAX_S, HOOK_TIMEOUT_MIN_S, HOOK_TIMEOUT_MS } from './agent/hooks'
 import { appendUserTurn } from './agent/userTurn'
 import {
   catalogForPlatform,
@@ -1936,15 +1937,31 @@ export function resolveHookEventInput(input: string): string {
   return input.trim()
 }
 
-/** Validate raw field input into a Hook, or return an error to show the user. */
-export function buildHook(event: string, matcher: string, command: string): Hook | { error: string } {
+/**
+ * Validate raw field input into a Hook, or return an error to show the user. A blank
+ * `timeout` keeps the default; otherwise it is a whole number of seconds, 1-600.
+ */
+export function buildHook(event: string, matcher: string, command: string, timeout = ''): Hook | { error: string } {
   if (!(HOOK_EVENTS as string[]).includes(event)) {
     return { error: `unknown event "${event}" (expected one of: ${HOOK_EVENTS.join(', ')})` }
   }
   const cmd = command.trim()
   if (!cmd) return { error: 'a hook needs a shell command to run' }
+  const t = timeout.trim()
+  let seconds: number | undefined
+  if (t) {
+    seconds = Number(t)
+    if (!/^\d+$/.test(t) || seconds < HOOK_TIMEOUT_MIN_S || seconds > HOOK_TIMEOUT_MAX_S) {
+      return { error: `the timeout is a whole number of seconds from ${HOOK_TIMEOUT_MIN_S} to ${HOOK_TIMEOUT_MAX_S}` }
+    }
+  }
   // Lifecycle events have no tool to match; a blank matcher means "any".
-  return { event: event as Hook['event'], matcher: matcher.trim() || '*', command: cmd }
+  return {
+    event: event as Hook['event'],
+    matcher: matcher.trim() || '*',
+    command: cmd,
+    ...(seconds !== undefined ? { timeout: seconds } : {})
+  }
 }
 
 /**
@@ -1998,7 +2015,8 @@ export function renderHookList(hooks: Hook[], paint: Painter): string {
   return hooks
     .map(
       (h, i) =>
-        `  ${paint(`${i + 1}.`, 'dim')} ${paint(h.event, 'cyan')}  ${h.matcher}  ${paint('→', 'dim')} ${h.command}`
+        `  ${paint(`${i + 1}.`, 'dim')} ${paint(h.event, 'cyan')}  ${h.matcher}  ${paint('→', 'dim')} ${h.command}` +
+        (h.timeout !== undefined ? paint(`  (timeout ${h.timeout}s)`, 'dim') : '')
     )
     .join('\n')
 }
@@ -5314,15 +5332,20 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
   deps.io.out(`Add a hook.\n  ${paint('events:', 'dim')} ${HOOK_EVENTS.map((e, i) => `${i + 1}) ${e}`).join('   ')}\n`)
   const evAns = await deps.io.readLine('event (number or name): ')
   if (evAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
-  const matcherAns = await deps.io.readLine('matcher (tool name or glob, e.g. edit_file or *; blank = any): ')
+  const matcherAns = await deps.io.readLine(
+    'matcher (tool name or glob, e.g. edit_file or *; for Notification a wait type such as tool_approval; blank = any): '
+  )
   if (matcherAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
   const cmdAns = await deps.io.readLine('command (shell to run): ')
   if (cmdAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+  const timeoutAns = await deps.io.readLine(`timeout in seconds (blank = ${HOOK_TIMEOUT_MS / 1000}): `)
+  if (timeoutAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
 
-  const built = buildHook(resolveHookEventInput(evAns), matcherAns, cmdAns)
+  const built = buildHook(resolveHookEventInput(evAns), matcherAns, cmdAns, timeoutAns)
   if ('error' in built) return void deps.io.out(paint(`· ${built.error}\n`, 'yellow'))
 
-  deps.io.out(`\n${paint('hook:', 'dim')} ${built.event}  ${built.matcher}  → ${built.command}\n`)
+  const shownTimeout = built.timeout !== undefined ? `  (timeout ${built.timeout}s)` : ''
+  deps.io.out(`\n${paint('hook:', 'dim')} ${built.event}  ${built.matcher}  → ${built.command}${shownTimeout}\n`)
   const ok = await deps.io.readLine('Add this hook? [y/N] ', { discardPending: true })
   if (parseApprovalAnswer(ok ?? '').decision !== 'allow')
     return void deps.io.out(paint('· not added\n', 'dim'))

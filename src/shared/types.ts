@@ -359,9 +359,22 @@ export interface McpServerStatus {
  * keep working. See src/main/agent/hooks.ts.
  */
 export interface Hook {
-  event: 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'SessionStart' | 'Stop' | 'PreCompact'
+  event:
+    | 'PreToolUse'
+    | 'PostToolUse'
+    | 'UserPromptSubmit'
+    | 'SessionStart'
+    | 'Stop'
+    | 'PreCompact'
+    | 'Notification'
+    | 'SessionEnd'
   matcher: string
   command: string
+  /**
+   * Seconds this hook may run before it is stopped. Absent means the default (60);
+   * a value is clamped to 1-600.
+   */
+  timeout?: number
 }
 
 /** The valid hook events, in display order — the one list validators and UIs share. */
@@ -371,7 +384,9 @@ export const HOOK_EVENTS: Hook['event'][] = [
   'UserPromptSubmit',
   'SessionStart',
   'Stop',
-  'PreCompact'
+  'PreCompact',
+  'Notification',
+  'SessionEnd'
 ]
 
 /**

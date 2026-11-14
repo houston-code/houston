@@ -667,3 +667,68 @@ describe('hooks scoped to lsp_rename', () => {
     expect(h.calls.filter((c) => c.command === 'post-any')).toHaveLength(1)
   })
 })
+
+describe('observational hooks in the loop (Notification, SessionEnd)', () => {
+  it('Notification fires when the run waits for an approval, with the call on stdin, and decides nothing', async () => {
+    h.settings.hooks = [{ event: 'Notification', matcher: 'tool_approval', command: 'notify' }]
+    // A directive here must not approve the call: the user still decides (deny).
+    h.static = { notify: { stdout: JSON.stringify({ decision: 'approve' }) } }
+    const { events } = await run({ turns: writeTurns('a.txt'), onApproval: (_id, decide) => decide('deny') })
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(true)
+    expect(existsSync(join(ws, 'a.txt'))).toBe(false)
+    const call = h.calls.find((c) => c.command === 'notify')
+    expect(call?.env?.HOUSTON_HOOK_EVENT).toBe('Notification')
+    expect(call?.env?.HOUSTON_TOOL_NAME).toBe('tool_approval')
+    const payload = JSON.parse(call?.stdin ?? '{}')
+    expect(payload).toMatchObject({
+      hook_event_name: 'Notification',
+      notification_type: 'tool_approval',
+      tool_name: 'write_file',
+      tool_input: { path: 'a.txt', content: 'hello' },
+      cwd: realpathSync(ws)
+    })
+    expect(payload.message).toMatch(/needs your approval/)
+    expect(typeof payload.session_id).toBe('string')
+  })
+
+  it('Notification matchers glob the wait type', async () => {
+    h.settings.hooks = [{ event: 'Notification', matcher: 'plan_*', command: 'notify' }]
+    await run({ turns: writeTurns('a.txt'), onApproval: (_id, decide) => decide('deny') })
+    expect(h.calls.some((c) => c.command === 'notify')).toBe(false)
+  })
+
+  it('SessionEnd runs once as the run ends, says how, and cannot change the outcome', async () => {
+    h.settings.hooks = [{ event: 'SessionEnd', matcher: '*', command: 'bye' }]
+    h.static = { bye: { exitCode: 2, stdout: JSON.stringify({ decision: 'block', additionalContext: 'x' }) } }
+    const { events } = await run({ turns: [[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]] })
+    const calls = h.calls.filter((c) => c.command === 'bye')
+    expect(calls).toHaveLength(1)
+    expect(JSON.parse(calls[0].stdin ?? '{}')).toMatchObject({ hook_event_name: 'SessionEnd', reason: 'completed', cwd: realpathSync(ws) })
+    expect(events.at(-1)?.type).toBe('done')
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+  })
+
+  it('SessionEnd reports a failed run as an error', async () => {
+    h.settings.hooks = [
+      { event: 'UserPromptSubmit', matcher: '*', command: 'guard' },
+      { event: 'SessionEnd', matcher: '*', command: 'bye' }
+    ]
+    h.static = { guard: { exitCode: 1, stdout: 'no' } }
+    await run({})
+    const call = h.calls.find((c) => c.command === 'bye')
+    expect(JSON.parse(call?.stdin ?? '{}').reason).toBe('error')
+  })
+
+  it('every hook gets the run on stdin, alongside the HOUSTON_* variables', async () => {
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'write_file', command: 'pre' }]
+    await run({ turns: writeTurns('a.txt'), onApproval: (_id, decide) => decide('deny') })
+    const call = h.calls.find((c) => c.command === 'pre')
+    expect(call?.env?.HOUSTON_TOOL_NAME).toBe('write_file')
+    expect(JSON.parse(call?.stdin ?? '{}')).toMatchObject({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'write_file',
+      tool_input: { path: 'a.txt' },
+      cwd: realpathSync(ws)
+    })
+  })
+})

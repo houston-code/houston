@@ -2,7 +2,18 @@ import { describe, it, expect } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { HOOK_ENV_PAYLOAD_MAX_BYTES, HOOK_TIMEOUT_MS, matchingHooks, runHooks } from './hooks'
+import {
+  HOOK_ENV_PAYLOAD_MAX_BYTES,
+  HOOK_TIMEOUT_MAX_S,
+  HOOK_TIMEOUT_MIN_S,
+  HOOK_TIMEOUT_MS,
+  hookStdinPayload,
+  hookTimeoutMs,
+  matchingHooks,
+  notificationFor,
+  runHooks
+} from './hooks'
+import { BLOCKING_EVENT_TYPES } from '@shared/agent'
 import type { Hook } from '@shared/types'
 import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../sandbox'
 
@@ -455,5 +466,157 @@ describe('runHooks', () => {
       expect(r.blocked).toBe(false)
       expect(Number(r.message.trim())).toBe(Buffer.byteLength(JSON.stringify(input)))
     }, 30_000)
+  })
+})
+
+describe('per-hook timeout', () => {
+  it('uses the default without one, and clamps one to 1-600 seconds', () => {
+    expect(hookTimeoutMs({})).toBe(HOOK_TIMEOUT_MS)
+    expect(hookTimeoutMs({ timeout: Number.NaN })).toBe(HOOK_TIMEOUT_MS)
+    expect(hookTimeoutMs({ timeout: 5 })).toBe(5_000)
+    expect(hookTimeoutMs({ timeout: 0.2 })).toBe(HOOK_TIMEOUT_MIN_S * 1000)
+    expect(hookTimeoutMs({ timeout: 10_000 })).toBe(HOOK_TIMEOUT_MAX_S * 1000)
+  })
+
+  it('runs each hook with its own timeout and names it when the hook hangs', async () => {
+    const seen: SandboxRunOptions[] = []
+    const r = await runHooks(
+      [
+        { event: 'PreToolUse', matcher: '*', command: 'quick', timeout: 5 },
+        { event: 'PreToolUse', matcher: '*', command: 'plain' }
+      ],
+      'PreToolUse',
+      { tool: 'write_file', input: {} },
+      '/ws',
+      sig,
+      runnerFrom({ quick: { exitCode: null, timedOut: true } }, seen)
+    )
+    expect(seen.map((o) => o.timeoutMs)).toEqual([5_000, HOOK_TIMEOUT_MS])
+    expect(r.blocked).toBe(true)
+    expect(r.message).toMatch(/PreToolUse hook timed out after 5s/)
+  })
+})
+
+describe('the stdin payload', () => {
+  const session = { id: 'conv-1', transcriptPath: '/profile/conversations/conv-1.json' }
+
+  it('carries the tool call for the tool events', () => {
+    expect(JSON.parse(hookStdinPayload('PreToolUse', { tool: 'run_shell', input: { command: 'ls' }, session }, '/ws'))).toEqual({
+      hook_event_name: 'PreToolUse',
+      session_id: 'conv-1',
+      transcript_path: '/profile/conversations/conv-1.json',
+      cwd: '/ws',
+      tool_name: 'run_shell',
+      tool_input: { command: 'ls' }
+    })
+    expect(JSON.parse(hookStdinPayload('PostToolUse', { tool: 'edit_file', input: {}, result: 'ok' }, '/ws'))).toEqual({
+      hook_event_name: 'PostToolUse',
+      cwd: '/ws',
+      tool_name: 'edit_file',
+      tool_input: {},
+      tool_response: 'ok'
+    })
+  })
+
+  it('leaves the tool out of lifecycle events, and adds what each one has', () => {
+    expect(JSON.parse(hookStdinPayload('UserPromptSubmit', { tool: 'UserPromptSubmit', input: {}, prompt: 'hi', session: { id: 'r' } }, '/ws'))).toEqual({
+      hook_event_name: 'UserPromptSubmit',
+      session_id: 'r',
+      cwd: '/ws',
+      prompt: 'hi'
+    })
+    expect(JSON.parse(hookStdinPayload('SessionEnd', { tool: 'SessionEnd', input: {}, reason: 'aborted' }, '/ws'))).toEqual({
+      hook_event_name: 'SessionEnd',
+      cwd: '/ws',
+      reason: 'aborted'
+    })
+    expect(
+      JSON.parse(
+        hookStdinPayload('Notification', { tool: 'plan_ready', input: {}, notification: { type: 'plan_ready', message: 'm' } }, '/ws')
+      )
+    ).toEqual({ hook_event_name: 'Notification', cwd: '/ws', notification_type: 'plan_ready', message: 'm' })
+  })
+
+  it('reaches the runner as stdin, with the payload inline however large it is', async () => {
+    const seen: SandboxRunOptions[] = []
+    const big = 'z'.repeat(HOOK_ENV_PAYLOAD_MAX_BYTES * 2)
+    await runHooks(
+      [{ event: 'PreToolUse', matcher: '*', command: 'c' }],
+      'PreToolUse',
+      { tool: 'write_file', input: { content: big } },
+      '/ws',
+      sig,
+      runnerFrom({}, seen)
+    )
+    expect(JSON.parse(seen[0].stdin ?? '{}').tool_input.content).toBe(big)
+    // The environment still points at the file for the same payload.
+    expect(seen[0].env?.HOUSTON_TOOL_INPUT).toBeUndefined()
+    expect(seen[0].env?.HOUSTON_TOOL_INPUT_FILE).toBeTruthy()
+  })
+
+  it.skipIf(process.platform === 'win32')('is readable by a real hook', async () => {
+    const ws = realpathSync(mkdtempSync(join(tmpdir(), 'houston-hook-stdin-')))
+    const r = await runHooks(
+      // A JSON stdout would be read as a directive, so the hook saves what it read.
+      [{ event: 'PostToolUse', matcher: '*', command: 'cat > payload.json' }],
+      'PostToolUse',
+      { tool: 'edit_file', input: { path: 'a' }, result: 'done', session: { id: 's1' } },
+      ws,
+      sig,
+      runSandboxed
+    )
+    expect(r.message).toBe('')
+    expect(JSON.parse(readFileSync(join(ws, 'payload.json'), 'utf8'))).toMatchObject({ hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'edit_file', tool_response: 'done' })
+  }, 30_000)
+})
+
+describe('observational events (Notification, SessionEnd)', () => {
+  const directive = JSON.stringify({ decision: 'block', additionalContext: 'ctx', updatedInput: { a: 1 }, systemMessage: 'note' })
+
+  it.each(['Notification', 'SessionEnd'] as const)('%s never blocks, approves, rewrites or adds context', async (event) => {
+    for (const stdout of [directive, JSON.stringify({ decision: 'approve' })]) {
+      const r = await runHooks(
+        [{ event, matcher: '*', command: 'h' }],
+        event,
+        { tool: event === 'Notification' ? 'tool_approval' : event, input: {} },
+        '/ws',
+        sig,
+        runnerFrom({ h: { stdout, exitCode: 3 } })
+      )
+      expect(r.blocked).toBe(false)
+      expect(r.approved).toBe(false)
+      expect(r.updatedInput).toBeUndefined()
+      expect(r.additionalContext).toBeUndefined()
+      expect(r.systemMessage).toBeUndefined()
+    }
+  })
+
+  it('Notification matchers glob the wait type; SessionEnd matches only * or empty', () => {
+    const list: Hook[] = [
+      { event: 'Notification', matcher: 'tool_*', command: 'a' },
+      { event: 'Notification', matcher: '*', command: 'b' },
+      { event: 'SessionEnd', matcher: '', command: 'c' },
+      { event: 'SessionEnd', matcher: 'x', command: 'd' }
+    ]
+    expect(matchingHooks(list, 'Notification', 'tool_approval').map((x) => x.command)).toEqual(['a', 'b'])
+    expect(matchingHooks(list, 'Notification', 'plan_ready').map((x) => x.command)).toEqual(['b'])
+    expect(matchingHooks(list, 'SessionEnd').map((x) => x.command)).toEqual(['c'])
+  })
+
+  it('describes each kind of wait', () => {
+    expect(
+      notificationFor({ runId: 'r', type: 'tool_approval', callId: 'c', name: 'run_shell', summary: 'npm test', args: { command: 'npm test' }, kind: 'shell' })
+    ).toEqual({ type: 'tool_approval', message: 'Houston needs your approval: npm test', toolName: 'run_shell', toolInput: { command: 'npm test' } })
+    expect(notificationFor({ runId: 'r', type: 'tool_question', callId: 'c', question: 'Which?', options: [] }).message).toBe(
+      'Houston has a question: Which?'
+    )
+    expect(notificationFor({ runId: 'r', type: 'plan_ready', callId: 'c', plan: {} as never }).type).toBe('plan_ready')
+    expect(
+      notificationFor({ runId: 'r', type: 'elicitation', callId: 'c', elicitId: 'e', serverId: 'db', message: 'Pick one', fields: [] }).message
+    ).toBe('db is asking for input: Pick one')
+  })
+
+  it('covers every blocking event type', () => {
+    expect([...BLOCKING_EVENT_TYPES].sort()).toEqual(['elicitation', 'plan_ready', 'tool_approval', 'tool_question'])
   })
 })
