@@ -108,6 +108,8 @@ export interface SubagentRecord {
   resumeId?: string
   /** This record continues an earlier agent (a resume). */
   resumed?: boolean
+  /** Set when it was dispatched with `background: true`: the id the main agent waits on ("bg1"). */
+  backgroundId?: string
   status: SubagentStatus
   /**
    * How its work came out, set when it ends. Records saved before this existed have none;

@@ -48,7 +48,8 @@ import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { SILENT_CHECK_IN, SILENT_ITERATION_LIMIT } from './stall'
 import { MAX_PROVIDER_RETRIES } from './retry'
-import { SUBAGENT_COST_LANDING_NOTE } from './subagent'
+import { SUBAGENT_COST_LANDING_NOTE, SUBAGENT_USER_STOPPED_NOTE } from './subagent'
+import { canStopSubagent, stopSubagent } from './subagentStops'
 import { COST_CAP_FALLBACK, COST_CAP_NOTE, costCapUnenforceableNotice } from './budget'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import { turnCostUsd } from '@shared/usage'
@@ -10194,6 +10195,58 @@ describe('subagent dispatch: progress, models, resume, nesting', () => {
     expect(saved.subagents![0].steps.length).toBeGreaterThan(0)
   })
 
+  // The terminal's `/tasks kill <n>` stops one agent; the turn that dispatched it goes on.
+  it('stops one dispatched agent on its own and lets the turn go on', async () => {
+    const runId = 'run-stop-one-agent'
+    const turns: ProviderStreamEvent[][] = [
+      dispatchCall({ description: 'scan', prompt: 'look around' }),
+      [
+        { type: 'tool_call', call: { id: 's1', name: 'list_dir', arguments: { path: '.' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      finalText('carried on')
+    ]
+    let i = 0
+    let stopped: boolean | undefined
+    let stoppableWhileRunning: boolean | undefined
+    h.provider = {
+      async *streamChat() {
+        const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]
+        // The agent's first turn: the user stops it from the task list.
+        if (i === 2) {
+          stoppableWhileRunning = canStopSubagent(runId, 'sa1')
+          stopped = stopSubagent(runId, 'sa1')
+        }
+        for (const ev of turn) yield ev
+      }
+    }
+    const events: AgentEvent[] = []
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'do it' }]
+      },
+      (e) => events.push(e)
+    )
+    expect(stoppableWhileRunning).toBe(true)
+    expect(stopped).toBe(true)
+    const end = events.find((e) => e.type === 'subagent_end')
+    expect(end?.type === 'subagent_end' && end.update.status).toBe('aborted')
+    // The model is told the user stopped it, and the turn carried on to its answer.
+    const result = events.find((e) => e.type === 'tool_result')
+    expect(result?.type === 'tool_result' && result.output).toContain(SUBAGENT_USER_STOPPED_NOTE)
+    expect(i).toBe(3)
+    const doneEv = events.find((e) => e.type === 'done')
+    expect(doneEv?.type === 'done' && doneEv.stopReason).toBe('end_turn')
+    // Its handle is gone once it ends.
+    expect(canStopSubagent(runId, 'sa1')).toBe(false)
+    expect(stopSubagent(runId, 'sa1')).toBe(false)
+  })
+
   it('records a nested agent under its parent, linked to the step that dispatched it', async () => {
     const provider = scriptedRecording(
       [
@@ -13318,6 +13371,71 @@ describe('background subagents', () => {
     expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
     const end = events.find((e) => e.type === 'subagent_end' && e.parentCallId === 'd1')
     expect(end && end.type === 'subagent_end' ? end.update.status : undefined).toBe('aborted')
+  }, 30_000)
+
+  // The terminal's `/tasks kill <n>` on a background agent: that one stops, the other
+  // keeps working, and the run goes on to hand both reports over.
+  it('stops one background agent on its own, leaving the others and the run going', async () => {
+    const runId = 'run-bg-stop-one'
+    let release: () => void = () => {}
+    const released = new Promise<void>((r) => (release = r))
+    const subPrompt = (req: ChatRequest): string => String(req.messages.find((m) => m.role === 'user')?.content ?? '')
+    const { provider, mainRequests } = routed(
+      (_req, n) => {
+        if (n === 0) {
+          return [
+            { type: 'tool_call', call: { id: 'd1', name: 'dispatch_agent', arguments: { description: 'Forever', prompt: 'forever', background: true } } },
+            { type: 'tool_call', call: { id: 'd2', name: 'dispatch_agent', arguments: { description: 'Quick', prompt: 'quick', background: true } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ]
+        }
+        return n === 1 ? say('waiting for them') : say('Got both reports.')
+      },
+      (req) => {
+        if (subPrompt(req).includes('quick')) return released.then(() => say('Quick result.'))
+        // Never answers on its own: only an abort ends it, as a real aborted stream does.
+        return new Promise<ProviderStreamEvent[]>((_resolve, reject) => {
+          const fail = (): void => reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }))
+          if (req.signal?.aborted) fail()
+          req.signal?.addEventListener('abort', fail, { once: true })
+        })
+      }
+    )
+    h.provider = provider
+    const events: AgentEvent[] = []
+    let stopped: boolean | undefined
+    await startRun(
+      { runId, workspace: ws, providerId: 'anthropic', model: 'claude-test', approvalPolicy: 'full-auto', messages: [{ role: 'user', content: 'go' }] },
+      (e) => {
+        events.push(e)
+        if (e.type === 'notice' && e.message === 'Waiting for 2 background agents to finish') {
+          const forever = events.find((x) => x.type === 'subagent_start' && x.record.label === 'Forever')
+          if (forever?.type !== 'subagent_start') return
+          stopped = stopSubagent(runId, forever.record.id)
+          setTimeout(release, 20)
+        }
+      }
+    )
+    expect(stopped).toBe(true)
+    const starts = events.flatMap((e) => (e.type === 'subagent_start' ? [[e.record.label, e.record.backgroundId]] : []))
+    expect(starts).toEqual([
+      ['Forever', 'bg1'],
+      ['Quick', 'bg2']
+    ])
+    const statusOf = (callId: string): string | undefined => {
+      const end = events.find((e) => e.type === 'subagent_end' && e.parentCallId === callId)
+      return end?.type === 'subagent_end' ? end.update.status : undefined
+    }
+    expect(statusOf('d1')).toBe('aborted')
+    expect(statusOf('d2')).toBe('done')
+    // Both reports reached the model, the stopped one marked as the user's stop.
+    const notes = mainRequests.flatMap((q) => q.messages.filter((m) => m.role === 'user').map((m) => String(m.content)))
+    const forNote = notes.find((c) => c.includes('Background agent bg1 ("Forever") has finished'))
+    expect(forNote).toContain(SUBAGENT_USER_STOPPED_NOTE)
+    expect(notes.some((c) => c.includes('Background agent bg2 ("Quick") has finished. Its report:\n\nQuick result.'))).toBe(true)
+    expect(notes.some((c) => c.includes('Quick result.') && c.includes(SUBAGENT_USER_STOPPED_NOTE) && !c.includes('bg1'))).toBe(false)
+    expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+    expect(mainRequests).toHaveLength(3)
   }, 30_000)
 
   it('refuses background with resume, and a start past the cap', async () => {

@@ -38,6 +38,8 @@ export interface PickerAction {
   confirm?: (o: PickerOption) => string
   /** Acts without a highlighted row (a scope toggle), so it works on an empty list too. */
   global?: boolean
+  /** What the default footer calls it, after its first key ("x kill"). Unlabelled: not listed. */
+  label?: string
 }
 
 /** What an action asks the caller to do: the row it applies to and any typed text. */
@@ -68,6 +70,8 @@ export interface PickerSpec {
   multiSelect?: boolean
   /** What Esc does here, for the footer ("esc deny" at an approval). Default "cancel". */
   escLabel?: string
+  /** What Enter does here, for a rich picker's default footer ("enter view"). Default "confirm". */
+  enterLabel?: string
   /**
    * Typing filters the rows live instead of handing off to a typed answer; Backspace
    * edits the filter and Esc clears it before it cancels.
@@ -323,6 +327,8 @@ function reduceRich(s: PickerState, key: PickerKey): PickerStep {
         if (started) return started
       }
       if (s.spec.filter) return setQuery(query + key.ch)
+      // A picker with key actions has no typed answer to fall back to: other keys do nothing.
+      if (s.spec.actions?.length) return { state: s }
       return { state: s, outcome: { kind: 'type' } }
     }
     case 'char':
@@ -446,8 +452,11 @@ export function renderPicker(
 
 /** The default footer for a rich picker, from the keys it has. */
 function richHint(s: PickerState): string {
-  const parts = ['↑/↓ move', 'enter confirm']
+  const parts = ['↑/↓ move', `enter ${s.spec.enterLabel ?? 'confirm'}`]
   if (s.spec.digitCommits) parts.push('1-9 open that row')
+  for (const a of s.spec.actions ?? []) {
+    if (a.label && a.keys[0]) parts.push(`${a.keys[0]} ${a.label}`)
+  }
   if (s.spec.filter) parts.push('type to filter')
   return [...parts, `esc ${s.spec.escLabel ?? 'cancel'}`].join(' · ')
 }
