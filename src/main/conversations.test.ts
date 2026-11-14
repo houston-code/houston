@@ -38,6 +38,7 @@ import {
   needsGeneratedTitle,
   organizeConversation,
   otherConversationsInWorktree,
+  detachConversationWorktree,
   setConversationError,
   setConversationSettings,
   setMessages,
@@ -1106,6 +1107,19 @@ describe('otherConversationsInWorktree', () => {
       worktree: { ...worktree, path: '/repo/.houston/worktrees/other', branch: 'other' }
     })
     expect(otherConversationsInWorktree(fork.id, worktree.path)).toBe(1)
+  })
+
+  it('moves a chat whose worktree was removed back to the repo root, keeping its messages', () => {
+    const worktree = { path: '/repo/.houston/worktrees/feat', branch: 'feat', repoRoot: '/repo' }
+    const c = createConversation({ workspace: worktree.path, providerId: 'p', model: 'm', worktree })
+    setMessages(c.id, [{ role: 'user', content: 'hi' }])
+    detachConversationWorktree(c.id, worktree.repoRoot)
+    const after = getConversation(c.id)!
+    expect(after.workspace).toBe('/repo')
+    expect(after.worktree).toBeUndefined()
+    expect(after.messages).toHaveLength(1)
+    // Unknown ids are a no-op.
+    expect(() => detachConversationWorktree('nope', '/repo')).not.toThrow()
   })
 })
 

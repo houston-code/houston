@@ -3047,6 +3047,13 @@ checkout.
 - In a repo whose current branch has no commits yet (a fresh `git init`), the toggle
   starts off. A worktree can only branch from a branch that has commits, and isn't
   offered when no branch has any.
+- **Archiving a chat removes its worktree** when that loses nothing: no uncommitted or
+  untracked changes, and its branch is merged (into your main checkout, or into
+  origin's default branch as of the last fetch). The merged branch is deleted too. The
+  chat keeps its messages and moves to the repo root, so unarchiving it works as
+  before. A worktree is left alone when it has changes or unmerged commits, when
+  another chat (a fork) still uses it, or while the chat has a run or background
+  shells going.
 
 ### Conversations
 
