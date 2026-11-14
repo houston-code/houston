@@ -62,6 +62,9 @@ describe('the composite action', () => {
       'max-cost',
       'verify',
       'allowed-tools',
+      'trigger',
+      'label',
+      'branch-prefix',
       'cli-version',
       'github-token'
     ]) {
@@ -93,7 +96,13 @@ describe('the composite action', () => {
 
 describe('the example workflows', () => {
   it('covers each mode', () => {
-    expect(examples.map((e) => e.name).sort()).toEqual(['houston-fix-ci.yml', 'houston-respond.yml', 'houston-review.yml'])
+    expect(examples.map((e) => e.name).sort()).toEqual([
+      'houston-fix-ci.yml',
+      'houston-implement.yml',
+      'houston-respond.yml',
+      'houston-review.yml',
+      'houston-scheduled.yml'
+    ])
   })
 
   it.each(examples)('$name starts with no permissions and grants each job its own', ({ text }) => {
@@ -134,6 +143,31 @@ describe('the example workflows', () => {
     expect(respond).not.toMatch(/contents: write/)
   })
 
+  it('implements issues only, from the default branch, by explicit opt-in', () => {
+    const implement = examples.find((e) => e.name === 'houston-implement.yml')!.text
+    expect(implement).toContain('mode: implement')
+    expect(implement).toContain('!github.event.issue.pull_request')
+    expect(implement).toMatch(/^ {2}issues:\n {4}types: \[labeled\]$/m)
+    expect(stepWith(implement, 'actions/checkout@')).not.toContain('ref:')
+    expect(implement).toMatch(/contents: write/)
+    expect(implement).not.toMatch(/actions: write|workflows: write/)
+  })
+
+  it('runs scheduled and manual tasks read-only unless the workflow opts in', () => {
+    const scheduled = examples.find((e) => e.name === 'houston-scheduled.yml')!.text
+    expect(scheduled).toMatch(/^ {2}schedule:$/m)
+    expect(scheduled).toMatch(/^ {2}workflow_dispatch:$/m)
+    expect(scheduled).not.toMatch(/^\s+mode: implement$/m)
+    expect(scheduled).not.toMatch(/: write$/m)
+    // The task comes from the workflow or its dispatcher, never from event text.
+    expect(scheduled).not.toContain('github.event.')
+  })
+
+  it('leaves implement commands to the implement workflow', () => {
+    const respond = examples.find((e) => e.name === 'houston-respond.yml')!.text
+    expect(respond).toContain("!contains(github.event.comment.body, '@houston implement')")
+  })
+
   it('fixes CI only for same-repository runs, checked out at the failed commit', () => {
     const fix = examples.find((e) => e.name === 'houston-fix-ci.yml')!.text
     expect(fix).toContain('github.event.workflow_run.head_repository.full_name == github.repository')
@@ -156,11 +190,12 @@ describe('the action end-to-end workflow', () => {
   })
 
   it('drives the real composite action through every mode, posting nothing for real', () => {
-    expect(e2e.match(/uses: \.\/action$/gm)?.length).toBeGreaterThanOrEqual(4)
-    for (const mode of ['respond', 'respond-stranger', 'review', 'fix-ci']) {
+    expect(e2e.match(/uses: \.\/action$/gm)?.length).toBeGreaterThanOrEqual(6)
+    for (const mode of ['respond', 'respond-stranger', 'review', 'fix-ci', 'implement', 'task']) {
       expect(e2e).toContain(`node action/test/assert.mjs ${mode} "$FIXTURE"`)
     }
     expect(e2e).toContain('action/test/bin" >> "$GITHUB_PATH"')
     expect(stepWith(e2e, 'mode: fix-ci')).toContain("post: 'false'")
+    expect(stepWith(e2e, 'mode: implement')).toContain("post: 'false'")
   })
 })

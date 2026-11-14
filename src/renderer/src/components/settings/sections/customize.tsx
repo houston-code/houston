@@ -15,7 +15,7 @@ const KINDS: Array<{ kind: CustomKind; title: string; noun: string; hint: string
     kind: 'skill',
     title: 'Skills',
     noun: 'skill',
-    hint: 'Instructions the agent loads when a task matches, from .houston/skills/<name>/SKILL.md.'
+    hint: 'Instructions the agent loads when a task matches, from .houston/skills/<name>/SKILL.md or .agents/skills/<name>/SKILL.md (the Agent Skills format). Run one with /<name>.'
   },
   {
     kind: 'command',
@@ -111,6 +111,7 @@ function ItemRow({
         </label>
         <span className="custom-item__name">{label}</span>
         <span className="pill">{SCOPE_LABEL[item.scope]}</span>
+        {item.source === 'agents' && <span className="pill">.agents</span>}
         {!on && <span className="settings-dim">Off</span>}
         <span className="custom-item__actions">
           <button
@@ -138,8 +139,23 @@ function ItemRow({
       </div>
       <span className="custom-item__desc">{item.description}</span>
       <code className="custom-item__file">{item.file}</code>
+      {item.details?.map((d) => (
+        <span key={d} className="custom-item__note">
+          {d}
+        </span>
+      ))}
+      {item.problems?.length ? (
+        <span className="custom-item__note" role="note">
+          {item.source === 'agents' ? 'Not loaded: ' : 'Format: '}
+          {item.problems.join(' ')}
+        </span>
+      ) : null}
       {item.shadowed && (
-        <span className="custom-item__note">This project has one with the same name, which is used instead.</span>
+        <span className="custom-item__note">
+          {item.kind !== 'skill'
+            ? 'This project has one with the same name, which is used instead.'
+            : "Another skill with the same name is used instead (a project's wins over yours, and .houston/skills over .agents/skills)."}
+        </span>
       )}
       {confirming && (
         <div className="custom-item__confirm" role="group" aria-label={`Delete ${label}`}>

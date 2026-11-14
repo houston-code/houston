@@ -48,6 +48,41 @@ describe('McpAddPanels', () => {
     expect(onAdd.mock.calls[0][0][0]).toMatchObject({ id: 'filesystem-2', enabled: true, args: ['-y', '@modelcontextprotocol/server-filesystem', '/home/me/notes'] })
   })
 
+  it('lets an id with a dash or a space be typed, tidying it when the field is left', () => {
+    const onAdd = vi.fn()
+    render(<McpAddPanels servers={[]} workspace="/w/app" onAdd={onAdd} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add from catalog' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Review Git' }))
+    const id = screen.getByLabelText('Id') as HTMLInputElement
+    fireEvent.change(id, { target: { value: 'my-' } })
+    expect(id.value).toBe('my-')
+    fireEvent.change(id, { target: { value: 'my git' } })
+    fireEvent.blur(id)
+    expect(id.value).toBe('my-git')
+    fireEvent.submit(screen.getByRole('form', { name: 'Review Git' }))
+    expect(onAdd.mock.calls[0][0][0]).toMatchObject({ id: 'my-git' })
+  })
+
+  it('takes Escape to cancel a review, then to close the panel', () => {
+    const onDialogKey = vi.fn()
+    render(
+      <div onKeyDown={onDialogKey}>
+        <McpAddPanels servers={[]} workspace="/w/app" onAdd={vi.fn()} />
+      </div>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add from catalog' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Review Git' }))
+    fireEvent.keyDown(screen.getByLabelText('Id'), { key: 'Escape' })
+    expect(screen.queryByRole('form', { name: 'Review Git' })).toBeNull()
+    expect(screen.getByRole('list', { name: 'MCP server catalog' })).toBeTruthy()
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Review Git' }), { key: 'Escape' })
+    expect(screen.queryByRole('list', { name: 'MCP server catalog' })).toBeNull()
+    expect(onDialogKey).not.toHaveBeenCalled()
+    // Nothing left open: Escape goes on to the dialog.
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Add from catalog' }), { key: 'Escape' })
+    expect(onDialogKey).toHaveBeenCalledTimes(1)
+  })
+
   it('reads pasted JSON, shows it, and adds the new servers switched off', () => {
     const onAdd = vi.fn()
     render(<McpAddPanels servers={[{ id: 'git', command: 'x', enabled: true }]} workspace={null} onAdd={onAdd} />)

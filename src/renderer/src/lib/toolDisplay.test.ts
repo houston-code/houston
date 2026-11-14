@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DisplayItem, ToolItem } from './items'
-import { describeTool, foldReadRuns, groupItems, shortenPath } from './toolDisplay'
+import { approvalRequestText, describeTool, foldReadRuns, groupItems, shortenPath } from './toolDisplay'
 
 function tool(name: string, args: Record<string, unknown>, id = name): ToolItem {
   return { kind: 'tool', id, name, args, status: 'done' }
@@ -152,6 +152,42 @@ describe('describeTool', () => {
   })
 })
 
+describe('approvalRequestText', () => {
+  const asks = (name: string, args: Record<string, unknown>, hasDiff = false): string | null =>
+    approvalRequestText(tool(name, args), { hasDiff })
+
+  it('spells out a shell command exactly as it will run', () => {
+    expect(asks('run_shell', { command: 'rm -rf build &&\n  npm run build', background: true })).toBe(
+      'rm -rf build &&\n  npm run build'
+    )
+    expect(asks('run_shell', { command: '  ' })).toBeNull()
+  })
+
+  it('lists a GitHub write’s fields, then the text it will post', () => {
+    expect(
+      asks('gh_pr_create', { title: 'Fix the parser', base: 'main', draft: true, body: 'Closes #4.\n\nDetails.' })
+    ).toBe('Title: Fix the parser\nBase: main\nDraft: yes\n\nCloses #4.\n\nDetails.')
+    // The number is already in the header ("Comment PR #12").
+    expect(asks('gh_pr_comment', { number: 12, body: 'LGTM' })).toBe('LGTM')
+    expect(asks('gh_pr_set_state', { number: 3, action: 'close', delete_branch: false })).toBe(
+      'Action: close\nDelete branch: no'
+    )
+    expect(asks('gh_pr_comment', { number: 12 })).toBeNull()
+  })
+
+  it('shows the arguments of an MCP tool or any tool whose header leaves something out', () => {
+    expect(asks('mcp__db__query', { sql: 'DELETE FROM users' })).toBe('{\n  "sql": "DELETE FROM users"\n}')
+    expect(asks('memory_save', { name: 'deploy', content: 'Use staging' })).toContain('"content": "Use staging"')
+    expect(asks('mcp__db__ping', {})).toBeNull()
+  })
+
+  it('adds nothing when the diff or the header already shows the request', () => {
+    expect(asks('edit_file', { path: 'a.ts', old_string: 'a', new_string: 'b' }, true)).toBeNull()
+    expect(asks('read_file', { path: '.env' })).toBeNull()
+    expect(asks('web_fetch', { url: 'https://example.com' })).toBeNull()
+  })
+})
+
 describe('groupItems', () => {
   const user: DisplayItem = { kind: 'user', id: 'u1', text: 'hi' }
   const asst: DisplayItem = { kind: 'assistant', id: 'a1', text: 'ok', streaming: false }
@@ -233,6 +269,21 @@ describe('foldReadRuns', () => {
       tool('read_file', { path: 'c' }, 't3')
     ])
     expect(runs.map((r) => r.kind)).toEqual(['single', 'single', 'single'])
+  })
+
+  it('keeps a read that is waiting on approval out of the fold, so its prompt shows', () => {
+    const waiting: ToolItem = { ...tool('read_file', { path: '.env' }, 't3'), status: 'awaiting-approval' }
+    const runs = foldReadRuns([
+      tool('read_file', { path: 'a' }, 't1'),
+      tool('read_file', { path: 'b' }, 't2'),
+      waiting,
+      tool('read_file', { path: 'c' }, 't4')
+    ])
+    expect(runs.map((r) => r.kind)).toEqual(['reads', 'single', 'single'])
+    expect(runs[1]).toEqual({ kind: 'single', id: 't3', item: waiting })
+    // Once answered it folds back in with its neighbours.
+    const settled = foldReadRuns([tool('read_file', { path: 'a' }, 't1'), { ...waiting, status: 'done' }])
+    expect(settled.map((r) => r.kind)).toEqual(['reads'])
   })
 })
 

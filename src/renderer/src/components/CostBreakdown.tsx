@@ -21,6 +21,7 @@ export function CostBreakdown({
   usage,
   contextWindow,
   priceTierAbove = null,
+  compactionNote = null,
   meterPct,
   meterClass,
   agents = [],
@@ -32,6 +33,8 @@ export function CostBreakdown({
   contextWindow: number | null
   /** Prompt size past which the model bills at its long-context rate, when it has one. */
   priceTierAbove?: number | null
+  /** Where automatic compaction kicks in, for the context breakdown. */
+  compactionNote?: string | null
   /** Context-fill percent for the inline meter, or null when the window is unknown. */
   meterPct: number | null
   /** Extra class for the meter fill at warn/danger fill levels. */
@@ -41,8 +44,14 @@ export function CostBreakdown({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  // Open only on a bump made while the chip is on screen. The counter never resets, so
+  // a chip that mounts later (a new chat's first reply) must not read an old request
+  // as a new one.
+  const seenSignal = useRef(openSignal)
   useEffect(() => {
-    if (openSignal > 0) setOpen(true)
+    if (openSignal === seenSignal.current) return
+    seenSignal.current = openSignal
+    setOpen(true)
   }, [openSignal])
 
   // One row per model, plus one for whatever the per-model tallies don't cover (usage
@@ -118,6 +127,7 @@ export function CostBreakdown({
             measured={usage.context}
             contextWindow={contextWindow}
             priceTierAbove={priceTierAbove}
+            compactionNote={compactionNote}
           />
           <div className="usage-panel__head">
             <span>Model</span>

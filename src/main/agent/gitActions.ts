@@ -180,8 +180,11 @@ export async function branchSync(root: string): Promise<BranchSync> {
   if (upstream) {
     const c = await runGitCapture(['rev-list', '--count', '@{upstream}..HEAD'], root)
     ahead = c.ok ? Number(c.stdout.trim()) || 0 : 0
-  } else if (branch) {
-    const c = await runGitCapture(['rev-list', '--count', 'HEAD'], root)
+  } else if (branch && remote) {
+    // Not published yet: what a first push would send, the commits that no branch on
+    // the remote already has. Counting all of HEAD would report the project's entire
+    // history for a branch cut from main a moment ago.
+    const c = await runGitCapture(['rev-list', '--count', 'HEAD', '--not', `--remotes=${remote}`], root)
     ahead = c.ok ? Number(c.stdout.trim()) || 0 : 0
   }
   return { branch, upstream, ahead, remote }

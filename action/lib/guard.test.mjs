@@ -9,6 +9,7 @@ import {
   changedControlFiles,
   containsSecret,
   fixBranchName,
+  implementBranchName,
   logSafe,
   secretValues,
   snapshotGitControl
@@ -90,6 +91,26 @@ describe('fix branches', () => {
     expect(() => assertPushTarget('main', o)).toThrow(/not under houston/)
     expect(() => assertPushTarget('houston/x', { ...o, defaultBranch: 'houston/x' })).toThrow(/refusing to push/)
     expect(() => assertPushTarget('houston/x', { ...o, failedBranch: 'houston/x' })).toThrow(/refusing to push/)
+  })
+})
+
+describe('implement branches', () => {
+  it('names an issue run and a task run only from numbers, under the prefix', () => {
+    expect(implementBranchName('houston/', 12, 900, 2)).toBe('houston/implement-12-900-2')
+    expect(implementBranchName('bots/h/', null, 900, 1)).toBe('bots/h/task-900-1')
+  })
+
+  it('refuses a bad prefix, a missing run id, and a non-number issue', () => {
+    expect(() => implementBranchName('main', 1, 1, 1)).toThrow(/branch-prefix/)
+    expect(() => implementBranchName('houston/', 1, Number.NaN, 1)).toThrow(/run id/)
+    expect(() => implementBranchName('houston/', 1, 5, 0)).toThrow(/run attempt/)
+    expect(() => implementBranchName('houston/', '1/../main', 5, 1)).toThrow(/issue number/)
+  })
+
+  it('never names the default branch or the base it starts from', () => {
+    const branch = implementBranchName('houston/', 3, 4, 1)
+    expect(() => assertPushTarget(branch, { prefix: 'houston/', defaultBranch: 'main', failedBranch: 'main' })).not.toThrow()
+    expect(() => assertPushTarget('main', { prefix: 'houston/', defaultBranch: 'main', failedBranch: 'main' })).toThrow()
   })
 })
 

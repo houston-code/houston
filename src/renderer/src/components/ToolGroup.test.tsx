@@ -27,7 +27,7 @@ describe('ToolGroup', () => {
       tool({
         id: 'a',
         name: 'run_shell',
-        status: 'denied',
+        status: 'stopped',
         args: { command: 'npm test' },
         output: `Denied by the user. They said: ${APPROVAL_INTERRUPTED_NOTE}`
       })
@@ -36,6 +36,12 @@ describe('ToolGroup', () => {
     fireEvent.click(container.querySelector('.tool-row__head')!)
     expect(screen.getByText('Not run: the run was stopped before it was approved.')).toBeInTheDocument()
     expect(screen.queryByText(/They said/)).not.toBeInTheDocument()
+    // Nobody refused it and nothing failed, so it carries neither the error tint nor
+    // the red mark.
+    expect(container.querySelector('.tool-row--stopped')).not.toBeNull()
+    expect(container.querySelector('.tool-row--denied, .tool-row--error')).toBeNull()
+    expect(container.querySelector('.tool-row__glyph--stopped')).not.toBeNull()
+    expect(container.querySelector('.tool-row__glyph--denied')).toBeNull()
   })
 
   it('shows how long a running call has been going, and nothing once it is done', () => {
@@ -632,6 +638,92 @@ describe('ToolGroup', () => {
     const head = container.querySelector('.tool-row__head')
     expect(head?.querySelector('[aria-label="running"]')).not.toBeNull()
     expect(screen.getByText('2 files')).toBeInTheDocument()
+  })
+
+  it('gives a read waiting on approval its own row with the prompt, even after other reads', () => {
+    const onApprove = vi.fn()
+    const items: ToolItem[] = [
+      tool({ id: 'r1', name: 'read_file', status: 'done', args: { path: 'src/one.ts' } }),
+      tool({ id: 'r2', name: 'read_file', status: 'awaiting-approval', args: { path: '.env' }, sensitiveRead: true })
+    ]
+    const { container } = render(<ToolGroup items={items} onApprove={onApprove} />)
+    // The settled read stays a plain row; the waiting one is not folded behind a count.
+    expect(screen.queryByText('2 files')).not.toBeInTheDocument()
+    expect(container.querySelector('[data-approval-keys]')).not.toBeNull()
+    expect(screen.getByText(/This reads a credential or secret file/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
+    expect(onApprove).toHaveBeenCalledWith('r2', 'allow')
+  })
+
+  describe('what an approval asks', () => {
+    const request = (container: HTMLElement): string | null =>
+      container.querySelector('.tool-row__approval-request')?.textContent ?? null
+
+    it('shows the whole shell command, line breaks and all', () => {
+      const command = 'git fetch origin && \\\n  git rebase origin/main --autostash --rebase-merges --update-refs'
+      const { container } = render(
+        <ToolGroup
+          items={[tool({ id: 's', name: 'run_shell', status: 'awaiting-approval', args: { command } })]}
+          onApprove={vi.fn()}
+        />
+      )
+      expect(request(container)).toBe(command)
+      // It is part of the prompt the keys answer.
+      expect(container.querySelector('[data-approval-keys] .tool-row__approval-request')).not.toBeNull()
+    })
+
+    it('shows the text a GitHub write will post, as plain text', () => {
+      const body = 'Looks good.\n\n<img src=x onerror=alert(1)> stays text'
+      const { container } = render(
+        <ToolGroup
+          items={[
+            tool({ id: 'c', name: 'gh_pr_comment', status: 'awaiting-approval', args: { number: 12, body } })
+          ]}
+          onApprove={vi.fn()}
+        />
+      )
+      expect(request(container)).toBe(body)
+      expect(container.querySelector('.tool-row__approval-request img')).toBeNull()
+    })
+
+    it('shows an MCP tool\u2019s arguments', () => {
+      const args = { channel: '#general', text: 'Deploying now' }
+      const { container } = render(
+        <ToolGroup
+          items={[tool({ id: 'm', name: 'mcp__slack__post_message', status: 'awaiting-approval', args })]}
+          onApprove={vi.fn()}
+        />
+      )
+      expect(JSON.parse(request(container) ?? '')).toEqual(args)
+    })
+
+    it('adds nothing when the diff or the header already shows the request', () => {
+      const { container, unmount } = render(
+        <ToolGroup
+          items={[
+            tool({
+              id: 'e',
+              name: 'edit_file',
+              status: 'awaiting-approval',
+              args: { path: 'src/x.ts', old_string: 'a', new_string: 'b' }
+            })
+          ]}
+          onApprove={vi.fn()}
+        />
+      )
+      expect(request(container)).toBeNull()
+      unmount()
+      const url = 'https://example.com/a/very/long/path?with=a&long=query&string=that-would-clip'
+      const { container: c2 } = render(
+        <ToolGroup
+          items={[tool({ id: 'f', name: 'web_fetch', status: 'awaiting-approval', args: { url } })]}
+          onApprove={vi.fn()}
+        />
+      )
+      expect(request(c2)).toBeNull()
+      // The header is the whole request here, so it wraps instead of clipping.
+      expect(screen.getByText(url)).toHaveClass('tool-row__target--whole')
+    })
   })
 
   // Guidance rides the same interaction as the refusal: without it a denial is a

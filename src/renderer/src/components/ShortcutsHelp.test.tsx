@@ -16,6 +16,13 @@ describe('ShortcutsHelp', () => {
     expect(screen.getByRole('heading', { name: /keyboard shortcuts/i })).toBeInTheDocument()
   })
 
+  it('lets the keyboard reach the list, so it can be scrolled without a mouse', () => {
+    render(<ShortcutsHelp onClose={() => {}} />)
+    const list = screen.getByRole('region', { name: 'Shortcut list' })
+    expect(list).toHaveAttribute('tabindex', '0')
+    expect(within(screen.getByRole('dialog')).getByRole('region')).toBe(list)
+  })
+
   it('lists known shortcuts grouped under their category', () => {
     render(<ShortcutsHelp onClose={() => {}} />)
     expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument()

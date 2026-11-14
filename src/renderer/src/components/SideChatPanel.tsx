@@ -70,10 +70,19 @@ export function SideChatPanel({
     if (!hidden) inputRef.current?.focus()
   }, [hidden])
 
+  // Follow the conversation as it grows, unless the user scrolled up to reread: then
+  // only a new question (theirs, just asked) brings the list back to the bottom.
+  const pinnedToBottom = useRef(true)
+  const exchanges = view.turns.length + (view.pending ? 1 : 0)
+  const seenExchanges = useRef(exchanges)
   useEffect(() => {
     const el = listRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [view])
+    const started = exchanges > seenExchanges.current
+    seenExchanges.current = exchanges
+    if (!el || !(pinnedToBottom.current || started)) return
+    el.scrollTop = el.scrollHeight
+    pinnedToBottom.current = true
+  }, [view, exchanges])
 
   const pending = view.pending
 
@@ -152,7 +161,15 @@ export function SideChatPanel({
         Sees this chat so far and can read the project. It can't change anything, and nothing here goes into
         the main chat unless you send it. It's kept with this chat.
       </p>
-      <div className="side-chat__list" ref={listRef} aria-live="polite">
+      <div
+        className="side-chat__list"
+        ref={listRef}
+        aria-live="polite"
+        onScroll={(e) => {
+          const el = e.currentTarget
+          pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+        }}
+      >
         {view.turns.length === 0 && !pending && (
           <p className="side-chat__empty">Ask anything about this chat or the code.</p>
         )}

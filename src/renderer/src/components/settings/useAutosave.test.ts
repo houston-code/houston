@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { AppSettings, ProviderConfig } from '@shared/types'
-import { mergeList, settingsPatch, useAutosave } from './useAutosave'
+import { mergeList, settingsPatch, useAutosave, withDerivedFlags } from './useAutosave'
 
 const provider: ProviderConfig = {
   id: 'anthropic',
@@ -66,7 +66,55 @@ describe('mergeList', () => {
   })
 })
 
+describe('withDerivedFlags', () => {
+  it("takes the key and sign-in flags from the current copy, the rest from the target", () => {
+    const server = { id: 'linear', command: '', url: 'https://x', transport: 'http' as const, enabled: true }
+    const older = {
+      ...base,
+      theme: 'dark',
+      providers: [{ ...provider, hasKey: false }],
+      searchKeyStatus: { tavily: false },
+      mcpServers: [{ ...server, hasOAuth: false }]
+    } as AppSettings
+    const current = {
+      ...base,
+      theme: 'light',
+      providers: [{ ...provider, hasKey: true }],
+      searchKeyStatus: { tavily: true },
+      mcpServers: [{ ...server, hasOAuth: true }]
+    } as AppSettings
+    const undone = withDerivedFlags(older, current)
+    expect(undone.theme).toBe('dark')
+    expect(undone.providers[0].hasKey).toBe(true)
+    expect(undone.searchKeyStatus).toEqual({ tavily: true })
+    expect(undone.mcpServers?.[0].hasOAuth).toBe(true)
+  })
+})
+
 describe('useAutosave', () => {
+  it('clears a failed save once a later save lands', async () => {
+    const saveSettings = vi.fn().mockRejectedValueOnce(new Error('disk full')).mockImplementation(async (s: AppSettings) => s)
+    window.api = { getSettings: vi.fn().mockResolvedValue(base), saveSettings } as unknown as typeof window.api
+    const { result, rerender } = renderHook((p: { settings: AppSettings }) =>
+      useAutosave({
+        settings: p.settings,
+        setSettings: vi.fn(),
+        initial: base,
+        containerRef: { current: null },
+        onSaved: vi.fn(),
+        delayMs: 60_000
+      }),
+      { initialProps: { settings: base } }
+    )
+    rerender({ settings: { ...base, theme: 'dark' } })
+    await act(() => result.current.flush())
+    expect(result.current.status).toBe('error')
+    expect(result.current.error).toBe('Could not save settings: disk full')
+    await act(() => result.current.flush())
+    expect(result.current.status).toBe('saved')
+    expect(result.current.error).toBeNull()
+  })
+
   it('saves a rule edit without dropping a rule saved elsewhere meanwhile', async () => {
     const keep = { action: 'allow' as const, tool: 'read_file', match: '*' }
     const drop = { action: 'deny' as const, tool: 'run_shell', match: 'rm *' }

@@ -1,7 +1,8 @@
 import { promises as fs, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { isDisabledFlag, parseFrontmatter } from '@shared/frontmatter'
+import { isDisabledFlag, parseFrontmatter, parseStructuredFrontmatter } from '@shared/frontmatter'
+import { parseSkillFields } from './agent/skillSpec'
 import {
   isCustomName,
   type CustomItem,
@@ -29,11 +30,20 @@ import { writeFileAtomicSync } from './atomic-write'
 
 const MAX_ITEMS = 200
 
-/** Where each kind lives under a project or the home folder. */
-const DIRS: Record<CustomKind, string> = {
+/**
+ * Where items live under a project or the home folder: each kind's `.houston` folder,
+ * plus `.agents/skills`, the Agent Skills format's own folder, as a second skill place.
+ */
+type Loc = CustomKind | 'skill-agents'
+const DIRS: Record<Loc, string> = {
   skill: join('.houston', 'skills'),
+  'skill-agents': join('.agents', 'skills'),
   command: join('.houston', 'commands'),
   agent: join('.houston', 'agents')
+}
+
+function isSkillLoc(loc: Loc): boolean {
+  return loc === 'skill' || loc === 'skill-agents'
 }
 
 export interface CustomizeDeps {
@@ -56,18 +66,30 @@ function rootFor(scope: CustomScope, deps: CustomizeDeps): string | null {
 }
 
 /** The folder holding all items of a kind for a scope. */
-function kindDir(kind: CustomKind, root: string): string {
-  return join(root, DIRS[kind])
+function kindDir(loc: Loc, root: string): string {
+  return join(root, DIRS[loc])
 }
 
 /** An item's own path: a skill's folder, or a command's or agent's file. */
-function itemPath(kind: CustomKind, root: string, name: string): string {
-  return kind === 'skill' ? join(kindDir(kind, root), name) : join(kindDir(kind, root), `${name}.md`)
+function itemPath(loc: Loc, root: string, name: string): string {
+  return isSkillLoc(loc) ? join(kindDir(loc, root), name) : join(kindDir(loc, root), `${name}.md`)
 }
 
 /** The file whose text describes the item (and holds its `disabled` flag). */
-function itemFile(kind: CustomKind, root: string, name: string): string {
-  return kind === 'skill' ? join(itemPath(kind, root, name), 'SKILL.md') : itemPath(kind, root, name)
+function itemFile(loc: Loc, root: string, name: string): string {
+  return isSkillLoc(loc) ? join(itemPath(loc, root, name), 'SKILL.md') : itemPath(loc, root, name)
+}
+
+/** A skill's format fields as short lines for its row, and what breaks the format. */
+function skillInfo(text: string, name: string): { details: string[]; problems: string[] } {
+  const parsed = parseSkillFields(parseStructuredFrontmatter(text).fields, name, false)
+  if (!parsed) return { details: [], problems: [] }
+  const details: string[] = []
+  if (parsed.allowedTools) details.push(`Tools: ${parsed.allowedTools.join(' ')}`)
+  if (parsed.paths) details.push(`Paths: ${parsed.paths.join(', ')}`)
+  if (parsed.license) details.push(`License: ${parsed.license}`)
+  if (parsed.compatibility) details.push(`Compatibility: ${parsed.compatibility}`)
+  return { details: details.map((d) => (d.length > 200 ? `${d.slice(0, 199)}…` : d)), problems: parsed.problems }
 }
 
 /** Whether `abs` resolves (symlinks followed) inside `root`. */
@@ -99,8 +121,9 @@ function describe(text: string): string {
   return (data.description?.trim() || first || 'No description.').slice(0, 160)
 }
 
-async function listKind(kind: CustomKind, scope: CustomScope, root: string): Promise<CustomItem[]> {
-  const dir = kindDir(kind, root)
+async function listKind(loc: Loc, scope: CustomScope, root: string): Promise<CustomItem[]> {
+  const kind: CustomKind = isSkillLoc(loc) ? 'skill' : (loc as CustomKind)
+  const dir = kindDir(loc, root)
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
@@ -120,17 +143,21 @@ async function listKind(kind: CustomKind, scope: CustomScope, root: string): Pro
       name = e.name.slice(0, -3)
     }
     if (!isCustomName(name)) continue
-    const file = itemFile(kind, root, name)
+    const file = itemFile(loc, root, name)
     const text = await readText(file)
     if (text === null) continue
+    const info = kind === 'skill' ? skillInfo(text, name) : null
     items.push({
-      id: `${kind}:${scope}:${name}`,
+      id: `${loc}:${scope}:${name}`,
       kind,
       scope,
       name,
       description: describe(text),
       file: shown(root, file, scope),
-      enabled: !isDisabledFlag(parseFrontmatter(text).data.disabled)
+      enabled: !isDisabledFlag(parseFrontmatter(text).data.disabled),
+      ...(loc === 'skill-agents' ? { source: 'agents' as const } : {}),
+      ...(info?.details.length ? { details: info.details } : {}),
+      ...(info?.problems.length ? { problems: info.problems } : {})
     })
   }
   return items
@@ -156,13 +183,18 @@ export async function listInstructionFiles(workspace: string | null, home: strin
 /** Every skill, command and agent in both places, plus the loaded instruction files. */
 export async function customizeOverview(deps: CustomizeDeps): Promise<CustomizeOverview> {
   const home = deps.home ?? homedir()
-  const kinds: CustomKind[] = ['skill', 'command', 'agent']
+  // In precedence order (the skill loader's): project over user, `.houston` over `.agents`.
+  const locs: Loc[] = ['skill', 'skill-agents', 'command', 'agent']
   const project = deps.workspace
-    ? (await Promise.all(kinds.map((k) => listKind(k, 'project', deps.workspace as string)))).flat()
+    ? (await Promise.all(locs.map((k) => listKind(k, 'project', deps.workspace as string)))).flat()
     : []
-  const user = (await Promise.all(kinds.map((k) => listKind(k, 'user', home)))).flat()
-  const taken = new Set(project.map((i) => `${i.kind}:${i.name.toLowerCase()}`))
-  for (const i of user) if (taken.has(`${i.kind}:${i.name.toLowerCase()}`)) i.shadowed = true
+  const user = (await Promise.all(locs.map((k) => listKind(k, 'user', home)))).flat()
+  const taken = new Set<string>()
+  for (const i of [...project, ...user]) {
+    const key = `${i.kind}:${i.name.toLowerCase()}`
+    if (taken.has(key)) i.shadowed = true
+    else taken.add(key)
+  }
   return { items: [...project, ...user], instructions: await listInstructionFiles(deps.workspace, home) }
 }
 
@@ -170,13 +202,13 @@ export async function customizeOverview(deps: CustomizeDeps): Promise<CustomizeO
 function parseId(
   id: unknown,
   deps: CustomizeDeps
-): { kind: CustomKind; scope: CustomScope; name: string; root: string } | null {
+): { kind: Loc; scope: CustomScope; name: string; root: string } | null {
   if (typeof id !== 'string') return null
-  const m = /^(skill|command|agent):(project|user):(.+)$/.exec(id)
+  const m = /^(skill|skill-agents|command|agent):(project|user):(.+)$/.exec(id)
   if (!m || !isCustomName(m[3])) return null
   const root = rootFor(m[2] as CustomScope, deps)
   if (!root) return null
-  return { kind: m[1] as CustomKind, scope: m[2] as CustomScope, name: m[3], root }
+  return { kind: m[1] as Loc, scope: m[2] as CustomScope, name: m[3], root }
 }
 
 /**
@@ -184,7 +216,7 @@ function parseId(
  * a committed link can't steer an edit or an open at a file elsewhere. The user's own
  * folder is theirs to arrange (it is often a link into a dotfiles repo).
  */
-function existingFile(p: { kind: CustomKind; scope: CustomScope; root: string; name: string }): string | null {
+function existingFile(p: { kind: Loc; scope: CustomScope; root: string; name: string }): string | null {
   const file = itemFile(p.kind, p.root, p.name)
   if (p.scope === 'project') return resolvesInside(p.root, file) ? file : null
   try {

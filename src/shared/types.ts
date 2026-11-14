@@ -649,9 +649,18 @@ export interface AppSettings {
    * Compact the conversation when the estimated context exceeds this many tokens.
    * Unset means automatic: a fraction of the selected model's context window
    * (COMPACTION_WINDOW_FRACTION), falling back to a fixed default when the window
-   * is unknown. Set a number to override that sizing; 0 disables compaction.
+   * is unknown. Set a number to compact sooner; it can lower the automatic
+   * threshold but never raise it (see resolveCompactionThreshold). 0 disables
+   * compaction.
    */
   compactionThreshold?: number
+  /**
+   * Compact when the estimated context exceeds this share (1 to 100) of the selected
+   * model's context window. Like `compactionThreshold` it only lowers the automatic
+   * threshold; when both are set the lower one applies. Ignored when the window is
+   * unknown. 0 disables compaction.
+   */
+  compactionThresholdPercent?: number
   /**
    * Cap (bytes) on a single shell command's output fed back to the model, keeping
    * both ends. Guards the context window from one runaway command. Must be > 0;

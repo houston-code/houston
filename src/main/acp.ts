@@ -1388,7 +1388,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         } catch (e) {
           log(`acp: could not list the workspace ${cmd.name}: ${String(e)}`)
         }
-        const where = cmd.name === 'skills' ? '.houston/skills' : '.houston/agents'
+        const where = cmd.name === 'skills' ? '.houston/skills or .agents/skills' : '.houston/agents'
         if (!items.length) return { kind: 'reply', text: `No ${cmd.name} in this workspace (${where}).` }
         return { kind: 'reply', text: items.map((i) => `- ${i.name}${i.description ? `: ${i.description}` : ''}`).join('\n') }
       }
