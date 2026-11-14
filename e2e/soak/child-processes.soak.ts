@@ -3,7 +3,7 @@ import { rmSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
 import { startSoakModel, TURN_PROMPT } from './model'
 import { soakWorkspace } from './fixtures'
-import { launchSoakApp, useSoakModel, type SoakApp } from './desktop'
+import { allowRunIfAsked, launchSoakApp, useSoakModel, type SoakApp } from './desktop'
 import { processesTagged, waitUntil } from './processes'
 
 /** A command that idles for ten minutes, findable in the process table by `tag`. */
@@ -45,7 +45,12 @@ test('terminals and stopped runs leave no processes behind', async () => {
     const composer = s.page.locator('textarea.composer__input')
     await composer.fill(`${TURN_PROMPT} 1: run the long command.`)
     await composer.press('Enter')
-    expect(await waitUntil(() => running(runTag) > 0, 60_000), 'the run started its command').toBe(true)
+    const started = Date.now()
+    while (running(runTag) === 0 && Date.now() - started < 60_000) {
+      await allowRunIfAsked(s)
+      await s.page.waitForTimeout(500)
+    }
+    expect(running(runTag), 'the run started its command').toBeGreaterThan(0)
     await s.page.getByRole('button', { name: 'Stop' }).click()
     expect(await waitUntil(() => running(runTag) === 0, 15_000), 'the stopped run\'s command ended').toBe(true)
 

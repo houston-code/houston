@@ -142,6 +142,9 @@ export async function runTurn(s: SoakApp, turn: number, timeoutMs: number): Prom
     await s.page.waitForFunction(
       (marker) => {
         ;(document.querySelector('.jump-bottom') as HTMLElement | null)?.click()
+        // Where there is no OS sandbox (the Windows runner), a shell command asks even in
+        // Full auto. Answer as a user would, once per run.
+        ;[...document.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith('Allow for run'))?.click()
         return document.body.innerText.includes(marker)
       },
       `${TURN_DONE}-${turn}`,
@@ -157,6 +160,17 @@ export async function runTurn(s: SoakApp, turn: number, timeoutMs: number): Prom
     console.log(`[soak] turn ${turn} did not finish; the window ends with:\n${tail}`)
     throw err
   }
+}
+
+/**
+ * Approve the open shell-command prompt for the rest of the run, if one is showing.
+ * Where there is no OS sandbox (the Windows runner) a shell command asks even in Full
+ * auto, as it must.
+ */
+export async function allowRunIfAsked(s: SoakApp): Promise<void> {
+  await s.page.evaluate(() => {
+    ;[...document.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith('Allow for run'))?.click()
+  })
 }
 
 /** Leave the open chat for a new, empty one. */
