@@ -26,10 +26,10 @@ afterEach(() => {
   delete document.documentElement.dataset.theme
 })
 
-function md(text: string, { visuals = true, html = false } = {}): ReturnType<typeof render> {
+function md(text: string, { visuals = true, html = false, streaming = false } = {}): ReturnType<typeof render> {
   return render(
     <VisualsContext.Provider value={{ html }}>
-      <Markdown text={text} visuals={visuals} />
+      <Markdown text={text} visuals={visuals} streaming={streaming} />
     </VisualsContext.Provider>
   )
 }
@@ -45,9 +45,16 @@ describe('svg blocks', () => {
   })
 
   it('stay code while the reply is still streaming the block', () => {
-    md('```svg\n<svg xmlns="http://www.w3.org/2000/svg">')
+    md('```svg\n<svg xmlns="http://www.w3.org/2000/svg">', { streaming: true })
     expect(screen.getByText('Rendering when complete')).toBeInTheDocument()
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('stay plain code, with no promise to render, once a reply ends without closing them', () => {
+    md('```svg\n<svg xmlns="http://www.w3.org/2000/svg">')
+    expect(screen.queryByText('Rendering when complete')).not.toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(document.querySelector('.md-codeblock__pre')?.textContent).toContain('<svg')
   })
 
   it('stay ordinary code where visuals are off', () => {

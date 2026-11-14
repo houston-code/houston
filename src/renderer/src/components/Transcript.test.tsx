@@ -22,6 +22,7 @@ import type {
   UserItem
 } from '../lib/items'
 import { Transcript } from './Transcript'
+import { ImageViewerContext } from '../lib/imageViewer'
 
 // ---- DisplayItem fixtures, built from the real lib/items types ----------
 
@@ -248,6 +249,29 @@ describe('Transcript', () => {
     // The summary is system-authored, not the user's input — no copy button.
     expect(container.querySelector('.msg--summary')).toBeInTheDocument()
     expect(container.querySelector('.msg__copy')).not.toBeInTheDocument()
+  })
+
+  it('opens an attached image full size in the viewer', () => {
+    const open = vi.fn()
+    const images = [
+      { mediaType: 'image/png', data: 'AAAA' },
+      { mediaType: 'image/png', data: 'BBBB' }
+    ]
+    render(
+      <ImageViewerContext.Provider value={{ open }}>
+        <Transcript items={[userItem({ text: 'see these', images })]} onApprove={vi.fn()} onAnswer={vi.fn()} onElicit={vi.fn()} />
+      </ImageViewerContext.Provider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Open attached image 2 full size' }))
+    expect(open).toHaveBeenCalledWith(
+      [expect.objectContaining({ label: 'Attached image 1' }), expect.objectContaining({ label: 'Attached image 2' })],
+      1
+    )
+  })
+
+  it('names an attached image without a viewer', () => {
+    renderTranscript([userItem({ text: 'see this', images: [{ mediaType: 'image/png', data: 'AAAA' }] })])
+    expect(screen.getByRole('img', { name: 'Attached image' })).toBeInTheDocument()
   })
 
   it('renders a tool row with its verb and target', () => {
@@ -674,7 +698,7 @@ describe('Transcript: staying at the latest message', () => {
     // At the bottom, then the reader scrolls up to read.
     sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 300, top: 700 })
     sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 300, top: 0 })
-    expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeInTheDocument()
 
     // More of the reply streaming in leaves the reader where they are.
     rerender(view([userItem({ id: 'u1' }), assistantItem({ id: 'a1', text: 'a long reply, longer' })]))
@@ -685,7 +709,7 @@ describe('Transcript: staying at the latest message', () => {
     rerender(view([...first, userItem({ id: 'u2', text: 'next question' })]))
     flushFrames()
     expect(scroller.scrollTop).toBe(1000)
-    expect(screen.queryByRole('button', { name: '↓' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Scroll to bottom' })).not.toBeInTheDocument()
   })
 
   it('pins to the bottom once per frame however many updates stream in', () => {
@@ -761,7 +785,7 @@ describe('Transcript: staying at the latest message', () => {
     // A row below settles from its placeholder height to its real one, and a scroll
     // event fires with the view where it was: the reader did not go anywhere.
     sizeScroller(scroller, { scrollHeight: 1540, clientHeight: 300, top: 700 })
-    expect(screen.queryByRole('button', { name: '↓' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Scroll to bottom' })).not.toBeInTheDocument()
     flushFrames()
     expect(scroller.scrollTop).toBe(1540)
     // The browser reports that jump as a scroll of its own (jsdom does not).
@@ -769,11 +793,11 @@ describe('Transcript: staying at the latest message', () => {
 
     // Scrolled up, the same growth leaves the reader where they are.
     sizeScroller(scroller, { scrollHeight: 1540, clientHeight: 300, top: 900 })
-    expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeInTheDocument()
     sizeScroller(scroller, { scrollHeight: 2000, clientHeight: 300, top: 900 })
     flushFrames()
     expect(scroller.scrollTop).toBe(900)
-    expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeInTheDocument()
   })
 
   it('stays pinned when layout pushes the view down, and catches up', () => {
@@ -784,13 +808,13 @@ describe('Transcript: staying at the latest message', () => {
     // A row above settles to its real height: scroll anchoring moves the view down a
     // little and the new card below is now out of reach. That is not the reader leaving.
     sizeScroller(scroller, { scrollHeight: 1300, clientHeight: 300, top: 730 })
-    expect(screen.queryByRole('button', { name: '↓' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Scroll to bottom' })).not.toBeInTheDocument()
     flushFrames()
     expect(scroller.scrollTop).toBe(1300)
 
     // The reader scrolling up still lets go.
     sizeScroller(scroller, { scrollHeight: 1300, clientHeight: 300, top: 400 })
-    expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeInTheDocument()
   })
 
   it('follows a card that grows after it mounts, but not a row the user opened', () => {
@@ -829,10 +853,48 @@ describe('Transcript: staying at the latest message', () => {
       Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1600 })
       act(() => onResize?.())
       expect(scroller.scrollTop).toBe(900)
-      expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeInTheDocument()
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+})
+
+describe('Transcript: screen reader status', () => {
+  const status = (container: HTMLElement): string =>
+    (container.querySelector('[aria-live="polite"]') as HTMLElement).textContent ?? ''
+  const receipt: DisplayItem = {
+    kind: 'receipt',
+    id: 'r1',
+    receipt: { v: 1, checks: [], otherCommands: 1, filesChanged: ['a.ts'], filesChangedCount: 1 }
+  }
+
+  it('says a reply is ready even when the turn ends on its receipt', () => {
+    const { container } = renderTranscript([userItem(), assistantItem(), receipt])
+    expect(status(container)).toBe('Response ready.')
+  })
+
+  it('says a turn was stopped, or why it failed', () => {
+    const { container, rerender } = renderTranscript([userItem(), assistantItem(), noticeItem({ text: 'Stopped.' })])
+    expect(status(container)).toBe('The run was stopped.')
+    rerender(
+      <Transcript
+        items={[userItem(), receipt, noticeItem({ text: 'Provider overloaded', tone: 'error' })]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+      />
+    )
+    expect(status(container)).toBe('Error: Provider overloaded')
+  })
+
+  it('stays quiet about a passing note while the run goes on', () => {
+    const { container } = renderTranscript([
+      userItem(),
+      assistantItem(),
+      noticeItem({ text: '⟳ Connection issue, retrying (2/6): reset', retry: { attempt: 2 } })
+    ])
+    expect(status(container)).toBe('')
   })
 })
 
@@ -866,6 +928,17 @@ describe('transcript detail preferences', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Collapse tools' }))
     fireEvent.click(screen.getByRole('button', { name: 'Expand tools' }))
     expect(screen.getByText('first output')).toBeInTheDocument()
+  })
+
+  it('opens and closes the rows already shown when the setting changes', () => {
+    const { rerender } = render_({})
+    expect(screen.queryByText('first output')).toBeNull()
+    rerender(<Transcript items={items()} onApprove={vi.fn()} onAnswer={vi.fn()} onElicit={vi.fn()} toolsExpanded />)
+    expect(screen.getByText('first output')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Collapse tools' })).toBeInTheDocument()
+    rerender(<Transcript items={items()} onApprove={vi.fn()} onAnswer={vi.fn()} onElicit={vi.fn()} toolsExpanded={false} />)
+    expect(screen.queryByText('first output')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Expand tools' })).toBeInTheDocument()
   })
 
   it('opens tool rows from the start with the setting on', () => {
@@ -969,6 +1042,31 @@ describe('message right-click menus and Retry', () => {
     fireEvent.contextMenu(screen.getByText('done it'), { clientX: 10, clientY: 10 })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Fork from here' }))
     expect(onForkFrom).toHaveBeenCalledWith(0)
+  })
+
+  it('offers no Retry on an earlier turn’s reply when the latest message got none', () => {
+    const items: DisplayItem[] = [
+      userItem({ id: 'u1' }),
+      assistantItem({ id: 'a1', text: 'first reply' }),
+      userItem({ id: 'u2', text: 'again' }),
+      noticeItem({ id: 'n1', text: 'Provider overloaded', tone: 'error' })
+    ]
+    const { rerender } = render(
+      <Transcript items={items} onApprove={vi.fn()} onAnswer={vi.fn()} onElicit={vi.fn()} onRetryLast={vi.fn()} />
+    )
+    // Retry would send "again", so it doesn't belong under the reply to "hello there".
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    // A message steered into the turn still leaves its reply the one to retry.
+    rerender(
+      <Transcript
+        items={[userItem({ id: 'u1' }), userItem({ id: 's1', text: 'also this', steered: true }), assistantItem({ id: 'a1' })]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+        onRetryLast={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 
   it('shows no Retry without a handler (a run is going)', () => {
