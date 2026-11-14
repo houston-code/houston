@@ -56,7 +56,9 @@ export function ShortcutsHelp({
             ✕
           </button>
         </div>
-        <div className="modal__body">
+        {/* Focusable, so the list can be scrolled with the arrow keys: the close
+            button is the sheet's only other stop. */}
+        <div className="modal__body" tabIndex={0} role="region" aria-label="Shortcut list">
           {groups.map(({ cat, items }) => (
             <section key={cat} className="shortcuts-help__group">
               <h3>{cat}</h3>

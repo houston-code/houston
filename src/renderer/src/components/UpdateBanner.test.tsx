@@ -74,6 +74,35 @@ describe('UpdateBanner', () => {
     expect(screen.getByText(/42%/)).toBeInTheDocument()
   })
 
+  it('keeps the announced text still and puts the percent on a progress bar', () => {
+    const banner = (percent: number): JSX.Element => (
+      <UpdateBanner
+        update={available}
+        progress={{ percent, bytesPerSecond: 1000, transferred: 4, total: 10 }}
+        downloaded={null}
+        failed={null}
+        onInstall={noop}
+        onDismiss={noop}
+      />
+    )
+    const { rerender } = render(banner(42))
+    const bar = screen.getByRole('progressbar', { name: 'Update download' })
+    expect(bar).toHaveAttribute('aria-valuenow', '42')
+    // What a screen reader hears from the live region doesn't change per progress event.
+    const spoken = (): string =>
+      [...screen.getByRole('status').querySelectorAll('.update-banner__label')]
+        .map((el) => {
+          const copy = el.cloneNode(true) as HTMLElement
+          copy.querySelectorAll('[aria-hidden="true"]').forEach((n) => n.remove())
+          return copy.textContent?.trim()
+        })
+        .join('')
+    const before = spoken()
+    rerender(banner(43))
+    expect(spoken()).toBe(before)
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '43')
+  })
+
   it('labels the close button "Cancel download" while the download runs', () => {
     const onDismiss = vi.fn()
     const { rerender } = render(

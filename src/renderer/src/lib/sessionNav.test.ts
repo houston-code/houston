@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest'
-import { chatAtIndex, cycleChatId } from './sessionNav'
+import { chatAtIndex, cycleChatId, windowTitle } from './sessionNav'
+
+describe('windowTitle', () => {
+  it('leads with the open chat, then the app, joined by a plain hyphen', () => {
+    expect(windowTitle('Fix the parser')).toBe('Fix the parser - Houston')
+  })
+
+  it('is just the app with no chat, or a blank title', () => {
+    expect(windowTitle(null)).toBe('Houston')
+    expect(windowTitle('  ')).toBe('Houston')
+  })
+})
 
 const list = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
 
