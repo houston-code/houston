@@ -115,7 +115,7 @@ describe('runHooks', () => {
   it('no matching hooks → not blocked, not approved, no spawn', async () => {
     const seen: SandboxRunOptions[] = []
     const r = await runHooks([], 'PreToolUse', { tool: 'read_file', input: {} }, '/ws', sig, runnerFrom({}, seen))
-    expect(r).toEqual({ blocked: false, approved: false, message: '' })
+    expect(r).toEqual({ blocked: false, approved: false, approvedBy: [], message: '' })
     expect(seen).toHaveLength(0)
   })
 
@@ -219,6 +219,23 @@ describe('runHooks', () => {
       )
       expect(r.blocked).toBe(true)
       expect(r.approved).toBe(false)
+      expect(r.approvedBy).toEqual([])
+    })
+
+    it('names, by identity, exactly the hooks that approved', async () => {
+      const user = { event: 'PreToolUse' as const, matcher: '*', command: 'ok' }
+      const silent = { event: 'PreToolUse' as const, matcher: '*', command: 'quiet' }
+      const r = await runHooks(
+        [user, silent],
+        'PreToolUse',
+        { tool: 'run_shell', input: {} },
+        '/ws',
+        sig,
+        runnerFrom({ ok: { stdout: JSON.stringify({ decision: 'approve' }) }, quiet: { stdout: '' } })
+      )
+      expect(r.approved).toBe(true)
+      expect(r.approvedBy).toHaveLength(1)
+      expect(r.approvedBy[0]).toBe(user)
     })
 
     it('collects additionalContext across hooks and returns updatedInput (last wins)', async () => {

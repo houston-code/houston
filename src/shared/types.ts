@@ -238,6 +238,14 @@ export function isApprovalPolicy(v: unknown): v is ApprovalPolicy {
 }
 
 /**
+ * The more restrictive of two approval policies, by their order in
+ * {@link APPROVAL_POLICIES} (plan is the most restrictive, full auto the least).
+ */
+export function leastPermissivePolicy(a: ApprovalPolicy, b: ApprovalPolicy): ApprovalPolicy {
+  return APPROVAL_POLICIES.indexOf(a) <= APPROVAL_POLICIES.indexOf(b) ? a : b
+}
+
+/**
  * Each policy's name as the user sees it, in both clients: the desktop's approval
  * menu and the terminal's `/approval` both print these, never the ids.
  */

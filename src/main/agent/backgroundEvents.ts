@@ -1,4 +1,4 @@
-import { systemNoteMessage, type ChatMessage, type ChildReport } from '@shared/agent'
+import { CHILD_REPORT_TAINT, systemNoteMessage, type ChatMessage, type ChildReport } from '@shared/agent'
 
 /**
  * News from background work, held for the chat that started it until the model can
@@ -193,7 +193,7 @@ export function backgroundEventsNote(events: BackgroundEvent[]): ChatMessage | n
 export function wakeNote(events: BackgroundEvent[], reports: ChildReport[]): ChatMessage | null {
   if (!events.length && !reports.length) return null
   const lines = [...describeReports(reports), ...events.map(describeEvent)]
-  return systemNoteMessage(
+  const note = systemNoteMessage(
     // The opening paragraph is what the transcript shows (see systemNoteSummary); the
     // rest, after the blank line, is for the model.
     'Background work finished while the chat was idle, so Houston continued on its own.\n\n' +
@@ -202,6 +202,10 @@ export function wakeNote(events: BackgroundEvent[], reports: ChildReport[]): Cha
       'if nothing needs doing, say so in a sentence and stop. Do not start new long-running background work just to keep waiting. ' +
       `${DATA_CAVEAT}\n${lines.join('\n')}`
   )
+  // A spawned session's summary is its own words, and it may have read someone else's
+  // text: marked so the memory taint rule sees it (no tool call in this log fetched
+  // it). A note about this chat's own shell commands carries nothing new.
+  return reports.length ? { ...note, taintSource: CHILD_REPORT_TAINT } : note
 }
 
 /** One line for the user, naming what the note told the model about. */

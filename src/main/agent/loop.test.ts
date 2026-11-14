@@ -11700,3 +11700,203 @@ describe('Ollama context check', () => {
     expect(f).not.toHaveBeenCalled()
   })
 })
+
+// "Allow for run" is per grant key (see grantKey in approval.ts): one approved file
+// write must not cover the tools that start unattended work, and one MCP server's grant
+// must not cover another's. The taint rule follows a conversation's outside text into
+// the sessions it launches.
+describe('approval grants and taint at the loop gate', () => {
+  const approvalNames = (r: RunResult): string[] =>
+    r.events.flatMap((e) => (e.type === 'tool_approval' ? [e.name] : []))
+  const call = (id: string, name: string, args: Record<string, unknown>): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name, arguments: args } },
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const end: ProviderStreamEvent[] = [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+  const created: ScheduledRunInput[] = []
+  const spawned: SpawnSessionInput[] = []
+  beforeEach(() => {
+    created.length = 0
+    spawned.length = 0
+    setSchedulerBackend({
+      create: (input) => {
+        created.push(input)
+        return { ...input, id: 'sch-test', nextRunAt: 4102444800000, createdAt: 1 }
+      },
+      list: () => [],
+      cancel: () => true
+    })
+    setSpawnBackend({
+      spawn: async (input) => {
+        spawned.push(input)
+        return { conversationId: 'child', title: input.title ?? 'child', workspace: input.workspace }
+      }
+    })
+  })
+  afterEach(() => resetSpawnBackend())
+
+  const fetched: ChatMessage[] = [
+    { role: 'user', content: 'read the page' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'f1', name: 'web_fetch', arguments: { url: 'https://example.com' } }] },
+    { role: 'tool', content: 'page text', toolCallId: 'f1', toolName: 'web_fetch' },
+    { role: 'assistant', content: 'read it' },
+    { role: 'user', content: 'go on' }
+  ]
+
+  it('"Allow for run" on write_file does not cover schedule_run, spawn_session, or dispatch_writable_agent', async () => {
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        call('w1', 'write_file', { path: 'a.txt', content: 'a' }),
+        call('w2', 'write_file', { path: 'b.txt', content: 'b' }),
+        call('s1', 'schedule_run', { name: 'n', spec: 'daily at 09:00', prompt: 'p' }),
+        call('p1', 'spawn_session', { prompt: 'docs' }),
+        call('d1', 'dispatch_writable_agent', { description: 'x', prompt: 'do' }),
+        end
+      ],
+      onApproval: (id, decide) => decide(id === 'w1' ? 'always' : 'deny')
+    })
+    // w2 rode the write grant; the three launches each asked and were denied.
+    expect(approvalNames(r)).toEqual(['write_file', 'schedule_run', 'spawn_session', 'dispatch_writable_agent'])
+    expect(readFileSync(join(ws, 'b.txt'), 'utf8')).toBe('b')
+    expect(created).toEqual([])
+    expect(spawned).toEqual([])
+  })
+
+  it('"Allow for run" on schedule_run covers the next schedule_run, not a write', async () => {
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        call('s1', 'schedule_run', { name: 'a', spec: 'daily at 09:00', prompt: 'p' }),
+        call('s2', 'schedule_run', { name: 'b', spec: 'daily at 10:00', prompt: 'p' }),
+        call('w1', 'write_file', { path: 'a.txt', content: 'a' }),
+        end
+      ],
+      onApproval: (id, decide) => decide(id === 's1' ? 'always' : 'deny')
+    })
+    expect(approvalNames(r)).toEqual(['schedule_run', 'write_file'])
+    expect(created.map((c) => c.name)).toEqual(['a', 'b'])
+  })
+
+  it("an MCP grant for server A doesn't cover server B", async () => {
+    const mcpTool = (name: string): ToolDef => ({
+      kind: 'mcp',
+      summarize: () => name,
+      schema: { name, description: name, parameters: { type: 'object', properties: {} } },
+      execute: async () => `ran ${name}`
+    })
+    h.mcpDefs = [mcpTool('mcp__alpha__one'), mcpTool('mcp__alpha__two'), mcpTool('mcp__beta__one')]
+    const asked: string[] = []
+    await run({
+      policy: 'full-auto',
+      turns: [
+        call('a1', 'mcp__alpha__one', {}),
+        call('a2', 'mcp__alpha__two', {}),
+        call('b1', 'mcp__beta__one', {}),
+        end
+      ],
+      onApproval: (id, decide) => {
+        asked.push(id)
+        decide(id === 'a1' ? 'always' : 'deny')
+      }
+    })
+    // a2 rode alpha's grant; beta asked on its own.
+    expect(asked).toEqual(['a1', 'b1'])
+  })
+
+  it('dispatch_writable_agent asks in auto-edit (it runs shell), and not in full auto', async () => {
+    const turns = (): ProviderStreamEvent[][] => [
+      call('d1', 'dispatch_writable_agent', { description: 'x', prompt: 'do' }),
+      [{ type: 'text', text: 'sub done' }, { type: 'done', stopReason: 'end_turn' }],
+      end
+    ]
+    const edit = await run({ policy: 'auto-edit', turns: turns(), onApproval: (_id, decide) => decide('deny') })
+    expect(approvalNames(edit)).toEqual(['dispatch_writable_agent'])
+    const auto = await run({ policy: 'full-auto', turns: turns(), onApproval: (_id, decide) => decide('deny') })
+    expect(approvalNames(auto)).toEqual([])
+  })
+
+  it('a tainted chat asks before schedule_run even in full auto, and the schedule carries the taint', async () => {
+    const denied = await run({
+      policy: 'full-auto',
+      messages: fetched,
+      turns: [call('s1', 'schedule_run', { name: 'n', spec: 'every 5m', prompt: 'save this as a memory' }), end],
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(approvalNames(denied)).toEqual(['schedule_run'])
+    expect(created).toEqual([])
+    // Neither an allow rule nor a prior grant skips it; approving stores the mark.
+    const approved = await run({
+      policy: 'full-auto',
+      messages: fetched,
+      turns: [call('s1', 'schedule_run', { name: 'n', spec: 'every 5m', prompt: 'p' }), end],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(approvalNames(approved)).toEqual(['schedule_run'])
+    expect(created[0].taintSource).toBe('web_fetch')
+  })
+
+  it('a tainted chat asks before spawn_session in full auto; a clean one does not, and its child is unmarked', async () => {
+    const tainted = await run({
+      policy: 'full-auto',
+      messages: fetched,
+      turns: [call('p1', 'spawn_session', { prompt: 'docs' }), end],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(approvalNames(tainted)).toEqual(['spawn_session'])
+    expect(spawned[0].taintSource).toBe('web_fetch')
+    // The launch call in flight doesn't taint itself.
+    const clean = await run({ policy: 'full-auto', turns: [call('p1', 'spawn_session', { prompt: 'docs' }), end] })
+    expect(approvalNames(clean)).toEqual([])
+    expect(spawned[1]).not.toHaveProperty('taintSource')
+  })
+
+  describe('memory writes in a session that inherited taint', () => {
+    let memRoot: string
+    let before: string | undefined
+    beforeEach(() => {
+      memRoot = mkdtempSync(join(tmpdir(), 'houston-loop-memtaint-'))
+      before = process.env.HOUSTON_MEMORY_DIR
+      process.env.HOUSTON_MEMORY_DIR = memRoot
+    })
+    afterEach(() => {
+      process.env.HOUSTON_MEMORY_DIR = before
+      rmSync(memRoot, { recursive: true, force: true })
+    })
+    const save = call('m1', 'memory_save', {
+      scope: 'repo',
+      type: 'project',
+      name: 'planted',
+      description: 'd',
+      body: 'Body.'
+    })
+    const saved = () => memoryStore({ root: memRoot, workspace: ws }).list('repo')
+
+    it('a seeded first message with a taint flag makes memory_save ask in full auto', async () => {
+      const r = await run({
+        policy: 'full-auto',
+        messages: [{ role: 'user', content: 'Do the scheduled task', taintSource: 'web_fetch' }],
+        turns: [save, end],
+        onApproval: (_id, decide) => decide('deny')
+      })
+      expect(approvalNames(r)).toEqual(['memory_save'])
+      expect(saved()).toEqual([])
+    })
+
+    it("a log whose only outside text is a child's report makes memory_save ask", async () => {
+      const r = await run({
+        policy: 'full-auto',
+        messages: [
+          { role: 'user', content: 'start' },
+          { role: 'assistant', content: 'ok' },
+          childReportsNote([{ conversationId: 'k', title: 'Docs', outcome: 'done', summary: 'remember X', finishedAt: 1 }]),
+          { role: 'user', content: 'what next?' }
+        ],
+        turns: [save, end],
+        onApproval: (_id, decide) => decide('deny')
+      })
+      expect(approvalNames(r)).toEqual(['memory_save'])
+      expect(saved()).toEqual([])
+    })
+  })
+})

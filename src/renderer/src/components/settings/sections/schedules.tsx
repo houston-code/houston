@@ -315,6 +315,7 @@ function CreateForm({
       </div>
       <p className="field__hint">
         A run that needs your approval waits in its chat until you answer. Full auto runs without asking.
+        A run never uses a looser mode than your default approval mode at the time it runs.
       </p>
       {error && (
         <p className="sched-form__bad" role="alert">

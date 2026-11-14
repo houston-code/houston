@@ -2948,7 +2948,11 @@ export interface TuiDeps {
    */
   wake?: {
     register: (tryWake: (conversationId: string) => boolean) => void
-    take: (conversationId: string) => string | null
+    /**
+     * The note's text, or the note with its {@link ChatMessage.taintSource} (a note
+     * quoting spawned sessions' reports), which the turn's message keeps.
+     */
+    take: (conversationId: string) => string | Pick<ChatMessage, 'content' | 'taintSource'> | null
   }
   /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
@@ -3657,12 +3661,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Background work finished while the composer was idle: its news is this turn's
     // input. Taken now, not when it arrived, so a draft typed meanwhile still wins.
     let wakeTurn = false
+    // What the wake note carries from outside (see ChatMessage.taintSource), kept on
+    // the turn's message so the memory taint rule still sees it.
+    let wakeTaint: string | undefined
     if (wakeRequested) {
       wakeRequested = false
-      const note = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      const taken = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      const note = typeof taken === 'string' ? taken : (taken?.content ?? null)
       if (note) {
         raw = note
         wakeTurn = true
+        if (taken && typeof taken === 'object') wakeTaint = taken.taintSource
         deps.io.out(paint('· background work finished; continuing on its own\n', 'dim'))
       } else if (raw === null && !resetComposer) continue
     }
@@ -4556,7 +4565,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       role: 'user',
       content: text,
       ...(pendingImages.length ? { images: pendingImages } : {}),
-      ...(invokedAs ? { invokedAs } : {})
+      ...(invokedAs ? { invokedAs } : {}),
+      ...(wakeTurn && wakeTaint ? { taintSource: wakeTaint } : {})
     })
     pendingImages = [] // consumed by this turn
     // Lazily open a persisted conversation on the first turn so the session
