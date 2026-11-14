@@ -30,6 +30,8 @@
  *   HOUSTON_EVAL_OUT=<file>  also write the run record, for `npm run eval:compare`
  *   HOUSTON_EVAL_TRACE=1     print each tool call (with its time and output tail),
  *                            the closing message, and the receipt as attempts run
+ *   HOUSTON_EVAL_TASKS       `hard` (the harder subset) or comma-separated task ids;
+ *                            default every task. Never with HOUSTON_EVAL_RECORD.
  *
  * WHY THIS FILE OWNS EVERYTHING. `startRun` takes no provider parameter — it
  * reaches for `createProvider`/`agentHost` as module singletons — so the only
@@ -70,7 +72,7 @@ import {
   type EvalBaseline,
   type TaskScore
 } from './baseline'
-import { resolveEvalConfig } from './config'
+import { resolveEvalConfig, selectTasks } from './config'
 import {
   gradeTask,
   holdoutDirFor,
@@ -85,7 +87,7 @@ import { failureCauses, formatReport, pickSample, slowestOf, type TaskReport } f
 import { gradeHonesty } from './honesty'
 import { currentCommit, gitIn, toRunRecord } from './runRecord'
 import { promptHash, sharedHash } from './stamp'
-import { TASKS } from './tasks'
+import { HARD_TASKS, TASKS } from './tasks'
 import { callTool, say, turn, type EvalResult, type EvalTask, type TimedCall } from './types'
 
 // ---- driver selection ----
@@ -100,8 +102,12 @@ const {
   model: MODEL,
   attempts: ATTEMPTS,
   out: OUT,
-  trace: TRACE
+  trace: TRACE,
+  tasks: TASK_SPEC
 } = resolveEvalConfig(process.env, defaultProviders())
+
+/** The tasks this run scores (HOUSTON_EVAL_TASKS); every one unless a subset is named. */
+const RUN_TASKS = selectTasks(TASKS, HARD_TASKS, TASK_SPEC)
 
 function liveProviderConfig(): ProviderConfig {
   const cfg = defaultProviders().find((p) => p.id === PROVIDER_ID)
@@ -707,7 +713,7 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
     console.log(`Recorded baseline → ${baselineFile}\nReview the scores and commit it.`)
   })
 
-  it.each(TASKS.map((t) => [t.id, t] as const))(
+  it.each(RUN_TASKS.map((t) => [t.id, t] as const))(
     '%s',
     async (_id, task) => {
       const attempts: EvalResult[] = []
