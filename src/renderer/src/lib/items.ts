@@ -17,7 +17,7 @@ import type { TurnReceipt } from '@shared/evidence'
 import type { ImageAttachment } from '@shared/images'
 import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocation'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
-import { planOutcome } from '@shared/promptOutcome'
+import { planOutcome, stoppedPromptText } from '@shared/promptOutcome'
 import { rendersAsReply } from '@shared/chatStatus'
 import { upsertFinding } from '@shared/reviewFindings'
 import { capSteps, upsertStep, type SubagentRecord } from '@shared/subagents'
@@ -26,7 +26,20 @@ import { addRound, type TurnStats } from './messageMeta'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
 
-export type ToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied'
+/**
+ * Where a tool call stands. `stopped` is an approval the run was stopped in front of:
+ * it never ran, and nobody refused it, so it is neither an error nor a denial.
+ */
+export type ToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied' | 'stopped'
+
+/** The status a finished call's result means (`ok` from a live result, absent on a saved one). */
+function resultStatus(output: string, ok?: boolean): ToolStatus {
+  if (ok) return 'done'
+  if (stoppedPromptText(output) !== null) return 'stopped'
+  if (output.startsWith('Denied') || output.startsWith('Blocked')) return 'denied'
+  // A saved result carries no ok flag, so only an explicit error reads as one.
+  return ok === false || output.startsWith('Error:') ? 'error' : 'done'
+}
 
 export interface UserItem {
   kind: 'user'
@@ -668,11 +681,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         const status = planOutcome(e.output)
         return items.map((it) => (it.kind === 'plan' && it.id === e.callId ? { ...it, status } : it))
       }
-      const status: ToolStatus = e.ok
-        ? 'done'
-        : e.output.startsWith('Denied') || e.output.startsWith('Blocked')
-          ? 'denied'
-          : 'error'
+      const status = resultStatus(e.output, e.ok)
       const patched = updateTool(items, e.callId, {
         status,
         output: e.output,
@@ -963,13 +972,7 @@ export function itemsFromMessages(
           continue
         }
         const output = res?.output
-        const status: ToolStatus = !output
-          ? 'done'
-          : output.startsWith('Denied') || output.startsWith('Blocked')
-            ? 'denied'
-            : output.startsWith('Error:')
-              ? 'error'
-              : 'done'
+        const status: ToolStatus = output ? resultStatus(output) : 'done'
         items.push({
           kind: 'tool',
           id: tc.id,
