@@ -8,13 +8,18 @@
   <true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
-  <!-- Electron reads a few DYLD_* / ELECTRON_* environment variables during startup. -->
-  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
-  <true/>
+  <!-- No com.apple.security.cs.allow-dyld-environment-variables: Electron does not need
+       it, and with it any process could inject a library into the signed app through
+       DYLD_INSERT_LIBRARIES and act as Houston (the keychain hands Houston's stored keys
+       to code signed as Houston). -->
   <!-- Houston loads the node-pty native addon and spawns the vendored CLI binaries
        (ripgrep, ast-grep) from Resources/bin. They are signed with the same Developer
        ID during packaging, but disabling library validation keeps loading/spawning
-       robust under the hardened runtime. -->
+       robust under the hardened runtime, and lets an ad-hoc re-signed copy (no team ID,
+       as the packaged e2e launches) load its own frameworks. Library validation only
+       guards dlopen of a foreign library, which needs code already running in the app:
+       the Electron fuses (scripts/electron-fuses.mjs) close the debugger, NODE_OPTIONS
+       and RUN_AS_NODE ways in, and the missing DYLD entitlement closes injection. -->
   <key>com.apple.security.cs.disable-library-validation</key>
   <true/>
 </dict>

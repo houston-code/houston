@@ -97,10 +97,29 @@ export function logSafe(text) {
  * branch that failed.
  */
 export function fixBranchName(prefix, runId, attempt) {
+  checkPrefix(prefix)
+  return `${prefix}fix-ci-${runId}-${attempt}`
+}
+
+function checkPrefix(prefix) {
   if (!/^[A-Za-z0-9._/-]+\/$/.test(prefix) || prefix.includes('..')) {
     throw new Error(`branch-prefix must be a plain path ending in "/", like houston/ (got ${JSON.stringify(prefix)})`)
   }
-  return `${prefix}fix-ci-${runId}-${attempt}`
+}
+
+/**
+ * The branch an implement run pushes: under the prefix, named only from numbers (the
+ * issue, when there is one, and this workflow run's id and attempt), so it is always new
+ * and never the default branch or the branch it starts from.
+ */
+export function implementBranchName(prefix, issue, runId, attempt) {
+  checkPrefix(prefix)
+  for (const [what, n] of [['run id', runId], ['run attempt', attempt]]) {
+    if (!Number.isSafeInteger(n) || n < 1) throw new Error(`the workflow ${what} is not a positive number (got ${JSON.stringify(n)})`)
+  }
+  if (issue === null) return `${prefix}task-${runId}-${attempt}`
+  if (!Number.isSafeInteger(issue) || issue < 1) throw new Error(`not an issue number: ${JSON.stringify(issue)}`)
+  return `${prefix}implement-${issue}-${runId}-${attempt}`
 }
 
 /** Refuse a push target that is the default branch or outside the fix prefix. */

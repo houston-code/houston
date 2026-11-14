@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isDisabledFlag, parseFrontmatter } from '@shared/frontmatter'
 import { mergeCommands, type Command } from '@shared/commands'
+import { loadSkills, skillCommands } from './skills'
 
 /**
  * Load custom slash commands.
@@ -90,4 +91,15 @@ export async function loadCommands(workspace: string, home: string = homedir()):
     loadFrom(join(home, USER_COMMANDS_DIR))
   ])
   return mergeCommands(project, user).sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * Everything a client offers after a slash beyond its built-ins: the custom commands
+ * from {@link loadCommands}, then one `/<skill-name>` per loaded skill. A custom
+ * command wins a name clash with a skill, as the built-ins win over both where the
+ * clients merge them in.
+ */
+export async function loadSlashCommands(workspace: string, home: string = homedir()): Promise<Command[]> {
+  const [commands, skills] = await Promise.all([loadCommands(workspace, home), loadSkills(workspace, home)])
+  return mergeCommands(commands, skillCommands(skills))
 }

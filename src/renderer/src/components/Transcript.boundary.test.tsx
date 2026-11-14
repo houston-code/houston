@@ -26,7 +26,7 @@ describe('Transcript row error boundary', () => {
       { kind: 'assistant', id: 'a3', text: 'last reply', streaming: false }
     ]
     render(<Transcript items={items} onApprove={vi.fn()} onAnswer={vi.fn()} onElicit={vi.fn()} />)
-    expect(screen.getByText("This item couldn't be shown.")).toBeInTheDocument()
+    expect(screen.getByText("This item failed to render.")).toBeInTheDocument()
     expect(screen.getByText('question')).toBeInTheDocument()
     expect(screen.getByText('first reply')).toBeInTheDocument()
     expect(screen.getByText('a later notice')).toBeInTheDocument()
@@ -44,9 +44,9 @@ describe('Transcript row error boundary', () => {
       />
     )
     const { rerender } = render(view('boom'))
-    expect(screen.getByText("This item couldn't be shown.")).toBeInTheDocument()
+    expect(screen.getByText("This item failed to render.")).toBeInTheDocument()
     rerender(view('boom, then more'))
-    expect(screen.queryByText("This item couldn't be shown.")).toBeNull()
+    expect(screen.queryByText("This item failed to render.")).toBeNull()
     expect(screen.getByText('boom, then more')).toBeInTheDocument()
   })
 })

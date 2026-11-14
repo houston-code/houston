@@ -32,7 +32,7 @@ import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type Sign
 import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
-import type { AgentEvent } from '@shared/agent'
+import type { AgentEvent, ConversationMeta } from '@shared/agent'
 import { setSpawnBackend } from './agent/spawn'
 import { setSchedulerBackend } from './agent/scheduler'
 import { createSpawnBackend } from './spawnSession'
@@ -43,7 +43,7 @@ import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps } from './
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
-import { loadCommands } from './agent/commands'
+import { loadSlashCommands } from './agent/commands'
 import { compactConversationNow } from './agent/compact'
 import {
   getConversationCheckpoint,
@@ -133,14 +133,24 @@ import {
 } from './conversations'
 
 /** Resume-picker rows, each marked with the desktop app's unread state for it. */
-function withUnread(convs: { id: string; title: string; updatedAt: number }[]): ResumeEntry[] {
+function withUnread(convs: { id: string; title: string; updatedAt: number; workspace?: string }[]): ResumeEntry[] {
   const unread = new ReadStateStore(join(getUserDataDir(), 'read-state.json')).snapshot()
   return convs.map((c) => ({
     id: c.id,
     title: c.title,
     updatedAt: c.updatedAt,
+    ...(c.workspace ? { workspace: c.workspace } : {}),
     ...(unread[c.id] ? { unread: unread[c.id].outcome } : {})
   }))
+}
+
+/** How many chats the resume picker lists: per folder, and across every folder. */
+const RESUME_LIMIT = 20
+const RESUME_ALL_LIMIT = 50
+
+/** Newest first, `limit` at most, with the desktop's unread state. */
+function resumeEntries(convs: ConversationMeta[], limit: number): ResumeEntry[] {
+  return withUnread([...convs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit))
 }
 
 /**
@@ -595,7 +605,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // already knew their names. Loaded once; the menu redraws on every keystroke and
   // must not touch the disk.
   let menuCommands: CommandSpec[] = [...COMMANDS]
-  void loadCommands(tui.cwd)
+  void loadSlashCommands(tui.cwd)
     .then((custom) => {
       menuCommands = mergeCommands(COMMANDS, custom).map((c) => ({
         name: c.name,
@@ -780,7 +790,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         }
       },
       // Custom slash commands from the workspace's .houston/commands (for /<name>).
-      commands: () => loadCommands(tui.cwd),
+      commands: () => loadSlashCommands(tui.cwd),
       // On-demand context compaction for the /compact command.
       compact: (id, providerId, model, opts) => compactConversationNow(id, providerId, model, opts),
       // Settings editing for /hooks and /mcp (writes the shared settings.json, 0600).
@@ -821,19 +831,18 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         // marked with the desktop app's unread state (read fresh each time, and only
         // read: the app owns that file and would overwrite a write from here).
         list: (workspace) =>
-          withUnread(
-            listConversations()
-              .filter((c) => c.workspace === workspace)
-              .sort((a, b) => b.updatedAt - a.updatedAt)
-              .slice(0, 20)
+          resumeEntries(
+            listConversations().filter((c) => c.workspace === workspace),
+            RESUME_LIMIT
           ),
         search: (workspace, query) =>
-          withUnread(
-            searchConversations(query)
-              .filter((c) => c.workspace === workspace)
-              .sort((a, b) => b.updatedAt - a.updatedAt)
-              .slice(0, 20)
+          resumeEntries(
+            searchConversations(query).filter((c) => c.workspace === workspace),
+            RESUME_LIMIT
           ),
+        // The picker's Ctrl-A scope: every folder's chats, each with its folder.
+        listAll: () => resumeEntries(listConversations(), RESUME_ALL_LIMIT),
+        searchAll: (query) => resumeEntries(searchConversations(query), RESUME_ALL_LIMIT),
         fork: (id) => {
           const forked = forkConversation(id)
           return forked ? { id: forked.id } : null
@@ -1099,7 +1108,7 @@ export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
           title: (id) => peekConversation(id)?.title
         },
         // The workspace's own slash commands, skills and agents, read fresh each time.
-        commands: (cwd) => loadCommands(cwd),
+        commands: (cwd) => loadSlashCommands(cwd),
         skills: async (cwd) => (await loadSkills(cwd)).map((k) => ({ name: k.name, description: k.description })),
         agents: async (cwd) => (await loadAgents(cwd)).map((a) => ({ name: a.name, description: a.description })),
         compact: (id, providerId, model) => compactConversationNow(id, providerId, model)

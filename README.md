@@ -92,6 +92,14 @@ Open source under the [Apache License 2.0](LICENSE).
   check that some text is or isn't shown) to try a flow such as logging in and get a
   pass or fail for each step, or capture the page at several viewports and color
   schemes in one call.
+- **Test a flow across calls.** `browser_session` keeps one localhost page open for
+  the rest of a turn, so cookies and page state carry over between calls: `open` a
+  URL, `act` with the same steps (naming elements by a ref from the last snapshot or
+  by selector), `snapshot` the accessibility tree with a screenshot, read recent
+  `console` messages and `network` requests (method, URL, status, timing), and
+  `close`. It runs in the same hardened offscreen window, loopback pin, and network
+  guards as `view_localhost`, with its own in-memory cookies, and shares its
+  per-host approvals (`act` asks separately). Desktop app only.
 - **Mockups and image galleries.** `render_mockup` turns an HTML mockup file in the
   project into screenshots at desktop, tablet, or mobile sizes, in a locked-down
   hidden browser with no network, and `show_images` shows image files the agent
@@ -266,7 +274,10 @@ Open source under the [Apache License 2.0](LICENSE).
   `model:` pins the agent to a
   (usually cheaper) sibling model from the current provider. Add a
   `.houston/skills/<name>/SKILL.md` to register a skill: its description is
-  surfaced to the agent, which reads the full instructions on demand. Agents,
+  surfaced to the agent, which reads the full instructions on demand. Skills in
+  the open Agent Skills format are read from `.agents/skills/` too, with their
+  `license`, `compatibility`, `metadata`, `allowed-tools` (which only ever narrows
+  the tools in use) and `paths:` triggers, and `/<skill-name>` runs one. Agents,
   skills, and custom commands in `~/.houston/` work in every project (a project's
   own wins a name clash). **Settings > Customize** lists them all, creates new
   ones from a template, opens them in your editor, switches them off and on, and
@@ -1136,7 +1147,7 @@ vice versa. Set `HOUSTON_DATA_DIR` to use an isolated profile (useful for CI
 and servers).
 
 **What's desktop-only.** Capabilities that genuinely need the desktop shell are
-absent: `view_localhost` and `render_mockup` (screenshots need Chromium) are not
+absent: `view_localhost`, `browser_session`, and `render_mockup` (they need Chromium) are not
 offered to the model at all in the CLI; the live Preview dock, integrated
 terminal, Files panel, diagram rendering, and auto-update are GUI features. Search tools degrade gracefully:
 `search_files` uses `ripgrep` from your `PATH` when present and falls back to a
@@ -1387,7 +1398,7 @@ the agent loop and UI never depend on a specific provider.
   the OS sandbox confines shell commands (macOS, Linux with bubblewrap), and in *ask*
   elsewhere; an existing install keeps its saved mode. Network egress prompts per
   destination, even in *full auto*, since it leaves the machine (`web_fetch` once per
-  site, `web_search` once per chat, `view_localhost` once per host, GitHub writes once
+  site, `web_search` once per chat, `view_localhost` and `browser_session` once per host, GitHub writes once
   per repository); *allow-for-the-run* covers only that destination. GitHub reads run
   without asking in *full auto*, merges, closes, checkouts, and repository creation
   always ask, and MCP tool calls always ask. A shell command that can throw away
@@ -1416,6 +1427,13 @@ the agent loop and UI never depend on a specific provider.
   Houston's own network tools refuse to send a request that carries one.
 - **Keys at rest** are encrypted via the OS credential store; only ciphertext is
   written to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
+- **The packaged app runs only its own code.** Its Electron fuses ignore `--inspect`
+  and `NODE_OPTIONS`, load the app only from an integrity-checked `app.asar`, and
+  (except on Linux, where the shell sandbox's network forwarder needs it) ignore
+  `ELECTRON_RUN_AS_NODE`; the macOS build doesn't accept `DYLD_*` variables. So
+  another program can't start Houston as a debugger or plain Node and run its own
+  code as Houston, which on macOS is what would let it ask the Keychain for
+  Houston's keys.
 
 Coding agents run model-authored commands. Treat *full auto* + network with the
 same caution you'd treat running untrusted code, and switch to *ask* or *auto-edit*

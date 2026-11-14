@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { TipId } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './Popover'
-import { isMacPlatform } from '../lib/shortcuts'
+import { formatChord, isMacPlatform } from '../lib/shortcuts'
 
 /**
  * A one-shot tip pinned to a real control. The anchor is found by its `data-tour`
@@ -13,20 +13,20 @@ import { isMacPlatform } from '../lib/shortcuts'
 
 /** A tip's text. Shortcuts are spelled for the platform (⌘ and ⇧ on macOS). */
 export function tipCopy(id: TipId, mac: boolean): { title: string; body: string } {
-  // Non-breaking spaces keep a shortcut ("⌘ + ↵") on one line when the body wraps.
-  const key = (...parts: string[]): string => parts.join('\u00a0+\u00a0')
-  const mod = mac ? '⌘' : 'Ctrl'
-  const shift = mac ? '⇧' : 'Shift'
+  // Spelled the way the shortcut sheet and the message box spell them.
+  const cycleMode = formatChord({ key: 'Tab', shift: true }, mac)
+  const queue = formatChord({ key: 'Enter', mod: true }, mac)
+  const palette = formatChord({ key: 'k', mod: true }, mac)
   switch (id) {
     case 'approval':
       return {
         title: 'You stay in control',
-        body: `This sets how much Houston can do without asking. Plan mode only reads and plans. ${key(shift, 'Tab')} cycles modes.`
+        body: `This sets how much Houston can do without asking. Plan mode only reads and plans. ${cycleMode} cycles modes.`
       }
     case 'worktree':
       return {
         title: 'Keep your checkout clean',
-        body: 'With New worktree on, this chat runs on its own branch in a separate folder on a separate git worktree.'
+        body: 'With New worktree on, this chat runs on its own branch in a separate worktree folder.'
       }
     case 'context':
       return {
@@ -36,7 +36,7 @@ export function tipCopy(id: TipId, mac: boolean): { title: string; body: string 
     case 'steer':
       return {
         title: 'Redirect it mid-run',
-        body: `Steer (↵) sends this now; Houston reads it before its next step. Queue (${key(mod, '↵')}) waits until the run ends.`
+        body: `Steer (↵) sends this now; Houston reads it before its next step. Queue (${queue}) waits until the run ends.`
       }
     case 'changes':
       return {
@@ -46,7 +46,7 @@ export function tipCopy(id: TipId, mac: boolean): { title: string; body: string 
     case 'revert':
       return {
         title: 'Every edit is undoable',
-        body: `Revert rolls back this turn's file edits. Redo restores them. Everything else: ${key(mod, 'K')}.`
+        body: `Revert rolls back this turn's file edits. Redo restores them. Everything else: ${palette}.`
       }
   }
 }

@@ -18,8 +18,8 @@ export interface SettingsCtx {
   setKeyInputs: Dispatch<SetStateAction<Record<string, string>>>
   /** Show an error in the footer (null clears it). */
   setFormError: (error: string | null) => void
-  /** Store an API key in the OS secret store (never in settings.json). */
-  saveKey: (id: string) => Promise<void>
+  /** Store an API key in the OS secret store (never in settings.json); true once saved. */
+  saveKey: (id: string) => Promise<boolean>
   removeKey: (id: string) => Promise<void>
   /**
    * Persist the working copy now. For actions main performs against the saved

@@ -55,6 +55,24 @@ if (scenario === 'respond') {
   check(!gh.some((c) => c.args[0] === 'pr' && c.args[1] === 'create'), 'post: false opened no pull request')
   const summary = readFileSync(process.env.REPLY_FILE ?? join(dir, 'reply-fix-ci.md'), 'utf8')
   check(summary.includes('Verification: passed'), 'the verify command ran and passed')
+} else if (scenario === 'implement') {
+  const git = (...args) => execFileSync('git', args, { cwd: join(dir, 'repo'), encoding: 'utf8' }).trim()
+  const branch = process.env.BRANCH ?? ''
+  check(/^houston\/implement-7-\d+-\d+$/.test(branch), `committed on a new implement branch (got ${branch || 'none'})`)
+  check(git('rev-parse', '--abbrev-ref', 'HEAD') === branch, 'the checkout is on that branch')
+  check(git('show', `${branch}:farewell.mjs`).includes("'goodbye'"), 'the branch has the change')
+  check(!git('ls-tree', '--name-only', 'main').split('\n').includes('farewell.mjs'), 'the default branch is untouched')
+  check(git('log', '-1', '--format=%s', branch) === 'Implement issue #7', 'the commit names the issue')
+  check(gh.some((c) => c.args[0] === 'api' && c.args[1].endsWith('/collaborators/maintainer/permission')), 'checked the labeller permission')
+  check(!gh.some((c) => c.args[0] === 'pr' && c.args[1] === 'create'), 'post: false opened no pull request')
+  const body = readFileSync(process.env.REPLY_FILE ?? '', 'utf8')
+  check(body.includes('Closes #7.'), 'the pull request body links the issue')
+} else if (scenario === 'task') {
+  const report = readFileSync(process.env.REPLY_FILE ?? '', 'utf8')
+  check(report.includes('Weekly report'), 'the report is the final answer')
+  check(gh.every((c) => c.args[0] !== 'issue' && c.args[0] !== 'pr'), 'a task posts nothing')
+  const run = requests.filter((r) => firstUser(r).includes('scheduled GitHub Actions job'))
+  check(run.some((r) => firstUser(r).includes('----- task from the workflow -----')), 'the task is delimited in the prompt')
 } else {
   failures.push(`unknown scenario ${scenario}`)
 }

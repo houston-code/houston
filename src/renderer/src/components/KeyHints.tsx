@@ -21,6 +21,7 @@ export function keyHintList(keys: { palette?: string; cycleMode?: string }): { k
     { keys: '/', does: 'commands' },
     { keys: '@', does: 'files' },
     { keys: '#', does: 'save a rule' },
+    { keys: '!', does: 'run in terminal' },
     ...(keys.cycleMode ? [{ keys: keys.cycleMode, does: 'switch mode' }] : []),
     { keys: '↑', does: 'last prompt' },
     ...(keys.palette ? [{ keys: keys.palette, does: 'everything else' }] : [])

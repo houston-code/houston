@@ -39,7 +39,8 @@ describe('useBackgroundTasks', () => {
     const byId = Object.fromEntries(result.current.tasks.map((t) => [t.id, t]))
     expect(byId.t1).toMatchObject({ kind: 'terminal', status: 'running' })
     expect(byId.t2).toMatchObject({ kind: 'terminal', status: 'done' })
-    expect(byId.t3).toMatchObject({ kind: 'terminal', status: 'error' })
+    // The exit code rides along, so the row reads "Failed (exit 1)" rather than "Stopped".
+    expect(byId.t3).toMatchObject({ kind: 'terminal', status: 'error', exitCode: 1 })
   })
 
   it('lists background shells with status from running/exit code and carries the spawning conversation', () => {

@@ -555,8 +555,8 @@ describe('mcp manager: servers shared between live runs', () => {
     // Run 1 can still call its project server.
     const call = first.find((d) => d.schema.name === mcpToolName('proj-a', 'echo'))!
     expect(await call.execute({}, noCtx)).not.toContain('no longer connected')
-    // And run 2 is offered only its own servers, not run 1's.
-    expect(second.map((d) => d.schema.name)).toEqual([mcpToolName('shared', 'echo'), mcpToolName('proj-b', 'echo')])
+    // And run 2 is offered only its own servers, not run 1's (sorted by server id).
+    expect(second.map((d) => d.schema.name)).toEqual([mcpToolName('proj-b', 'echo'), mcpToolName('shared', 'echo')])
   })
 
   it('closes a server once the run that wanted it has ended and another reconcile runs', async () => {
@@ -1251,6 +1251,39 @@ describe('mcp manager: Stop', () => {
     const next = await getMcpToolDefs([cfg()])
     expect(next.map((d) => d.schema.name)).toEqual([mcpToolName('srv', 'slow')])
     expect(created).toHaveLength(1)
+  })
+})
+
+describe('mcp manager: a stable tool order', () => {
+  it('offers tools sorted by server, then by name, whatever order they connected or were listed in', async () => {
+    /** A stdio server listing `names` in that order, answering after `delayMs`. */
+    const listing = (names: string[], delayMs: number): SpawnFn =>
+      (() => {
+        const stdout = new EventEmitter()
+        const stdin = Object.assign(new EventEmitter(), {
+          write(line: string): boolean {
+            const msg = JSON.parse(line.trim()) as { id?: number; method: string }
+            if (msg.id === undefined) return true
+            const result = msg.method === 'tools/list' ? { tools: names.map((name) => ({ name })) } : {}
+            setTimeout(() => stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`)), delayMs)
+            return true
+          }
+        })
+        return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+      }) as unknown as SpawnFn
+    // "zeta" connects first, "alpha" last; each lists its tools out of order.
+    const zeta = listing(['b', 'a'], 1)
+    const alpha = listing(['y', 'x'], 15)
+    const spawn = ((cmd: string, args: string[], options: object) =>
+      (cmd === 'zeta' ? zeta : alpha)(cmd, args, options)) as unknown as SpawnFn
+    _setMcpClientFactory(() => new McpClient(spawn))
+    const defs = await getMcpToolDefs([cfg({ id: 'zeta', command: 'zeta' }), cfg({ id: 'alpha', command: 'alpha' })])
+    expect(defs.map((d) => d.schema.name)).toEqual([
+      mcpToolName('alpha', 'x'),
+      mcpToolName('alpha', 'y'),
+      mcpToolName('zeta', 'a'),
+      mcpToolName('zeta', 'b')
+    ])
   })
 })
 

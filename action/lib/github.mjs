@@ -61,6 +61,49 @@ export async function postReview(exec, repository, number, bodyFile) {
   return `https://github.com/${repository}/pull/${number}`
 }
 
+/**
+ * The pull request's review comments as `{ body, userType, association }` rows, every
+ * page of them. Each comment comes back as one line of JSON (jq's `@json`), so a body's
+ * own line breaks can't split a row.
+ */
+export async function listReviewComments(exec, repository, number) {
+  const out = await gh(exec, [
+    'api',
+    '--paginate',
+    `repos/${repository}/pulls/${number}/comments?per_page=100`,
+    '--jq',
+    '.[] | {body: .body, userType: .user.type, association: .author_association} | @json'
+  ])
+  const rows = []
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      rows.push(JSON.parse(line))
+    } catch {
+      // not a row: ignore it rather than trust it
+    }
+  }
+  return rows
+}
+
+/**
+ * One comment review with inline comments on the diff, from a JSON request body file
+ * (`{ commit_id, event: 'COMMENT', body, comments }`). Returns the review's URL.
+ */
+export async function postReviewWithComments(exec, repository, number, payloadFile) {
+  const out = await gh(exec, [
+    'api',
+    '--method',
+    'POST',
+    `repos/${repository}/pulls/${number}/reviews`,
+    '--input',
+    payloadFile,
+    '--jq',
+    '.html_url'
+  ])
+  return out.trim() || `https://github.com/${repository}/pull/${number}`
+}
+
 /** Open the fix pull request. Returns its URL. */
 export async function createPullRequest(exec, repository, { base, head, title, bodyFile, draft }) {
   // `--flag=value`: a branch name from the event can never be read as another flag.

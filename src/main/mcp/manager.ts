@@ -470,8 +470,10 @@ export async function getMcpToolDefs(
 
   const defs: ToolDef[] = []
   // Only this run's servers: another live run's may be connected too, and are not
-  // this run's to call.
-  const own = [...connections].filter(([id]) => mine.has(id))
+  // this run's to call. Sorted, with each server's tools sorted below, so the tool
+  // list is the same on every request whatever order servers connected in or listed
+  // their tools: a reordered list would miss the provider's prompt cache.
+  const own = [...connections].filter(([id]) => mine.has(id)).sort(([a], [b]) => byCodeUnit(a, b))
   const exposed = exposeMcpTools(
     own.map(([serverId, conn]) => ({ serverId, tools: conn.client.tools })),
     warnOnce
@@ -483,7 +485,7 @@ export async function getMcpToolDefs(
     }
   }
   for (const { serverId, tools } of exposed) {
-    for (const t of tools) {
+    for (const t of [...tools].sort((a, b) => byCodeUnit(a.name, b.name))) {
       const fullName = t.name
       const original = t.original
       defs.push({
@@ -616,6 +618,11 @@ function presentMcpResult(
 function liveMcpToolNames(): string[] {
   const exposed = exposeMcpTools([...connections].map(([serverId, conn]) => ({ serverId, tools: conn.client.tools })))
   return exposed.flatMap((s) => s.tools.map((t) => t.name))
+}
+
+/** Plain code-unit order: locale-independent, so every machine sorts the same. */
+function byCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 /** Problems already logged for a server's tool list, so a reused list doesn't log them every run. */

@@ -32,6 +32,8 @@ export type ShortcutId =
   | 'insert-newline'
   | 'edit-last-message'
   | 'history-recall'
+  | 'history-search'
+  | 'shell-escape'
 
 export type ShortcutCategory = 'General' | 'Navigation' | 'Chat' | 'Modes'
 
@@ -221,6 +223,21 @@ export const SHORTCUTS: ShortcutDef[] = [
     category: 'Chat',
     scope: 'composer',
     display: () => '↑ / ↓'
+  },
+  {
+    id: 'history-search',
+    // Ctrl on every platform (on macOS ⌘R is left alone), as in a shell.
+    chords: [{ key: 'r', ctrl: true }],
+    label: 'Search the messages you sent before',
+    category: 'Chat',
+    scope: 'composer'
+  },
+  {
+    id: 'shell-escape',
+    chords: [{ key: '!' }],
+    label: 'Run a command in the terminal (start the message with !)',
+    category: 'Chat',
+    scope: 'composer'
   }
 ]
 

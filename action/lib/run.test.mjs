@@ -55,7 +55,18 @@ function resultLine(o = {}) {
  * the CLI (`onCli` can change the checkout mid-run) and gh, while git runs for real except
  * `push`, which is only recorded.
  */
-function world({ eventName, event, inputs = {}, cliOut = resultLine(), onCli, permission = 'write', repo = gitRepo() }) {
+function world({
+  eventName,
+  event,
+  inputs = {},
+  cliOut = resultLine(),
+  onCli,
+  permission = 'write',
+  repo = gitRepo(),
+  reviewComments = '',
+  reviewPostFails = false,
+  extraEnv = {}
+}) {
   const temp = mkdtempSync(join(tmpdir(), 'h-runner-'))
   const eventPath = join(temp, 'event.json')
   writeFileSync(eventPath, JSON.stringify(typeof event === 'function' ? event(repo) : event))
@@ -71,6 +82,7 @@ function world({ eventName, event, inputs = {}, cliOut = resultLine(), onCli, pe
     HOUSTON_NODE: NODE,
     HOUSTON_ACTION_API_KEY: API_KEY,
     GH_TOKEN,
+    ...extraEnv,
     ...Object.fromEntries(Object.entries(inputs).map(([k, v]) => [`HOUSTON_INPUT_${k.toUpperCase().replace(/-/g, '_')}`, v]))
   }
   const calls = []
@@ -87,6 +99,11 @@ function world({ eventName, event, inputs = {}, cliOut = resultLine(), onCli, pe
     }
     if (cmd === 'gh') {
       if (args[0] === 'api' && args[1].endsWith('/permission')) return { code: 0, stdout: `${permission}\n`, stderr: '' }
+      if (args[0] === 'api' && args[1] === '--paginate') return { code: 0, stdout: reviewComments, stderr: '' }
+      if (args[0] === 'api' && payloadArg(args)) {
+        if (reviewPostFails) return { code: 1, stdout: '', stderr: 'HTTP 422: Line could not be resolved' }
+        return { code: 0, stdout: 'https://github.com/acme/widgets/pull/4#pullrequestreview-1\n', stderr: '' }
+      }
       if (args[0] === 'issue' && args[1] === 'comment') return { code: 0, stdout: 'https://github.com/acme/widgets/issues/12#c1\n', stderr: '' }
       if (args[0] === 'pr' && args[1] === 'create') return { code: 0, stdout: 'https://github.com/acme/widgets/pull/13\n', stderr: '' }
       return { code: 0, stdout: '', stderr: '' }
@@ -101,6 +118,12 @@ function world({ eventName, event, inputs = {}, cliOut = resultLine(), onCli, pe
   const cliCall = () => calls.find((c) => c.cmd === NODE && c.args[1] !== 'providers')
   const gh = (a, b) => calls.filter((c) => c.cmd === 'gh' && c.args[0] === a && c.args[1] === b)
   return { env, calls, logs, go, outputs, cliCall, gh, repo, temp }
+}
+
+/** The `--input` file of a `gh api` call, if it has one. */
+function payloadArg(args) {
+  const i = args.indexOf('--input')
+  return i >= 0 ? args[i + 1] : undefined
 }
 
 const mention = (comment = {}) => ({
@@ -204,6 +227,95 @@ describe('review', () => {
     expect(w.cliCall().opts.input).toContain('review_changes with base')
     const [review] = w.gh('pr', 'review')
     expect(review.args.slice(0, 6)).toEqual(['pr', 'review', '4', '--repo', REPO, '--comment'])
+  })
+
+  // The template's feature commit changes app.js line 1.
+  const prAt = (r) => ({
+    action: 'synchronize',
+    pull_request: { number: 4, base: { sha: r.base }, head: { sha: r.head, repo: { full_name: REPO } } }
+  })
+  const findingLine = (o = {}) =>
+    JSON.stringify({
+      type: 'review_finding',
+      parentCallId: 'c1',
+      finding: {
+        id: 'correctness:0',
+        dimension: 'correctness',
+        severity: 'high',
+        status: 'confirmed',
+        location: 'app.js:1',
+        title: 'Still a bug',
+        detail: 'It prints the wrong thing.',
+        ...o
+      }
+    })
+  const reviewOut = (...findings) => [...findings, resultLine({ finalText: 'One finding.' })].join('\n')
+  const reviewPost = (w) => w.calls.find((c) => c.cmd === 'gh' && c.args[0] === 'api' && payloadArg(c.args))
+
+  it('posts findings inline on their diff lines, inside the one review', async () => {
+    const w = world({
+      eventName: 'pull_request',
+      event: prAt,
+      cliOut: reviewOut(
+        findingLine(),
+        findingLine({ id: 'x:1', location: 'app.js:9', title: 'off the diff' }),
+        findingLine({ id: 'x:2', status: 'rejected', title: 'dropped' })
+      )
+    })
+    expect(await w.go()).toBe(0)
+    const post = reviewPost(w)
+    expect(post.args.slice(0, 4)).toEqual(['api', '--method', 'POST', `repos/${REPO}/pulls/4/reviews`])
+    const payload = JSON.parse(readFileSync(payloadArg(post.args), 'utf8'))
+    expect(payload).toMatchObject({ commit_id: w.repo.head, event: 'COMMENT' })
+    expect(payload.body).toMatch(/^One finding\./)
+    expect(payload.comments).toHaveLength(1)
+    expect(payload.comments[0]).toMatchObject({ path: 'app.js', line: 1, side: 'RIGHT' })
+    expect(payload.comments[0].body).toMatch(/^\*\*HIGH\*\* Still a bug[\s\S]*<!-- houston-finding:[0-9a-f]{16} -->$/)
+    expect(w.gh('pr', 'review')).toEqual([])
+    expect(w.outputs()).toContain('pullrequestreview-1')
+  })
+
+  it('does not repeat a finding whose marker an app or collaborator already posted', async () => {
+    const first = world({ eventName: 'pull_request', event: prAt, cliOut: reviewOut(findingLine()) })
+    await first.go()
+    const posted = JSON.parse(readFileSync(payloadArg(reviewPost(first).args), 'utf8')).comments[0].body
+    const row = (userType, association) => JSON.stringify({ body: posted, userType, association })
+
+    const again = world({ eventName: 'pull_request', event: prAt, cliOut: reviewOut(findingLine()), reviewComments: `${row('Bot', 'NONE')}\n` })
+    expect(await again.go()).toBe(0)
+    expect(reviewPost(again)).toBeUndefined()
+    expect(again.gh('pr', 'review')).toHaveLength(1)
+    expect(again.logs.join('\n')).toMatch(/already have an inline comment/)
+
+    // A stranger copying the marker can't hide the finding.
+    const forged = world({ eventName: 'pull_request', event: prAt, cliOut: reviewOut(findingLine()), reviewComments: `${row('User', 'NONE')}\n` })
+    expect(await forged.go()).toBe(0)
+    expect(reviewPost(forged)).toBeDefined()
+  })
+
+  it('falls back to the plain review when GitHub refuses the inline comments', async () => {
+    const w = world({ eventName: 'pull_request', event: prAt, cliOut: reviewOut(findingLine()), reviewPostFails: true })
+    expect(await w.go()).toBe(0)
+    expect(w.gh('pr', 'review')).toHaveLength(1)
+    expect(w.logs.join('\n')).toMatch(/refused the inline comments/)
+  })
+
+  it('refuses inline comments that carry a credential', async () => {
+    const w = world({ eventName: 'pull_request', event: prAt, cliOut: reviewOut(findingLine({ detail: `key ${API_KEY}` })) })
+    expect(await w.go()).toBe(1)
+    expect(reviewPost(w)).toBeUndefined()
+    expect(w.gh('pr', 'review')).toEqual([])
+  })
+
+  it('keeps findings in the body when the head commit is not checked out', async () => {
+    const elsewhere = (r) => ({
+      ...prAt(r),
+      pull_request: { ...prAt(r).pull_request, head: { sha: 'e'.repeat(40), repo: { full_name: REPO } } }
+    })
+    const w = world({ eventName: 'pull_request', event: elsewhere, cliOut: reviewOut(findingLine()) })
+    expect(await w.go()).toBe(0)
+    expect(reviewPost(w)).toBeUndefined()
+    expect(w.gh('pr', 'review')).toHaveLength(1)
   })
 
   it('stops before running when the base commit is not checked out', async () => {
@@ -317,6 +429,164 @@ describe('fix-ci', { timeout: 30_000 }, () => {
     await w.go()
     if (process.platform === 'linux') expect(w.logs.join('\n')).toMatch(/refuse every shell command/)
     expect(w.cliCall()).toBeDefined()
+  })
+})
+
+describe('implement', { timeout: 30_000 }, () => {
+  const labeled = (o = {}) => ({
+    action: 'labeled',
+    repository: { default_branch: 'main' },
+    label: { name: 'houston' },
+    issue: { number: 12, state: 'open' },
+    sender: { login: 'dana', type: 'User' },
+    ...o
+  })
+  const onMain = () => {
+    const repo = gitRepo()
+    repo.git('switch', '--quiet', 'main')
+    return repo
+  }
+  const change = (r) => writeFileSync(join(r.dir, 'feature.js'), 'new\n')
+  const env = { GITHUB_RUN_ID: '900', GITHUB_RUN_ATTEMPT: '2' }
+  const implement = (o = {}) =>
+    world({ eventName: 'issues', event: labeled(), inputs: { mode: 'implement' }, repo: onMain(), extraEnv: env, ...o })
+
+  it('commits to a new branch off the default branch and opens a PR that closes the issue', async () => {
+    const w = implement({ onCli: change })
+    expect(await w.go()).toBe(0)
+    const [check] = w.calls.filter((c) => c.cmd === 'gh' && c.args[0] === 'api')
+    expect(check.args[1]).toBe(`repos/${REPO}/collaborators/dana/permission`)
+    expect(w.cliCall().args).toEqual(expect.arrayContaining(['--approval', 'auto-edit', '--on-approval', 'deny']))
+    expect(w.cliCall().opts.input).toContain('labelled issue #12')
+    const settings = JSON.parse(readFileSync(join(w.cliCall().opts.env.HOUSTON_DATA_DIR, 'settings.json'), 'utf8'))
+    expect(settings.permissionRules.find((r) => r.tool === 'gh_pr_create')).toEqual({ action: 'deny', tool: 'gh_pr_create', match: '*' })
+
+    const { git } = w.repo
+    expect(git('rev-parse', '--abbrev-ref', 'HEAD')).toBe('houston/implement-12-900-2')
+    expect(git('log', '-1', '--format=%s')).toBe('Implement issue #12')
+    expect(git('ls-tree', '--name-only', 'main')).not.toContain('feature.js')
+    const push = w.calls.find((c) => c.cmd === 'git' && c.args.includes('push'))
+    expect(push.args).toContain('HEAD:refs/heads/houston/implement-12-900-2')
+    expect(push.args.join(' ')).not.toContain(GH_TOKEN)
+    const [create] = w.gh('pr', 'create')
+    expect(create.args).toEqual(expect.arrayContaining(['--base=main', '--head=houston/implement-12-900-2', '--title=Implement issue #12']))
+    const body = readFileSync(create.args[create.args.indexOf('--body-file') + 1], 'utf8')
+    expect(body).toContain('Closes #12. Requested by @dana.')
+  })
+
+  it('starts from an @houston implement comment by a collaborator', async () => {
+    const event = { ...mention({ body: '@houston implement it' }), repository: { default_branch: 'main' } }
+    const w = implement({ eventName: 'issue_comment', event, onCli: change })
+    expect(await w.go()).toBe(0)
+    expect(w.cliCall().opts.input).toContain('----- comment from @dana -----\n@houston implement it')
+    expect(w.gh('pr', 'create')).toHaveLength(1)
+  })
+
+  it('skips a labeller without write access before running anything', async () => {
+    const w = implement({ permission: 'triage' })
+    expect(await w.go()).toBe(0)
+    expect(w.cliCall()).toBeUndefined()
+    expect(w.outputs()).toMatch(/skipped<<.*\ntrue\n/)
+  })
+
+  it('never starts from a comment on a pull request', async () => {
+    const event = { ...mention({ body: '@houston implement' }), issue: { number: 12, pull_request: {} }, repository: { default_branch: 'main' } }
+    const w = implement({ eventName: 'issue_comment', event })
+    expect(await w.go()).toBe(0)
+    expect(w.calls).toEqual([])
+  })
+
+  it('refuses to push when the run committed or moved HEAD itself', async () => {
+    const w = implement({
+      onCli: (r) => {
+        change(r)
+        r.git('add', '.')
+        r.git('commit', '--quiet', '-m', 'sneaky')
+        writeFileSync(join(r.dir, 'more.js'), 'x\n')
+      }
+    })
+    expect(await w.go()).toBe(1)
+    expect(w.logs.join('\n')).toMatch(/moved HEAD/)
+    expect(w.calls.some((c) => c.cmd === 'git' && c.args.includes('push'))).toBe(false)
+  })
+
+  it('keeps the .git tamper check: a rewritten .git/config stops the push', async () => {
+    const w = implement({
+      onCli: (r) => {
+        change(r)
+        r.git('config', 'core.sshCommand', 'curl evil')
+      }
+    })
+    expect(await w.go()).toBe(1)
+    expect(w.logs.join('\n')).toMatch(/changed \.git\/config/)
+    expect(w.gh('pr', 'create')).toEqual([])
+  })
+
+  it('keeps the credential check on the change', async () => {
+    const w = implement({ onCli: (r) => writeFileSync(join(r.dir, 'leak.txt'), API_KEY) })
+    expect(await w.go()).toBe(1)
+    expect(w.logs.join('\n')).toMatch(/contains a credential/)
+    expect(w.calls.some((c) => c.cmd === 'git' && c.args.includes('push'))).toBe(false)
+  })
+
+  it('tells the issue when the run changed nothing, and opens no PR', async () => {
+    const w = implement({ cliOut: resultLine({ finalText: 'This needs a product decision.' }) })
+    expect(await w.go()).toBe(0)
+    expect(w.gh('pr', 'create')).toEqual([])
+    const [note] = w.gh('issue', 'comment')
+    expect(readFileSync(note.args.at(-1), 'utf8')).toMatch(/^@dana This needs a product decision\./)
+  })
+
+  it('tells the issue when the run fails', async () => {
+    const w = implement({ onCli: change, cliOut: resultLine({ status: 'stalled' }) })
+    expect(await w.go()).toBe(1)
+    expect(w.gh('pr', 'create')).toEqual([])
+    expect(readFileSync(w.gh('issue', 'comment')[0].args.at(-1), 'utf8')).toMatch(/could not finish this request \(stalled\)/)
+  })
+
+  it('runs a scheduled opt-in from its prompt, onto a task branch', async () => {
+    const w = implement({
+      eventName: 'schedule',
+      event: { schedule: '0 6 * * 1' },
+      inputs: { mode: 'implement', prompt: 'Bump the version.' },
+      onCli: change,
+      extraEnv: { ...env, GITHUB_REF_NAME: 'main', GITHUB_REF_TYPE: 'branch' }
+    })
+    expect(await w.go()).toBe(0)
+    expect(w.calls.filter((c) => c.cmd === 'gh' && c.args[0] === 'api')).toEqual([])
+    expect(w.cliCall().opts.input).toContain('----- task from the workflow -----\nBump the version.')
+    expect(w.gh('pr', 'create')[0].args).toEqual(expect.arrayContaining(['--base=main', '--head=houston/task-900-2']))
+  })
+
+  it('needs a prompt on a scheduled run', async () => {
+    const w = implement({ eventName: 'schedule', event: {}, extraEnv: { ...env, GITHUB_REF_NAME: 'main', GITHUB_REF_TYPE: 'branch' } })
+    expect(await w.go()).toBe(1)
+    expect(w.calls).toEqual([])
+    expect(w.logs.join('\n')).toMatch(/needs the prompt input/)
+  })
+})
+
+describe('task', () => {
+  it('runs read-only and writes the report to the summary, posting nothing', async () => {
+    const w = world({
+      eventName: 'workflow_dispatch',
+      event: {},
+      inputs: { prompt: 'Report stale TODOs.' },
+      cliOut: resultLine({ finalText: 'Three stale TODOs.' })
+    })
+    w.env.GITHUB_STEP_SUMMARY = join(w.temp, 'summary.md')
+    expect(await w.go()).toBe(0)
+    expect(w.cliCall().args).toEqual(expect.arrayContaining(['--approval', 'plan']))
+    expect(w.cliCall().opts.input).toContain('Report stale TODOs.')
+    expect(w.calls.filter((c) => c.cmd === 'gh')).toEqual([])
+    expect(w.calls.some((c) => c.cmd === 'git' && c.args.includes('commit'))).toBe(false)
+    expect(readFileSync(w.env.GITHUB_STEP_SUMMARY, 'utf8')).toContain('Three stale TODOs.')
+  })
+
+  it('needs a prompt', async () => {
+    const w = world({ eventName: 'schedule', event: {} })
+    expect(await w.go()).toBe(1)
+    expect(w.calls).toEqual([])
   })
 })
 

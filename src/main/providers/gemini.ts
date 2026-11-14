@@ -152,6 +152,10 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
       for (const img of m.images ?? []) {
         toolImages.push({ inlineData: { mimeType: img.mediaType, data: img.data } })
       }
+      // A PDF read_file attached goes the same way: Gemini reads application/pdf inline data.
+      for (const doc of m.documents ?? []) {
+        toolImages.push({ inlineData: { mimeType: doc.mediaType, data: doc.data } })
+      }
     }
   }
   flushToolImages()

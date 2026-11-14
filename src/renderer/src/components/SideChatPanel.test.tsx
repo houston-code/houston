@@ -88,6 +88,30 @@ describe('SideChatPanel', () => {
     expect(screen.queryByText('Thinking…')).toBeNull()
   })
 
+  it('leaves the list where the user scrolled while an answer progresses, and follows a new question', async () => {
+    const inFlight: SideChatView = { ...answered, pending: { id: 't2', question: 'And refresh tokens?', progress: 'Reading auth.ts' } }
+    const fake = installApi({ 'conv-1': inFlight })
+    const { container } = renderPanel()
+    await screen.findByText('Reading auth.ts')
+    const list = container.querySelector('.side-chat__list') as HTMLElement
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 1000 })
+    Object.defineProperty(list, 'clientHeight', { configurable: true, value: 200 })
+    // The user scrolls up to reread the first answer.
+    list.scrollTop = 100
+    fireEvent.scroll(list)
+    fake.change('conv-1', { ...inFlight, pending: { ...inFlight.pending!, progress: 'Reading token.ts' } })
+    expect(await screen.findByText('Reading token.ts')).toBeInTheDocument()
+    expect(list.scrollTop).toBe(100)
+    // Once that answer lands, a new question of theirs brings the list to the bottom.
+    const done: SideChatView = { turns: [...answered.turns, { id: 't2', question: 'And refresh tokens?', answer: 'Rotated.', at: 2 }] }
+    fake.change('conv-1', done)
+    await screen.findByText('Rotated.')
+    expect(list.scrollTop).toBe(100)
+    fireEvent.change(input(), { target: { value: 'Where is it stored?' } })
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(list.scrollTop).toBe(1000)
+  })
+
   it("ignores another chat's changes", async () => {
     const fake = installApi()
     renderPanel()

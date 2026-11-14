@@ -37,7 +37,7 @@ permissions, and skills behave the same everywhere.
 
 **Desktop-only surfaces.** The sidebar, the Preview panel, the integrated terminal
 and Files panel, rendered diagrams, and the tools that need a browser engine
-(`view_localhost` and `render_mockup`). Spawned sessions run in every client, but
+(`view_localhost`, `browser_session`, and `render_mockup`). Spawned sessions run in every client, but
 only the desktop app lists them in a sidebar.
 
 ### Desktop app
@@ -325,7 +325,7 @@ and cost as usage.
 - **Slash commands** the editor can offer: `/review`, `/init`, `/compact`,
   `/agent <name> <task>`, `/plan`, `/ask`, `/auto`, `/full`, `/approval [mode]`,
   `/model [name]`, `/reasoning [level]`, `/skills`, `/agents` and `/help`, plus the
-  workspace's own `.houston/commands`. A prompt that starts with another `/word` is
+  workspace's own `.houston/commands` and `/<skill-name>` for each skill. A prompt that starts with another `/word` is
   sent as written.
 - **Titles**: the chat's title is shown to the editor when a session opens and once
   a turn gives it one.
@@ -369,6 +369,27 @@ list, and pick a model.
   switching back is one click. It hides while you search.
 - It warns you before you pick a model that can't call tools.
 - Keys are stored encrypted by the OS keychain and never reach the app's interface.
+
+### Local and OpenAI-compatible models
+
+- **Reasoning shows as reasoning.** Compatible servers send a model's thinking in
+  different ways: a `reasoning_content` or `reasoning` field, OpenRouter's
+  `reasoning_details`, or a `<think>…</think>` block at the start of the reply.
+  Houston shows all of them as the model's reasoning, not as its answer. On
+  OpenRouter, the reasoning is sent back with later requests so the model can carry it
+  across tool calls; other servers never receive it back.
+- **Tool calls written as text still run.** When a local model writes its tool call
+  into the reply instead of as a real call (bare or fenced JSON, `<tool_call>` blocks,
+  Qwen3-Coder's `<function=…>` format, or Mistral's `[TOOL_CALLS]`), Houston runs it,
+  as long as it names a tool the request offered and nothing else is in the reply.
+- **Ollama's context size.** Ollama runs a model with a context it picks at load time,
+  often far smaller than the model supports, and silently drops the start of a longer
+  prompt (Houston's instructions and tool definitions go first). When Ollama reports
+  that context (a loaded model, or `num_ctx` in its Modelfile) and the first request
+  of a turn won't fit, Houston says so and names the fix: start Ollama with
+  `OLLAMA_CONTEXT_LENGTH=32768` (or more), or add `PARAMETER num_ctx 32768` to the
+  model's Modelfile and run `ollama create`. Ollama's OpenAI-compatible endpoint takes
+  no context setting per request, so Houston can't raise it for you.
 
 ### Each chat keeps its own settings
 
@@ -489,7 +510,11 @@ retries the turn with a growing pause between attempts and tells you it's retryi
 - **Rate limits are named.** When the provider throttles a request (HTTP 429),
   the notice says so, how long Houston waits before trying again (the provider's
   `Retry-After` when it sends one), and how many requests or tokens its headers say
-  are left in the current window. An exhausted quota is not retried.
+  are left in the current window. An exhausted quota is not retried. In the desktop
+  app, what the selected provider last reported (requests and tokens left, and when it
+  said it would take requests again) stays in the status bar, and the Usage view lists
+  it for every provider, until the app quits. Nothing shows before a provider has
+  rate limited a request.
 - **Nothing half-runs.** Tool calls in a discarded reply never run.
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.
@@ -510,6 +535,9 @@ Two things never use it: `web_fetch`, which connects straight to an address it h
 checked so it can't be pointed at a private network, and shell commands, which the
 sandbox's own network proxy governs. Houston also trusts certificates in your
 operating system's store, so a proxy that re-signs TLS with a company root works too.
+Install that root in the OS store: the installed desktop app, `Houston -i` and
+`Houston -p` included, ignores `NODE_EXTRA_CA_CERTS` and `NODE_OPTIONS` (the
+standalone CLI, which runs on your own Node, still reads them).
 
 ### When a turn fails
 
@@ -625,7 +653,7 @@ Both clients accept the same names, so a command learned in one works in the oth
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
 | `/rewind` | go back to an earlier message: the conversation, the code, or both |
 | `/changes` (or `/diff`) | what's different in the working tree |
-| `/skills`, `/agents` | list the workspace's skills and custom agents |
+| `/skills`, `/agents` | list the workspace's skills and custom agents (run a skill with `/<skill-name>`) |
 | `/help` | list the available commands (in the desktop app, opens the command palette on them) |
 
 Also: `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`, `/cost`, `/context`, `/cwd`, `/share`,
@@ -656,6 +684,21 @@ the model.
 - `/delete` deletes the chat after asking, then starts a new one.
 - `/permissions` lists your saved permission rules, numbered; `/permissions remove <n>`
   deletes one. Rules in a project's `.houston/settings.json` are edited in that file.
+- `/resume [search]` (or `/sessions`) opens a picker of this folder's saved chats,
+  newest first, marked unread or failed as in the desktop sidebar. Under the list it
+  previews the highlighted chat: its title, when it was last updated, how many messages
+  it has, the first thing you asked, and the start of the last reply. In the picker:
+  - type to filter by title and content (Backspace edits, Esc clears the filter, then
+    cancels); a search given with the command starts the filter
+  - Enter opens the highlighted chat, and 1-9 open that row (so digits don't go into
+    the filter)
+  - Ctrl-R renames the chat (type the title, Enter saves)
+  - Ctrl-D, or `x` while the filter is empty, deletes it after a y/N question; deleting
+    the chat you're in says so first, and you carry on in a new chat
+  - Ctrl-A switches between this folder and all folders; all folders shows each chat's
+    folder
+  Off a terminal that can't show the picker, it prints a numbered list to answer by
+  number.
 - Resuming a chat (`/resume`, `--continue`, `--resume <id>`) replays its last three
   exchanges, so you can see where you left off, and says how its last turn ended when it
   didn't finish (an error, a Stop, or a limit it hit).
@@ -1307,11 +1350,15 @@ The Changes view also has a commit form, for when you'd rather not spend an agen
   repository's remote. A branch made from another one (`git switch -c feat
   origin/main`) is pushed as `feat`, never onto `main`, and its upstream becomes
   `origin/feat`. If ssh would need to ask something (an unknown host key, a key
-  passphrase), the push fails instead of waiting.
+  passphrase), the push fails instead of waiting. It pushes to network remotes only
+  (https, ssh, git): a remote whose push URL is a folder on this computer, a
+  `file://` URL, or an `ext::` / `fd::` transport is refused, since that push would
+  run git in that folder with its hooks. Submodules are never pushed along with it.
 
 Houston refuses to commit or push when the repository's own git config names a program
-git would run for it (a signing program, an ssh command, a credential helper, or an
-include): use a terminal there. Your global git config (identity, signing, credentials)
+git would run for it (a signing program, an ssh command, a credential helper, an
+include, a remote helper, or an alternate-refs command) or pushes submodules too: use
+a terminal there. Your global git config (identity, signing, credentials)
 applies as usual. **Create PR** stays a hand-off to the agent.
 
 **Pull request chip.** When the chat's branch has a pull request on GitHub, a chip at
@@ -1667,7 +1714,9 @@ destination (the prompt says which):
   Permissions → **Web reads in full auto** can let these run without asking. Either
   way, a URL or query carrying a credential is refused.
 - **`view_localhost`** asks once per host, since a page can load from the internet. A
-  call that clicks or types (`steps`) asks once more per host.
+  call that clicks or types (`steps`) asks once more per host. **`browser_session`**
+  shares those grants: opening or reading a page asks once per host, and `act` asks
+  once more, for the host the session is on.
 - **GitHub writes** (open a PR or issue, comment, review, reopen, mark ready or draft)
   share one grant per repository, so allowing a comment on one repository never allows
   anything on another. The repository is the one `gh` would pick (your
@@ -1923,7 +1972,42 @@ it.
 
 **Create one** at `.houston/skills/<name>/SKILL.md`, with frontmatter `name` and
 `description`, and a body of instructions. Put it in `~/.houston/skills/<name>/` to
-have it in every project; a project's skill wins if both use the same name.
+have it in every project.
+
+**The Agent Skills format.** Houston also reads skills written to the open Agent
+Skills format (agentskills.io) from `.agents/skills/<name>/SKILL.md` in the project
+and from `~/.agents/skills/`. When two skills share a name, a project's wins over
+yours, and `.houston/skills` wins over `.agents/skills` in the same place. Skills
+in `.claude/skills` aren't read directly; import them in Settings instead.
+
+| Frontmatter | Effect |
+| --- | --- |
+| `name` | up to 64 lowercase letters, digits and single hyphens, matching the folder name |
+| `description` | what the skill does and when to use it (required, up to 1024 characters) |
+| `license` | the skill's license, shown in Settings |
+| `compatibility` | what the skill needs (tools, network, a platform), up to 500 characters; shown with the instructions |
+| `metadata` | a map of extra keys and values, kept as written |
+| `allowed-tools` | space-separated tools; once the agent loads the skill, only these run for the rest of that turn |
+| `paths` | file globs (a list, or comma-separated); when the agent works on a matching file, it is told about the skill once |
+| `disabled: true` | switches it off without deleting it |
+
+- **Checked against the format.** A skill in `.agents/skills` whose name breaks the
+  rules, doesn't match its folder, or has no description isn't loaded. Older skills
+  in `.houston/skills` keep loading, and Settings > Customize shows what to fix.
+- **`allowed-tools` only narrows.** It can never give the agent a tool or a permission
+  it doesn't already have, and with two such skills loaded a tool must be on both
+  lists. Houston tool names work (`read_file`, `run_shell`), as do the format's
+  generic names (`Read`, `Bash`, `Grep`) and a trailing `*` (`mcp__github__*`). A
+  scope like `Bash(git:*)` covers the whole tool. Asking you, the task list, plan
+  presentation and loading another skill are always allowed.
+- **`paths` triggers.** `paths: ["**/*.pdf", "docs/*.md"]` names the skill to the
+  agent the first time it reads or edits a matching file in the conversation. A
+  pattern without a `/` matches the file name in any folder.
+
+**Run one yourself** with `/<skill-name>` in the desktop app or the terminal, followed
+by anything you want to add (`/pdf-tools split report.pdf`). Skills are listed under
+their own heading in the slash menu. A custom command or a built-in with the same
+name wins.
 
 **How it's loaded (progressive disclosure):**
 
@@ -2142,9 +2226,14 @@ carries the news with it.
 A subagent reports back into the current turn. `spawn_session` instead spins off a
 *separate* chat that runs in the background.
 
-- **What it gets:** the agent hands it a task, optionally on its own git branch and
-  worktree. It starts fresh with its prompt or, with context "fork", with a copy of
-  the spawning chat so far.
+- **What it gets:** the agent hands it a task. It starts fresh with its prompt or,
+  with context "fork", with a copy of the spawning chat so far.
+- **Its own checkout.** In a git repository it runs on a new branch and worktree by
+  default (named after its title, like `houston/docs-pass-1a2b3c`), branched from
+  what the spawning chat has checked out, so two sessions never edit one folder. The
+  agent can name the branch and base, or keep the session in the same folder when you
+  ask for that. A repository with no commits yet has nothing to branch from, so the
+  session shares the folder.
 - **Never more permissive.** It inherits the current approval policy.
 - **When it ends,** the chat that started it gets a short report (title, how it ended,
   the start of its answer) as a Houston note, and you see a notice in the transcript.
@@ -2238,7 +2327,9 @@ what branch each one is on. Pick a number to open one.
 Ask the agent for a recurring (or one-time) background run, such as "every morning
 at 9, run the tests and summarize failures", and it stores a schedule with
 `schedule_run`. At each occurrence, a fresh session starts with the stored prompt,
-under the approval policy of the chat that created it.
+under the approval policy of the chat that created it. A schedule made from a chat
+in one of Houston's worktrees runs in the main checkout instead, since that
+worktree goes away with its chat.
 
 ### Schedule formats
 
@@ -2290,6 +2381,7 @@ missed while Houston was closed fires once at the next launch.
 | `show_images` | shows you image files the agent produced |
 | `render_mockup` | screenshots an HTML mockup without a dev server (desktop app) |
 | `view_localhost` | loads and tests a page from your local dev server (desktop app) |
+| `browser_session` | keeps a page from your local dev server open across calls, to test a flow step by step (desktop app) |
 
 ### Reviewing changes
 
@@ -2364,6 +2456,29 @@ console output.
 - Text typed into a password field is never shown back to the agent.
 - Steps can't download or upload files, or use your camera, microphone, or location.
 - The page can't leave localhost.
+
+### Testing a flow step by step
+
+`browser_session` (desktop app) keeps one page from your local dev server open for the
+rest of a turn, so the agent can test a flow across several calls instead of fitting
+it into one. Cookies, storage, and what's on the page (a login, a half-filled form)
+carry over between calls. Its actions:
+
+- **open** loads a localhost URL, in the page already open when there is one.
+- **act** runs the same steps as `view_localhost` on the current page. A step can name
+  an element by its ref from the last snapshot (like `e12`) instead of a CSS selector.
+- **snapshot** returns the page's accessibility tree (roles, names, states, and a ref
+  for each element) with a screenshot.
+- **console** and **network** return the page's recent console messages, and its recent
+  requests with method, URL, status, and timing.
+- **close** ends the session. It also closes on its own when the turn ends.
+
+**Safety** is the same as `view_localhost`: the same hidden, locked-down browser, only
+localhost pages, the same blocks on private network addresses, downloads, uploads, and
+device permissions, and the same approvals (see Network calls in full auto). Each session has
+its own cookies, never shared with another chat, `view_localhost`, or the app, and
+cleared when it closes. Snapshot elements are marked with a `data-houston-ref`
+attribute so their refs stay stable.
 
 ## Hooks
 
@@ -3010,13 +3125,17 @@ window:
   context window: a large-window model compacts later, a small local model sooner.
   When a model bills long prompts at a higher rate past some size, compaction keeps
   the conversation under that size, and `/context` says where the conversation stands
-  against it. A fixed threshold in Settings governs both trimming and summarizing.
+  against it. Your own limit in Settings governs both trimming and summarizing.
 - **Built up, not redone.** The summary is saved with the conversation, so later turns
   extend it instead of re-summarizing from scratch.
 - **Nothing disappears on screen.** The full transcript stays visible; only what's sent
   to the model is compacted.
-- **Settings:** set a fixed token threshold, or turn compaction off, in Settings,
-  *Agent Behavior*, *Context window*.
+- **Settings:** in Settings, *Agent Behavior*, *Context window*, choose Automatic,
+  a share of the context window (for example 50%), a token count, or Off. Your own
+  limit can only make compaction start sooner: it never goes past 80% of the window
+  or above a long-context price tier, which still apply as a ceiling. `/context`
+  shows where compaction will start and whether your setting or the automatic
+  sizing set it.
 - **`/compact` on demand.** It shows progress (including when it retries a slow or
   overloaded model) and can be cancelled: **Cancel** in the desktop app, **Esc** or
   **Ctrl-C** in the terminal. It gives up after 3 minutes. A cancelled or failed
@@ -3145,11 +3264,19 @@ The desktop app's **Help** menu is last in the menu bar on every platform.
   👍 to the ones you want fixed first.
 - **Open Logs** shows Houston's log file (`houston.log` in the app's profile folder) in
   your file manager. Keys and tokens are scrubbed from it, but it can name your folders,
-  so read it before attaching it to a public report.
+  so read it before attaching it to a public report. It records errors from the window
+  too. Set `HOUSTON_LOG_LEVEL` to `debug`, `info` (the default), `warn`, or `error` to
+  log more or less.
+- **If the window crashes or stops responding,** Houston logs it and reloads the window
+  (after 15 seconds for one that stopped responding); a run that was going keeps going
+  and reappears. A window that crashes three times within a minute is left as it is.
+  A crash also saves a crash dump on your computer. Crash dumps are never uploaded.
 - **Report an Issue…** first shows the text a new GitHub issue will start with: your
   Houston version, platform, and a summary of the diagnostics (each check's name and
   status, as in `/doctor`). It includes no logs, file paths, keys, or names you chose
-  (MCP servers and custom providers are only counted). **Open GitHub** opens the issue
+  (MCP servers and custom providers are only counted). If Houston saved crash dumps in
+  the last two weeks, it lists their file names so you can choose to attach one.
+  **Open GitHub** opens the issue
   in your browser with that text filled in; describe what happened there before you
   submit. Both are also in the command palette.
 - **Take the Tour…** plays the getting-started tips again.

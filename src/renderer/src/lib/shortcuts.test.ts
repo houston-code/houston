@@ -205,6 +205,20 @@ describe('where Shift+Tab and Esc act on the chat', () => {
 })
 
 describe('SHORTCUTS registry', () => {
+  it('lists history search and the ! terminal line in the Chat section, for the composer only', () => {
+    const search = SHORTCUTS.find((s) => s.id === 'history-search')
+    const shell = SHORTCUTS.find((s) => s.id === 'shell-escape')
+    expect(search && shortcutDisplays(search, true)).toEqual(['⌃R'])
+    expect(search && shortcutDisplays(search, false)).toEqual(['Ctrl+R'])
+    expect(shell && shortcutDisplays(shell, false)).toEqual(['!'])
+    for (const def of [search, shell]) {
+      expect(def?.category).toBe('Chat')
+      expect(def?.scope).toBe('composer')
+    }
+    // Composer keys never fire as app shortcuts.
+    expect(matchShortcut({ key: 'r', ctrlKey: true, metaKey: false })).toBeNull()
+  })
+
   it('has a unique id per entry', () => {
     const ids = SHORTCUTS.map((s) => s.id)
     expect(new Set(ids).size).toBe(ids.length)

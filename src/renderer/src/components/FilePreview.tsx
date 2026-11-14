@@ -27,6 +27,16 @@ function svgDataUrl(svg: string): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`
 }
 
+/** Whether two reads of a file show the same thing. */
+function samePreview(a: FilePreviewData, b: FilePreviewData): boolean {
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'text' && b.kind === 'text') return a.text === b.text && a.truncated === b.truncated && a.bytes === b.bytes
+  if (a.kind === 'image' && b.kind === 'image') return a.bytes === b.bytes && a.image.data === b.image.data
+  if (a.kind === 'error' && b.kind === 'error') return a.message === b.message
+  if (a.kind === 'too-large' && b.kind === 'too-large') return a.bytes === b.bytes && a.limit === b.limit
+  return a.kind === 'binary' && b.kind === 'binary' && a.bytes === b.bytes
+}
+
 /**
  * The Files panel's preview pane: renders the selected workspace file in-app.
  * Markdown and SVG render visually (with a Source toggle); other text shows in a
@@ -38,13 +48,16 @@ export function FilePreview({
   workspace,
   path,
   onOpen,
-  line
+  line,
+  reloadSignal = 0
 }: {
   workspace: string
   path: string | null
   onOpen: (path: string) => void
   /** A 1-based line to scroll to and mark (a link that named one). Shows the source view. */
   line?: number
+  /** Bumped to re-read the same file in place (the panel's Refresh). */
+  reloadSignal?: number
 }): JSX.Element {
   const [data, setData] = useState<FilePreviewData | null>(null)
   const [loading, setLoading] = useState(false)
@@ -52,25 +65,32 @@ export function FilePreview({
   const [view, setView] = useState<'rendered' | 'source'>('rendered')
   const rich = useMemo<RichKind>(() => (path ? richKindFor(path) : null), [path])
 
+  // A new file (or line) starts over; a reload of the same one keeps showing what it
+  // has until the fresh read lands, and keeps the view (rendered or source) as chosen.
+  const shown = useRef<string | null>(null)
   useEffect(() => {
-    setView(line ? 'source' : 'rendered')
+    const key = `${workspace}\0${path ?? ''}\0${line ?? ''}`
+    const fresh = key !== shown.current
+    shown.current = key
+    if (fresh) setView(line ? 'source' : 'rendered')
     if (!path) {
       setData(null)
       return
     }
     let cancelled = false
-    setData(null)
+    if (fresh) setData(null)
     setLoading(true)
     void window.api.readWorkspaceFile(workspace, path).then((d) => {
       if (!cancelled) {
-        setData(d)
+        // An unchanged file keeps its object, so nothing re-renders or re-scrolls.
+        setData((prev) => (prev && samePreview(prev, d) ? prev : d))
         setLoading(false)
       }
     })
     return () => {
       cancelled = true
     }
-  }, [workspace, path, line])
+  }, [workspace, path, line, reloadSignal])
 
   // Scroll a named line into view and mark it. Lines are a fixed height in the code
   // pane (no wrapping), so its offset is the line index times the line height.

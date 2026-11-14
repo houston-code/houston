@@ -36,6 +36,7 @@ import {
   type ListedPages,
   type McpListKind
 } from './protocol'
+import { withTraceContext } from './trace'
 
 /**
  * A minimal MCP client over the **legacy HTTP+SSE** transport (MCP protocol
@@ -504,7 +505,7 @@ export class McpSseClient implements McpConnection {
     void result.catch(() => {})
     try {
       // The run's Stop also abandons a POST the server has not acknowledged yet.
-      await this.postMessage({ jsonrpc: '2.0', id, method, params: sent }, timeoutMs, opts.signal)
+      await this.postMessage({ jsonrpc: '2.0', id, method, params: withTraceContext(sent) }, timeoutMs, opts.signal)
     } catch (e) {
       this.pending.reject(id, e as Error)
     }

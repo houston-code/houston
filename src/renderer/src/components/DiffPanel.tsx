@@ -29,6 +29,9 @@ import { CommitForm } from './CommitForm'
 /** Below this many files the list starts fully expanded; above it, collapsed. */
 const AUTO_EXPAND_LIMIT = 8
 
+/** Wait this long after the window regains focus before re-reading (focus can flap). */
+const FOCUS_REFRESH_MS = 300
+
 const SCOPE_LABEL: Record<ChangesScope, string> = {
   turn: 'This turn',
   chat: 'This chat',
@@ -417,11 +420,16 @@ type Loaded =
  * agent (commit, push, open PR through its own tools) rather than the renderer
  * driving git directly. The action follows the repo's state (see chooseShipAction).
  * `creating` disables it while a run is busy.
+ *
+ * `active` says whether the view is on screen: the side panel keeps it mounted behind
+ * other tabs so drafts survive, and it reads git only while it shows (again each time
+ * it comes back, when a run ends, and when the window regains focus).
  */
 export function DiffPanel({
   workspace,
   conversationId = null,
   running = false,
+  active = true,
   onShip,
   creating = false,
   commitForm = false,
@@ -432,6 +440,8 @@ export function DiffPanel({
   conversationId?: string | null
   /** The chat's run is going: reverts wait, and the list refreshes when it ends. */
   running?: boolean
+  /** The view is showing. Hidden, it keeps its state but doesn't read git. */
+  active?: boolean
   onShip?: (action: ShipAction) => void
   creating?: boolean
   /**
@@ -466,11 +476,14 @@ export function DiffPanel({
     },
     [commentsKey]
   )
-  const tree = data?.scope === 'tree' ? data.tree : null
-  const chat = data && data.scope !== 'tree' ? data.chat : null
+  // What was loaded for the scope on screen. Just after a scope switch `data` still
+  // holds the previous scope until the new read lands, and nothing of it may show.
+  const current = data?.scope === scope ? data : null
+  const tree = current?.scope === 'tree' ? current.tree : null
+  const chat = current && current.scope !== 'tree' ? current.chat : null
   const files = useMemo(
-    () => (data?.scope === scope ? (data.scope === 'tree' ? data.tree.files : data.chat.files) : []),
-    [data, scope]
+    () => (current ? (current.scope === 'tree' ? current.tree.files : current.chat.files) : []),
+    [current]
   )
   // Unchanged lines revealed around hunks: each file's text as read from disk (null
   // when it can't be read, or no longer matches its diff), and how far each hunk has
@@ -585,6 +598,8 @@ export function DiffPanel({
   // Only the newest load may write state: a slow reply for a scope (or folder, or chat)
   // the user already left must not replace what the current one shows.
   const loadSeq = useRef(0)
+  // Counts working-tree reads, so the commit form re-reads the branch along with them.
+  const [treeReads, setTreeReads] = useState(0)
   const load = useCallback(async (): Promise<void> => {
     const seq = ++loadSeq.current
     if (!workspace) {
@@ -597,7 +612,10 @@ export function DiffPanel({
     try {
       if (scope === 'tree') {
         const tree = await window.api.getWorkingTreeChanges(workspace)
-        if (seq === loadSeq.current) setData({ scope, tree })
+        if (seq === loadSeq.current) {
+          setData({ scope, tree })
+          setTreeReads((n) => n + 1)
+        }
       } else if (conversationId) {
         const chat = await window.api.getChatChanges(conversationId, scope)
         if (seq === loadSeq.current) setData({ scope, chat })
@@ -609,16 +627,37 @@ export function DiffPanel({
     }
   }, [workspace, scope, conversationId])
 
+  // Read on first show, on a scope switch, and each time the view comes back.
   useEffect(() => {
-    void load()
-  }, [load])
+    if (active) void load()
+  }, [load, active])
 
-  // A finished turn changes what every scope shows.
+  // A finished turn changes what every scope shows. Hidden, the view reads again when
+  // it next shows instead.
   const wasRunning = useRef(running)
   useEffect(() => {
-    if (wasRunning.current && !running) void load()
+    if (wasRunning.current && !running && active) void load()
     wasRunning.current = running
-  }, [running, load])
+  }, [running, load, active])
+
+  // Catch commits and edits made outside the app (a terminal, an editor) while it was
+  // in the background, so the list never offers to revert a change that is gone.
+  useEffect(() => {
+    if (!active) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onFocus = (): void => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        void load()
+      }, FOCUS_REFRESH_MS)
+    }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      if (timer) clearTimeout(timer)
+    }
+  }, [active, load])
 
   const pickScope = (s: ChangesScope): void => {
     setStoredScope(s)
@@ -728,10 +767,10 @@ export function DiffPanel({
       <div className="changes-panel__body">
         {error ? (
           <p className="changes-panel__empty">Couldn’t read changes: {error}</p>
-        ) : loading && !data ? (
-          <p className="changes-panel__empty">Loading…</p>
         ) : !workspace ? (
           <p className="changes-panel__empty">Open a chat in a project to see its changes.</p>
+        ) : !current ? (
+          <p className="changes-panel__empty">Loading…</p>
         ) : tree && !tree.isRepo && tree.unreadable ? (
           <div className="changes-panel__empty changes-panel__init">
             <p>
@@ -760,7 +799,7 @@ export function DiffPanel({
             {initError && <p className="changes-panel__init-error">{initError}</p>}
           </div>
         ) : files.length === 0 ? (
-          <p className="changes-panel__empty">{data ? empty : 'Loading…'}</p>
+          <p className="changes-panel__empty">{empty}</p>
         ) : (
           <>
             {viewFiles.map((f, n) => (
@@ -789,7 +828,7 @@ export function DiffPanel({
         )}
       </div>
 
-      {onSendComments && data?.scope === scope && outdated.length > 0 && (
+      {onSendComments && current && outdated.length > 0 && (
         <section className="changes-view__outdated" aria-label="Comments not on a line shown here">
           <p className="changes-panel__foot-hint">
             Not on a line shown here (the code changed or is in another view):
@@ -864,6 +903,7 @@ export function DiffPanel({
           conversationId={conversationId}
           hasChanges={files.length > 0}
           busy={creating}
+          refreshSignal={treeReads}
           onChanged={() => void load()}
         />
       )}

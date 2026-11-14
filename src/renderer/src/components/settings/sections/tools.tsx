@@ -3,16 +3,40 @@ import type { Hook, IntegrationsInfo } from '@shared/types'
 import { LspServersField, SettingsSection } from '../fields'
 import type { SettingsCtx } from '../context'
 
+/** The events that run around a tool call; their matcher globs the tool name. */
+const TOOL_HOOK_EVENTS: ReadonlySet<Hook['event']> = new Set(['PreToolUse', 'PostToolUse'])
+/** Events with a subject a matcher applies to: a tool, or (Notification) a wait type. */
+const SUBJECT_HOOK_EVENTS: ReadonlySet<Hook['event']> = new Set([...TOOL_HOOK_EVENTS, 'Notification'])
+/** The tool a new tool hook matches, and the one a hook gets back when it becomes one. */
+const DEFAULT_HOOK_MATCHER = 'edit_file'
+/** A matcher a turn-level hook still runs with: none, or every tool. */
+const matchesAll = (matcher: string): boolean => matcher.trim() === '' || matcher.trim() === '*'
+
 /** Shell commands run at points in the agent loop. */
 export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
   const hooks = settings.hooks ?? []
   const setHooks = (next: Hook[]): void => setSettings((s) => ({ ...s, hooks: next }))
   const addHook = (): void =>
-    setHooks([...hooks, { event: 'PostToolUse', matcher: 'edit_file', command: '' }])
+    setHooks([...hooks, { event: 'PostToolUse', matcher: DEFAULT_HOOK_MATCHER, command: '' }])
   const patchHook = (i: number, patch: Partial<Hook>): void =>
     setHooks(hooks.map((h, idx) => (idx === i ? { ...h, ...patch } : h)))
   const removeHook = (i: number): void => setHooks(hooks.filter((_, idx) => idx !== i))
+  // A turn-level event has no subject, so it runs only with no matcher: switching to
+  // one clears the tool, switching to Notification starts on every wait, and switching
+  // back to a tool event starts from the default tool.
+  const setEvent = (i: number, event: Hook['event']): void => {
+    const h = hooks[i]
+    const fromTool = TOOL_HOOK_EVENTS.has(h.event)
+    const matcher = TOOL_HOOK_EVENTS.has(event)
+      ? fromTool || (h.event !== 'Notification' && h.matcher.trim())
+        ? h.matcher
+        : DEFAULT_HOOK_MATCHER
+      : event === 'Notification' && h.event === 'Notification'
+        ? h.matcher
+        : ''
+    patchHook(i, { event, matcher })
+  }
 
   return (
     <SettingsSection
@@ -38,53 +62,68 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
         </>
       }
     >
-      {hooks.map((h, i) => (
-        <div className="rule" key={i}>
-          <select
-            value={h.event}
-            onChange={(e) => patchHook(i, { event: e.target.value as Hook['event'] })}
-          >
-            <option value="PreToolUse">Pre</option>
-            <option value="PostToolUse">Post</option>
-            <option value="UserPromptSubmit">Prompt</option>
-            <option value="SessionStart">Session</option>
-            <option value="Stop">Stop</option>
-            <option value="PreCompact">Compact</option>
-            <option value="Notification">Notify</option>
-            <option value="SessionEnd">End</option>
-          </select>
-          <input
-            list="tool-names"
-            className="rule__tool"
-            placeholder={h.event === 'Notification' ? 'wait type (or *)' : 'tool (or *)'}
-            value={h.matcher}
-            onChange={(e) => patchHook(i, { matcher: e.target.value.trim() })}
-          />
-          <input
-            className="rule__match"
-            placeholder="shell command, e.g. npm run format"
-            value={h.command}
-            onChange={(e) => patchHook(i, { command: e.target.value })}
-          />
-          <input
-            type="number"
-            min={1}
-            max={600}
-            className="rule__timeout"
-            aria-label="Timeout in seconds"
-            title="Timeout in seconds (blank = 60)"
-            placeholder="60s"
-            value={h.timeout ?? ''}
-            onChange={(e) => {
-              const n = Number.parseInt(e.target.value, 10)
-              patchHook(i, { timeout: Number.isFinite(n) && n > 0 ? Math.min(600, n) : undefined })
-            }}
-          />
-          <button className="btn btn--sm btn--danger" onClick={() => removeHook(i)}>
-            ✕
-          </button>
-        </div>
-      ))}
+      {hooks.map((h, i) => {
+        const subjectEvent = SUBJECT_HOOK_EVENTS.has(h.event)
+        // A turn-level hook saved with a tool matcher (from before this was enforced)
+        // never runs; show the matcher so it can be seen and cleared.
+        const strandedMatcher = !subjectEvent && !matchesAll(h.matcher)
+        return (
+          <div key={i}>
+            <div className="rule">
+              <select value={h.event} onChange={(e) => setEvent(i, e.target.value as Hook['event'])}>
+                <option value="PreToolUse">Pre</option>
+                <option value="PostToolUse">Post</option>
+                <option value="UserPromptSubmit">Prompt</option>
+                <option value="SessionStart">Session</option>
+                <option value="Stop">Stop</option>
+                <option value="PreCompact">Compact</option>
+                <option value="Notification">Notify</option>
+                <option value="SessionEnd">End</option>
+              </select>
+              {(subjectEvent || strandedMatcher) && (
+                <input
+                  list="tool-names"
+                  className="rule__tool"
+                  placeholder={h.event === 'Notification' ? 'wait type (or *)' : 'tool (or *)'}
+                  value={h.matcher}
+                  onChange={(e) => patchHook(i, { matcher: e.target.value.trim() })}
+                />
+              )}
+              <input
+                className="rule__match"
+                placeholder="shell command, e.g. npm run format"
+                value={h.command}
+                onChange={(e) => patchHook(i, { command: e.target.value })}
+              />
+              <input
+                type="number"
+                min={1}
+                max={600}
+                className="rule__timeout"
+                aria-label="Timeout in seconds"
+                title="Timeout in seconds (blank = 60)"
+                placeholder="60s"
+                value={h.timeout ?? ''}
+                onChange={(e) => {
+                  const n = Number.parseInt(e.target.value, 10)
+                  patchHook(i, { timeout: Number.isFinite(n) && n > 0 ? Math.min(600, n) : undefined })
+                }}
+              />
+              <button className="btn btn--sm btn--danger" onClick={() => removeHook(i)}>
+                ✕
+              </button>
+            </div>
+            {strandedMatcher && (
+              <p className="rule__issue rule__issue--warn">
+                Never runs: a {h.event} hook has no tool to match.{' '}
+                <button className="link" onClick={() => patchHook(i, { matcher: '' })}>
+                  Clear the tool
+                </button>
+              </p>
+            )}
+          </div>
+        )
+      })}
       <button className="btn btn--sm" onClick={addHook}>
         + Add hook
       </button>

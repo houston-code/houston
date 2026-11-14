@@ -181,6 +181,32 @@ describe('PlanPanel', () => {
       fireEvent.keyDown(panel, { key: 'a', metaKey: true })
       expect(onResolve).not.toHaveBeenCalled()
     })
+
+    it('keeps focus in the panel when the suggestion box closes, so the shortcuts still work', () => {
+      const { panel } = renderPanel()
+      fireEvent.click(screen.getByRole('button', { name: /Suggest changes/ }))
+      fireEvent.keyDown(screen.getByLabelText('Suggested changes to the plan'), { key: 'Escape' })
+      expect(document.activeElement).toBe(panel)
+      fireEvent.click(screen.getByRole('button', { name: /Suggest changes/ }))
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(document.activeElement).toBe(panel)
+    })
+
+    it('takes focus back when a revised plan arrives, unless the user is typing elsewhere', () => {
+      const props = { revising: false, onResolve: vi.fn(), onClose: vi.fn() }
+      const { panel, rerender } = renderPanel(props)
+      // Sending a suggestion removes the box; focus would otherwise land on the page.
+      ;(document.activeElement as HTMLElement | null)?.blur()
+      rerender(<PlanPanel plan={{ ...plan, title: 'Revised' }} {...props} />)
+      expect(document.activeElement).toBe(panel)
+
+      const composer = document.createElement('textarea')
+      document.body.appendChild(composer)
+      composer.focus()
+      rerender(<PlanPanel plan={{ ...plan, title: 'Revised again' }} {...props} />)
+      expect(document.activeElement).toBe(composer)
+      composer.remove()
+    })
   })
 
   it('shows a working state and hides the actions while revising', () => {
