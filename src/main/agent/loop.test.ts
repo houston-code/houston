@@ -5402,6 +5402,519 @@ describe('writable subagent unconfined-shell gate', () => {
   })
 })
 
+describe('tool-call batches between encumbered calls', () => {
+  /**
+   * A meeting point for `n` concurrent calls: each one that arrives waits for the rest.
+   * Resolves true once all have arrived, or false after `timeoutMs` (so a call that ran
+   * alone fails its assertion instead of hanging the test).
+   */
+  const rendezvous = (n: number, timeoutMs = 1500): (() => Promise<boolean>) => {
+    let arrived = 0
+    let release!: () => void
+    const all = new Promise<void>((r) => (release = r))
+    return () => {
+      if (++arrived === n) release()
+      return Promise.race([
+        all.then(() => true),
+        new Promise<boolean>((r) => setTimeout(() => r(false), timeoutMs))
+      ])
+    }
+  }
+  /** A read-kind tool (registered as an MCP def) whose body the test controls. */
+  const probeRead = (name: string, body: () => Promise<string>): ToolDef => ({
+    kind: 'read',
+    summarize: () => name,
+    schema: { name, description: name, parameters: { type: 'object', properties: {} } },
+    execute: body
+  })
+  const callTurn = (
+    ...calls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>
+  ): ProviderStreamEvent[] => [
+    ...calls.map((call) => ({ type: 'tool_call' as const, call })),
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const finalText = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn' }
+  ]
+  const eventIndex = (r: RunResult, type: AgentEvent['type'], callId: string): number =>
+    r.events.findIndex((e) => e.type === type && 'callId' in e && e.callId === callId)
+  const resultIds = (r: RunResult): string[] =>
+    r.events.filter((e) => e.type === 'tool_result').map((e) => (e as { callId: string }).callId)
+  const toolIds = (r: RunResult): Array<string | undefined> =>
+    r.messages.filter((m) => m.role === 'tool').map((m) => m.toolCallId)
+  const write = (id: string, path: string): { id: string; name: string; arguments: Record<string, unknown> } => ({
+    id,
+    name: 'write_file',
+    arguments: { path, content: 'WRITTEN' }
+  })
+
+  afterEach(() => {
+    h.settings.permissionRules = []
+  })
+
+  it('[write, read, read]: the reads run concurrently, once the write has landed', async () => {
+    const meet = rendezvous(2)
+    const met: Record<string, boolean> = {}
+    const sawWrite: Record<string, boolean> = {}
+    const reader = (name: string): ToolDef =>
+      probeRead(name, async () => {
+        sawWrite[name] = existsSync(join(ws, 'w.txt'))
+        met[name] = await meet()
+        return `RESULT_${name}`
+      })
+    h.mcpDefs = [reader('read_a'), reader('read_b')]
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        callTurn(write('w1', 'w.txt'), { id: 'ra', name: 'read_a', arguments: {} }, { id: 'rb', name: 'read_b', arguments: {} }),
+        finalText('done')
+      ]
+    })
+    // Both reads were in flight at once (sequential calls never meet), and each started
+    // only after the write had finished.
+    expect(met).toEqual({ read_a: true, read_b: true })
+    expect(sawWrite).toEqual({ read_a: true, read_b: true })
+    expect(eventIndex(r, 'tool_start', 'ra')).toBeGreaterThan(eventIndex(r, 'tool_result', 'w1'))
+    // Each call still gets its own tool_start and tool_result, the results in call order.
+    expect(eventIndex(r, 'tool_start', 'rb')).toBeLessThan(eventIndex(r, 'tool_result', 'ra'))
+    expect(resultIds(r)).toEqual(['w1', 'ra', 'rb'])
+    expect(toolIds(r)).toEqual(['w1', 'ra', 'rb'])
+    expect(r.messages.find((m) => m.toolCallId === 'rb')?.content).toBe('RESULT_read_b')
+  })
+
+  it('[read, write, read, read]: two batches around the write, flushed in call order', async () => {
+    const meet = rendezvous(2)
+    const finished: string[] = []
+    const met: Record<string, boolean> = {}
+    let firstSawWrite: boolean | undefined
+    h.mcpDefs = [
+      probeRead('read_a', async () => {
+        firstSawWrite = existsSync(join(ws, 'w.txt'))
+        return 'A'
+      }),
+      // The earlier call of the second batch finishes LAST: its result still comes first.
+      probeRead('read_b', async () => {
+        met.read_b = await meet()
+        await new Promise((r) => setTimeout(r, 40))
+        finished.push('rb')
+        return 'B'
+      }),
+      probeRead('read_c', async () => {
+        met.read_c = await meet()
+        finished.push('rc')
+        return 'C'
+      })
+    ]
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        callTurn(
+          { id: 'ra', name: 'read_a', arguments: {} },
+          write('w1', 'w.txt'),
+          { id: 'rb', name: 'read_b', arguments: {} },
+          { id: 'rc', name: 'read_c', arguments: {} }
+        ),
+        finalText('done')
+      ]
+    })
+    // The leading read ran (and finished) before the write; the two after it ran together.
+    expect(firstSawWrite).toBe(false)
+    expect(eventIndex(r, 'tool_start', 'w1')).toBeGreaterThan(eventIndex(r, 'tool_result', 'ra'))
+    expect(eventIndex(r, 'tool_start', 'rb')).toBeGreaterThan(eventIndex(r, 'tool_result', 'w1'))
+    expect(met).toEqual({ read_b: true, read_c: true })
+    expect(finished).toEqual(['rc', 'rb'])
+    expect(resultIds(r)).toEqual(['ra', 'w1', 'rb', 'rc'])
+    expect(toolIds(r)).toEqual(['ra', 'w1', 'rb', 'rc'])
+    expect(r.messages.filter((m) => m.role === 'tool').map((m) => m.content)).toEqual([
+      'A',
+      expect.stringContaining('w.txt'),
+      'B',
+      'C'
+    ])
+  })
+
+  it('[edit, dispatch_agent, dispatch_agent]: the two subagents run at the same time', async () => {
+    const meet = rendezvous(2)
+    const met: Record<string, boolean> = {}
+    // Each subagent reads one file; the probe stands in for read_file in both.
+    h.probeTools = [
+      {
+        kind: 'read',
+        summarize: () => 'read',
+        schema: { name: 'read_file', description: 'read', parameters: { type: 'object', properties: { path: { type: 'string' } } } },
+        execute: async (a) => {
+          met[String(a.path)] = await meet()
+          return `content of ${String(a.path)}`
+        }
+      }
+    ]
+    // Turns are routed by the conversation's first user message: the main agent's, or
+    // each subagent's prompt, since the two subagents ask the provider concurrently.
+    const scripts: Record<string, ProviderStreamEvent[][]> = {
+      'do it': [
+        callTurn(
+          write('w1', 'w.txt'),
+          { id: 'd1', name: 'dispatch_agent', arguments: { description: 'one', prompt: 'sub one' } },
+          { id: 'd2', name: 'dispatch_agent', arguments: { description: 'two', prompt: 'sub two' } }
+        ),
+        finalText('main done')
+      ],
+      'sub one': [callTurn({ id: 's1', name: 'read_file', arguments: { path: 'one.txt' } }), finalText('report one')],
+      'sub two': [callTurn({ id: 's2', name: 'read_file', arguments: { path: 'two.txt' } }), finalText('report two')]
+    }
+    const served: Record<string, number> = {}
+    const provider: Provider = {
+      async *streamChat(req) {
+        const first = String(req.messages?.find((m) => m.role === 'user')?.content ?? '')
+        const key = Object.keys(scripts).find((k) => k !== 'do it' && first.includes(k)) ?? 'do it'
+        const i = (served[key] = (served[key] ?? 0) + 1) - 1
+        for (const ev of scripts[key]?.[i] ?? finalText('')) yield ev
+      }
+    }
+    const r = await run({ policy: 'full-auto', provider })
+    expect(met).toEqual({ 'one.txt': true, 'two.txt': true })
+    expect(resultIds(r).filter((id) => ['w1', 'd1', 'd2'].includes(id))).toEqual(['w1', 'd1', 'd2'])
+    expect(String(r.messages.find((m) => m.toolCallId === 'd1')?.content)).toContain('report one')
+    expect(String(r.messages.find((m) => m.toolCallId === 'd2')?.content)).toContain('report two')
+  })
+
+  it('keeps a credential-file read and a denied read out of the batches, each gated in its place', async () => {
+    writeFileSync(join(ws, '.env'), 'APP_MODE=batched-dotenv-marker')
+    writeFileSync(join(ws, 'secret.txt'), 'deny-rule-marker')
+    h.settings.permissionRules = [{ action: 'deny', tool: 'read_file', match: 'secret.txt' }]
+    const ran: string[] = []
+    h.mcpDefs = [
+      probeRead('read_a', async () => {
+        ran.push('ra')
+        return 'A'
+      }),
+      probeRead('read_b', async () => {
+        ran.push('rb')
+        return 'B'
+      })
+    ]
+    const approvals: string[] = []
+    const r = await run({
+      policy: 'full-auto',
+      onApproval: (callId, decide) => {
+        approvals.push(callId)
+        decide('deny')
+      },
+      turns: [
+        callTurn(
+          write('w1', 'w.txt'),
+          { id: 'ra', name: 'read_a', arguments: {} },
+          { id: 'env', name: 'read_file', arguments: { path: '.env' } },
+          { id: 'sec', name: 'read_file', arguments: { path: 'secret.txt' } },
+          { id: 'rb', name: 'read_b', arguments: {} }
+        ),
+        finalText('done')
+      ]
+    })
+    // Only the credential file asked; the deny rule refused without a prompt.
+    expect(approvals).toEqual(['env'])
+    // The gated reads ran alone, in call order: read_a was done before the .env prompt,
+    // and read_b started only after the denied read had been answered.
+    expect(eventIndex(r, 'tool_approval', 'env')).toBeGreaterThan(eventIndex(r, 'tool_result', 'ra'))
+    expect(eventIndex(r, 'tool_result', 'sec')).toBeGreaterThan(eventIndex(r, 'tool_result', 'env'))
+    expect(eventIndex(r, 'tool_start', 'rb')).toBeGreaterThan(eventIndex(r, 'tool_result', 'sec'))
+    expect(ran).toEqual(['ra', 'rb'])
+    expect(JSON.stringify(r.messages)).not.toContain('batched-dotenv-marker')
+    expect(JSON.stringify(r.messages)).not.toContain('deny-rule-marker')
+    expect(toolIds(r)).toEqual(['w1', 'ra', 'env', 'sec', 'rb'])
+  })
+
+  it('still batches the reads after a write that plan mode blocks', async () => {
+    const meet = rendezvous(2)
+    const met: Record<string, boolean> = {}
+    h.mcpDefs = [
+      probeRead('read_a', async () => String((met.read_a = await meet()))),
+      probeRead('read_b', async () => String((met.read_b = await meet())))
+    ]
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        callTurn(write('w1', 'w.txt'), { id: 'ra', name: 'read_a', arguments: {} }, { id: 'rb', name: 'read_b', arguments: {} }),
+        finalText('done')
+      ]
+    })
+    expect(existsSync(join(ws, 'w.txt'))).toBe(false)
+    expect(String(r.messages.find((m) => m.toolCallId === 'w1')?.content)).toMatch(/Plan mode/)
+    expect(met).toEqual({ read_a: true, read_b: true })
+    expect(toolIds(r)).toEqual(['w1', 'ra', 'rb'])
+  })
+
+  it('asks about a host the egress proxy refused during a batch after that batch, on its first call', async () => {
+    // A background command reaching a host that isn't allowed is refused by the proxy
+    // while the reads run; the question comes after them, once, on the first result.
+    const meet = rendezvous(2)
+    h.mcpDefs = [
+      probeRead('read_a', async () => {
+        await meet()
+        checkEgressHost('blocked.example.com', h.settings, h.egressScope!)
+        return 'A'
+      }),
+      probeRead('read_b', async () => {
+        await meet()
+        return 'B'
+      })
+    ]
+    const r = await run({
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('deny'),
+      turns: [
+        callTurn(write('w1', 'w.txt'), { id: 'ra', name: 'read_a', arguments: {} }, { id: 'rb', name: 'read_b', arguments: {} }),
+        finalText('done')
+      ]
+    })
+    const asked = r.events.filter((e) => e.type === 'tool_approval') as Array<
+      Extract<AgentEvent, { type: 'tool_approval' }>
+    >
+    expect(asked.map((a) => [a.callId, a.egressHost])).toEqual([['ra', 'blocked.example.com']])
+    expect(eventIndex(r, 'tool_approval', 'ra')).toBeLessThan(eventIndex(r, 'tool_result', 'ra'))
+    expect(String(r.messages.find((m) => m.toolCallId === 'ra')?.content)).toContain(
+      egressHostDeclinedNote('blocked.example.com')
+    )
+    expect(r.messages.find((m) => m.toolCallId === 'rb')?.content).toBe('B')
+  })
+
+  describe('stopped mid-turn', () => {
+    const startRunWith = async (
+      runId: string,
+      turns: ProviderStreamEvent[][],
+      onEvent: (e: AgentEvent) => void = () => {}
+    ): Promise<{ events: AgentEvent[]; messages: ChatMessage[] }> => {
+      h.provider = scripted(turns)
+      const events: AgentEvent[] = []
+      let messages: ChatMessage[] = []
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          messages: [{ role: 'user', content: 'go' }]
+        },
+        (e) => {
+          events.push(e)
+          onEvent(e)
+        },
+        (m) => {
+          messages = m
+        }
+      )
+      return { events, messages }
+    }
+
+    it('keeps the results of a batch stopped partway and gives the calls after it the interrupted placeholder', async () => {
+      const runId = 'run-stop-mid-batch'
+      const meet = rendezvous(2)
+      h.mcpDefs = [
+        probeRead('read_a', async () => {
+          await meet()
+          // Stop while both reads are in flight.
+          cancelRun(runId)
+          return 'A_REAL'
+        }),
+        probeRead('read_b', async () => {
+          await meet()
+          return 'B_REAL'
+        })
+      ]
+      const { events, messages } = await startRunWith(runId, [
+        callTurn(
+          write('w1', 'one.txt'),
+          { id: 'ra', name: 'read_a', arguments: {} },
+          { id: 'rb', name: 'read_b', arguments: {} },
+          write('w2', 'two.txt')
+        )
+      ])
+      expect(missingToolResults(messages)).toEqual([])
+      expect(messages.find((m) => m.toolCallId === 'w1')?.content).toContain('one.txt')
+      expect(messages.find((m) => m.toolCallId === 'ra')?.content).toBe('A_REAL')
+      expect(messages.find((m) => m.toolCallId === 'rb')?.content).toBe('B_REAL')
+      expect(messages.find((m) => m.toolCallId === 'w2')?.content).toBe(INTERRUPTED_TOOL_RESULT)
+      expect(existsSync(join(ws, 'two.txt'))).toBe(false)
+      expect(events.filter((e) => e.type === 'done')).toMatchObject([{ type: 'done', stopReason: 'aborted' }])
+    })
+
+    it('does not start a batch once the run was stopped during the call before it', async () => {
+      const runId = 'run-stop-before-batch'
+      const ran: string[] = []
+      h.mcpDefs = [
+        probeRead('read_a', async () => {
+          ran.push('ra')
+          return 'A'
+        }),
+        probeRead('read_b', async () => {
+          ran.push('rb')
+          return 'B'
+        })
+      ]
+      const { events, messages } = await startRunWith(
+        runId,
+        [
+          callTurn(
+            write('w1', 'one.txt'),
+            { id: 'ra', name: 'read_a', arguments: {} },
+            { id: 'rb', name: 'read_b', arguments: {} }
+          )
+        ],
+        (e) => {
+          if (e.type === 'tool_result' && e.callId === 'w1') cancelRun(runId)
+        }
+      )
+      expect(ran).toEqual([])
+      expect(events.some((e) => e.type === 'tool_start' && e.callId === 'ra')).toBe(false)
+      expect(messages.find((m) => m.toolCallId === 'ra')?.content).toBe(INTERRUPTED_TOOL_RESULT)
+      expect(messages.find((m) => m.toolCallId === 'rb')?.content).toBe(INTERRUPTED_TOOL_RESULT)
+      expect(events.filter((e) => e.type === 'done')).toMatchObject([{ type: 'done', stopReason: 'aborted' }])
+    })
+  })
+
+  describe('in a subagent', () => {
+    /** Scripts turns and snapshots every request's messages, subagent transcripts included. */
+    const recording = (turns: ProviderStreamEvent[][], requests: ChatMessage[][]): Provider => {
+      let i = 0
+      return {
+        async *streamChat(req) {
+          requests.push(JSON.parse(JSON.stringify(req.messages ?? [])) as ChatMessage[])
+          for (const ev of turns[i++] ?? finalText('')) yield ev
+        }
+      }
+    }
+    const subToolIds = (requests: ChatMessage[][], ids: string[]): Array<string | undefined> =>
+      (requests.find((ms) => ms.some((m) => m.toolCallId === ids[0])) ?? [])
+        .filter((m) => m.role === 'tool')
+        .map((m) => m.toolCallId)
+    /** A stand-in for read_file that logs when each read starts. */
+    const probeReadFile = (onRead: (path: string) => Promise<string>): ToolDef => ({
+      kind: 'read',
+      summarize: (a) => `read ${String(a.path)}`,
+      schema: {
+        name: 'read_file',
+        description: 'read',
+        parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+      },
+      execute: async (a) => onRead(String(a.path))
+    })
+
+    it("runs a subagent's batched reads concurrently, recorded in call order", async () => {
+      const meet = rendezvous(3)
+      const met: Record<string, boolean> = {}
+      h.probeTools = [
+        probeReadFile(async (path) => {
+          met[path] = await meet()
+          // Finish in reverse order: the transcript still answers them in call order.
+          await new Promise((r) => setTimeout(r, path === 'a.txt' ? 30 : 0))
+          return `content of ${path}`
+        })
+      ]
+      const requests: ChatMessage[][] = []
+      const r = await run({
+        policy: 'full-auto',
+        provider: recording(
+          [
+            callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read them' } }),
+            callTurn(
+              { id: 's1', name: 'read_file', arguments: { path: 'a.txt' } },
+              { id: 's2', name: 'read_file', arguments: { path: 'b.txt' } },
+              { id: 's3', name: 'read_file', arguments: { path: 'c.txt' } }
+            ),
+            finalText('sub report'),
+            finalText('main done')
+          ],
+          requests
+        )
+      })
+      expect(met).toEqual({ 'a.txt': true, 'b.txt': true, 'c.txt': true })
+      expect(subToolIds(requests, ['s1'])).toEqual(['s1', 's2', 's3'])
+      expect(String(r.messages.find((m) => m.toolCallId === 'd1')?.content)).toContain('sub report')
+    })
+
+    it("holds a subagent's later reads until a credential-file read in the batch is answered", async () => {
+      writeFileSync(join(ws, '.env'), 'APP_MODE=sub-batch-dotenv-marker')
+      const log: string[] = []
+      h.probeTools = [
+        probeReadFile(async (path) => {
+          log.push(`read ${path}`)
+          return path === '.env' ? readFileSync(join(ws, '.env'), 'utf8') : `content of ${path}`
+        })
+      ]
+      const requests: ChatMessage[][] = []
+      const r = await run({
+        policy: 'full-auto',
+        provider: recording(
+          [
+            callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read them' } }),
+            callTurn(
+              { id: 's1', name: 'read_file', arguments: { path: 'a.txt' } },
+              { id: 's2', name: 'read_file', arguments: { path: '.env' } },
+              { id: 's3', name: 'read_file', arguments: { path: 'b.txt' } }
+            ),
+            finalText('sub report'),
+            finalText('main done')
+          ],
+          requests
+        ),
+        onApproval: (_id, decide) => {
+          log.push('answered')
+          decide('deny')
+        }
+      })
+      const approvals = r.events.filter((e) => e.type === 'tool_approval') as Array<
+        Extract<AgentEvent, { type: 'tool_approval' }>
+      >
+      expect(approvals).toHaveLength(1)
+      expect(approvals[0].sensitiveRead).toBe(true)
+      // The credential read never ran, and the read after it waited for the answer.
+      expect(log).toEqual(['read a.txt', 'answered', 'read b.txt'])
+      expect(JSON.stringify(requests)).not.toContain('sub-batch-dotenv-marker')
+      expect(subToolIds(requests, ['s1'])).toEqual(['s1', 's2', 's3'])
+    })
+
+    it("refuses a subagent's denied read in a batch without stopping the reads around it", async () => {
+      h.settings.permissionRules = [{ action: 'deny', tool: 'read_file', match: 'secret.txt' }]
+      const meet = rendezvous(2)
+      const met: Record<string, boolean> = {}
+      const read: string[] = []
+      h.probeTools = [
+        probeReadFile(async (path) => {
+          read.push(path)
+          met[path] = await meet()
+          return `content of ${path}`
+        })
+      ]
+      const requests: ChatMessage[][] = []
+      const r = await run({
+        policy: 'full-auto',
+        provider: recording(
+          [
+            callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read them' } }),
+            callTurn(
+              { id: 's1', name: 'read_file', arguments: { path: 'a.txt' } },
+              { id: 's2', name: 'read_file', arguments: { path: 'secret.txt' } },
+              { id: 's3', name: 'read_file', arguments: { path: 'b.txt' } }
+            ),
+            finalText('sub report'),
+            finalText('main done')
+          ],
+          requests
+        ),
+        onApproval: (_id, decide) => decide('allow')
+      })
+      expect(r.events.some((e) => e.type === 'tool_approval')).toBe(false)
+      expect(read.sort()).toEqual(['a.txt', 'b.txt'])
+      expect(met).toEqual({ 'a.txt': true, 'b.txt': true })
+      const sub = requests.find((ms) => ms.some((m) => m.toolCallId === 's2')) ?? []
+      expect(sub.find((m) => m.toolCallId === 's2')?.content).toBe('Denied by a permission rule.')
+      expect(subToolIds(requests, ['s1'])).toEqual(['s1', 's2', 's3'])
+    })
+  })
+})
+
 describe('permission gates: batched sensitive reads and subagent calls', () => {
   /** Scripts turns and snapshots every request's messages, subagent transcripts included. */
   function recording(turns: ProviderStreamEvent[][], requests: ChatMessage[][]): Provider {

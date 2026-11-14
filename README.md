@@ -48,9 +48,10 @@ Open source under the [Apache License 2.0](LICENSE).
   `multi_edit`, `apply_patch`, `notebook_edit`, `list_dir`, `glob`, `search_files`,
   `ast_grep`, `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`,
   `gh_pr_*` (pull requests), `todo_write`, `pr_sweep`, and `ask_user` to actually
-  do the work, not just describe it. When a turn is all
-  reads (e.g. open five files at once), they run **concurrently**; anything that
-  writes, runs a command, or needs approval stays sequential. Edits are matched
+  do the work, not just describe it. Reads the agent asks for together (e.g. open
+  five files at once) run **concurrently**, in a subagent too, even after an edit
+  in the same step (they wait for it to land first); anything that writes, runs a
+  command, or needs approval runs on its own, in order. Edits are matched
   **resiliently**: if the model's snippet drifts from the file by indentation or
   whitespace, Houston still locates and applies it instead of failing, and shows the
   model the lines it actually changed. Reads come back **line-numbered**, and the

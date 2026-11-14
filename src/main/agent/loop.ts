@@ -130,7 +130,7 @@ import {
   mcpCatalogEntries
 } from './lazy-mcp'
 import { isDeferredBuiltin } from './deferred-tools'
-import { isParallelizableRead, partitionCalls } from './scheduling'
+import { callSegments, isParallelizableRead, type IndexedCall } from './scheduling'
 import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
 import {
   abortableSleep,
@@ -4557,16 +4557,15 @@ export async function startRun(
 
       // ---------------------------------------------------------------------
       // Tool dispatch. A turn can mix parallelizable reads with encumbered calls
-      // (writes/shell/network/MCP/gated/hooked/ask_user). We run the CONTIGUOUS
-      // LEADING run of unencumbered reads CONCURRENTLY, then the rest — the first
-      // encumbered call and everything after it (including any later reads) —
-      // SEQUENTIALLY in its original relative order. Because the parallel group is
-      // entirely before the sequential group in original order, results are flushed
-      // (tool_result + appended to the log) INLINE as each call finalizes, still in
-      // ORIGINAL call order, so the transcript and the model's window match a
-      // fully-sequential run — and a read that follows a write in the same turn sees
-      // the write. The all-reads case is the partition where `sequential` is empty;
-      // a turn led by an encumbered call has `parallel` empty (fully sequential).
+      // (writes/shell/network/MCP/gated/hooked/ask_user). Each MAXIMAL run of
+      // unencumbered reads runs CONCURRENTLY as one batch, and each encumbered call
+      // runs on its own, all in original call order: a batch starts only after the
+      // encumbered call before it has finished, and the call after it waits for the
+      // whole batch, so a read that follows a write in the same turn sees the write.
+      // Results are flushed (tool_result + appended to the log) as each segment
+      // finalizes, still in ORIGINAL call order, so the transcript and the model's
+      // window match a fully-sequential run. An all-reads turn is a single batch; a
+      // turn of encumbered calls only is fully sequential.
       // ---------------------------------------------------------------------
 
       // Per-call outcome, ready to emit + append.
@@ -4581,9 +4580,9 @@ export async function startRun(
       // Flush one finalized call: emit tool_result, fire the onToolResult plugin
       // event, and append the tool message — so each tool_use is answered exactly
       // once and the persisted log stays provider-valid (role alternation, matched
-      // toolCallId pairing). Called INLINE the moment a call finalizes (parallel
-      // group in original order right after Promise.all; sequential group one at a
-      // time) so a mid-turn abort never discards an already-completed real result:
+      // toolCallId pairing). Called INLINE the moment a call finalizes (a batch in
+      // original order right after its Promise.all; an encumbered call on its own)
+      // so a mid-turn abort never discards an already-completed real result:
       // whatever has been appended persists, and only not-yet-run calls get the
       // interrupted placeholder from the finally block's repair pass.
       const flushResult = async (r: CallResult): Promise<void> => {
@@ -4623,8 +4622,8 @@ export async function startRun(
           if (limited !== messages) for (let i = 0; i < limited.length; i++) messages[i] = limited[i]
         }
         // Feed the stall/verify accumulators as each call finalizes — inline flush
-        // runs in ORIGINAL call order (parallel group in order, then each
-        // sequential call), so this is the same call-order collection the detector
+        // runs in ORIGINAL call order (each batch in order, each encumbered call in
+        // its place), so this is the same call-order collection the detector
         // expects. Record failures (raw output — errorSignature normalization
         // happens inside the detector) for repeated-error tracking, and note any
         // successful workspace-mutating (write/shell) call so a run that's actually
@@ -4681,7 +4680,7 @@ export async function startRun(
       // result (ok:false) instead of executing — the model self-corrects next
       // turn. Returns the repair CallResult, or null when the args are acceptable
       // (or the tool is unknown, which the caller reports separately). Applied in
-      // both the parallel and the sequential path.
+      // both the batch and the sequential path.
       const validationFailure = (call: ToolCall): CallResult | null => {
         // A call whose arguments didn't arrive whole (see ToolCall.incomplete) has only a
         // placeholder to validate. Answer it without running anything.
@@ -4722,91 +4721,109 @@ export async function startRun(
       const cutOffCalls = stopReason === 'max_tokens' ? toolCalls.filter((c) => c.incomplete) : []
       if (cutOffCalls.length) emit({ type: 'notice', message: incompleteCallsNotice(cutOffCalls) })
 
-      // Partition this turn's calls into the CONTIGUOUS LEADING run of unencumbered
-      // reads and the sequential rest (the first encumbered call and everything
-      // after it, including later reads). Because the parallel group is entirely
-      // before the sequential group in original order, we can flush each group's
-      // results as soon as they finalize and still keep the model-visible order.
-      const { parallel, sequential } = partitionCalls(toolCalls, isParallelCall)
-
-      // --- Parallel group: leading unencumbered reads, all dispatched at once. --
+      // --- A batch: a run of unencumbered reads, all dispatched at once. ---------
       // These need no approval, plan check, hooks, or checkpoint, so there's no
       // ordering constraint between them. Validate each ONCE up front (reused for
       // both the tool_start decision and the execute map), emit tool_start for the
       // ones that actually run, then dispatch via Promise.all and flush the results
       // in original call order.
-      const parallelValidation = parallel.map(({ call }) => validationFailure(call))
-      for (let p = 0; p < parallel.length; p++) {
-        if (parallelValidation[p]) continue // tool_start intentionally not emitted for a refused call
-        const { call } = parallel[p]
-        emit({
-          type: 'tool_start',
-          callId: call.id,
-          name: call.name,
-          args: call.arguments,
-          kind: lookupTool(call.name)?.kind
-        })
-        await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
-      }
-      const parallelResults = await Promise.all(
-        parallel.map(async ({ call }, p): Promise<CallResult> => {
-          const invalid = parallelValidation[p]
-          if (invalid) return invalid
-          // Serve an identical repeat from the run cache. A parallel call is always
-          // hook-free (isParallelCall excludes hooked tools), but not every read is
-          // cacheable — only the pure, on-disk-deterministic ones (isCacheableRead).
-          // A stateful read like read_shell_output runs here too and must NOT cache.
-          const cacheable = isCacheableRead(call.name, lookupTool(call.name)!.kind)
-          const cached = cacheable ? await readCache.get(call.name, call.arguments) : undefined
-          if (cached) {
-            return {
-              call,
-              output: cached.output,
-              ok: cached.ok,
-              images: cached.images,
-              documents: cached.documents
+      const runReadBatch = async (batch: IndexedCall[]): Promise<void> => {
+        const batchValidation = batch.map(({ call }) => validationFailure(call))
+        for (let p = 0; p < batch.length; p++) {
+          if (batchValidation[p]) continue // tool_start intentionally not emitted for a refused call
+          const { call } = batch[p]
+          emit({
+            type: 'tool_start',
+            callId: call.id,
+            name: call.name,
+            args: call.arguments,
+            kind: lookupTool(call.name)?.kind
+          })
+          await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
+        }
+        const batchResults = await Promise.all(
+          batch.map(async ({ call }, p): Promise<CallResult> => {
+            const invalid = batchValidation[p]
+            if (invalid) return invalid
+            // Serve an identical repeat from the run cache. A batched call is always
+            // hook-free (isParallelCall excludes hooked tools), but not every read is
+            // cacheable — only the pure, on-disk-deterministic ones (isCacheableRead).
+            // A stateful read like read_shell_output runs here too and must NOT cache.
+            const cacheable = isCacheableRead(call.name, lookupTool(call.name)!.kind)
+            const cached = cacheable ? await readCache.get(call.name, call.arguments) : undefined
+            if (cached) {
+              return {
+                call,
+                output: cached.output,
+                ok: cached.ok,
+                images: cached.images,
+                documents: cached.documents
+              }
             }
-          }
-          const images: ImageAttachment[] = []
-          const documents: DocumentAttachment[] = []
-          let output: string
-          let ok = true
-          try {
-            output = await lookupTool(call.name)!.execute(
-              call.arguments,
-              makeToolContext(
-                call.id,
-                (i) => images.push(i),
-                (d) => documents.push(d)
+            const images: ImageAttachment[] = []
+            const documents: DocumentAttachment[] = []
+            let output: string
+            let ok = true
+            try {
+              output = await lookupTool(call.name)!.execute(
+                call.arguments,
+                makeToolContext(
+                  call.id,
+                  (i) => images.push(i),
+                  (d) => documents.push(d)
+                )
               )
-            )
-          } catch (e) {
-            output = `Error: ${(e as Error).message}`
-            ok = false
+            } catch (e) {
+              output = `Error: ${(e as Error).message}`
+              ok = false
+            }
+            if (cacheable) {
+              await readCache.set(
+                call.name,
+                call.arguments,
+                { output, ok, images, documents },
+                readDeps(call.name, call.arguments, resolvePath)
+              )
+            }
+            return { call, output, ok, images, documents }
+          })
+        )
+        for (let p = 0; p < batch.length; p++) {
+          const result = batchResults[p]
+          // As after a call run on its own: ask about any host the egress proxy refused
+          // since the last call (a background command's), one call at a time and in
+          // call order. Outside the cache, since the note belongs to this moment.
+          if (!batchValidation[p] && run.egressRefused.size > 0) {
+            const tool = lookupTool(result.call.name)!
+            result.output = await offerEgressHosts(result.call, result.call.arguments, tool, result.output)
           }
-          if (cacheable) {
-            await readCache.set(
-              call.name,
-              call.arguments,
-              { output, ok, images, documents },
-              readDeps(call.name, call.arguments, resolvePath)
-            )
-          }
-          return { call, output, ok, images, documents }
-        })
-      )
-      for (const result of parallelResults) await flushResult(result)
+          await flushResult(result)
+        }
+      }
 
-      // --- Sequential group: the first encumbered call and everything after it,
-      // one call at a time. -----------------------------------------------------
-      // Preserves the original relative order and every existing semantic:
-      // unknown-tool, deny rule, plan block, approval prompts, "Allow for run"/rule
-      // persistence, Pre/PostToolUse hooks, write checkpoints, format/diagnostics-
-      // on-save, and per-call abort checks. Each outcome is flushed INLINE the
-      // moment it finalizes, so an abort partway through this loop leaves the
-      // already-completed real results in the log (only the not-yet-run calls get
-      // the interrupted placeholder from the finally block).
-      for (const { call: modelCall } of sequential) {
+      // Run the turn's segments in call order (see callSegments): each batch of
+      // unencumbered reads through runReadBatch, each other call through the
+      // sequential gate below. Segments are classified lazily, so the reads after an
+      // encumbered call are judged only once it has run (and any rule its approval
+      // added is in force).
+      for (const segment of callSegments(toolCalls, isParallelCall)) {
+        if (segment.parallel) {
+          if (abort.signal.aborted) {
+            emit({ type: 'done', stopReason: 'aborted' })
+            return
+          }
+          await runReadBatch(segment.calls)
+          continue
+        }
+
+        // --- An encumbered call, on its own. ---------------------------------
+        // Preserves every existing semantic: unknown-tool, deny rule, plan block,
+        // approval prompts, "Allow for run"/rule persistence, Pre/PostToolUse hooks,
+        // write checkpoints, format/diagnostics-on-save, and per-call abort checks.
+        // Each outcome is flushed INLINE the moment it finalizes, so an abort partway
+        // through the turn leaves the already-completed real results in the log (only
+        // the not-yet-run calls get the interrupted placeholder from the finally block).
+        const { call: modelCall } = segment.call
         if (abort.signal.aborted) {
           emit({ type: 'done', stopReason: 'aborted' })
           return
