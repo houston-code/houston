@@ -117,7 +117,7 @@ import {
 } from './browserSession'
 import { clampSearchResults, formatHits, getSearchAdapter, NO_RESULTS } from './websearch'
 import { resolveRipgrep, searchContents } from './search'
-import { FALLBACK_SKIP_DIRS, gitListFiles, gitTrackedHidden, globTester, hasHiddenSegment } from './fileScope'
+import { FALLBACK_SKIP_DIRS, globTester, hasHiddenSegment, listScope, type ScopeCache } from './fileScope'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { EditNotFoundError, resolveEdit, type EditRegion, type EditResult, type EditStrategy } from './edit-match'
 import { displayLines, numberLines, numberWidth } from './line-numbers'
@@ -399,6 +399,12 @@ export interface ToolContext {
    * Absent on hosts that drive the tools directly, where nothing is enforced.
    */
   fileTracker?: FileReadTracker
+  /**
+   * The run's memo of which files each search root covers (injected by the loop, which
+   * invalidates it after every call that isn't a read), so search_files, ast_grep, and
+   * glob skip re-running git to plan their scope. Absent, each call plans afresh.
+   */
+  scopeCache?: ScopeCache
   /**
    * The language servers covering this run's files (injected by the loop), behind the
    * lsp_* tools. Absent where no servers can run; the tools then say so.
@@ -1660,7 +1666,8 @@ const searchTool: ToolDef = {
       ignoreCase: args.ignore_case === true,
       glob: str(args, 'glob') || undefined,
       context: context !== undefined ? Math.max(0, Math.floor(context)) : undefined,
-      filesWithMatches: args.files_with_matches === true
+      filesWithMatches: args.files_with_matches === true,
+      scopeCache: ctx.scopeCache
     })
   }
 }
@@ -1697,7 +1704,8 @@ const astGrepTool: ToolDef = {
       // Prefer the ast-grep we bundle with the packaged app; fall back to one on PATH (dev).
       binPath: bundledAstGrep() ?? resolveAstGrep(),
       max: 100,
-      signal: ctx.signal
+      signal: ctx.signal,
+      scopeCache: ctx.scopeCache
     })
   }
 }
@@ -1739,27 +1747,39 @@ async function walkGlob(
  * either way (glob's default dot:false), except tracked ones git lists (see
  * gitTrackedHidden), which `**` and `*` then match like any other path.
  */
-async function collectGlob(base: string, pattern: string, out: { full: string; mtimeMs: number }[]): Promise<void> {
-  const listed = await gitListFiles(base)
+async function collectGlob(
+  base: string,
+  pattern: string,
+  out: { full: string; mtimeMs: number }[],
+  scopeCache?: ScopeCache
+): Promise<void> {
+  const { listed, trackedHidden: hidden } = await (scopeCache?.listing(base) ?? listScope(base))
   // Compiled once per call, not once per listed path.
   const matches = globTester(pattern)
   if (!listed) return walkGlob(base, base, matches, out)
-  const trackedHidden = new Set(await gitTrackedHidden(base))
+  const trackedHidden = new Set(hidden)
   const matchesDot = globTester(pattern, { dot: true })
-  for (const rel of listed) {
-    const ok = hasHiddenSegment(rel) ? trackedHidden.has(rel) && matchesDot(rel) : matches(rel)
-    if (!ok) continue
-    const full = join(base, rel)
-    try {
-      // lstat: like the walk, never follow a symlink. Tracked files deleted from
-      // disk and submodule entries are skipped too.
-      const st = await fs.lstat(full)
-      if (st.isFile()) out.push({ full, mtimeMs: st.mtimeMs })
-    } catch {
-      // deleted from disk but still in the index
-    }
+  const picked = listed.filter((rel) =>
+    hasHiddenSegment(rel) ? trackedHidden.has(rel) && matchesDot(rel) : matches(rel)
+  )
+  // lstat: like the walk, never follow a symlink. Tracked files deleted from disk
+  // (still in the index) and submodule entries are skipped too. A batch at a time
+  // rather than one by one, which dominated a broad pattern on a large repo; results
+  // keep the listing's order.
+  for (let i = 0; i < picked.length; i += GLOB_LSTAT_BATCH) {
+    const batch = picked.slice(i, i + GLOB_LSTAT_BATCH).map((rel) => join(base, rel))
+    const stats = await Promise.all(batch.map((full) => fs.lstat(full).catch(() => null)))
+    stats.forEach((st, j) => {
+      if (st?.isFile()) out.push({ full: batch[j], mtimeMs: st.mtimeMs })
+    })
   }
 }
+
+/**
+ * Paths glob lstats at once: enough to keep the thread pool busy, few enough that a
+ * broad match never queues tens of thousands of requests ahead of other file I/O.
+ */
+const GLOB_LSTAT_BATCH = 256
 
 const globTool: ToolDef = {
   kind: 'read',
@@ -1788,7 +1808,7 @@ const globTool: ToolDef = {
     // Collect ALL matches before sorting/capping: the cap must be applied to the
     // mtime-sorted set so "most-recently-modified first" holds and the newest file is
     // never dropped just because traversal reached it after an arbitrary 200 others.
-    await collectGlob(start, pattern, found)
+    await collectGlob(start, pattern, found, ctx.scopeCache)
     if (found.length === 0) return 'No files found.'
     found.sort((a, b) => b.mtimeMs - a.mtimeMs)
     const shown = found.slice(0, MAX_GLOB_RESULTS)

@@ -15,6 +15,7 @@ import type {
   Provider,
   QuestionOption,
   TokenUsage,
+  ProviderWebSearchUsage,
   AgentQuestion,
   ReasoningBlock,
   ReasoningEffort,
@@ -61,8 +62,8 @@ import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
 import { hostPlatform, installHost } from './installHost'
-import { longContextTierAbove, resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
-import { providerAcceptsPdf, providerSendsXhigh } from '@shared/model-facts'
+import { isPriced, longContextTierAbove, resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
+import { nativeWebSearchFeeUsd, providerAcceptsPdf, providerSendsXhigh } from '@shared/model-facts'
 import {
   addPermissionRule,
   noteRuleUsed,
@@ -129,6 +130,7 @@ import {
   writePaths,
   writeTouchesUnknownPaths
 } from './readCache'
+import { ScopeCache } from './fileScope'
 import { createShellSession, shellCwdLabel, type ShellSession } from './shell-session'
 import { getMcpToolDefs, releaseMcpRun } from '../mcp/manager'
 import {
@@ -303,6 +305,7 @@ import {
 } from './compaction'
 import {
   conversationFilePath,
+  flushConversation,
   peekConversation,
   setAnnouncedPolicy,
   setCompaction,
@@ -353,7 +356,11 @@ import {
   landingReminder,
   isFinalStep,
   FINAL_STEP_NOTE,
-  FINAL_STEP_FALLBACK
+  FINAL_STEP_FALLBACK,
+  COST_CAP_NOTE,
+  COST_CAP_FALLBACK,
+  overCostCap,
+  costCapUnenforceableNotice
 } from './budget'
 import {
   shouldVerify,
@@ -400,18 +407,22 @@ interface Route extends SelectedModel {
 export function nativeWebSearchFor(
   route: Pick<Route, 'provider' | 'model' | 'providerId'>,
   signal: AbortSignal,
-  onUsage?: (usage: TokenUsage, model: string) => void
+  onUsage?: (usage: TokenUsage, model: string, feeUsd: number) => void
 ): Pick<ToolContext, 'nativeWebSearch'> {
   const { provider, model } = route
   if (!provider.webSearch) return {}
+  // The provider's own fee per search, billed on top of the tokens.
+  const perSearch = nativeWebSearchFeeUsd(getProvider(route.providerId)?.kind)
   return {
     nativeWebSearch: {
       label: getProvider(route.providerId)?.label ?? 'the model provider',
       search: async (query, maxResults) => {
         // The search is a full model request on `model`; report what each attempt billed
         // (a failed search can still be a billed reply) so the run's cost and its cost
-        // ceiling count it.
-        const report = onUsage ? (u: TokenUsage) => onUsage(u, model) : undefined
+        // ceiling count it, with the per-search fee for the searches it says it ran.
+        const report = onUsage
+          ? (u: ProviderWebSearchUsage) => onUsage(u, model, (u.searches ?? 0) * perSearch)
+          : undefined
         return withProviderRetry(
           () => provider.webSearch!({ model, query, maxResults, signal, ...(report ? { onUsage: report } : {}) }),
           { signal }
@@ -1313,9 +1324,12 @@ export function withRunEndRecord(
  * The saved transcript file a hook is pointed at. Best effort: where the profile folder
  * isn't set up (or the conversation store isn't the real one), the hook just gets no path.
  */
-function transcriptPathOf(conversationId: string): { transcriptPath?: string } {
+function transcriptPathOf(conversationId: string): { transcriptPath?: string; flushTranscript?: () => void } {
   try {
-    return { transcriptPath: conversationFilePath(conversationId) }
+    return {
+      transcriptPath: conversationFilePath(conversationId),
+      flushTranscript: () => flushConversation(conversationId)
+    }
   } catch {
     return {}
   }
@@ -2087,23 +2101,21 @@ export async function startRun(
     // A side request on a model (a provider-run web search, the isolated reader for
     // flagged content): price it on that model and fold it into the conversation's usage
     // like a subagent's. inputTokens: 0 keeps the context-size meter on the main turn
-    // (the request has its own, throwaway context). No per-search fee is added for a
-    // search: the pricing tables carry token rates only.
+    // (the request has its own, throwaway context). `feeUsd` is what the request billed
+    // beyond its tokens (a provider-run search's per-search fee).
     const recordSideRequestUsage = (
       u: TokenUsage,
       sideModel: string,
-      caps: ModelCaps | undefined = providerConfig.models.find((m) => m.id === sideModel)?.caps
+      caps: ModelCaps | undefined = providerConfig.models.find((m) => m.id === sideModel)?.caps,
+      feeUsd = 0
     ): void => {
       const input = u.inputTokens ?? 0
       const output = u.outputTokens ?? 0
-      if (!input && !output) return
-      const cost = turnCostUsd(
-        sideModel,
-        input,
-        output,
-        { readTokens: u.cacheReadTokens, writeTokens: u.cacheWriteTokens },
-        caps
-      )
+      if (!input && !output && !feeUsd) return
+      const cost =
+        turnCostUsd(sideModel, input, output, { readTokens: u.cacheReadTokens, writeTokens: u.cacheWriteTokens }, caps) +
+        feeUsd
+      if (input || output) warnUnpriced(sideModel, caps)
       delegatedCostUsd += cost
       emit({
         type: 'usage',
@@ -2161,11 +2173,11 @@ export async function startRun(
     }
 
     // Allowed roots: the workspace plus any configured additional directories
-    // that still resolve (deduped), and the session's own (`--add-dir`, `/add-dir`),
-    // which are the same thing scoped to the session. This is the file-tool + sandbox
-    // boundary.
+    // that still resolve (deduped), and the session's own (`--add-dir`, `/add-dir`, or
+    // the folders an ACP client passed for its session), which are the same thing scoped
+    // to the session. This is the file-tool + sandbox boundary.
     const roots = [workspace]
-    for (const dir of [...(settings.additionalRoots ?? []), ...(req.addDirs ?? [])]) {
+    for (const dir of [...(settings.additionalRoots ?? []), ...(req.addDirs ?? []), ...(req.additionalRoots ?? [])]) {
       try {
         const real = realpathSync(dir)
         if (!roots.includes(real)) roots.push(real)
@@ -2844,7 +2856,7 @@ export async function startRun(
           ...nativeWebSearchFor(
             { provider: primaryRoute.provider, providerId: req.providerId, model },
             abort.signal,
-            recordSideRequestUsage
+            (u, m, fee) => recordSideRequestUsage(u, m, undefined, fee)
           ),
           collectSecrets: () => knownSecrets
         },
@@ -2862,7 +2874,8 @@ export async function startRun(
           ceiling: settings.maxIterationsCeiling,
           ...(hardCap ? { hardCap } : {}),
           // The run's cost ceiling reaches the agent too (see spentUsd below).
-          costCeilingUsd: settings.costCeilingUsd
+          costCeilingUsd: settings.costCeilingUsd,
+          maxCostUsd: settings.maxCostUsd
         },
         stall:
           settings.stallDetection === false
@@ -2947,6 +2960,7 @@ export async function startRun(
           subCost += turnCost
           // Counted as it bills, so the cost ceiling sees a long dispatch while it runs.
           delegatedCostUsd += turnCost
+          warnUnpriced(model, modelCaps)
           handle?.usage(u)
         }
       }).finally(() => {
@@ -3128,6 +3142,7 @@ export async function startRun(
       recordEvidence: (e) => recordEvidence(e),
       checkTodos,
       fileTracker,
+      scopeCache,
       ghExec,
       getSecret: getKey,
       collectSecrets: () => knownSecrets,
@@ -3136,7 +3151,7 @@ export async function startRun(
       // the fallback route like quarantineExtract: it runs on whichever model is
       // serving the run now, billed to that provider's key.
       // Priced with the route's own caps: after a hop the backup's provider may differ.
-      ...nativeWebSearchFor(route, abort.signal, (u, m) => recordSideRequestUsage(u, m, route.caps)),
+      ...nativeWebSearchFor(route, abort.signal, (u, m, fee) => recordSideRequestUsage(u, m, route.caps, fee)),
       // Reads flagged web content on the run's own model, but with no tools and no
       // history — so the page has nothing to act through and nothing to override.
       // Follows the fallback route (provider and model move together here, like the
@@ -3583,6 +3598,10 @@ export async function startRun(
     // user editing in their editor, a git checkout — are caught instead by the stat
     // revalidation every hit performs. See readCache.ts.
     const readCache = new ReadCache({ stat: statPath })
+    // Which files each search root covers (tracked, ignored, hidden), so search_files,
+    // ast_grep, and glob don't re-run git to plan every call. Per run like the read
+    // cache, and cleared with it on every mutating call below. See ScopeCache.
+    const scopeCache = new ScopeCache()
     // Map a tool's `path` argument to a canonical absolute path the way the file
     // tools do, so cache dependencies and write-invalidation keys line up exactly.
     const resolvePath = (rel: string): string => resolveInRoots(roots, rel)
@@ -3614,6 +3633,8 @@ export async function startRun(
     const invalidateForMutation = (name: string, kind: ToolKind, args: Record<string, unknown>): void => {
       // Any mutation may have switched branches (a shell `git switch`, a write to .git).
       branchStale = true
+      // ...or changed what is tracked, ignored, or present: search scope is planned afresh.
+      scopeCache.invalidate()
       if (kind === 'write') {
         const touched = writePaths(name, args, resolvePath, patchPaths)
         if (writeTouchesUnknownPaths(touched)) readCache.invalidateAll()
@@ -3631,12 +3652,24 @@ export async function startRun(
     // the 'usage' emit reports).
     const budget = resolveBudgetLimits({
       maxIterations: settings.maxIterations,
-      costCeilingUsd: settings.costCeilingUsd
+      costCeilingUsd: settings.costCeilingUsd,
+      maxCostUsd: settings.maxCostUsd
     })
     let cumulativeCostUsd = 0
     // Whether this run has checked the context an Ollama server runs its model with.
     let ollamaContextChecked = false
     let landed = false
+    // Set when the hard cost cap made this iteration the last; the run then ends with a
+    // `max-cost` limit whatever the model replies.
+    let costCapStop = false
+    // Models whose turns couldn't be priced while a cost cap is set: warned once each,
+    // since their spend counts as nothing toward the cap.
+    const unpricedWarned = new Set<string>()
+    const warnUnpriced = (model: string, caps: ModelCaps | undefined): void => {
+      if (budget.maxCostUsd <= 0 || unpricedWarned.has(model) || isPriced(model, caps)) return
+      unpricedWarned.add(model)
+      emit({ type: 'notice', message: costCapUnenforceableNotice(model) })
+    }
     // A run that is still landing file writes, or still finding things out, gets more
     // room instead of a wrap-up (see shouldExtend): `budget.maxIterations` grows in
     // place, up to a hard ceiling.
@@ -4122,8 +4155,16 @@ export async function startRun(
       // on a summary. Enforced below by dropping any tool call it makes anyway. Tools
       // stay in the request (a history with tool_use blocks must still declare them).
       // A stalled run's extra step is a final step too, announced by its own note.
-      const finalStep = stallStop !== null || isFinalStep(iter, budget)
-      if (finalStep && stallStop === null) {
+      // A hard cost cap reached since the last step makes this one the last too, with
+      // its own note; a stall stop, already announced, takes precedence. The cap is
+      // checked between steps, so the step that crossed it always finishes.
+      if (!costCapStop && stallStop === null && overCostCap(cumulativeCostUsd + delegatedCostUsd, budget)) {
+        costCapStop = true
+        messages.push(systemNoteMessage(COST_CAP_NOTE))
+        persist(messages)
+      }
+      const finalStep = stallStop !== null || costCapStop || isFinalStep(iter, budget)
+      if (finalStep && stallStop === null && !costCapStop) {
         messages.push(systemNoteMessage(FINAL_STEP_NOTE))
         persist(messages)
       }
@@ -4486,12 +4527,16 @@ export async function startRun(
         )
         // Accumulate for the adaptive-budget cost ceiling (the landing trigger).
         cumulativeCostUsd += turnCost
+        const unpriced = !isPriced(route.model, route.caps)
+        if (unpriced) warnUnpriced(route.model, route.caps)
         roundUsage = { inputTokens: turnInput, outputTokens: turnOutput, cost: turnCost }
         emit({
           type: 'usage',
           inputTokens: turnInput,
           outputTokens: turnOutput,
           cost: turnCost,
+          // No known price: the 0 above means "unknown", not "free".
+          ...(unpriced ? { costUnknown: true } : {}),
           // The model that billed the round. After a fallback hop that is the backup,
           // and filing its tokens under the primary hid the hop from the cost breakdown.
           model: route.model,
@@ -4529,7 +4574,8 @@ export async function startRun(
         cutAtCap = true
         toolCalls = []
         if (!assistantText.trim()) {
-          assistantText = stallStop !== null ? STALL_STOP_FALLBACK : FINAL_STEP_FALLBACK
+          assistantText =
+            stallStop !== null ? STALL_STOP_FALLBACK : costCapStop ? COST_CAP_FALLBACK : FINAL_STEP_FALLBACK
           emit({ type: 'text', delta: assistantText })
         }
       }
@@ -4559,8 +4605,10 @@ export async function startRun(
         persist(messages)
       }
 
-      if (cutAtCap) {
-        emit({ type: 'limit', reason: stallStop !== null ? 'stalled' : 'max-steps' })
+      // The cost cap ends the run after its summary step whether or not the model tried
+      // to keep working: unlike the step limit, a text-only reply here is not a finish.
+      if (cutAtCap || costCapStop) {
+        emit({ type: 'limit', reason: stallStop !== null ? 'stalled' : costCapStop ? 'max-cost' : 'max-steps' })
         emit({ type: 'done', stopReason: 'end_turn' })
         return
       }

@@ -14,7 +14,7 @@ import {
   settleSteers,
   takeQueue
 } from './queue'
-import { createConversation, forkConversation, getConversation, listConversations } from '../conversations'
+import { createConversation, flushConversation, forkConversation, getConversation, listConversations } from '../conversations'
 import { resetUserDataDir, setUserDataDir } from '../userData'
 
 function add(conversationId: string, userText: string, over: Partial<QueueAddRequest> = {}) {
@@ -200,6 +200,8 @@ describe('queue persistence', () => {
   it('drops a malformed stored queue rather than crashing or failing open', () => {
     const cid = conv()
     add(cid, 'ok')
+    // The chat's JSON file with its saved log folded in, edited as another process would.
+    flushConversation(cid)
     const path = join(dir, 'conversations', `${cid}.json`)
     const raw = JSON.parse(readFileSync(path, 'utf8'))
     raw.queuedInput.approvalPolicy = 'yolo'

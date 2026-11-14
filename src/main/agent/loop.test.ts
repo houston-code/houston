@@ -49,8 +49,10 @@ import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { SILENT_CHECK_IN, SILENT_ITERATION_LIMIT } from './stall'
 import { MAX_PROVIDER_RETRIES } from './retry'
 import { SUBAGENT_COST_LANDING_NOTE } from './subagent'
+import { COST_CAP_FALLBACK, COST_CAP_NOTE, costCapUnenforceableNotice } from './budget'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import { turnCostUsd } from '@shared/usage'
+import { nativeWebSearchFeeUsd } from '@shared/model-facts'
 import { resetOllamaContextCache } from '../providers/ollama'
 import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
 import Anthropic from '@anthropic-ai/sdk'
@@ -95,6 +97,7 @@ import {
   type ScheduledRunInfo,
   type ScheduledRunInput
 } from './scheduler'
+import { ScopeCache } from './fileScope'
 
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
@@ -4386,6 +4389,49 @@ describe('ask_user', () => {
     expect(types(r).at(-1)).toBe('done')
   })
 
+  it("lets a run read a request's own extra root, and no other run", async () => {
+    // An ACP editor's additionalDirectories: they widen only the run that carries them.
+    const extra = realpathSync(mkdtempSync(join(tmpdir(), 'houston-extra-root-')))
+    writeFileSync(join(extra, 'note.txt'), 'from the extra root\n')
+    const readIt = (): void => {
+      h.provider = scripted([
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: join(extra, 'note.txt') } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+    }
+    const go = async (runId: string, additionalRoots?: string[]): Promise<{ ok: boolean; output: string }> => {
+      const events: AgentEvent[] = []
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          messages: [{ role: 'user', content: 'read it' }],
+          ...(additionalRoots ? { additionalRoots } : {})
+        },
+        (e) => events.push(e)
+      )
+      return events.find((e) => e.type === 'tool_result' && e.callId === 'r1') as unknown as { ok: boolean; output: string }
+    }
+    readIt()
+    const widened = await go('run-extra-root', [extra])
+    expect(widened.ok).toBe(true)
+    expect(widened.output).toContain('from the extra root')
+    readIt()
+    const plain = await go('run-no-extra-root')
+    expect(plain.output).not.toContain('from the extra root')
+    // A listed folder that no longer exists is skipped, not an error.
+    readIt()
+    const gone = await go('run-gone-root', [join(extra, 'missing')])
+    expect(gone.output).not.toContain('from the extra root')
+    rmSync(extra, { recursive: true, force: true })
+  })
+
   it('unblocks a pending question when the run is cancelled', async () => {
     // Drive startRun directly so the runId is in scope to cancel: with no answer,
     // the question must still resolve (via cancelRun) instead of hanging forever.
@@ -5262,6 +5308,163 @@ describe('ask_user', () => {
       const pollOutputs = outputs(r).filter((o) => o.startsWith('chunk#'))
       expect(pollOutputs).toEqual(['chunk#1', 'chunk#2', 'chunk#3'])
     })
+  })
+})
+
+describe('search scope memo (per run)', () => {
+  // A repository in the workspace, searched by the real search_files tool. Between
+  // searches a tracked hidden file arrives, or lib/ becomes ignored (its kept.ts is
+  // tracked, so still searched, and its loose.ts is not). A scope plan carried past
+  // either change answers for the old tree on both search backends, so each result
+  // below is only right if the loop planned afresh.
+  beforeEach(() => {
+    mkdirSync(join(ws, 'lib'))
+    for (const rel of ['app.ts', 'lib/kept.ts', 'lib/loose.ts']) writeFileSync(join(ws, rel), 'needle\n')
+    execFileSync('git', ['init', '-q'], { cwd: ws, stdio: 'ignore' })
+    execFileSync('git', ['add', 'app.ts', 'lib/kept.ts'], { cwd: ws, stdio: 'ignore' })
+  })
+
+  const step = { type: 'done', stopReason: 'tool_use' } as const
+  const end = { type: 'done', stopReason: 'end_turn' } as const
+  const search = (id: string): ProviderStreamEvent => ({
+    type: 'tool_call',
+    call: { id, name: 'search_files', arguments: { pattern: 'needle', files_with_matches: true } }
+  })
+  /** Each search_files result as a sorted, '/'-separated file list. */
+  const searches = (r: RunResult): string[][] =>
+    r.events
+      .filter((e) => e.type === 'tool_result' && e.name === 'search_files')
+      .map((e) => (e as { output: string }).output.split('\n').map((l) => l.replace(/\\/g, '/')).sort())
+  const trackHidden = (): void => {
+    mkdirSync(join(ws, '.github'), { recursive: true })
+    writeFileSync(join(ws, '.github', 'ci.yml'), 'needle\n')
+    execFileSync('git', ['add', '-f', '.github/ci.yml'], { cwd: ws, stdio: 'ignore' })
+  }
+  const noArgs = { type: 'object', properties: {}, additionalProperties: false } as const
+  // A shell command that tracks a new hidden file, as `git add -f` would.
+  const probeTrack = (): ToolDef => ({
+    kind: 'shell',
+    summarize: () => 'track a hidden file',
+    schema: { name: 'probe_track', description: 'Tracks .github/ci.yml.', parameters: noArgs },
+    execute: async () => {
+      trackHidden()
+      return 'tracked'
+    }
+  })
+  // A write that ignores lib/.
+  const probeIgnore = (): ToolDef => ({
+    kind: 'write',
+    summarize: () => 'ignore lib/',
+    schema: {
+      name: 'probe_ignore',
+      description: 'Writes .gitignore.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+        additionalProperties: false
+      }
+    },
+    execute: async () => {
+      writeFileSync(join(ws, '.gitignore'), 'lib/\n')
+      return 'wrote .gitignore'
+    }
+  })
+
+  it('hands every call in a run the same memo, and each run a new one', async () => {
+    const seen: unknown[] = []
+    h.probeTools = [
+      {
+        kind: 'read',
+        summarize: () => 'probe glob',
+        schema: {
+          name: 'glob',
+          description: 'Records the scope memo it was handed.',
+          parameters: {
+            type: 'object',
+            properties: { pattern: { type: 'string' } },
+            required: ['pattern'],
+            additionalProperties: false
+          }
+        },
+        execute: async (_args, ctx) => {
+          seen.push(ctx.scopeCache)
+          return 'ok'
+        }
+      }
+    ]
+    const globCall = (id: string, pattern: string): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'glob', arguments: { pattern } }
+    })
+    const turns = (): ProviderStreamEvent[][] => [[globCall('g1', '*.ts'), step], [globCall('g2', '*.md'), step], [end]]
+    await run({ policy: 'full-auto', turns: turns() })
+    await run({ policy: 'full-auto', turns: turns() })
+    expect(seen).toHaveLength(4)
+    expect(seen[0]).toBeInstanceOf(ScopeCache)
+    expect(seen[1]).toBe(seen[0])
+    expect(seen[2]).toBeInstanceOf(ScopeCache)
+    expect(seen[3]).toBe(seen[2])
+    expect(seen[2]).not.toBe(seen[0])
+  })
+
+  it('plans afresh after a shell call and after a write, within one run', async () => {
+    h.mcpDefs = [probeTrack(), probeIgnore()]
+    const r = await run({
+      policy: 'full-auto',
+      // An unconfined shell (Linux CI) prompts even in full-auto.
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [search('q1'), step],
+        [{ type: 'tool_call', call: { id: 's1', name: 'probe_track', arguments: {} } }, step],
+        [search('q2'), step],
+        [{ type: 'tool_call', call: { id: 'w1', name: 'probe_ignore', arguments: { path: '.gitignore' } } }, step],
+        [search('q3'), step],
+        [end]
+      ]
+    })
+    expect(searches(r)).toEqual([
+      ['app.ts', 'lib/kept.ts', 'lib/loose.ts'],
+      ['.github/ci.yml', 'app.ts', 'lib/kept.ts', 'lib/loose.ts'],
+      ['.github/ci.yml', 'app.ts', 'lib/kept.ts']
+    ])
+  })
+
+  it('plans afresh after a writable subagent', async () => {
+    const r = await run({
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [search('q1'), step],
+        [
+          {
+            type: 'tool_call',
+            call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'ignore lib', prompt: 'ignore lib/' } }
+          },
+          step
+        ],
+        // The subagent ignores lib/, then reports.
+        [{ type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: '.gitignore', content: 'lib/\n' } } }, step],
+        [{ type: 'text', text: 'ignored lib/' }, end],
+        [search('q2'), step],
+        [end]
+      ]
+    })
+    expect(readFileSync(join(ws, '.gitignore'), 'utf8')).toBe('lib/\n')
+    expect(searches(r)).toEqual([
+      ['app.ts', 'lib/kept.ts', 'lib/loose.ts'],
+      ['app.ts', 'lib/kept.ts']
+    ])
+  })
+
+  it('carries nothing into the next run', async () => {
+    const turns = (): ProviderStreamEvent[][] => [[search('q1'), step], [end]]
+    const first = await run({ policy: 'full-auto', turns: turns() })
+    // Outside any run's tool calls, as the user's own `git add` would be.
+    trackHidden()
+    const second = await run({ policy: 'full-auto', turns: turns() })
+    expect(searches(first)).toEqual([['app.ts', 'lib/kept.ts', 'lib/loose.ts']])
+    expect(searches(second)).toEqual([['.github/ci.yml', 'app.ts', 'lib/kept.ts', 'lib/loose.ts']])
   })
 })
 
@@ -12392,7 +12595,8 @@ describe('nativeWebSearchFor', () => {
     await entry.nativeWebSearch!.search('q', 3)
     await entry.nativeWebSearch!.search('q', 3)
     expect(onUsage).toHaveBeenCalledTimes(1)
-    expect(onUsage).toHaveBeenCalledWith(usage, 'claude-x')
+    // The provider's per-search fee rides along: one search on the Claude API.
+    expect(onUsage).toHaveBeenCalledWith(usage, 'claude-x', 0.01)
   })
 })
 
@@ -12440,8 +12644,9 @@ describe('provider-run web search cost', () => {
     expect(search!.inputTokens).toBe(0)
     expect(search!.cacheReadTokens).toBe(2000)
     expect(search!.model).toBe('claude-opus-4-8')
+    // Tokens plus the provider's fee for the one search it ran.
     expect(search!.cost).toBeCloseTo(
-      turnCostUsd('claude-opus-4-8', 20000, 400, { readTokens: 2000 }),
+      turnCostUsd('claude-opus-4-8', 20000, 400, { readTokens: 2000 }) + nativeWebSearchFeeUsd('anthropic'),
       10
     )
     expect(search!.cost).toBeGreaterThan(0)
@@ -12855,6 +13060,113 @@ describe('background news delivery', () => {
       () => {}
     )
     expect(wakeBlocker('conv-bg-streak')).toBe('held')
+  })
+})
+
+describe('hard cost limit (maxCostUsd)', () => {
+  /** A provider that records each request and replays `turns` in order. */
+  const recording = (turns: ProviderStreamEvent[][], seen: ChatMessage[][]): Provider => {
+    let i = 0
+    return {
+      async *streamChat(req) {
+        seen.push(req.messages.map((m) => ({ ...m })))
+        for (const ev of turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]) yield ev
+      }
+    }
+  }
+  const listDir = (id: string, inputTokens: number): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name: 'list_dir', arguments: { path: '.' } } },
+    { type: 'done', stopReason: 'tool_use', usage: { inputTokens, outputTokens: 10 } }
+  ]
+  const textTurn = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 5, outputTokens: 5 } }
+  ]
+  const noted = (msgs: ChatMessage[], note: string): boolean =>
+    msgs.some((m) => m.role === 'user' && m.content.endsWith(note))
+  const limits = (r: RunResult): string[] => r.events.flatMap((e) => (e.type === 'limit' ? [e.reason] : []))
+  const toolRuns = (r: RunResult): number => r.events.filter((e) => e.type === 'tool_result').length
+  const usageEvents = (r: RunResult): Extract<AgentEvent, { type: 'usage' }>[] =>
+    r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]
+
+  it('makes the step after the limit is reached the last, with tools off, and ends the run', async () => {
+    const seen: ChatMessage[][] = []
+    const r = await run({
+      // One step over $1 on its own, then a model that tries to keep working.
+      provider: recording([listDir('a', 1_000_000), listDir('b', 10), listDir('c', 10)], seen),
+      policy: 'full-auto',
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(turnCostUsd('claude-opus-4-8', 1_000_000, 10)).toBeGreaterThan(1)
+    expect(seen).toHaveLength(2)
+    expect(noted(seen[0], COST_CAP_NOTE)).toBe(false)
+    expect(noted(seen[1], COST_CAP_NOTE)).toBe(true)
+    // Only the first step's tool ran; the capped step's call was dropped.
+    expect(toolRuns(r)).toBe(1)
+    expect(limits(r)).toEqual(['max-cost'])
+    expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+    const last = r.messages.at(-1)!
+    expect(last.role).toBe('assistant')
+    expect(last.content).toBe(COST_CAP_FALLBACK)
+    expect(last.toolCalls).toBeUndefined()
+  })
+
+  it('still ends at the limit when the capped step replies in text', async () => {
+    const r = await run({
+      provider: recording([listDir('a', 1_000_000), textTurn('Did the first half.')], []),
+      policy: 'full-auto',
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(limits(r)).toEqual(['max-cost'])
+    expect(r.messages.at(-1)!.content).toBe('Did the first half.')
+  })
+
+  it('tells the model to wrap up before the limit, and never stops a run under it', async () => {
+    const seen: ChatMessage[][] = []
+    // About 85% of the $1 limit: past the reminder, short of the stop.
+    const tokens = Math.round(0.85 / turnCostUsd('claude-opus-4-8', 1, 0))
+    const r = await run({
+      provider: recording([listDir('a', tokens), textTurn('ok')], seen),
+      policy: 'full-auto',
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(limits(r)).toEqual([])
+    expect(seen[1].some((m) => m.role === 'user' && /cost budget/.test(m.content))).toBe(true)
+    expect(noted(seen[1], COST_CAP_NOTE)).toBe(false)
+  })
+
+  it('says once that a model with no known price cannot be held to the limit, and marks its cost unknown', async () => {
+    const r = await run({
+      provider: recording([listDir('a', 5_000_000), listDir('b', 5_000_000), textTurn('ok')], []),
+      policy: 'full-auto',
+      model: 'my-local-model',
+      overrides: { maxCostUsd: 0.01 }
+    })
+    const notices = r.events.filter(
+      (e) => e.type === 'notice' && e.message === costCapUnenforceableNotice('my-local-model')
+    )
+    expect(notices).toHaveLength(1)
+    // Its spend counts as nothing, so it is not stopped, and that is said rather than hidden.
+    expect(limits(r)).toEqual([])
+    const usage = usageEvents(r)
+    expect(usage.length).toBe(3)
+    expect(usage.every((u) => u.cost === 0 && u.costUnknown === true)).toBe(true)
+  })
+
+  it('warns about nothing without a limit, and marks nothing unknown on a priced model', async () => {
+    const unlimited = await run({ provider: recording([textTurn('ok')], []), model: 'my-local-model' })
+    expect(unlimited.events.some((e) => e.type === 'notice' && /cost limit/.test(e.message))).toBe(false)
+    expect(usageEvents(unlimited)[0].costUnknown).toBe(true)
+    const priced = await run({
+      provider: recording([textTurn('ok')], []),
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(usageEvents(priced)[0].costUnknown).toBeUndefined()
+    expect(priced.events.some((e) => e.type === 'notice' && /cost limit/.test(e.message))).toBe(false)
   })
 })
 

@@ -70,7 +70,7 @@ import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { quotaIsLow, quotaStatusText, throttleNotice, type ProviderQuota } from '@shared/rateLimit'
 import { providerQuota } from './providers/quota'
-import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import type { ContextParts, ModelUsage, RunLimitReason } from '@shared/agent'
@@ -832,6 +832,8 @@ export interface SessionCost {
   inputTokens: number
   outputTokens: number
   cost: number
+  /** Part of the spend came from a model with no known price (see formatCost). */
+  costUnknown?: boolean
 }
 
 /**
@@ -869,11 +871,11 @@ export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
       : ''
     const written = t.cacheWriteTokens ? paint(`  (${n(t.cacheWriteTokens)} cache write)`, 'dim') : ''
     lines.push(
-      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  ${formatUsd(t.cost)}`
+      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  ${formatCost(t.cost, t.costUnknown)}`
     )
   }
   if (tallies.length > 1) {
-    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  ${formatUsd(total.cost)}`, 'dim'))
+    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  ${formatCost(total.cost, tallies.some((t) => t.costUnknown))}`, 'dim'))
   }
   return lines.join('\n')
 }
@@ -881,7 +883,7 @@ export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
 /** Format a cost total, e.g. "1,234+567 tok · $0.012" (amounts as the desktop shows them). */
 export function formatSessionCost(c: SessionCost): string {
   const n = (v: number): string => v.toLocaleString('en-US')
-  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · ${formatUsd(c.cost)}`
+  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · ${formatCost(c.cost, c.costUnknown)}`
 }
 
 /** Status marker for a subagent row, printed as a discrete line in line mode. */
@@ -997,7 +999,7 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
     paint(shortCwd(s.cwd), 'dim')
   ]
   if (s.branch) parts.push(paint(s.branch, 'magenta'))
-  parts.push(formatUsd(s.cost.cost))
+  parts.push(formatCost(s.cost.cost, s.cost.costUnknown))
   const ctx = renderContextUsage(s.contextTokens, s.model, paint)
   if (ctx) parts.push(ctx)
   const quota = quotaStatusText(s.quota)
@@ -3125,8 +3127,12 @@ export interface TuiDeps {
    * not answer. Absent ⇒ hosts are listed without a probe.
    */
   listModels?: (provider: ProviderConfig) => Promise<ModelOption[]>
-  /** The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch shown. */
-  gitBranch?: () => Promise<string | null>
+  /**
+   * The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch
+   * shown. Read before every status line and never waited for: a value shows at once, a
+   * promise shows on the status line after it settles.
+   */
+  gitBranch?: () => string | null | Promise<string | null>
   /**
    * Write an export (`/export`) to `path`, relative to the working folder, without
    * replacing an existing file. Returns the full path written; throws on failure.
@@ -3620,12 +3626,27 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // This session's landed edits (newest last), for `/diff last [n]`.
   let recentEdits: FileDiffPreview[][] = []
   // The checked-out branch, re-read before each status line (a turn or `!git`
-  // may switch it).
+  // may switch it). Never waited for: the prompt, and a queued turn's request behind
+  // it, must not sit behind a git process. A slow answer shows on the next status line.
   let branch: string | null = null
-  const refreshBranch = async (): Promise<void> => {
+  let branchReads = 0
+  const refreshBranch = (): void => {
     if (!deps.gitBranch) return
+    const read = ++branchReads
     try {
-      branch = await deps.gitBranch()
+      const got = deps.gitBranch()
+      if (got === null || typeof got === 'string') {
+        branch = got
+        return
+      }
+      got.then(
+        (b) => {
+          if (read === branchReads) branch = b
+        },
+        () => {
+          if (read === branchReads) branch = null
+        }
+      )
     } catch {
       branch = null
     }
@@ -4036,7 +4057,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // A persistent status line above the composer: model, policy, cwd, cost, and
     // context-window fill — so live session state is always visible. Before a
     // provider is set up it shows a "no model" prompt pointing at /login instead.
-    await refreshBranch()
+    refreshBranch()
     deps.io.out(
       `${
         providerId && model
@@ -5199,6 +5220,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     let turnInputTokens = 0
     let turnOutputTokens = 0
     let turnCost = 0
+    let turnCostUnknown = false
     // Assistant text streams through a markdown renderer that emits whole blocks
     // as they finalize. Any non-text event flushes the pending block first, so
     // text always renders before the tool line / prompt that follows it.
@@ -5236,6 +5258,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
+    // Set once a text delta has relabelled the spinner, so the rest of the reply
+    // doesn't relabel it on every delta; any other event clears it.
+    let saysResponding = false
 
     const send = (e: AgentEvent): void => {
       // Attention signals ride the event stream itself, so anything that blocks the
@@ -5253,11 +5278,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (e.type === 'text') {
         retryStreak = 0 // the request got through
+        // The reply is streaming: whatever the spinner said before (a tool that has
+        // finished, Thinking) is over. Same word the desktop app's status bar uses.
+        if (!saysResponding) {
+          deps.io.setSpinnerLabel?.('Responding')
+          saysResponding = true
+        }
         const s = md.push(e.delta)
         if (s) roundShown = true
         deps.io.out(s)
         return
       }
+      saysResponding = false
       // A discarded round's unfinished block is dropped unrendered, never flushed:
       // its redo will print the whole reply again.
       if (e.type === 'turn_discarded') md.discard()
@@ -5584,6 +5616,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           turnInputTokens += e.inputTokens
           turnOutputTokens += e.outputTokens
           turnCost += e.cost
+          if (e.costUnknown) {
+            sessionCost.costUnknown = true
+            turnCostUnknown = true
+          }
           // Current context size ≈ the last MAIN round's input tokens; feeds the
           // status line. Subagent usage events carry inputTokens: 0, so guard
           // against them resetting the meter to zero mid-turn.
@@ -5626,7 +5662,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             const turnTally: SessionCost = {
               inputTokens: turnInputTokens,
               outputTokens: turnOutputTokens,
-              cost: turnCost
+              cost: turnCost,
+              ...(turnCostUnknown ? { costUnknown: true } : {})
             }
             deps.io.out(
               paint(

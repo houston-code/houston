@@ -819,9 +819,12 @@ are never written back:
 - `--effort <off|low|medium|high|xhigh>`: the model's reasoning effort.
 - `--max-turns <n>`: the most model steps the run may take. It is a hard cap: the
   run never auto-extends past it, and hitting it exits 3.
-- `--max-cost <usd>`: once the run's estimated cost reaches this amount, the agent
-  is told to wrap up. It is a soft ceiling: the step in flight finishes and the
-  agent gets to summarize, so a run can end slightly above it.
+- `--max-cost <usd>`: a hard cost limit. The agent is told to wrap up at 80% of it,
+  and once the run's estimated cost reaches it, the agent gets one last step without
+  tools to summarize and the run stops with exit 3 (`limitReason` `max-cost`). The
+  step that crosses the limit still finishes, so a run can end slightly above it. A
+  model with no known price can't be held to it: Houston warns once, and the result
+  line sets `costUnknown`.
 - `--verify <command>`: when the agent stops after editing files, run this command
   (sandboxed like the agent's own shell). If it fails, its output goes back to the
   agent for a bounded fix-up pass. It needs a policy that can edit, such as
@@ -872,7 +875,7 @@ matching value) or `schemaErrors` (why it didn't match).
 | 0 | The agent finished on its own. | `success` |
 | 1 | The run failed: an error or an aborted run, a stalled agent, or a call refused under `--on-approval fail`. | `error`, `stalled`, `approval_denied` |
 | 2 | Usage error: a bad flag value, an unreadable flag file, or an empty prompt on stdin (nothing ran); or a bad `--input-format stream-json` line. | (no result line), `input_error` |
-| 3 | The run hit a budget before finishing: its step cap (`--max-turns`, or your saved limit) or the model's output limit. | `limit` |
+| 3 | The run hit a budget before finishing: its step cap (`--max-turns`, or your saved limit), its cost limit (`--max-cost`, or your saved limit), or the model's output limit. | `limit` |
 | 4 | The final answer still didn't match `--output-schema` after one corrective round. | `schema_invalid` |
 | 5 | The agent finished, but the last `--verify` check it ran still failed once its fix-up passes ran out. | `verify_failed` |
 | 129, 130, 143 | Stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, and the chat is saved. A second signal exits at once. | `aborted` |
@@ -1227,8 +1230,17 @@ in the CLI, so keys already set up with `houston providers set-key` work without
 What maps to what:
 
 - **Sessions** are ordinary Houston conversations in the editor's folder: the editor
-  can list and reopen them, and they also appear in the desktop app and in
-  `houston -i --resume <id>`.
+  can list, load (replaying the history), resume (without it), close, and delete
+  them, and they also appear in the desktop app and in `houston -i --resume <id>`.
+  A delete stops the chat's running prompt and background commands first, as in the
+  app.
+- **Extra folders** (`additionalDirectories`) are readable and writable by that
+  session's runs only, and never saved.
+- **System prompts** from the editor are appended to Houston's, as with
+  `--append-system-prompt`; they can't replace it.
+- **Requests** can be withdrawn with `$/cancel_request`; a withdrawn prompt stops as
+  if cancelled.
+- **Compaction** arrives as `compaction_update` for editors that support it.
 - **Modes** are the approval policies: Plan, Ask, Auto-edit, and Full auto. The
   mode you pick is saved on the chat and restored when it is reopened.
 - **Config options**: the model and the reasoning effort, saved on the chat.
@@ -1384,7 +1396,8 @@ src/
 │   ├── oauth.ts       provider-account OAuth (stub; MCP-server OAuth is real
 │   │                  and lives in mcp/oauth.ts)
 │   ├── store.ts       settings persistence + migrations
-│   ├── conversations.ts  conversation persistence (one JSON per chat)
+│   ├── conversations.ts  conversation persistence (one JSON per chat, plus an
+│   │                  append-only log of recent saves, folded in as it grows)
 │   ├── tui.ts / headless.ts  the interactive terminal and one-shot clients
 │   └── ipc.ts         all IPC handlers
 ├── cli/           the standalone CLI entry (no Electron): env/file credentials,

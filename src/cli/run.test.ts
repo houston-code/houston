@@ -1,7 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import tls from 'node:tls'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { permissionRuleKey, type PermissionRule } from '@shared/types'
 import { selectRunMode, wireCliHost } from './run'
 import { noteRuleUsed } from '../main/agentHost'
@@ -78,8 +79,11 @@ describe('selectRunMode', () => {
 
 describe('wireCliHost', () => {
   const saved = process.env.HOUSTON_DATA_DIR
+  // wireCliHost puts a gate on tls.connect until the certificate store is read.
+  const savedConnect = tls.connect
   let dir = ''
   afterEach(() => {
+    tls.connect = savedConnect
     resetRuleUsageForTests()
     if (saved === undefined) delete process.env.HOUSTON_DATA_DIR
     else process.env.HOUSTON_DATA_DIR = saved
@@ -95,5 +99,23 @@ describe('wireCliHost', () => {
     flushRuleUsage()
     const usage = JSON.parse(readFileSync(join(dir, 'rule-usage.json'), 'utf8')) as Record<string, number>
     expect(typeof usage[permissionRuleKey(rule)]).toBe('number')
+  })
+
+  // Reading the OS store takes tens of milliseconds, so start-up no longer pays for it:
+  // the TUI runs it after its first paint (system-ca.test.ts covers the TLS gate).
+  it('leaves the system certificate store for later and hands back the read', () => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-cli-host-'))
+    process.env.HOUSTON_DATA_DIR = dir
+    const read = vi.spyOn(tls, 'getCACertificates').mockReturnValue([])
+    try {
+      const { trustCertificatesNow } = wireCliHost()
+      expect(read).not.toHaveBeenCalled()
+      expect(tls.connect).not.toBe(savedConnect)
+      trustCertificatesNow()
+      expect(read).toHaveBeenCalledWith('system')
+      expect(tls.connect).toBe(savedConnect)
+    } finally {
+      read.mockRestore()
+    }
   })
 })

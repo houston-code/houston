@@ -1059,6 +1059,13 @@ describe('formatSessionCost', () => {
     expect(at(0.0042)).toBe('1+1 tok · $0.0042')
     expect(at(12.3456)).toBe('1+1 tok · $12.35')
   })
+
+  it('says the cost is unknown for a model with no known price', () => {
+    expect(formatSessionCost({ inputTokens: 1, outputTokens: 1, cost: 0, costUnknown: true })).toBe('1+1 tok · cost unknown')
+    expect(formatSessionCost({ inputTokens: 1, outputTokens: 1, cost: 2, costUnknown: true })).toBe(
+      '1+1 tok · $2.00 + unknown'
+    )
+  })
 })
 
 describe('formatRelativeTime', () => {
@@ -2748,6 +2755,38 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.spinner).toEqual(['start:Working', 'label:Thinking', 'label:Read', 'stop'])
+  })
+
+  // The tool's verb stayed up while the next reply streamed, so a finished command
+  // looked like it was still running.
+  it('drops a finished tool from the spinner, and says Responding once the reply streams', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'run_shell', args: { command: 'ls' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_result', callId: 'c1', name: 'run_shell', ok: true, output: 'a' },
+      { runId: 'x', type: 'reasoning', delta: 'so' },
+      { runId: 'x', type: 'text', delta: 'Done' },
+      { runId: 'x', type: 'text', delta: ' here.' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.spinner).toEqual(['start:Working', 'label:Run', 'label:Working', 'label:Thinking', 'label:Responding', 'stop'])
+  })
+
+  it('keeps a parallel batch on the spinner until its last call is done', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'read_file', args: { path: 'a' } },
+      { runId: 'x', type: 'tool_start', callId: 'c2', name: 'run_shell', args: { command: 'ls' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_result', callId: 'c1', name: 'read_file', ok: true, output: 'a' },
+      { runId: 'x', type: 'tool_result', callId: 'c2', name: 'run_shell', ok: true, output: 'b' },
+      { runId: 'x', type: 'text', delta: 'Both done.' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.spinner).toEqual(['start:Working', 'label:Read', 'label:Run', 'label:Working', 'label:Responding', 'stop'])
   })
 
   it('persists composer submissions to history, not approval answers', async () => {
@@ -4634,7 +4673,8 @@ describe('status line: branch and the running turn', () => {
   it('shows the branch above the composer, re-read before each prompt', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const branches = ['main', 'feature/y']
-    d.gitBranch = async () => branches.shift() ?? null
+    // The host reads HEAD synchronously (headBranch.ts).
+    d.gitBranch = () => branches.shift() ?? null
     const t = fakeIo(['go', null])
     d.io = t.io
     await runTui(opts, d)
@@ -4650,6 +4690,39 @@ describe('status line: branch and the running turn', () => {
     const t = fakeIo([null])
     d.io = t.io
     await expect(runTui(opts, d)).resolves.toBe(0)
+  })
+
+  it('a lookup that throws outright just leaves the branch out too', async () => {
+    const { d } = deps([])
+    d.gitBranch = () => {
+      throw new Error('unreadable')
+    }
+    const t = fakeIo([null])
+    d.io = t.io
+    await expect(runTui(opts, d)).resolves.toBe(0)
+    expect(t.reads).toHaveLength(1)
+  })
+
+  // A lookup that has to ask git is never waited for: the prompt (and the request of a
+  // turn queued behind it) must not sit behind a git process.
+  it('never waits for a branch lookup that is still running', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.gitBranch = () => new Promise<string | null>(() => {})
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await expect(runTui(opts, d)).resolves.toBe(0)
+    expect(t.reads).toHaveLength(2)
+    expect(t.text()).not.toContain(' · main · ')
+  })
+
+  it('shows the branch from a slow lookup on the status line after it settles', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.gitBranch = async () => 'main'
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // Two status lines: the first is drawn before the lookup settles, the second shows it.
+    expect(t.text().split(' · main · ')).toHaveLength(2)
   })
 
   it('hands the status to the spinner line while a turn runs, and updates its context', async () => {

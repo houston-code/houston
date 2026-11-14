@@ -104,7 +104,6 @@ import {
 } from './agent/loop'
 import {
   killShell,
-  killShellsFor,
   listShells,
   listPreviewServers,
   onShellsChanged,
@@ -112,7 +111,8 @@ import {
   shellTail
 } from './agent/shells'
 import { removeWorktreeOnArchive } from './archiveWorktree'
-import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
+import { stopAndDeleteConversation } from './deleteChat'
+import { addToQueue, removeFromQueue, clearQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
 import { runAndDrain, drainQueue, startWakeTurn, type DrainIO } from './agent/drain'
 import { setWakeHost } from './agent/backgroundEvents'
 import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
@@ -189,7 +189,6 @@ import {
   createConversation,
   forkConversation,
   forkConversationAt,
-  deleteConversation,
   otherConversationsInWorktree,
   detachConversationWorktree,
   importConversation,
@@ -323,6 +322,7 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
     ...(e.model ? { model: e.model } : {}),
     ...(e.cacheReadTokens ? { cacheReadTokens: e.cacheReadTokens } : {}),
     ...(e.cacheWriteTokens ? { cacheWriteTokens: e.cacheWriteTokens } : {}),
+    ...(e.costUnknown ? { costUnknown: true } : {}),
     ...(e.context ? { contextParts: e.context } : {})
   })
   return mergeRunningTotals(e, total)
@@ -1530,12 +1530,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       // Stop what the chat still has running before it goes: its live run (which would
       // otherwise keep writing to a deleted chat) and its background shells (whose dev
       // servers would keep their ports, inside a worktree about to be removed).
-      const liveRun = activeRunForConversation(id)
-      if (liveRun) cancelRun(liveRun)
-      killShellsFor(id)
-      deleteConversation(id)
-      // Drop the cached queue too: it went with the file, and must not linger in memory.
-      forgetQueue(id)
+      stopAndDeleteConversation(id)
       attention?.forget(id)
       const worktree =
         action.removeWorktree && conv?.worktree ? await removeWorktree(conv.worktree) : null

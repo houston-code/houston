@@ -1,20 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import {
+  appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { rgPath as vscodeRg } from '@vscode/ripgrep'
 import { minimatch } from 'minimatch'
-import { gitListFiles, gitTrackedHidden, globTester, hasHiddenSegment, inGitScope, planRuns, runPathArgs } from './fileScope'
+import {
+  SCOPE_CACHE_MAX_ROOTS,
+  SCOPE_CACHE_TTL_MS,
+  ScopeCache,
+  gitListFiles,
+  gitTrackedHidden,
+  globTester,
+  hasHiddenSegment,
+  inGitScope,
+  listScope,
+  planRuns,
+  planScope,
+  runPathArgs
+} from './fileScope'
 import { resolveRipgrep, searchContents } from './search'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { clearMentionCache, findFiles } from './mentions'
@@ -228,6 +244,42 @@ describe('glob scope', () => {
   it('in a plain folder: the fixed skip set applies', async () => {
     expect(await glob(plain, '**/*.ts')).toEqual(['src/app.ts'])
   }, SLOW)
+
+  it('stats matches in batches without changing the result or its order', async () => {
+    // More matches than one lstat batch, under three mtimes so most of them tie (a tie
+    // keeps git's listing order), plus a tracked file deleted from disk and, where the
+    // platform has them, a tracked symlink: both must drop out as before.
+    const rels = Array.from({ length: 700 }, (_, i) => `many/f${String(i).padStart(3, '0')}.ts`)
+    rels.forEach((rel, i) => {
+      write(repo, rel)
+      const t = 1_700_000_000 + (i % 3) * 1000
+      utimesSync(join(repo, rel), t, t)
+    })
+    git(['add', 'many'], repo)
+    unlinkSync(join(repo, rels[300]))
+    if (process.platform !== 'win32') {
+      symlinkSync(join(repo, rels[0]), join(repo, 'many', 'link.ts'))
+      git(['add', 'many/link.ts'], repo)
+    }
+    // The reference: git's listing, one lstat at a time, as glob used to stat it.
+    const found = (await gitListFiles(repo))!
+      .filter((rel) => minimatch(rel, 'many/*.ts'))
+      .flatMap((rel) => {
+        try {
+          const st = lstatSync(join(repo, rel))
+          return st.isFile() ? [{ rel, mtimeMs: st.mtimeMs }] : []
+        } catch {
+          return []
+        }
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    expect(found).toHaveLength(699)
+    const expected = `${found.slice(0, 200).map((f) => f.rel).join('\n')}\n[truncated to 200 of 699 matches]`
+    const out = await getTool('glob')!.execute({ pattern: 'many/*.ts' }, { workspace: repo, allowNetwork: false })
+    expect(out.replace(/\\/g, '/')).toBe(expected)
+    const cached = { workspace: repo, allowNetwork: false, scopeCache: new ScopeCache() }
+    expect(await getTool('glob')!.execute({ pattern: 'many/*.ts' }, cached)).toBe(out)
+  }, SLOW)
 })
 
 describe('ast_grep scope', () => {
@@ -340,6 +392,175 @@ describe.skipIf(process.platform === 'win32')('tracked symlinks out of the works
       max: 100
     })
     expect(out).not.toContain('link.ts')
+  }, SLOW)
+})
+
+describe('ScopeCache (a run\'s memo of the scope plan)', () => {
+  // The three things a stale plan gets wrong: a tracked hidden file, a tracked file
+  // under a directory about to be ignored, and an untracked file beside it.
+  beforeEach(() => {
+    write(repo, '.github/workflows/ci.yml', 'run: needle\n')
+    write(repo, 'lib/kept.ts')
+    git(['add', '-f', '.github/workflows/ci.yml', 'lib/kept.ts'], repo)
+    write(repo, 'lib/loose.ts')
+  })
+
+  const backends = rg ? [null, rg] : [null]
+
+  /** search_files in files-with-matches mode, sorted, through `cache` when given. */
+  const found = async (rgBin: string | null, searchRel = '.', cache?: ScopeCache): Promise<string[]> => {
+    const out = await searchContents({
+      pattern: 'needle',
+      workspace: repo,
+      searchRel,
+      startAbs: join(repo, searchRel),
+      rgPath: rgBin,
+      max: 100,
+      filesWithMatches: true,
+      scopeCache: cache
+    })
+    return out === 'No matches found.' ? [] : out.split('\n').map((l) => l.replace(/\\/g, '/')).sort()
+  }
+  /** glob's raw output (so its order counts too), through `cache` when given. */
+  const globbed = async (pattern: string, path?: string, cache?: ScopeCache): Promise<string> =>
+    (await getTool('glob')!.execute({ pattern, path }, { workspace: repo, allowNetwork: false, scopeCache: cache })).replace(
+      /\\/g,
+      '/'
+    )
+
+  it('answers exactly as planning afresh does, for every kind of root', async () => {
+    const cache = new ScopeCache()
+    for (const dir of [repo, join(repo, 'src'), join(repo, 'build'), join(repo, 'target'), join(repo, '.github'), plain]) {
+      const plan = await planScope(dir)
+      expect(await cache.plan(dir)).toEqual(plan) // planned
+      expect(await cache.plan(dir)).toEqual(plan) // from memory
+      // The one-round listing matches the two serial helpers glob used before.
+      const listed = await gitListFiles(dir)
+      const listing = { listed, trackedHidden: listed ? await gitTrackedHidden(dir) : [] }
+      expect(await listScope(dir)).toEqual(listing)
+      expect(await cache.listing(dir)).toEqual(listing)
+      expect(await cache.listing(dir)).toEqual(listing)
+    }
+  }, SLOW)
+
+  it('leaves what search_files, glob, and ast_grep find unchanged', async () => {
+    const cache = new ScopeCache()
+    for (const searchRel of ['.', 'build', 'target', '.github', 'lib']) {
+      for (const bin of backends) {
+        const fresh = await found(bin, searchRel)
+        expect(await found(bin, searchRel, cache)).toEqual(fresh)
+        expect(await found(bin, searchRel, cache)).toEqual(fresh)
+      }
+    }
+    for (const [pattern, path] of [['**/*'], ['*.ts', 'build'], ['**/*.yml'], ['*.ts', 'target']]) {
+      const fresh = await globbed(pattern, path)
+      expect(await globbed(pattern, path, cache)).toBe(fresh)
+      expect(await globbed(pattern, path, cache)).toBe(fresh)
+    }
+    if (ag) {
+      // ast-grep walks in parallel, so its line order varies from run to run.
+      const structural = async (scopeCache?: ScopeCache): Promise<string[]> =>
+        (
+          await searchStructural({
+            pattern: 'console.log($A)',
+            lang: 'ts',
+            workspace: repo,
+            searchRel: '.',
+            binPath: ag,
+            max: 100,
+            scopeCache
+          })
+        )
+          .split('\n')
+          .map((l) => l.replace(/\\/g, '/'))
+          .sort()
+      const fresh = await structural()
+      expect(fresh).toContain('lib/kept.ts:1:1: console.log(needle)')
+      expect(await structural(cache)).toEqual(fresh)
+      expect(await structural(cache)).toEqual(fresh)
+    }
+  }, SLOW)
+
+  it('holds its answer until invalidated, then sees a newly tracked file and a new ignore rule', async () => {
+    const cache = new ScopeCache()
+    for (const bin of backends) await found(bin, '.', cache)
+    const globBefore = await globbed('**/*', undefined, cache)
+    // What a shell command or a write might do mid-run: track a new hidden file and
+    // ignore lib/, whose kept.ts is tracked (so still searched) and loose.ts isn't.
+    write(repo, '.husky/pre-commit', 'needle\n')
+    git(['add', '-f', '.husky/pre-commit'], repo)
+    appendFileSync(join(repo, '.gitignore'), 'lib/\n')
+    const fresh = await found(null, '.')
+    expect(fresh).toContain('.husky/pre-commit')
+    expect(fresh).toContain('lib/kept.ts')
+    expect(fresh).not.toContain('lib/loose.ts')
+    // A held plan is not checked against the tree again (that is why the loop
+    // invalidates the memo after every call that may change it), so every backend
+    // still answers for the old tree...
+    for (const bin of backends) expect(await found(bin, '.', cache)).not.toEqual(fresh)
+    expect(await globbed('**/*', undefined, cache)).toBe(globBefore)
+    // ...until it is invalidated.
+    cache.invalidate()
+    for (const bin of backends) expect(await found(bin, '.', cache)).toEqual(fresh)
+    const globFresh = await globbed('**/*')
+    expect(globFresh).toContain('.husky/pre-commit')
+    expect(globFresh).not.toContain('lib/loose.ts')
+    expect(await globbed('**/*', undefined, cache)).toBe(globFresh)
+  }, SLOW)
+
+  it('plans afresh once its window has passed', async () => {
+    let now = 1_000
+    const cache = new ScopeCache({ now: () => now })
+    const plan = await cache.plan(repo)
+    const listing = await cache.listing(repo)
+    now += SCOPE_CACHE_TTL_MS - 1
+    expect(await cache.plan(repo)).toBe(plan)
+    expect(await cache.listing(repo)).toBe(listing)
+    now += 1
+    const replanned = await cache.plan(repo)
+    expect(replanned).not.toBe(plan)
+    expect(replanned).toEqual(plan)
+    expect(await cache.listing(repo)).not.toBe(listing)
+  }, SLOW)
+
+  it('shares one planning between concurrent callers, one entry per root', async () => {
+    const cache = new ScopeCache()
+    const [a, b] = await Promise.all([cache.plan(repo), cache.plan(repo)])
+    expect(b).toBe(a)
+    expect(await cache.plan(join(repo, 'build'))).toEqual({ kind: 'git', walk: false, explicit: ['entitlements.ts'] })
+    const listing = await cache.listing(repo)
+    expect(await cache.listing(repo)).toBe(listing)
+    expect(cache.size).toBe(3)
+    cache.invalidate()
+    expect(cache.size).toBe(0)
+    expect(await cache.plan(repo)).not.toBe(a)
+  }, SLOW)
+
+  it('does not keep a planning that an invalidation overtook', async () => {
+    const cache = new ScopeCache()
+    const pending = cache.plan(repo)
+    cache.invalidate()
+    await pending
+    expect(cache.size).toBe(0)
+  }, SLOW)
+
+  it('keeps no answer a git call failed to give', async () => {
+    // A filter driver named so no override can switch it off: Houston runs no git
+    // there, so the plan is the no-git fallback, and it is worked out again next time.
+    appendFileSync(join(repo, '.git', 'config'), '[filter "a=b"]\n\tclean = cat\n')
+    const cache = new ScopeCache()
+    expect(await cache.plan(repo)).toEqual({ kind: 'plain' })
+    expect(await cache.listing(repo)).toEqual({ listed: null, trackedHidden: [] })
+    expect(cache.size).toBe(0)
+  }, SLOW)
+
+  it('holds a bounded number of roots', async () => {
+    const cache = new ScopeCache()
+    for (let i = 0; i <= SCOPE_CACHE_MAX_ROOTS; i++) {
+      mkdirSync(join(plain, `d${i}`))
+      await cache.plan(join(plain, `d${i}`))
+    }
+    expect(cache.size).toBe(SCOPE_CACHE_MAX_ROOTS)
   }, SLOW)
 })
 

@@ -15,6 +15,7 @@ import { peekConversation } from '../conversations'
 import { createProvider } from '../providers'
 import { GIT_ENV, hardenedGitArgs, runGitCapture } from './gitRead'
 import { ghAuthedHosts, ghRepoEnv, ghRepoKey, resolveGh, runGh, type GhExec } from './github'
+import { gitExecutable } from './gitBinary'
 import { providerStreamError, withProviderRetry } from './retry'
 import { titleRequestOptions } from './title'
 import { collectWorkingTreeChanges } from './workingTree'
@@ -104,7 +105,7 @@ function runGitWrite(
     (hardening) =>
       new Promise((resolve) => {
         execFile(
-          'git',
+          gitExecutable(env),
           [...hardening, ...WRITE_HARDENING, '--no-pager', ...args],
           { cwd, env, timeout: timeoutMs, maxBuffer: 4_000_000, windowsHide: true },
           (err, stdout, stderr) => resolve({ ok: !err, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
