@@ -1561,6 +1561,12 @@ export type AgentEvent =
       runId: string
       type: 'usage'
       inputTokens: number
+      /**
+       * Input a subagent, a review, or a side request billed, on a rolled-up event
+       * whose `inputTokens` is 0 so the context meter stays on the main turn. Lets a
+       * total of everything billed (the ACP turn usage) count it.
+       */
+      delegatedInputTokens?: number
       outputTokens: number
       cost: number
       /** The model that billed this round; absent on older events. */

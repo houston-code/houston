@@ -2072,6 +2072,7 @@ export async function startRun(
       emit({
         type: 'usage',
         inputTokens: 0,
+        delegatedInputTokens: input,
         outputTokens: output,
         cost,
         model: sideModel,
@@ -2873,6 +2874,7 @@ export async function startRun(
           emit({
             type: 'usage',
             inputTokens: 0,
+            delegatedInputTokens: subInput,
             outputTokens: subOutput,
             cost: subCost,
             // A subagent can run on its own (often cheaper) model; attribute it there.
@@ -3225,6 +3227,7 @@ export async function startRun(
             emit({
               type: 'usage',
               inputTokens: 0,
+              delegatedInputTokens: reviewInput,
               outputTokens: reviewOutput,
               cost: reviewCost,
               // Its own model: a review can run on a different (often cheaper) one,

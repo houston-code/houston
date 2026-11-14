@@ -1229,7 +1229,13 @@ What maps to what:
   deny). "Always allow" saves a permission rule, exactly as in the app. A plan from
   Plan mode is accepted or sent back the same way.
 - **Streaming**: replies, reasoning, tool calls (with before/after diffs for edits),
-  the todo list as a plan, and context and cost usage.
+  the todo list as a plan, and context and cost usage. Each prompt's reply also
+  carries the turn's token totals (input, output, and cached input).
+- **Launch flags** set defaults for a client that never changes them, such as a
+  benchmark runner or a CI job: `--approval <policy>` (or `--full-auto`) for the mode
+  new sessions start in, `--effort <level>` for their reasoning effort, and
+  `--max-turns <n>` for a hard step cap on every prompt. For example,
+  `houston --acp --full-auto --effort high --max-turns 1000`.
 - **Questions and MCP input requests** show as forms when the editor supports them;
   otherwise they resolve the way headless mode does, so a run never waits forever.
 - **MCP servers** the editor passes for a session are added for that session only.

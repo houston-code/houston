@@ -99,7 +99,7 @@ import {
   type HeadlessOptions,
   type HeadlessSignal
 } from './headless'
-import { serveAcp } from './acp'
+import { serveAcp, type AcpLaunchOptions } from './acp'
 import { createTerminalIo, resolveColor } from './tui-io'
 import {
   makeCompleter,
@@ -1039,7 +1039,7 @@ export function reserveStdoutForProtocol(): (frame: string) => void {
  * Run Houston as an Agent Client Protocol server on stdio (`--acp`) until the
  * editor closes the connection. Returns the exit code.
  */
-export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
+export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOptions = {}): Promise<number> {
   const writeFrame = reserveStdoutForProtocol()
   // The editor went away mid-write: there is no one left to serve, so live prompts
   // are cancelled rather than left editing files for a reader that is gone.
@@ -1075,6 +1075,7 @@ export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
           process.stderr.write(`${m}\n`)
         },
         version: host.version ?? 'dev',
+        ...launch,
         store: {
           create: ({ workspace, providerId, model }) => createConversation({ workspace, providerId, model }),
           get: (id) => {
