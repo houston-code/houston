@@ -9278,7 +9278,7 @@ body:has(.coachmark) .get-started {
   font-size: 12px;
 }
 
-/* ---- MCP Servers: add from catalog, paste JSON ---- */
+/* ---- MCP Servers: recommended, registry, paste JSON ---- */
 .mcp-add {
   display: flex;
   flex-direction: column;
@@ -9381,6 +9381,36 @@ body:has(.coachmark) .get-started {
 }
 .mcp-paste__problems {
   padding-left: 18px;
+}
+.mcp-registry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mcp-registry__search {
+  display: flex;
+  gap: 8px;
+}
+.mcp-registry__search input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+.mcp-registry__search input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+.mcp-registry__link {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.mcp-registry__unsupported {
+  font-size: 11px;
 }
 .mcp-paste {
   display: flex;

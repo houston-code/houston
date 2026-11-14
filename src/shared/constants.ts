@@ -178,6 +178,8 @@ export const IPC = {
   mcpOAuthLogin: 'mcp:oauthLogin',
   mcpOAuthLogout: 'mcp:oauthLogout',
   mcpStatus: 'mcp:status',
+  /** Read-only search of the official MCP Registry (Settings > MCP Servers, Browse registry). */
+  mcpRegistrySearch: 'mcp:registrySearch',
   // Optional integrations status (gh CLI, formatters) — for the Settings UI hint.
   integrationsGet: 'integrations:get',
   /** Settings > Scheduled runs over the scheduler service. */

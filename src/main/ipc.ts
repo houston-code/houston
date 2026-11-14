@@ -225,6 +225,7 @@ import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './sched
 import { registerScheduleIpc } from './scheduleIpc'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 import { wireMediaProtocol } from './mediaProtocol'
+import { searchMcpRegistry } from './mcpRegistry'
 import { noteThrottle, onRateLimitChange, rateLimitSnapshot } from './rateLimitStore'
 
 /** A preferences export is a few KB; anything past this is not one. */
@@ -1235,6 +1236,11 @@ export function registerIpc(ready?: Promise<unknown>): void {
 
   // Live per-server connection status (connected / needs-auth / error) for Settings.
   handle(IPC.mcpStatus, () => getMcpStatuses())
+
+  // Browse the MCP Registry: read-only GETs to its fixed origin, nothing saved or run.
+  handle(IPC.mcpRegistrySearch, (_e, query: unknown, cursor: unknown) =>
+    searchMcpRegistry(typeof query === 'string' ? query : '', typeof cursor === 'string' ? cursor : undefined)
+  )
 
   // Optional-integrations status (gh CLI, formatters) for the Settings hint.
   handle(IPC.integrationsGet, () =>
