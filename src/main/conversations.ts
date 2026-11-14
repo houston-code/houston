@@ -1049,6 +1049,8 @@ export function addUsage(
     model?: string
     cacheReadTokens?: number
     cacheWriteTokens?: number
+    /** The round's model has no known price (its cost of 0 is unknown, not free). */
+    costUnknown?: boolean
     /** What filled the context on this round's request; a round without it keeps the last. */
     contextParts?: ContextParts
   }

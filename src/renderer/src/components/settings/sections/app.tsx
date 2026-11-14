@@ -326,6 +326,7 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   autoExtendTurns: 'keep going while productive',
   maxIterationsCeiling: 'step limit',
   costCeilingUsd: 'cost reminder',
+  maxCostUsd: 'cost limit',
   stallDetection: 'loop detection',
   doneEvidenceNote: 'check before finishing',
   verifyOnStop: 'verify on finish',
