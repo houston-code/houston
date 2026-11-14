@@ -36,7 +36,7 @@ import { createSpawnBackend } from './spawnSession'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { createWorktree, removeWorktree } from './agent/worktree'
 import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
-import { askSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
+import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
@@ -471,6 +471,22 @@ function runUserShell(
 const HOST_PROBE_MS = 2500
 
 /** Reject with a timeout when `p` takes longer than `ms`; a late result is dropped. */
+/**
+ * The terminal's side chat (`/btw`): ask, start over, and stop an answer in flight,
+ * which Ctrl-C or Esc does while one is pending (the answer is stored as stopped).
+ */
+export function terminalSideChat(): {
+  ask: (input: Parameters<typeof askSideChat>[0]) => ReturnType<typeof askSideChat>
+  clear: (conversationId: string) => void
+  cancel: (conversationId: string) => void
+} {
+  return {
+    ask: (input) => askSideChat(input, hostSideChatDeps()),
+    clear: (conversationId) => clearSideChat(conversationId, { saveSideChat }),
+    cancel: (conversationId) => cancelSideChat(conversationId)
+  }
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   p.catch(() => {}) // a late rejection after the timeout won the race is not an error
   return new Promise<T>((resolve, reject) => {
@@ -682,10 +698,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           decideProposal({ conversationId, callId, status }, hostProposalDeps())
         }
       },
-      sideChat: {
-        ask: (input) => askSideChat(input, hostSideChatDeps()),
-        clear: (conversationId) => clearSideChat(conversationId, { saveSideChat })
-      },
+      sideChat: terminalSideChat(),
       takeLegacyRulesNotice: () => takeLegacyRulesTerminalNotice(() => legacyRulesNoticeApplies()),
       checkUpdate: async () => {
         // The session never waits on this, so it can afford a slow network.
