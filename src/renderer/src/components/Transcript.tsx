@@ -52,6 +52,12 @@ const SR_ONLY: CSSProperties = {
 }
 
 /**
+ * How long after the user opens or closes a row the chat's growth counts as theirs
+ * (kept in place) rather than new output (followed to the bottom).
+ */
+const DISCLOSURE_HOLD_MS = 500
+
+/**
  * Subtle, hover-revealed copy affordance shared by user and assistant turns. The
  * `className` lets each turn place it (the assistant pins it to the top-right; the
  * user turn tucks it to the left of the right-aligned bubble — see global.css).
@@ -601,15 +607,65 @@ export function Transcript({
   // The "New" divider, and whether it has scrolled out of view above (offer a jump).
   const newRef = useRef<HTMLDivElement>(null)
   const [newAbove, setNewAbove] = useState(false)
+  // Where the last scroll event left the view, to tell which way the next one moved.
+  const lastTopRef = useRef(0)
+  // When the user last opened or closed something in the chat (a tool row, reasoning,
+  // a receipt). The growth that follows is theirs, not new output to follow.
+  const disclosedAtRef = useRef(Number.NEGATIVE_INFINITY)
+
+  // Keep the latest output in view only while pinned. Using an instant jump
+  // (not smooth) avoids restarting an animation on every streaming delta, which
+  // is what made the view flicker and fight the user's own scrolling. Reading
+  // scrollHeight forces a layout, so a burst of deltas folds into one jump per
+  // frame instead of one per update.
+  const pinFrame = useRef<number | null>(null)
+  function followBottom(): void {
+    if (!pinnedRef.current || pinFrame.current !== null) return
+    pinFrame.current = requestAnimationFrame(() => {
+      pinFrame.current = null
+      const el = containerRef.current
+      if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
+    })
+  }
 
   function handleScroll(): void {
     const el = containerRef.current
     if (!el) return
-    pinnedRef.current = isNearBottom(el)
+    const movedDown = el.scrollTop > lastTopRef.current
+    lastTopRef.current = el.scrollTop
+    if (isNearBottom(el)) pinnedRef.current = true
+    // A view that moved down while pinned was pushed by layout (rows above settling to
+    // their real height), not by the reader, who can't scroll down past the bottom:
+    // stay pinned and catch up. Only a move up, or a view left short of the bottom
+    // without moving, means the reader went somewhere else.
+    else if (!(pinnedRef.current && movedDown)) pinnedRef.current = false
+    else followBottom()
     setShowJump(!pinnedRef.current)
     const divider = newRef.current
     setNewAbove(!!divider && divider.getBoundingClientRect().bottom < el.getBoundingClientRect().top)
   }
+
+  // Scroll anchoring would hold a row below the one the user opened still and push the
+  // opened row up out of view instead; hold it off while their toggle lays out.
+  const anchorTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  function noteDisclosure(target: EventTarget | null): void {
+    if (!(target instanceof Element && target.closest('[aria-expanded], summary'))) return
+    disclosedAtRef.current = performance.now()
+    const el = containerRef.current
+    if (!el) return
+    el.style.overflowAnchor = 'none'
+    if (anchorTimer.current !== null) clearTimeout(anchorTimer.current)
+    anchorTimer.current = setTimeout(() => {
+      anchorTimer.current = null
+      el.style.overflowAnchor = ''
+    }, DISCLOSURE_HOLD_MS)
+  }
+  useEffect(
+    () => () => {
+      if (anchorTimer.current !== null) clearTimeout(anchorTimer.current)
+    },
+    []
+  )
 
   // Open on unseen output: start at the "New" divider rather than the bottom, and
   // stop following the bottom so the next render doesn't scroll past it.
@@ -631,12 +687,6 @@ export function Transcript({
   }, [items])
   const lastUserRef = useRef(lastUserId)
 
-  // Keep the latest output in view only while pinned. Using an instant jump
-  // (not smooth) avoids restarting an animation on every streaming delta, which
-  // is what made the view flicker and fight the user's own scrolling. Reading
-  // scrollHeight forces a layout, so a burst of deltas folds into one jump per
-  // frame instead of one per update.
-  const pinFrame = useRef<number | null>(null)
   useEffect(() => {
     if (lastUserId !== lastUserRef.current) {
       lastUserRef.current = lastUserId
@@ -645,12 +695,7 @@ export function Transcript({
         setShowJump(false)
       }
     }
-    if (!pinnedRef.current || pinFrame.current !== null) return
-    pinFrame.current = requestAnimationFrame(() => {
-      pinFrame.current = null
-      const el = containerRef.current
-      if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
-    })
+    followBottom()
   }, [items, lastUserId])
   useEffect(
     () => () => {
@@ -662,13 +707,25 @@ export function Transcript({
   // The view shrinks when a bar opens under it (the turn's file changes, a failed
   // turn's Retry, the queue, a banner) and grows when one closes. Stay at the bottom
   // through either while pinned; otherwise the last row ends up behind the new bar.
+  // The rows themselves also grow after they mount: an off-screen row is laid out at a
+  // placeholder height until it nears the viewport, and a card fills in its diff or
+  // options a frame later. Follow that too, or a new approval or question lands with
+  // its buttons below the fold while the run waits on them. A row the user just opened
+  // is the exception: keep it where they clicked it.
   useEffect(() => {
     const el = containerRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => {
-      if (pinnedRef.current) el.scrollTop = el.scrollHeight
+      if (!pinnedRef.current) return
+      if (performance.now() - disclosedAtRef.current < DISCLOSURE_HOLD_MS) {
+        pinnedRef.current = isNearBottom(el)
+        setShowJump(!pinnedRef.current)
+        return
+      }
+      el.scrollTop = el.scrollHeight
     })
     observer.observe(el)
+    if (el.firstElementChild) observer.observe(el.firstElementChild)
     return () => observer.disconnect()
   }, [])
 
@@ -845,7 +902,10 @@ export function Transcript({
         <button
           type="button"
           className="transcript__tools-toggle"
-          onClick={() => setExpandAll((prev) => ({ open: !allOpen, seq: (prev?.seq ?? 0) + 1 }))}
+          onClick={() => {
+            disclosedAtRef.current = performance.now()
+            setExpandAll((prev) => ({ open: !allOpen, seq: (prev?.seq ?? 0) + 1 }))
+          }}
           title={allOpen ? 'Collapse every tool row' : 'Expand every tool row'}
           aria-label={allOpen ? 'Collapse tools' : 'Expand tools'}
         >
@@ -874,6 +934,10 @@ export function Transcript({
         role="log"
         aria-label="Conversation"
         aria-live="off"
+        onClickCapture={(e) => noteDisclosure(e.target)}
+        onKeyDownCapture={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') noteDisclosure(e.target)
+        }}
       >
         <div className="transcript__inner">
           {nodes.map((node) => (

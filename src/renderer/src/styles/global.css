@@ -6133,6 +6133,10 @@ body.is-resizing .preview-dock__resizer::after {
 .files-row__btn:hover {
   background: var(--bg-hover);
 }
+.files-row__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .files-row__btn--selected,
 .files-row__btn--selected:hover {
   background: var(--bg-selected);

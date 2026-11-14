@@ -208,4 +208,69 @@ describe('conversation media store', () => {
     setMessages(conv.id, messagesWithImages())
     expect(listConversations().map((m) => m.id)).toEqual([conv.id])
   })
+
+  it('loads a chat for the window with image URLs instead of bytes, and no document bytes', async () => {
+    const { createConversation, setMessages, getConversationForView } = await import('./conversations')
+    const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(conv.id, messagesWithImages())
+    const [ref1, ref2] = [PNG, PNG2].map((d) => mediaFiles(conv.id).find((f) => readFileSync(join(convDir(), `${conv.id}.media`, f)).toString('base64') === d)!)
+    const view = getConversationForView(conv.id)!
+    expect(view.messages[0].images).toEqual([{ mediaType: 'image/png', data: '', src: `houston-media://${conv.id}/${ref1}` }])
+    expect(view.messages[2].images).toEqual([{ mediaType: 'image/png', data: '', src: `houston-media://${conv.id}/${ref2}` }])
+    const doc = view.messages[2].documents![0] as unknown as Record<string, unknown>
+    expect(doc.data).toBeUndefined()
+    expect(doc.name).toBe('spec.pdf')
+    expect(JSON.stringify(view)).not.toContain(PNG)
+    expect(JSON.stringify(view)).not.toContain(PDF)
+  })
+
+  it('leaves an image whose file is gone out of the window copy', async () => {
+    const { createConversation, setMessages, getConversationForView } = await import('./conversations')
+    const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(conv.id, messagesWithImages())
+    for (const f of mediaFiles(conv.id)) rmSync(join(convDir(), `${conv.id}.media`, f))
+    const view = getConversationForView(conv.id)!
+    expect(view.messages[0].images).toEqual([])
+    expect(view.messages[2].documents).toEqual([])
+  })
+
+  it('gives a stored image its bytes back when the window sends it again', async () => {
+    const { createConversation, setMessages, getConversationForView, resolveStoredImages } = await import('./conversations')
+    const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(conv.id, messagesWithImages())
+    const shown = getConversationForView(conv.id)!.messages[0].images!
+    const pasted = { mediaType: 'image/jpeg', data: 'BBBB' }
+    expect(resolveStoredImages([...shown, pasted])).toEqual([{ mediaType: 'image/png', data: PNG }, pasted])
+  })
+
+  it('takes a stored image\'s type from its file, and leaves unknown or forged URLs unresolved', async () => {
+    const { createConversation, setMessages, getConversationForView, resolveStoredImages, readStoredImage } = await import('./conversations')
+    const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(conv.id, messagesWithImages())
+    const src = getConversationForView(conv.id)!.messages[0].images![0].src!
+    // The caller's claimed type is ignored.
+    expect(resolveStoredImages([{ mediaType: 'image/gif', data: '', src }])).toEqual([{ mediaType: 'image/png', data: PNG }])
+    const ref = src.slice(src.lastIndexOf('/') + 1)
+    for (const bad of [
+      `houston-media://${conv.id}/../../settings.json`,
+      `houston-media://${conv.id}/${ref.replace('.png', '.pdf')}`,
+      `houston-media://bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/${ref}`,
+      `houston-media://../${ref}`,
+      `file:///etc/passwd`,
+      42
+    ]) {
+      expect(readStoredImage(bad)).toBeNull()
+      expect(resolveStoredImages([{ mediaType: 'image/png', data: '', src: bad }])).toEqual([{ mediaType: 'image/png', data: '', src: bad }])
+    }
+    // A pdf next to the images is a stored file, but not one the image URL serves.
+    const pdfRef = mediaFiles(conv.id).find((f) => f.endsWith('.pdf'))!
+    expect(readStoredImage(`houston-media://${conv.id}/${pdfRef}`)).toBeNull()
+  })
+
+  it('leaves data the window sent with an image untouched', async () => {
+    const { resolveStoredImages } = await import('./conversations')
+    const img = { mediaType: 'image/png', data: 'CCCC', src: 'houston-media://whatever' }
+    expect(resolveStoredImages([img])).toEqual([img])
+    expect(resolveStoredImages('nope')).toBe('nope')
+  })
 })

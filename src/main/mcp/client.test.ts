@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { version as PKG_VERSION } from '../../../package.json'
 import { MAX_MCP_MESSAGE_CHARS } from './sse-client'
-import { McpClient, type SpawnFn } from './client'
+import { McpClient, killLiveMcpGroups, type SpawnFn } from './client'
 import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
 
 interface ToolDecl {
@@ -616,6 +616,88 @@ describe('McpClient (real stdio process)', () => {
       })
     ).rejects.toThrow('MCP server process exited: Error: missing API_TOKEN')
     client.close()
+  }, 15_000)
+})
+
+describe.skipIf(process.platform === 'win32')('McpClient close (POSIX process group)', () => {
+  /**
+   * A server that starts a long-lived helper of its own (as `npx`/`uvx`/`sh -c`
+   * launchers do) and names the helper's pid as its one tool. `helperIgnoresTerm`
+   * makes both the helper and the server ignore SIGTERM, so only SIGKILL ends them.
+   */
+  const serverWithHelper = (helperIgnoresTerm: boolean): string => {
+    const trap = helperIgnoresTerm ? "process.on('SIGTERM', () => {});" : ''
+    return String.raw`
+      ${trap}
+      const { spawn } = require('node:child_process')
+      // The helper says when its SIGTERM handler is in place; the server only starts
+      // answering after that, so close() can't land before the handler does.
+      const helper = spawn(process.execPath, ['-e', ${JSON.stringify(`${trap} process.stdout.write('ready'); setInterval(() => {}, 1e6)`)}], { stdio: ['ignore', 'pipe', 'ignore'] })
+      let buf = ''
+      helper.stdout.once('data', () => process.stdin.on('data', (c) => {
+        buf += c
+        let nl
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const msg = JSON.parse(buf.slice(0, nl))
+          buf = buf.slice(nl + 1)
+          if (msg.id === undefined) continue
+          const result = msg.method === 'tools/list' ? { tools: [{ name: 'pid-' + helper.pid }] } : { capabilities: {} }
+          process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\n')
+        }
+      }))
+    `
+  }
+
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async function goneWithin(pid: number, ms: number): Promise<boolean> {
+    const deadline = Date.now() + ms
+    while (Date.now() < deadline) {
+      if (!alive(pid)) return true
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    return !alive(pid)
+  }
+
+  for (const ignoresTerm of [false, true]) {
+    it(`stops the server's own child processes on close${ignoresTerm ? ' (SIGKILL after the grace)' : ''}`, async () => {
+      const client = new McpClient()
+      let helperPid = 0
+      try {
+        await client.connect({ command: process.execPath, args: ['-e', serverWithHelper(ignoresTerm)] })
+        helperPid = Number(client.tools[0]?.name.replace('pid-', ''))
+        expect(helperPid).toBeGreaterThan(0)
+        expect(alive(helperPid)).toBe(true)
+        client.close()
+        expect(await goneWithin(helperPid, 6_000)).toBe(true)
+      } finally {
+        client.close()
+        if (helperPid && alive(helperPid)) process.kill(helperPid, 'SIGKILL')
+      }
+    }, 15_000)
+  }
+
+  it('kills servers still running when Houston exits, even ones never closed', async () => {
+    const client = new McpClient()
+    let helperPid = 0
+    try {
+      await client.connect({ command: process.execPath, args: ['-e', serverWithHelper(true)] })
+      helperPid = Number(client.tools[0]?.name.replace('pid-', ''))
+      expect(alive(helperPid)).toBe(true)
+      // What the process 'exit' hook runs: no grace, since nothing runs after it.
+      killLiveMcpGroups()
+      expect(await goneWithin(helperPid, 1_500)).toBe(true)
+    } finally {
+      client.close()
+      if (helperPid && alive(helperPid)) process.kill(helperPid, 'SIGKILL')
+    }
   }, 15_000)
 })
 

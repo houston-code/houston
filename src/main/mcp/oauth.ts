@@ -1,3 +1,4 @@
+import { outboundFetch } from '../outbound-proxy'
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
@@ -232,7 +233,7 @@ async function probeResourceMetadataUrl(serverUrl: string, fetchFn: FetchFn): Pr
  * endpoint paths on the issuer origin — but does throw when the discovered
  * endpoints are unusable (non-https, unparseable).
  */
-export async function discoverAuthServer(serverUrl: string, fetchFn: FetchFn = fetch): Promise<McpAuthServerInfo> {
+export async function discoverAuthServer(serverUrl: string, fetchFn: FetchFn = outboundFetch): Promise<McpAuthServerInfo> {
   const resource = canonicalResourceUri(serverUrl)
 
   // 1. Protected-resource metadata (RFC 9728): the 401 challenge's URL first,
@@ -304,7 +305,7 @@ export async function discoverAuthServer(serverUrl: string, fetchFn: FetchFn = f
 export async function registerClient(
   info: McpAuthServerInfo,
   redirectUri: string,
-  fetchFn: FetchFn = fetch
+  fetchFn: FetchFn = outboundFetch
 ): Promise<{ clientId: string; clientSecret?: string }> {
   if (!info.registrationEndpoint) {
     throw new Error(
@@ -400,7 +401,7 @@ async function tokenRequest(
  * set has no refresh token (the user must sign in again interactively). Keeps
  * the old refresh token when the server doesn't rotate it.
  */
-export async function refreshMcpOAuth(tokens: McpOAuthTokens, fetchFn: FetchFn = fetch): Promise<McpOAuthTokens> {
+export async function refreshMcpOAuth(tokens: McpOAuthTokens, fetchFn: FetchFn = outboundFetch): Promise<McpOAuthTokens> {
   if (!tokens.refresh) throw new Error('No refresh token stored; sign in again.')
   const minted = await tokenRequest(
     tokens.tokenEndpoint,
@@ -544,7 +545,7 @@ function openWithSystemHandler(url: string): boolean {
  * with a user-readable error on any failure or on timeout.
  */
 export async function runMcpOAuthFlow(serverUrl: string, deps: McpOAuthFlowDeps = {}): Promise<McpOAuthTokens> {
-  const fetchFn = deps.fetchFn ?? fetch
+  const fetchFn = deps.fetchFn ?? outboundFetch
   const openUrl = deps.openUrl ?? openWithSystemHandler
   const onStatus = deps.onStatus ?? ((): void => {})
   if (!/^https?:\/\//i.test(serverUrl)) throw new Error(`Not a remote MCP server URL: ${serverUrl}`)

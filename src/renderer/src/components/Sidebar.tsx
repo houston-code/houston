@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type DragEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup, SidebarGroupBy } from '@shared/types'
 import type { EditorId, EditorStatus } from '@shared/editors'
@@ -20,6 +20,7 @@ import {
 import { listEditors, fileManagerName } from '../lib/editors'
 import { baseName } from '../lib/paths'
 import { isMacPlatform } from '../lib/shortcuts'
+import { listMove, tabStop } from '../lib/rovingFocus'
 import { Icon } from './Icon'
 import { Popover } from './Popover'
 import { MenuExpander } from './MenuExpander'
@@ -234,7 +235,9 @@ function ConvRow({
   depth = 0,
   nested,
   signal,
-  reason
+  reason,
+  tabStop: isTabStop = true,
+  onFocusRow
 }: {
   conv: ConversationMeta
   active: boolean
@@ -261,6 +264,9 @@ function ConvRow({
   signal: ChatSignal
   /** Why the chat needs attention, shown at the start of the meta line. */
   reason?: string
+  /** This row is the list's one Tab stop; the arrow keys reach the others. */
+  tabStop?: boolean
+  onFocusRow?: (id: string) => void
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -301,7 +307,11 @@ function ConvRow({
       data-signal={signal}
       // Keyboard-reachable so a row can be opened without the mouse. Not renaming:
       // the inline input owns focus/keys then. `aria-current` marks the open chat.
-      tabIndex={renaming ? -1 : 0}
+      tabIndex={renaming || !isTabStop ? -1 : 0}
+      data-conv-id={conv.id}
+      onFocus={(e) => {
+        if (e.target === e.currentTarget) onFocusRow?.(conv.id)
+      }}
       aria-current={active ? 'true' : undefined}
       // The row's name carries its state, so a screen reader hears "needs approval"
       // without having to find the dot.
@@ -876,7 +886,9 @@ function SidebarSectionView({
   setRenamingConv,
   setRenamingGroup,
   collapsedParents,
-  toggleParent
+  toggleParent,
+  tabStopId,
+  onFocusRow
 }: {
   section: SidebarSection
   props: SidebarProps
@@ -888,6 +900,9 @@ function SidebarSectionView({
   /** Parents whose spawned chats the user folded away. */
   collapsedParents: ReadonlySet<string>
   toggleParent: (id: string) => void
+  /** The chat row that is the list's Tab stop. */
+  tabStopId: string | null
+  onFocusRow: (id: string) => void
 }): JSX.Element {
   const { groups } = props
   // Slot the drop indicator sits at while dragging over this section, or null.
@@ -975,6 +990,8 @@ function SidebarSectionView({
           onStartRenameGroup={(id) => setRenamingGroup(id)}
           depth={depth}
           signal={signal}
+          tabStop={c.id === tabStopId}
+          onFocusRow={onFocusRow}
           {...(reason ? { reason } : {})}
           {...(kids.length
             ? {
@@ -1035,6 +1052,43 @@ function SidebarSectionView({
 
 const NO_PARENTS: ReadonlySet<string> = new Set()
 
+/**
+ * The chat rows the list shows, top to bottom: open sections' chats, each followed by
+ * its spawned chats unless they are folded away (a parent holding the open chat
+ * stays unfolded, as it renders).
+ */
+export function visibleRowIds(
+  sections: readonly SidebarSection[],
+  collapsedParents: ReadonlySet<string>,
+  currentId: string | null
+): string[] {
+  const out: string[] = []
+  for (const section of sections) {
+    if (section.collapsed) continue
+    const walk = (c: ConversationMeta): void => {
+      out.push(c.id)
+      const kids = section.children[c.id] ?? []
+      if (kids.length === 0) return
+      const open =
+        !collapsedParents.has(c.id) || descendantsOf(c.id, section.children).some((d) => d.id === currentId)
+      if (open) kids.forEach(walk)
+    }
+    section.conversations.forEach(walk)
+  }
+  return out
+}
+
+/** Up/Down/Home/End on a focused chat row move focus to another row. */
+function listKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
+  const target = e.target as HTMLElement
+  if (!target.dataset.convId) return
+  const rows = [...e.currentTarget.querySelectorAll<HTMLElement>('[data-conv-id]')]
+  const next = listMove(e.key, rows.indexOf(target), rows.length)
+  if (next === null) return
+  e.preventDefault()
+  rows[next]?.focus()
+}
+
 export function Sidebar(props: SidebarProps): JSX.Element {
   const { conversations, groups, currentId } = props
   const searchRef = useRef<HTMLInputElement>(null)
@@ -1072,6 +1126,10 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // Parents whose spawned chats are folded away (saved in settings; expanded by default).
   const collapsedParents = props.collapsedParents ?? NO_PARENTS
   const toggleParent = (id: string): void => props.onToggleParentCollapsed?.(id)
+  // The chat list is one Tab stop (the row last focused, else the open chat, else
+  // the first row); Up/Down/Home/End move between rows.
+  const [focusedConv, setFocusedConv] = useState<string | null>(null)
+  const tabStopId = tabStop(visibleRowIds(sections, collapsedParents, currentId), focusedConv, currentId)
 
   // Collapsed: a thin rail with just the expand toggle and the most-used actions.
   if (props.collapsed) {
@@ -1151,7 +1209,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         />
       </div>
 
-      <div className="sidebar__list">
+      <div className="sidebar__list" onKeyDown={listKeyDown}>
         {conversations.length === 0 && (
           <div className="sidebar__empty">
             {props.search
@@ -1174,6 +1232,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             setRenamingGroup={setRenamingGroup}
             collapsedParents={collapsedParents}
             toggleParent={toggleParent}
+            tabStopId={tabStopId}
+            onFocusRow={setFocusedConv}
           />
         ))}
       </div>

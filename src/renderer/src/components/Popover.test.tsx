@@ -40,6 +40,29 @@ describe('Popover', () => {
     window.removeEventListener('keydown', globalEsc)
   })
 
+  it('closes on Tab from inside a menu, but leaves Tab to a form inside it', () => {
+    const onClose = vi.fn()
+    const { getByText } = renderPopover(onClose)
+    getByText('One').focus()
+    const tab = fireEvent.keyDown(getByText('One'), { key: 'Tab' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(tab).toBe(false)
+    cleanup()
+
+    const onCloseForm = vi.fn()
+    const anchor = document.createElement('button')
+    document.body.appendChild(anchor)
+    const { getByLabelText } = render(
+      <Popover anchorRef={{ current: anchor }} onClose={onCloseForm}>
+        <input aria-label="Link" />
+        <button>Add</button>
+      </Popover>
+    )
+    getByLabelText('Link').focus()
+    fireEvent.keyDown(getByLabelText('Link'), { key: 'Tab' })
+    expect(onCloseForm).not.toHaveBeenCalled()
+  })
+
   it('closes when the page scrolls (the anchor moves out from under it)', () => {
     const onClose = vi.fn()
     renderPopover(onClose)

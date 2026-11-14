@@ -239,6 +239,7 @@ import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skill
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
+import { inferVerifyCommand } from '../verifyInfer'
 import { formatPromptSnapshot, localDateStamp, resolvePromptSnapshot } from './promptSnapshot'
 import { memoryStore, type MemoryStore } from './memoryStore'
 import { buildMemoryIndex } from './memoryIndex'
@@ -300,6 +301,7 @@ import {
 } from './stall'
 import { RevertTracker } from './revertTracker'
 import { currentBranch, workingTreeFingerprint } from './workingTree'
+import { changedSince, shellMayEdit, snapshotWorkingTree, type TreeSnapshot } from './shellEdits'
 import {
   MAX_OUTPUT_CONTINUATIONS,
   continuationNote,
@@ -325,11 +327,14 @@ import {
   shouldVerify,
   runVerification,
   verifyFailureMessage,
+  inferredVerifyNotice,
   resolveVerifyMaxPasses
 } from './verify-gate'
 
 /** Max times a Stop hook may force another turn, so a blocking hook can't spin forever. */
 const MAX_STOP_CONTINUATIONS = 3
+/** A working-tree snapshot slower than this turns shell-edit snapshots off for the run. */
+const SHELL_SNAPSHOT_MAX_MS = 1_500
 /** Max transient-failure retries per model turn (so up to MAX_STREAM_RETRIES+1 attempts). */
 const MAX_STREAM_RETRIES = MAX_PROVIDER_RETRIES
 
@@ -3397,15 +3402,40 @@ export async function startRun(
     // files (so we don't verify a read-only turn) and how many verification passes
     // have already run (bounded self-correction). A write-kind tool call arms it
     // directly. A run_shell edit (sed -i, a heredoc, git apply, a codegen script) arms
-    // it too: when the gate is configured, the working tree is fingerprinted at run
-    // start, and at a natural stop after a successful foreground shell command it is
-    // fingerprinted again; a difference means the shell changed files. Outside a git
-    // repo there is no fingerprint, so only write-kind calls arm it there.
+    // it too: in a git repo, a foreground command that may write is bracketed by
+    // working-tree snapshots and the paths it changed are recorded (see shellEdits.ts).
+    // As a backstop, when the gate is configured the tree is also fingerprinted at run
+    // start and again at a natural stop after a successful foreground shell command; a
+    // difference means the shell changed files. Outside a git repo only write-kind
+    // calls arm it.
     let filesModified = false
+    // The command the gate runs: the user's own, or, when the gate is on with none set,
+    // the one the project's files suggest (package.json scripts, Cargo, Go, pytest).
+    // An inferred command runs only in Full auto, where shell commands already run
+    // without asking, and gets network only where the agent's own shell commands
+    // would; it is announced once, the first time it runs.
+    const userVerifyCommand = (settings.verifyCommand ?? '').trim()
+    const inferredVerify =
+      settings.verifyOnStop === true && userVerifyCommand === '' ? inferVerifyCommand(workspace) : null
+    const verifyCommandFor = (): { command: string; inferred: boolean } | null => {
+      if (userVerifyCommand) return { command: userVerifyCommand, inferred: false }
+      if (inferredVerify && run.policy === 'full-auto') return { command: inferredVerify.command, inferred: true }
+      return null
+    }
+    let inferredVerifyAnnounced = false
     const verifyGateConfigured =
-      settings.verifyOnStop === true && (settings.verifyCommand ?? '').trim() !== ''
+      settings.verifyOnStop === true && (userVerifyCommand !== '' || inferredVerify !== null)
     const treeAtStart = verifyGateConfigured ? await workingTreeFingerprint(workspace) : null
     let shellMayHaveEdited = false
+    // Snapshots around shell commands (see shellEdits.ts) stop for the rest of the run
+    // once one is slow: a huge repository shouldn't add seconds to every command.
+    let shellSnapshotsOff = false
+    const timedSnapshot = async (): Promise<TreeSnapshot | null> => {
+      const started = Date.now()
+      const snap = await snapshotWorkingTree(workspace)
+      if (Date.now() - started > SHELL_SNAPSHOT_MAX_MS) shellSnapshotsOff = true
+      return snap
+    }
     let verifyPassesRun = 0
     // Whether the model has been told this turn that its edits loosened a test (once).
     let testEditsNoted = false
@@ -3537,7 +3567,8 @@ export async function startRun(
       }
     }
 
-    // Pinned working memory (original task, todo list, files in play), derived from
+    // Pinned working memory (original task, the user's later messages, todo list,
+    // files in play, workspace state), derived from
     // everything compaction or eviction has touched: the head before the cut or the
     // eviction watermark, whichever reaches further. Both only advance at a
     // compaction or eviction, so the block is byte-identical in between. The task is
@@ -3547,7 +3578,10 @@ export async function startRun(
       const task = originalTaskIndex(messages)
       return buildPinnedMessages(messages.slice(0, Math.max(cut, evictBefore)), {
         omitTask: task >= cut || task === anchor,
-        workspaceState
+        workspaceState,
+        // Only what the summary stands in for: from the anchor on, the request and its
+        // steers are re-sent verbatim, and everything after the cut is in the tail.
+        userMessagesBefore: anchor ?? cut
       })
     }
 
@@ -4245,11 +4279,13 @@ export async function startRun(
           const treeNow = await workingTreeFingerprint(workspace)
           if (treeNow !== null && treeNow !== treeAtStart) filesModified = true
         }
+        const verify = verifyCommandFor()
         if (
           stopReason === 'end_turn' &&
+          verify !== null &&
           shouldVerify({
             enabled: settings.verifyOnStop === true,
-            command: settings.verifyCommand,
+            command: verify.command,
             filesModified,
             passesRun: verifyPassesRun,
             maxPasses: verifyMaxPasses,
@@ -4259,17 +4295,24 @@ export async function startRun(
           })
         ) {
           verifyPassesRun += 1
+          if (verify.inferred && !inferredVerifyAnnounced && inferredVerify) {
+            inferredVerifyAnnounced = true
+            emit({ type: 'notice', message: inferredVerifyNotice(verify.command, inferredVerify.source) })
+          }
           const result = await runVerification({
-            command: settings.verifyCommand!,
+            command: verify.command,
             workspace,
             roots,
-            // The verify command is USER-authored (a settings field the agent can't
-            // change), not agent-authored, so it isn't part of the shell-exfiltration
-            // vector the shell-network consent guards. Keep its prior network behavior
-            // (full-auto, or an explicit shell-network grant) so a verify command that
-            // hits the network isn't silently starved in full-auto.
+            // A user-set verify command is USER-authored (a settings field the agent
+            // can't change), not agent-authored, so it isn't part of the
+            // shell-exfiltration vector the shell-network consent guards. Keep its prior
+            // network behavior (full-auto, or an explicit shell-network grant) so a
+            // verify command that hits the network isn't silently starved in full-auto.
+            // An inferred one runs scripts the project (and so the agent) can edit, so
+            // it gets network only on the agent's own shell-network grant.
             allowNetwork:
-              (run.policy === 'full-auto' || run.shellNetworkGranted) && !egressUnavailable,
+              (verify.inferred ? run.shellNetworkGranted : run.policy === 'full-auto' || run.shellNetworkGranted) &&
+              !egressUnavailable,
             // The user-authored verify command still egresses through the same
             // per-domain allowlist — the policy is about destinations, not authorship.
             egressProxy,
@@ -4281,11 +4324,11 @@ export async function startRun(
             return
           }
           emit({ type: 'verification', passed: result.passed })
-          run.evidence.recordGate(redact(settings.verifyCommand!), result.passed)
+          run.evidence.recordGate(redact(verify.command), result.passed)
           if (!result.passed) {
             // Push the failure feedback as a system note so the model sees it next
             // turn and the transcript shows it as Houston's, not the user's; then loop.
-            messages.push(systemNoteMessage(verifyFailureMessage(settings.verifyCommand!, result.output)))
+            messages.push(systemNoteMessage(verifyFailureMessage(verify.command, result.output)))
             persist(messages)
             continue
           }
@@ -5014,6 +5057,19 @@ export async function startRun(
                           redact
                         )
                       : undefined
+                  // A foreground command that may write: snapshot the git working tree
+                  // around it, so the files it changed reach the ledger (see shellEdits.ts).
+                  // What it reports is held until then, so a check it ran sits after the
+                  // changes it made rather than before them.
+                  const treeBefore =
+                    call.name === 'run_shell' &&
+                    execArgs.background !== true &&
+                    !shellSnapshotsOff &&
+                    run.policy !== 'plan' &&
+                    shellMayEdit(typeof execArgs.command === 'string' ? execArgs.command : '')
+                      ? await timedSnapshot()
+                      : null
+                  const heldEvidence: EvidenceDraft[] = []
                   try {
                     output = await tool.execute(
                       execArgs,
@@ -5023,13 +5079,22 @@ export async function startRun(
                             ...(live ? { onShellOutput: live.push } : {}),
                             recordEvidence: (e) => {
                               if (e.kind === 'shell' && e.blocked === 'network') networkBlocked = true
-                              ctx.recordEvidence?.(e)
+                              if (treeBefore) heldEvidence.push(e)
+                              else ctx.recordEvidence?.(e)
                             }
                           }
                         : ctx
                     )
                   } finally {
                     live?.close()
+                    if (treeBefore) {
+                      const changed = await changedSince(treeBefore, workspace)
+                      if (changed.length) {
+                        run.evidence.recordFiles(workspace, changed)
+                        filesModified = true
+                      }
+                      for (const e of heldEvidence) ctx.recordEvidence?.(e)
+                    }
                   }
                 } catch (e) {
                   output = `Error: ${(e as Error).message}`

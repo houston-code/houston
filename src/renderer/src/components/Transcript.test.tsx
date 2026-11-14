@@ -750,6 +750,65 @@ describe('Transcript: staying at the latest message', () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it('stays pinned when layout pushes the view down, and catches up', () => {
+    const { container } = renderTranscript([userItem(), assistantItem()])
+    const scroller = container.querySelector('.transcript') as HTMLElement
+    flushFrames()
+    sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 300, top: 700 })
+    // A row above settles to its real height: scroll anchoring moves the view down a
+    // little and the new card below is now out of reach. That is not the reader leaving.
+    sizeScroller(scroller, { scrollHeight: 1300, clientHeight: 300, top: 730 })
+    expect(screen.queryByRole('button', { name: '↓' })).not.toBeInTheDocument()
+    flushFrames()
+    expect(scroller.scrollTop).toBe(1300)
+
+    // The reader scrolling up still lets go.
+    sizeScroller(scroller, { scrollHeight: 1300, clientHeight: 300, top: 400 })
+    expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
+  })
+
+  it('follows a card that grows after it mounts, but not a row the user opened', () => {
+    let onResize: (() => void) | undefined
+    const observed: Element[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          onResize = cb
+        }
+        observe(el: Element): void {
+          observed.push(el)
+        }
+        disconnect(): void {}
+      }
+    )
+    try {
+      const done = toolItem({ id: 't1', name: 'run_shell', status: 'done', args: { command: 'ls' }, output: 'a\nb' })
+      const { container } = renderTranscript([userItem(), done, assistantItem()])
+      const scroller = container.querySelector('.transcript') as HTMLElement
+      expect(observed).toContain(container.querySelector('.transcript__inner'))
+      sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 300, top: 700 })
+
+      // An approval card fills in its diff a frame after it mounted: follow it.
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1200 })
+      onResize?.()
+      expect(scroller.scrollTop).toBe(1200)
+      sizeScroller(scroller, { scrollHeight: 1200, clientHeight: 300, top: 900 })
+
+      // The user opens a tool row: what they clicked stays put, and the jump button
+      // offers the way back down.
+      fireEvent.click(container.querySelector('[aria-expanded]') as HTMLElement)
+      // Scroll anchoring is held off too, or it would push the opened row up.
+      expect(scroller.style.overflowAnchor).toBe('none')
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1600 })
+      act(() => onResize?.())
+      expect(scroller.scrollTop).toBe(900)
+      expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
 
 describe('transcript detail preferences', () => {

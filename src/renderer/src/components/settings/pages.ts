@@ -6,6 +6,7 @@ import {
   AddProviderSection,
   ContextWindowSection,
   LoopControlSection,
+  NetworkProxySection,
   ProvidersSection,
   ReasoningSection,
   SuggestionsSection,
@@ -92,6 +93,12 @@ export const PAGES: SettingsPage[] = [
         id: 'add-provider',
         Component: AddProviderSection,
         keywords: ['new provider', 'custom endpoint', 'local model', 'self-hosted', 'ollama', 'openai compatible', 'host']
+      },
+      {
+        id: 'network-proxy',
+        Component: NetworkProxySection,
+        keywords: ['proxy', 'https_proxy', 'http_proxy', 'no_proxy', 'corporate network', 'vpn'],
+        values: (s) => [s.proxyUrl]
       },
       {
         id: 'scorecard',

@@ -10,7 +10,7 @@ import {
 } from '@shared/queue'
 import { sanitizeAttachments } from '@shared/images'
 import { sanitizeInvocation } from '@shared/promptInvocation'
-import { getQueuedInput, setQueuedInput } from '../conversations'
+import { getQueuedInput, resolveStoredImages, setQueuedInput } from '../conversations'
 
 /**
  * Per-conversation buffer of messages typed while a run was in progress. Held in
@@ -74,7 +74,8 @@ export function addToQueue(
   req: QueueAddRequest,
   opts: { id?: string; steer?: boolean } = {}
 ): QueuedInputMeta[] {
-  const images = sanitizeAttachments(req.images)
+  // A past message's images sent again come as stored-image URLs; read them back.
+  const images = sanitizeAttachments(resolveStoredImages(req.images))
   const invokedAs = sanitizeInvocation(req.invokedAs)
   const item: QueuedInput = {
     id: opts.id ?? randomUUID(),

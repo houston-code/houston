@@ -58,7 +58,9 @@ import {
   isEditableTarget,
   isMacPlatform,
   shortcutHint,
-  terminalKeepsKey
+  terminalKeepsKey,
+  shiftTabCyclesMode,
+  escapeStopsRun
 } from './lib/shortcuts'
 import { chatAtIndex, cycleChatId } from './lib/sessionNav'
 import { coalesced } from './lib/coalesce'
@@ -70,7 +72,7 @@ import { playAttentionSound } from './lib/attentionSound'
 import { RunMeterText } from './components/RunMeterText'
 import { newGroupId } from './lib/chatGroups'
 import { checkpointNotice } from './lib/checkpointNotice'
-import { occludesPreview, ownsShiftTab, suppressesTips, type OverlayFlags } from './lib/overlays'
+import { occludesPreview, ownsShiftTab, shortcutAllowedOverModal, suppressesTips, type OverlayFlags } from './lib/overlays'
 import { baseName } from './lib/paths'
 import {
   clampSidebarWidth,
@@ -229,6 +231,22 @@ function defaultSelection(settings: AppSettings): SelectedModel | null {
   const ready = settings.providers.find((p) => (!p.requiresKey || p.hasKey) && p.models.length > 0)
   if (ready) return { providerId: ready.id, model: pickDefaultModel(ready) ?? ready.models[0].id }
   return null
+}
+
+
+/**
+ * A banner's "Not now" for one workspace. Built outside App on purpose: a callback
+ * created inside App's render shares that render's closure scope, so one kept for as
+ * long as the workspace stays the same (as these are) also kept everything that render
+ * held, such as the transcript of a chat the user had since left.
+ */
+function notNowFor(
+  workspace: string | null | undefined,
+  set: (update: (s: ReadonlySet<string>) => ReadonlySet<string>) => void
+): () => void {
+  return () => {
+    if (workspace) set((s) => new Set(s).add(workspace))
+  }
 }
 
 export default function App(): JSX.Element {
@@ -717,14 +735,10 @@ export default function App(): JSX.Element {
       ),
     [chat.items]
   )
-  const onGitInitNotNow = useCallback(() => {
-    if (workspace) setGitInitNotNow((s) => new Set(s).add(workspace))
-  }, [workspace])
+  const onGitInitNotNow = useMemo(() => notNowFor(workspace, setGitInitNotNow), [workspace])
   // Session-only "Not now" for the trusted-folders consent banner (per workspace).
   const [trustNotNow, setTrustNotNow] = useState<ReadonlySet<string>>(() => new Set())
-  const onTrustNotNow = useCallback(() => {
-    if (workspace) setTrustNotNow((s) => new Set(s).add(workspace))
-  }, [workspace])
+  const onTrustNotNow = useMemo(() => notNowFor(workspace, setTrustNotNow), [workspace])
   // Nudge the git-init banner to re-check repo state when the Changes panel closes —
   // the user may have initialized the repo from there, which no window-focus event
   // would signal.
@@ -3020,16 +3034,18 @@ export default function App(): JSX.Element {
       // shortcut, or the same Escape would additionally cancel the running turn.
       if (e.defaultPrevented) return
       // Plain-character shortcuts (e.g. `?`) must not fire while typing in a field;
-      // mod-bearing chords (⌘…) still work everywhere, and Esc is always allowed.
-      const inEditable = isEditableTarget(e.target)
-      if (inEditable && !(e.metaKey || e.ctrlKey) && e.key !== 'Escape') return
+      // mod-bearing chords (⌘…) still work everywhere, Esc is always allowed, and so is
+      // Shift+Tab in the message box (see shiftTabCyclesMode).
       const action = matchShortcut(e, shortcuts)
+      const inEditable = isEditableTarget(e.target)
+      if (inEditable && !(e.metaKey || e.ctrlKey) && e.key !== 'Escape' && action !== 'cycle-mode') return
       // Keys typed inside the terminal mostly belong to the shell (Esc → vim, Ctrl+C
       // → SIGINT, etc.). The terminal toggle and ⌘-chords (macOS app shortcuts the
       // shell never sees) still reach the app; everything else passes through.
       const inTerminal =
         e.target instanceof HTMLElement && e.target.closest('.terminal-dock') !== null
       if (inTerminal && terminalKeepsKey(action, e.metaKey)) return
+      if (!shortcutAllowedOverModal(action, overlaysRef.current)) return
       if (action === 'new-chat') {
         e.preventDefault()
         void onNewChat()
@@ -3076,6 +3092,7 @@ export default function App(): JSX.Element {
         // What's new card) owns the key while focus is inside it.
         const inDialog = e.target instanceof Element && e.target.closest('[role="dialog"]') !== null
         if (ownsShiftTab(overlaysRef.current) || isAnyPopoverOpen() || inDialog) return
+        if (!shiftTabCyclesMode(e.target)) return
         e.preventDefault()
         cyclePolicy()
       } else if (action === 'escape') {
@@ -3090,7 +3107,7 @@ export default function App(): JSX.Element {
         else if (o.scorecard) setScorecardOpen(false)
         else if (o.usage) setUsageOpen(false)
         else if (o.doctor) setDoctorOpen(false)
-        else if (chat.running) chat.cancel()
+        else if (chat.running && escapeStopsRun(e.target)) chat.cancel()
       }
     }
     window.addEventListener('keydown', onKey)

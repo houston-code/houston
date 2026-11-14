@@ -13,6 +13,8 @@ import { imageDataUrl, type ImageAttachment } from '@shared/images'
 const urls = new WeakMap<ImageAttachment, string>()
 
 export function cachedImageDataUrl(a: ImageAttachment): string {
+  // A saved chat's images come as a URL to the stored file, not bytes.
+  if (a.src && !a.data) return a.src
   let url = urls.get(a)
   if (url === undefined) {
     url = imageDataUrl(a)

@@ -8,6 +8,7 @@ import {
   parseImageDataUrl,
   sanitizeAttachments
 } from './images'
+import { mediaUrl, parseMediaUrl } from './images'
 
 describe('exceedsImageSizeLimit', () => {
   it('passes small payloads and rejects huge ones', () => {
@@ -93,3 +94,26 @@ describe('imageFileName', () => {
     expect(imageFileName('', 'image/webp')).toBe('image.webp')
   })
 })
+
+describe('media URLs', () => {
+  const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const ref = `${'a'.repeat(64)}.png`
+  it('round-trips a chat id and stored file name', () => {
+    expect(parseMediaUrl(mediaUrl(id, ref))).toEqual({ conversationId: id, mediaRef: ref })
+  })
+  it('rejects anything that is not a chat id and a content digest', () => {
+    for (const bad of [
+      `houston-media://${id}/../x.png`,
+      `houston-media://${id}/${'a'.repeat(63)}.png`,
+      `houston-media://${id}/${ref}?x=1`,
+      `houston-media://not-an-id/${ref}`,
+      `houston-visual://${id}/${ref}`,
+      `houston-media://${id}/${ref}/extra`,
+      null,
+      `houston-media://${id}/${'a'.repeat(300)}.png`
+    ]) {
+      expect(parseMediaUrl(bad)).toBeNull()
+    }
+  })
+})
+

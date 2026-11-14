@@ -186,8 +186,8 @@ describe('FilesPanel opened at a file', () => {
     render(<FilesPanel workspace="/repo" onClose={vi.fn()} initialPath="e2e/a.png" docked />)
     expect(await screen.findByText('a.png')).toBeInTheDocument()
     // The user opens another folder and picks another file there.
-    fireEvent.click(screen.getByRole('button', { name: /src/ }))
-    fireEvent.click(await screen.findByRole('button', { name: /main\.ts/ }))
+    fireEvent.click(screen.getByRole('treeitem', { name: /src/ }))
+    fireEvent.click(await screen.findByRole('treeitem', { name: /main\.ts/ }))
     const selectedName = (): string | null =>
       document.querySelector('.files-row__btn--selected .files-row__name')?.textContent ?? null
     await waitFor(() => expect(selectedName()).toBe('main.ts'))
@@ -203,5 +203,71 @@ describe('FilesPanel opened at a file', () => {
     expect(normalizeRelPath('./a/b.png')).toBe('a/b.png')
     expect(normalizeRelPath('a\\b.png')).toBe('a/b.png')
     expect(normalizeRelPath('/a/')).toBe('a')
+  })
+})
+
+describe('FilesPanel keyboard (tree pattern)', () => {
+  const tree = {
+    '': [dir('src', 'src'), file('README.md', 'README.md')],
+    src: [dir('lib', 'src/lib'), file('main.ts', 'src/main.ts')],
+    'src/lib': [file('util.ts', 'src/lib/util.ts')]
+  }
+  const item = (name: RegExp): HTMLElement => screen.getByRole('treeitem', { name })
+  const key = (k: string): void => {
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: k })
+  }
+
+  it('is one Tab stop, and the arrow keys walk, open, and close folders', async () => {
+    const api = installApi(tree)
+    render(<FilesPanel workspace="/repo" onClose={vi.fn()} docked />)
+    const src = await screen.findByRole('treeitem', { name: /\bsrc$/ })
+    // Only the first row is in the Tab order.
+    expect(src).toHaveAttribute('tabindex', '0')
+    expect(item(/README/)).toHaveAttribute('tabindex', '-1')
+    expect(src).toHaveAttribute('aria-level', '1')
+    expect(src).toHaveAttribute('aria-expanded', 'false')
+
+    src.focus()
+    key('ArrowDown')
+    expect(document.activeElement).toBe(item(/README/))
+    key('ArrowUp')
+    expect(document.activeElement).toBe(src)
+
+    // Right opens a closed folder (loading it), and again steps into it.
+    key('ArrowRight')
+    expect(await screen.findByRole('treeitem', { name: /main\.ts/ })).toBeInTheDocument()
+    expect(api.listWorkspaceDir).toHaveBeenCalledWith('/repo', 'src')
+    expect(src).toHaveAttribute('aria-expanded', 'true')
+    key('ArrowRight')
+    expect(document.activeElement).toBe(item(/\blib$/))
+    expect(item(/\blib$/)).toHaveAttribute('aria-level', '2')
+    // The focused row takes over the Tab stop.
+    expect(item(/\blib$/)).toHaveAttribute('tabindex', '0')
+    expect(src).toHaveAttribute('tabindex', '-1')
+
+    // Left on a closed folder goes to its parent; Left on an open one closes it.
+    key('ArrowLeft')
+    expect(document.activeElement).toBe(src)
+    key('ArrowLeft')
+    expect(src).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('treeitem', { name: /main\.ts/ })).toBeNull()
+
+    key('End')
+    expect(document.activeElement).toBe(item(/README/))
+    key('Home')
+    expect(document.activeElement).toBe(src)
+    // Right on a file stays put.
+    key('End')
+    key('ArrowRight')
+    expect(document.activeElement).toBe(item(/README/))
+  })
+
+  it('makes the selected file the Tab stop when the panel opens on it', async () => {
+    installApi(tree)
+    render(<FilesPanel workspace="/repo" onClose={vi.fn()} initialPath="src/main.ts" docked />)
+    const main = await screen.findByRole('treeitem', { name: /main\.ts/ })
+    expect(main).toHaveAttribute('tabindex', '0')
+    expect(main).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getAllByRole('treeitem').filter((el) => el.tabIndex === 0)).toHaveLength(1)
   })
 })

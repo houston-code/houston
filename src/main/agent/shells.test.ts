@@ -488,13 +488,16 @@ describe.skipIf(process.platform === 'win32')('graceful stop', () => {
   it('sends SIGTERM first and SIGKILL only after the grace when the shell ignores it', async () => {
     const { child, id } = await shell("trap '' TERM; echo ready; while :; do sleep 0.05; done")
     const done = exited(child)
-    const started = Date.now()
+    // Monotonic clock: the grace timer runs on libuv's millisecond clock, so a wall-clock
+    // (Date.now) reading can come out 1ms short of the grace and fail a correct kill.
+    const started = performance.now()
     expect(killShell(id, { graceMs: 400 })).toBe('killed')
     await new Promise((r) => setTimeout(r, 200))
     expect(readShellOutput(id).running).toBe(true)
     const { signal } = await done
     expect(signal).toBe('SIGKILL')
-    expect(Date.now() - started).toBeGreaterThanOrEqual(400)
+    // 1ms for the timer clock's whole-millisecond rounding.
+    expect(performance.now() - started).toBeGreaterThanOrEqual(399)
     await vi.waitFor(() => expect(groupAlive(child.pid!)).toBe(false))
   })
 
