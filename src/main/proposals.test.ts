@@ -124,6 +124,23 @@ describe('startProposal', () => {
     expect(out.proposals.p1.status).toBe('started')
   })
 
+  it('marks the session when the proposing chat had read outside text, and not otherwise', async () => {
+    // The proposal's own (answered) call doesn't taint the session it starts.
+    const clean = fakeDeps(parent())
+    await startProposal({ conversationId: 'parent', callId: 'p1', approvalPolicy: 'ask' }, clean.deps)
+    expect(clean.spawned[0]).not.toHaveProperty('taintSource')
+
+    const fetched: ChatMessage[] = [
+      { role: 'user', content: 'read it' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'f1', name: 'web_fetch', arguments: { url: 'https://e.com' } }] },
+      { role: 'tool', content: 'page', toolCallId: 'f1', toolName: 'web_fetch' },
+      ...logWith({ title: 'Update API docs', prompt: 'Document /auth/*' })
+    ]
+    const tainted = fakeDeps(parent({ messages: fetched }))
+    await startProposal({ conversationId: 'parent', callId: 'p1', approvalPolicy: 'ask' }, tainted.deps)
+    expect(tainted.spawned[0].taintSource).toBe('web_fetch')
+  })
+
   it("starts the session on the parent chat's own reasoning effort", async () => {
     const { deps, spawned } = fakeDeps(parent({ reasoningEffort: 'xhigh' }))
     await startProposal({ conversationId: 'parent', callId: 'p1', approvalPolicy: 'ask' }, deps)

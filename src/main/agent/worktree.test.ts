@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync, existsSync, rmSync, symlinkSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
 import { runGitCapture, runReadGit } from './gitRead'
@@ -328,6 +328,86 @@ describe('createWorktree', () => {
     await expect(createWorktree({ workspace: repo, branch: 'wip' }, exec)).rejects.toThrow(
       /pick an existing branch as the base \(lucid-meadow\)/
     )
+  })
+})
+
+/**
+ * A cloned repo can commit `.houston/worktrees` (or `.houston`) as a symlink. Followed
+ * blindly, `git worktree add` would check a branch out wherever it points, outside the
+ * project. Something able to write the git dir could also link `info/exclude` at a file
+ * elsewhere for the ignore-line append to grow.
+ */
+describe('createWorktree with planted links', () => {
+  const posixOnly = process.platform === 'win32' ? it.skip : it
+  const repoGit = (repo: string, calls: string[][]): GitRun =>
+    fakeGit(
+      {
+        'worktree list': () => worktreeList(repo),
+        'rev-parse --abbrev-ref': () => 'main\n',
+        'for-each-ref': () => 'main\n',
+        'rev-parse --git-common-dir': () => join(repo, '.git'),
+        'worktree add': () => ''
+      },
+      calls
+    )
+
+  posixOnly('refuses a .houston/worktrees that links out of the repo', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'wt-out-'))
+    const repo = mkdtempSync(join(tmpdir(), 'wt-repo-'))
+    mkdirSync(join(repo, '.git'), { recursive: true })
+    mkdirSync(join(repo, '.houston'))
+    symlinkSync(outside, join(repo, '.houston', 'worktrees'))
+    const calls: string[][] = []
+    await expect(createWorktree({ workspace: repo, branch: 'wip' }, repoGit(repo, calls))).rejects.toThrow(
+      /links outside the repository/
+    )
+    expect(calls.some((c) => c[1] === 'add')).toBe(false)
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  posixOnly('refuses a relative ../../.. link, and a .houston that links out, creating nothing there', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'wt-parent-'))
+    const repo = join(parent, 'repo')
+    mkdirSync(join(repo, '.git'), { recursive: true })
+    mkdirSync(join(repo, '.houston'))
+    symlinkSync('../../..', join(repo, '.houston', 'worktrees'))
+    const calls: string[][] = []
+    await expect(createWorktree({ workspace: repo, branch: 'wip' }, repoGit(repo, calls))).rejects.toThrow(
+      /links outside the repository/
+    )
+    rmSync(join(repo, '.houston'), { recursive: true, force: true })
+    const elsewhere = join(parent, 'elsewhere')
+    mkdirSync(elsewhere)
+    symlinkSync(elsewhere, join(repo, '.houston'))
+    await expect(createWorktree({ workspace: repo, branch: 'wip' }, repoGit(repo, calls))).rejects.toThrow(
+      /links outside the repository/
+    )
+    // Not even the worktrees folder was made through the link.
+    expect(existsSync(join(elsewhere, 'worktrees'))).toBe(false)
+    expect(calls.some((c) => c[1] === 'add')).toBe(false)
+    rmSync(parent, { recursive: true, force: true })
+  })
+
+  posixOnly('allows a .houston/worktrees link that stays inside the repo', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'wt-repo-'))
+    mkdirSync(join(repo, '.git'), { recursive: true })
+    mkdirSync(join(repo, 'trees'))
+    mkdirSync(join(repo, '.houston'))
+    symlinkSync('../trees', join(repo, '.houston', 'worktrees'))
+    const calls: string[][] = []
+    await createWorktree({ workspace: repo, branch: 'wip' }, repoGit(repo, calls))
+    expect(calls.some((c) => c[1] === 'add')).toBe(true)
+  })
+
+  posixOnly('leaves a linked info/exclude alone', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'wt-repo-'))
+    const victim = join(mkdtempSync(join(tmpdir(), 'wt-victim-')), 'profile')
+    writeFileSync(victim, 'keep\n')
+    mkdirSync(join(repo, '.git', 'info'), { recursive: true })
+    symlinkSync(victim, join(repo, '.git', 'info', 'exclude'))
+    await createWorktree({ workspace: repo, branch: 'wip' }, repoGit(repo, []))
+    expect(readFileSync(victim, 'utf8')).toBe('keep\n')
+    expect(lstatSync(join(repo, '.git', 'info', 'exclude')).isSymbolicLink()).toBe(true)
   })
 })
 

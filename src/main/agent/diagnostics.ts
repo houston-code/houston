@@ -127,7 +127,7 @@ export async function runPostEditDiagnostics(
   const candidates = CHECKERS[extKey(abs)]
   if (!candidates) return { ran: false }
   // Null under the Windows cmd.exe fallback too: see planToolRun.
-  const plan = planToolRun(candidates, abs, opts)
+  const plan = planToolRun(candidates, abs, { ...opts, roots })
   if (!plan) return { ran: false }
   const { tool: checker, command } = plan
 

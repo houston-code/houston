@@ -3,7 +3,7 @@ import { sanitizeServerId } from './mcp'
 
 /**
  * A small, static list of well-known MCP servers, offered in Settings > MCP Servers
- * as "Add from catalog". Shipped with the app (never fetched), each entry prefills a
+ * as "Recommended". Shipped with the app (never fetched), each entry prefills a
  * server's command and arguments for the user to review; nothing is saved until they
  * add it, and it is added switched off unless they choose otherwise.
  *
@@ -137,6 +137,84 @@ export function catalogServer(entry: McpCatalogEntry, workspace: string | null):
   }
 }
 
+/** An environment variable or header a server needs, filled in on the review form. */
+export interface McpDraftInput {
+  kind: 'env' | 'header'
+  name: string
+  description: string
+  required: boolean
+  /** Shown masked while typed. Every value is stored encrypted either way. */
+  secret: boolean
+  /** The shape the publisher gives for the value (`Bearer {api_key}`), shown as a hint only. */
+  format?: string
+  /** What the server uses when it is left empty. */
+  default?: string
+}
+
+/** A server to review before adding: the config to prefill plus what to tell the user. */
+export interface McpDraft {
+  /** Unique per draft in a list. */
+  key: string
+  name: string
+  publisher: string
+  note?: string
+  needs?: string
+  server: McpServerConfig
+  /** Header names with what to put in each (catalog entries). */
+  headerHints?: Record<string, string>
+  /** Variables or headers to ask for one field each (registry entries). */
+  inputs?: McpDraftInput[]
+}
+
+/** A catalog entry as a draft for the review form. */
+export function catalogDraft(entry: McpCatalogEntry, workspace: string | null): McpDraft {
+  return {
+    key: entry.id,
+    name: entry.name,
+    publisher: entry.publisher,
+    ...(entry.note ? { note: entry.note } : {}),
+    ...(entry.needs ? { needs: entry.needs } : {}),
+    server: catalogServer(entry, workspace),
+    ...(entry.headers ? { headerHints: entry.headers } : {})
+  }
+}
+
+/** The form key a draft input's value is held under. */
+export function draftInputKey(input: Pick<McpDraftInput, 'kind' | 'name'>): string {
+  return `${input.kind}:${input.name}`
+}
+
+/**
+ * Put the values typed for a draft's inputs into its env or headers. A required one
+ * is always kept (so an empty one is reported), an optional one only when filled in.
+ */
+export function applyDraftInputs(
+  server: McpServerConfig,
+  inputs: readonly McpDraftInput[],
+  values: Readonly<Record<string, string>>
+): McpServerConfig {
+  if (!inputs.length) return server
+  const pick = (kind: 'env' | 'header'): Record<string, string> | undefined => {
+    const out: Record<string, string> = {}
+    for (const i of inputs.filter((x) => x.kind === kind)) {
+      const v = (values[draftInputKey(i)] ?? '').trim()
+      if (v || i.required) out[i.name] = v
+    }
+    return Object.keys(out).length ? out : undefined
+  }
+  const rest: McpServerConfig = { ...server }
+  delete rest.env
+  delete rest.headers
+  const env = pick('env')
+  const headers = pick('header')
+  return { ...rest, ...(env ? { env } : {}), ...(headers ? { headers } : {}) }
+}
+
+/** The first `{name}` placeholder in a string, or null. */
+function placeholderIn(s: string): string | null {
+  return /\{[^{}\s]+\}/.exec(s)?.[0] ?? null
+}
+
 /** An id not taken by `taken`: the id itself, else `<id>-2`, `<id>-3`, ... */
 export function freeServerId(id: string, taken: readonly string[]): string {
   const base = sanitizeServerId(id) || 'server'
@@ -158,12 +236,16 @@ export function serverProblem(server: McpServerConfig, taken: readonly string[])
   const remote = server.transport === 'http' || server.transport === 'sse'
   if (remote) {
     if (!/^https?:\/\/\S+$/i.test(server.url ?? '')) return 'Enter the server’s http:// or https:// URL.'
+    const inUrl = placeholderIn(server.url ?? '')
+    if (inUrl) return `Replace ${inUrl} in the URL.`
     const empty = Object.entries(server.headers ?? {}).find(([, v]) => !v.trim())
     if (empty) return `Fill in the ${empty[0]} header.`
   } else {
     if (!server.command.trim()) return 'Enter the command to run.'
     if ((server.args ?? []).some((a) => a.includes(PROJECT_PLACEHOLDER))) return `Replace ${PROJECT_PLACEHOLDER} with a folder path.`
     if ((server.args ?? []).some((a) => !a.trim())) return 'Fill in every argument, or remove the empty ones.'
+    const inArgs = (server.args ?? []).map(placeholderIn).find((x) => x !== null)
+    if (inArgs) return `Replace ${inArgs} in the arguments.`
     const empty = Object.entries(server.env ?? {}).find(([, v]) => !v.trim())
     if (empty) return `Fill in the ${empty[0]} variable.`
   }

@@ -1,22 +1,23 @@
-import type { ToolKind } from './tools'
-
 /**
- * "Allow for run" consent, scoped to a conversation and to a tool KIND.
+ * "Allow for run" consent, scoped to a conversation and to a grant key (see grantKey
+ * in approval.ts: usually the tool KIND; its own key for the tools that start
+ * unattended work; per server for MCP).
  *
  * - Conversation-scoped: the grant survives across the turns of one chat, so the
  *   user isn't re-prompted for the same kind on every message. (A "run" is a single
  *   turn; without this the consent would evaporate the moment the turn ended.)
- * - Per-kind: granting one kind (say, a file write) does NOT silently also allow
- *   network egress or MCP — each kind needs its own "Allow for run". This keeps a
- *   single approval from quietly widening into a blanket pass for the whole run.
+ * - Per-key: granting one kind (say, a file write) does NOT silently also allow
+ *   network egress, MCP, or scheduling and spawning — each needs its own "Allow for
+ *   run". This keeps a single approval from quietly widening into a blanket pass for
+ *   the whole run.
  *
  * Deliberately in-memory only: this is a soft, session-lived grant, not a saved
  * preference. A fresh app launch starts clean. The PERSISTENT path is an
  * "Always allow" permission rule (see store.addPermissionRule).
  */
 export interface ConversationOverride {
-  /** Tool kinds the user has granted "Allow for run" on, this conversation. */
-  kinds: Set<ToolKind>
+  /** Grant keys (see grantKey) the user has granted "Allow for run" on, this conversation. */
+  grants: Set<string>
   /**
    * Conscious consent to keep running UNCONFINED shell — only relevant on a host
    * with no enforceable sandbox, where a generic kind grant is not enough (see
@@ -55,7 +56,7 @@ const store = new Map<string, ConversationOverride>()
 /** A fresh, empty override — for a headless run, or a conversation with no grants yet. */
 export function emptyOverride(): ConversationOverride {
   return {
-    kinds: new Set(),
+    grants: new Set(),
     unsandboxedShell: false,
     networkHosts: new Set(),
     shellNetworkDecided: false,
@@ -74,7 +75,7 @@ export function overrideForConversation(conversationId: string | undefined): Con
   const stored = conversationId ? store.get(conversationId) : undefined
   if (!stored) return emptyOverride()
   return {
-    kinds: new Set(stored.kinds),
+    grants: new Set(stored.grants),
     unsandboxedShell: stored.unsandboxedShell,
     networkHosts: new Set(stored.networkHosts),
     shellNetworkDecided: stored.shellNetworkDecided,
@@ -91,12 +92,13 @@ export function overrideForConversation(conversationId: string | undefined): Con
  */
 export function grantConversationOverride(
   conversationId: string | undefined,
-  kind: ToolKind,
+  /** The call's grant key (see grantKey). */
+  key: string,
   unsandboxedShell: boolean
 ): void {
   if (!conversationId) return
   const cur = store.get(conversationId) ?? emptyOverride()
-  cur.kinds.add(kind)
+  cur.grants.add(key)
   if (unsandboxedShell) cur.unsandboxedShell = true
   store.set(conversationId, cur)
 }

@@ -1084,6 +1084,93 @@ describe('local permission gate (gateLocal)', () => {
     expect(ends).toEqual(['aborted'])
   })
 
+  it('overlaps a batch of reads, but sends each to its gate in order once the one before has passed', async () => {
+    for (const f of ['a.txt', 'b.txt', 'c.txt']) writeFileSync(join(ws, f), `body of ${f}`)
+    const sink = { system: '', messages: [] as ChatMessage[][] }
+    const provider = recordingProvider(
+      [
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'a.txt' } } },
+          { type: 'tool_call', call: { id: 'r2', name: 'read_file', arguments: { path: 'b.txt' } } },
+          { type: 'tool_call', call: { id: 'r3', name: 'list_dir', arguments: { path: '.' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Done.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      sink
+    )
+    const log: string[] = []
+    let enterThird!: () => void
+    const thirdEntered = new Promise<void>((r) => (enterThird = r))
+    let firstOverlapped: boolean | undefined
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'read them',
+      signal: new AbortController().signal,
+      gateLocal: async (name, _kind, args, run) => {
+        const what = String(args.path)
+        log.push(`gate ${name} ${what}`)
+        if (what === 'a.txt') {
+          // Runs, then holds its result until the third call reached its gate: a batch
+          // run one call at a time would never get there first.
+          const out = await run()
+          firstOverlapped = await Promise.race([
+            thirdEntered.then(() => true),
+            new Promise<boolean>((r) => setTimeout(() => r(false), 1500))
+          ])
+          return out
+        }
+        if (what === 'b.txt') {
+          // Stands in for an approval prompt: nothing after it reaches a gate until it
+          // is answered, and its own read waits for the answer too.
+          await new Promise((r) => setTimeout(r, 20))
+          log.push('answered b.txt')
+          return run()
+        }
+        enterThird()
+        return run()
+      }
+    })
+    expect(log).toEqual(['gate read_file a.txt', 'gate read_file b.txt', 'answered b.txt', 'gate list_dir .'])
+    expect(firstOverlapped).toBe(true)
+    const toolMsgs = sink.messages[1].filter((m) => m.role === 'tool')
+    expect(toolMsgs.map((m) => m.toolCallId)).toEqual(['r1', 'r2', 'r3'])
+    expect(toolMsgs[0].content).toContain('body of a.txt')
+    expect(toolMsgs[1].content).toContain('body of b.txt')
+    expect(toolMsgs[2].content).toContain('c.txt')
+  })
+
+  it('sends no later read of a batch to its gate once the run is stopped', async () => {
+    const provider = scriptedProvider([
+      [
+        { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'a.txt' } } },
+        { type: 'tool_call', call: { id: 'r2', name: 'read_file', arguments: { path: 'b.txt' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'Done.' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const controller = new AbortController()
+    const gated: string[] = []
+    const ends: string[] = []
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'read both',
+      signal: controller.signal,
+      gateLocal: async (_name, _kind, args, run) => {
+        gated.push(String(args.path))
+        controller.abort()
+        return run()
+      },
+      onEnd: (e) => ends.push(e.status)
+    })
+    expect(gated).toEqual(['a.txt'])
+    expect(ends).toEqual(['aborted'])
+  })
+
   it('without a gate, refuses a credential-file read and still runs ordinary reads', async () => {
     writeFileSync(join(ws, '.env'), 'APP_MODE=ungated-dotenv-marker')
     writeFileSync(join(ws, 'note.txt'), 'ordinary note')

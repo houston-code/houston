@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { UseTerminals } from '../hooks/useTerminals'
 import { TerminalView } from './TerminalView'
+import { PanelResizer, type PanelSize } from './PanelResizer'
 
 /**
  * The integrated terminal panel: a resizable strip docked above the composer with
@@ -17,14 +18,18 @@ export function TerminalDock({
   controller,
   visible,
   onResizeMouseDown,
+  size,
   onClose
 }: {
   controller: UseTerminals
   visible: boolean
   onResizeMouseDown: (e: React.MouseEvent) => void
+  /** The panel's height, for the resizer's keyboard and double-click controls. */
+  size?: PanelSize
   onClose: () => void
 }): JSX.Element {
   const { tabs, activeId, addTab, closeTab, setActive } = controller
+  const tabRefs = useRef(new Map<string, HTMLButtonElement>())
   // Guards against double-spawning while the async addTab is in flight.
   const opening = useRef(false)
 
@@ -78,29 +83,57 @@ export function TerminalDock({
         }
       }}
     >
-      <div
+      <PanelResizer
         className="terminal-dock__resizer"
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Resize terminal panel"
+        label="Resize terminal panel"
+        edge="top"
+        size={size}
         onMouseDown={onResizeMouseDown}
       />
       <div className="terminal-dock__tabs">
-        <div className="terminal-dock__tablist" role="tablist">
-          {tabs.map((t) => (
+        <div className="terminal-dock__tablist" role="tablist" aria-label="Terminals">
+          {tabs.map((t, idx) => (
             <div
               key={t.id}
-              role="tab"
-              aria-selected={t.id === activeId}
               className={`terminal-tab${t.id === activeId ? ' terminal-tab--active' : ''}${
                 t.exited ? ' terminal-tab--exited' : ''
               }`}
               onClick={() => setActive(t.id)}
             >
-              <span className="terminal-tab__title">
+              <button
+                type="button"
+                role="tab"
+                ref={(el) => {
+                  if (el) tabRefs.current.set(t.id, el)
+                  else tabRefs.current.delete(t.id)
+                }}
+                id={`terminal-tab-${t.id}`}
+                aria-selected={t.id === activeId}
+                aria-controls={`terminal-pane-${t.id}`}
+                tabIndex={t.id === activeId ? 0 : -1}
+                className="terminal-tab__title"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setActive(t.id)
+                }}
+                onKeyDown={(e) => {
+                  // Arrow keys move between tabs (roving tabindex), per the ARIA tabs pattern.
+                  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return
+                  e.preventDefault()
+                  const n = tabs.length
+                  const next =
+                    e.key === 'Home'
+                      ? tabs[0]
+                      : e.key === 'End'
+                        ? tabs[n - 1]
+                        : tabs[(idx + (e.key === 'ArrowRight' ? 1 : n - 1)) % n]
+                  setActive(next.id)
+                  tabRefs.current.get(next.id)?.focus()
+                }}
+              >
                 {t.title}
                 {t.exited ? ' (exited)' : ''}
-              </span>
+              </button>
               <button
                 type="button"
                 className="terminal-tab__close"
@@ -144,6 +177,9 @@ export function TerminalDock({
             <div
               key={t.id}
               className="terminal-dock__pane"
+              role="tabpanel"
+              id={`terminal-pane-${t.id}`}
+              aria-labelledby={`terminal-tab-${t.id}`}
               style={{ display: t.id === activeId ? 'block' : 'none' }}
             >
               {/* "active" drives focus/refit; gate on panel visibility so a hidden

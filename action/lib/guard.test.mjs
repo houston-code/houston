@@ -10,9 +10,11 @@ import {
   containsSecret,
   fixBranchName,
   implementBranchName,
+  hasPersistedCredential,
   logSafe,
   secretValues,
-  snapshotGitControl
+  snapshotGitControl,
+  withEncodedForms
 } from './guard.mjs'
 
 function repo() {
@@ -35,6 +37,21 @@ describe('snapshotGitControl', () => {
     mkdirSync(join(dir, '.git/info'), { recursive: true })
     writeFileSync(join(dir, '.git/info/attributes'), '* filter=evil\n')
     expect(changedControlFiles(before, snapshotGitControl(dir))).toEqual(['config', 'hooks/pre-commit', 'info/attributes'])
+  })
+
+  it('catches a commondir redirect, a config.worktree, and anything under worktrees/', () => {
+    const dir = repo()
+    const before = snapshotGitControl(dir)
+    writeFileSync(join(dir, '.git/commondir'), '/tmp/evil-git\n')
+    writeFileSync(join(dir, '.git/config.worktree'), '[core]\n\tfsmonitor = touch /tmp/pwned\n')
+    mkdirSync(join(dir, '.git/worktrees/x'), { recursive: true })
+    writeFileSync(join(dir, '.git/worktrees/x/commondir'), '/tmp/evil-git\n')
+    expect(changedControlFiles(before, snapshotGitControl(dir))).toEqual([
+      'commondir',
+      'config.worktree',
+      'worktrees',
+      'worktrees/x/commondir'
+    ])
   })
 
   it('catches the hooks directory swapped for a symlink, without following it', () => {
@@ -61,6 +78,21 @@ describe('secrets', () => {
     expect(values).not.toContain('/usr/bin')
     expect(values).not.toContain('abc')
     expect(values).not.toContain('/tmp/agent.sock')
+  })
+
+  it('adds the base64 form a persisted checkout credential takes', () => {
+    const values = withEncodedForms(['ghs_123456789'])
+    const encoded = Buffer.from('x-access-token:ghs_123456789').toString('base64')
+    expect(values).toEqual(['ghs_123456789', encoded])
+    expect(containsSecret(`AUTHORIZATION: basic ${encoded}`, values)).toBe(true)
+  })
+
+  it('finds a persisted http extraheader in git config output', () => {
+    expect(hasPersistedCredential('http.https://github.com/.extraheader AUTHORIZATION: basic abc\n')).toBe(true)
+    expect(hasPersistedCredential('core.bare false\nhttp.extraheader AUTHORIZATION: basic abc\n')).toBe(true)
+    expect(hasPersistedCredential('HTTP.https://github.com/.EXTRAHEADER x\n')).toBe(true)
+    expect(hasPersistedCredential('')).toBe(false)
+    expect(hasPersistedCredential('http.https://github.com/.sslverify true\nuser.name extraheader\n')).toBe(false)
   })
 
   it('finds a secret anywhere in the text', () => {

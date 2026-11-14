@@ -21,6 +21,25 @@ describe('ImageViewer', () => {
     expect(screen.getByRole('img')).toHaveAttribute('src', IMAGES[0].src)
   })
 
+  it('switches between fit and actual size by button, click, or keys', () => {
+    render(<ImageViewer images={IMAGES} initialIndex={0} onClose={vi.fn()} />)
+    const toggle = screen.getByRole('button', { name: 'Actual size' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('img')).toHaveClass('image-viewer__image--actual')
+    fireEvent.keyDown(dialog(), { key: '0' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.keyDown(dialog(), { key: '+' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('img'))
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(screen.getByRole('img'))
+    // Stepping to another image starts it fitted again.
+    fireEvent.keyDown(dialog(), { key: 'ArrowRight' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  })
+
   it('steps with the arrow buttons and keys, wrapping at both ends', () => {
     render(<ImageViewer images={IMAGES} initialIndex={0} onClose={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Next image' }))

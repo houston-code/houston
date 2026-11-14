@@ -38,6 +38,7 @@ import {
   mergeRunningTotals,
   needsGeneratedTitle,
   organizeConversation,
+  reorderConversations,
   otherConversationsInWorktree,
   detachConversationWorktree,
   setConversationError,
@@ -811,6 +812,30 @@ describe('listConversations metadata cache', () => {
 
     deleteConversation(a.id)
     expect(titles()).toEqual(['Second chat'])
+  })
+
+  it('sets, cleans, and clears a chat’s labels without touching its recency or order', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    reorderConversations([c.id])
+    const before = listConversations().find((x) => x.id === c.id)!
+    organizeConversation(c.id, { labels: ['l-a', 'l-b', 'l-a', 7 as unknown as string, ''] })
+    const labeled = listConversations().find((x) => x.id === c.id)!
+    expect(labeled.labels).toEqual(['l-a', 'l-b'])
+    expect(labeled.updatedAt).toBe(before.updatedAt)
+    expect(labeled.order).toBe(0)
+    organizeConversation(c.id, { labels: [] })
+    const cleared = listConversations().find((x) => x.id === c.id)!
+    expect('labels' in cleared).toBe(false)
+    expect(JSON.parse(readFileSync(file(c.id), 'utf8'))).not.toHaveProperty('labels')
+  })
+
+  it('lists only well-formed label ids from a hand-edited chat file', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const raw = JSON.parse(readFileSync(file(c.id), 'utf8')) as Record<string, unknown>
+    writeFileSync(file(c.id), JSON.stringify({ ...raw, labels: ['ok', { bad: true }, 'ok', 3] }))
+    expect(listConversations().find((x) => x.id === c.id)?.labels).toEqual(['ok'])
+    writeFileSync(file(c.id), JSON.stringify({ ...raw, labels: 'nope' }))
+    expect(listConversations().find((x) => x.id === c.id)).not.toHaveProperty('labels')
   })
 
   it('reuses a chat whose file has not changed instead of reading it again', () => {

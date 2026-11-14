@@ -1,5 +1,6 @@
 import { promises as fs, realpathSync, lstatSync, readlinkSync } from 'node:fs'
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path'
+import { removeEmptyDirContained, removeFileContained, writeFileContained } from './safeWrite'
 import type {
   AgentQuestion,
   ChatMessage,
@@ -92,6 +93,7 @@ import {
 } from './untrusted'
 import type { FetchedDocument } from './webfetch'
 import { fetchUrlAsDocument, truncationNote } from './webfetch'
+import { OutputTee, SPILL_MAX_BYTES, spillNote, type SpillResult } from './shellSpill'
 import { stripAnsi } from './loopback'
 import { assertNoRedactedValues, findSecret } from './redact'
 import {
@@ -302,6 +304,12 @@ export interface ToolContext {
   /** Max bytes of a single shell command's output kept in a tool result (context guard). */
   shellOutputMaxBytes?: number
   /**
+   * Save a foreground run_shell command's whole output when its result had to be
+   * clamped, redacted, and say where (see shellSpill.ts). Null when the run's spill
+   * budget is spent or the write failed. Unset: clamped output is not kept.
+   */
+  spillShellOutput?: (output: string, truncatedNote?: string) => Promise<SpillResult | null>
+  /**
    * The run's watch over exec-capable git state (hooks, fsmonitor, filter drivers, …)
    * that a shell command could plant for git to run outside the sandbox later (injected
    * by the loop, shared with writable subagents; see gitGuard.ts). run_shell and the
@@ -434,6 +442,8 @@ export interface ToolDef {
 }
 
 const MAX_GLOB_RESULTS = 200
+/** The marker CappedOutput leaves where a stream's middle was dropped while running. */
+const STREAM_TRUNCATION_MARKER = /\n\[\.\.\. \d+ bytes truncated \.\.\.\]\n/
 /** Largest notebook read_file parses and renders; JSON has to be held whole to parse. */
 const MAX_NOTEBOOK_BYTES = 64 * 1024 * 1024
 
@@ -938,8 +948,7 @@ const writeFile: ToolDef = {
         )
       }
     }
-    await fs.mkdir(dirname(abs), { recursive: true })
-    await fs.writeFile(abs, content, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, content, { display: rel })
     ctx.fileTracker?.noteWrite(abs, content)
     const done = `Wrote ${Buffer.byteLength(content)} bytes to ${rel}.`
     const feedback = previous === null ? '' : rewriteFeedback(previous, content)
@@ -1128,7 +1137,7 @@ const editFile: ToolDef = withShellCwdHint({
     const sensitive = isSensitivePath(rel)
     const result = resolveEdit(data, oldStr, newStr, replaceAll, { showCandidate: !sensitive })
     assertNoRedactedValues(data, result.content)
-    await fs.writeFile(abs, result.content, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, result.content, { display: rel })
     ctx.fileTracker?.noteWrite(abs, result.content)
     const n = result.replacements
     const fuzzy = result.strategy === 'exact' ? '' : ` [matched via ${result.strategy}]`
@@ -1241,7 +1250,7 @@ const multiEdit: ToolDef = withShellCwdHint({
       data = result.content
     })
     assertNoRedactedValues(original, data)
-    await fs.writeFile(abs, data, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, data, { display: rel })
     ctx.fileTracker?.noteWrite(abs, data)
     const done = `Edited ${rel} (${edits.length} edit${edits.length === 1 ? '' : 's'}).`
     if (flagged.length === 0) return done
@@ -1323,7 +1332,7 @@ const notebookEdit: ToolDef = withShellCwdHint({
       cellType: typeof args.cell_type === 'string' ? args.cell_type : undefined
     })
     const serialized = serializeNotebook(updated)
-    await fs.writeFile(abs, serialized, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, serialized, { display: rel })
     ctx.fileTracker?.noteWrite(abs, serialized)
     const what =
       mode === 'insert'
@@ -1397,19 +1406,21 @@ async function snapshotForRollback(paths: string[]): Promise<Map<string, FileSna
  * thing is to say so — silently swallowing it would report "nothing was changed"
  * over a working tree that had in fact been changed.
  */
-async function rollbackTo(
+function rollbackTo(
+  roots: string[],
   snaps: Map<string, FileSnapshot>,
   createdDirs: string[]
-): Promise<string[]> {
+): string[] {
   const failures: string[] = []
+  // Every restore goes through the contained helpers, like the commit itself: a
+  // rollback runs after an arbitrary delay and must not follow a symlink planted on
+  // the path in the meantime any more than the patch could.
   for (const [abs, snap] of snaps) {
     try {
       if (snap.data === null) {
-        await fs.rm(abs, { force: true })
+        removeFileContained(roots, abs)
       } else {
-        await fs.mkdir(dirname(abs), { recursive: true })
-        await fs.writeFile(abs, snap.data)
-        if (snap.mode !== undefined) await fs.chmod(abs, snap.mode)
+        writeFileContained(roots, abs, snap.data, { mode: snap.mode })
       }
     } catch (e) {
       failures.push(`${abs} (${(e as Error).message})`)
@@ -1417,13 +1428,11 @@ async function rollbackTo(
   }
   // Directories this call brought into being hold nothing but files it just wrote
   // and has now removed, so they go too — otherwise a rolled-back patch would leave
-  // a scaffold of empty directories behind. Deepest first, and best-effort.
+  // a scaffold of empty directories behind. Deepest first, and best-effort. Each is
+  // removed only while empty (rmdir, never a recursive rm): anything else that
+  // appeared in one since stays, rather than being deleted on the patch's say-so.
   for (const dir of [...createdDirs].sort((a, b) => b.length - a.length)) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true })
-    } catch {
-      // An empty directory left behind is untidy, not incorrect; never fail on it.
-    }
+    removeEmptyDirContained(roots, dir)
   }
   return failures
 }
@@ -1547,21 +1556,22 @@ const applyPatch: ToolDef = {
       // Phase 2: commit. Deletes first so a Move's delete can't clobber its target.
       for (const change of staged.filter((c) => c.content === null)) {
         failing = change
-        await fs.rm(change.abs, { force: true })
+        removeFileContained(roots, change.abs, { display: change.rel })
       }
       for (const change of staged.filter((c) => c.content !== null)) {
         failing = change
-        // mkdir reports the topmost directory it had to create, which is exactly what
-        // a rollback needs to remove; undefined means they all already existed.
-        const created = await fs.mkdir(dirname(change.abs), { recursive: true })
-        if (created) createdDirs.push(created)
-        await fs.writeFile(change.abs, change.content as string, 'utf8')
-        if (change.mode !== undefined) await fs.chmod(change.abs, change.mode)
+        // The helper reports every directory it had to create, which is exactly what
+        // a rollback needs to remove.
+        writeFileContained(roots, change.abs, change.content as string, {
+          display: change.rel,
+          mode: change.mode,
+          createdDirs
+        })
       }
     } catch (e) {
       const where = failing ? ` on ${failing.rel}` : ''
       const relOf = new Map(staged.map((c) => [c.abs, c.rel]))
-      const restoreFailures = (await rollbackTo(snaps, createdDirs)).map(
+      const restoreFailures = rollbackTo(roots, snaps, createdDirs).map(
         (f) => f.replace(/^(\S+)/, (abs) => relOf.get(abs) ?? abs)
       )
       if (restoreFailures.length > 0) {
@@ -1811,8 +1821,8 @@ const NETWORK_ERROR_RE =
 /** The hint appended to a network-looking failure that ran without network access. */
 export const NETWORK_BLOCKED_HINT =
   '[note: this command ran in the sandbox WITHOUT network access. If it failed because it needs the network ' +
-  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user grants network for the rest ' +
-  'of the run by choosing "Allow for run" on a shell command\'s approval prompt. Then retry.]'
+  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user is asked whether shell ' +
+  'commands may reach the network for this chat. Retry only once they have allowed it.]'
 
 /**
  * {@link NETWORK_BLOCKED_HINT} for a headless run, which has no approval prompt to
@@ -1826,7 +1836,7 @@ export const HEADLESS_NETWORK_BLOCKED_HINT =
   'the network.]'
 
 /**
- * Replaces the network hint on a full-auto command that failed offline once the user
+ * Replaces the network hint on a command that failed offline once the user
  * has answered the shell-network question it raised (see offerShellNetwork in loop.ts).
  */
 export const SHELL_NETWORK_GRANTED_NOTE =
@@ -2235,6 +2245,17 @@ const runShell: ToolDef = {
     // Route through the persistent session only when the backend's shell can run the
     // bash prelude (`cd`/env threading). On a cmd.exe fallback it can't, so run directly.
     const session = ctx.shellSession && backendSupportsSession() ? ctx.shellSession : undefined
+    // Every chunk also goes to a capped copy, so a result clamped below can point at
+    // the whole output on disk (see shellSpill.ts).
+    const tee = ctx.spillShellOutput ? new OutputTee() : null
+    const watch = ctx.onShellOutput
+    const onOutput =
+      tee || watch
+        ? (chunk: string): void => {
+            tee?.push(chunk)
+            watch?.(chunk)
+          }
+        : undefined
     const result = session
       ? await runInSession({
           command,
@@ -2245,7 +2266,7 @@ const runShell: ToolDef = {
           egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal,
-          ...(ctx.onShellOutput ? { onOutput: ctx.onShellOutput } : {}),
+          ...(onOutput ? { onOutput } : {}),
           run: runSandboxed
         })
       : await runSandboxed({
@@ -2257,7 +2278,7 @@ const runShell: ToolDef = {
           egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal,
-          ...(ctx.onShellOutput ? { onOutput: ctx.onShellOutput } : {})
+          ...(onOutput ? { onOutput } : {})
         })
     const segments: string[] = []
     if (result.stdout) segments.push(result.stdout.trimEnd())
@@ -2268,8 +2289,18 @@ const runShell: ToolDef = {
     const parts: string[] = []
     // Clamp first; the network-error scan then runs over the bounded text (errors
     // surface in stderr, which the both-ends clamp keeps), not a multi-MB blob.
-    const body = clampToolResult(segments.join('\n'), ctx.shellOutputMaxBytes)
+    const joined = segments.join('\n')
+    const body = clampToolResult(joined, ctx.shellOutputMaxBytes)
     if (body) parts.push(body)
+    // Clamped here, or already cut while streaming (the per-stream memory cap): the
+    // middle is gone from the result, so say where the whole output is.
+    if (tee && ctx.spillShellOutput && (body !== joined || STREAM_TRUNCATION_MARKER.test(joined))) {
+      const spilled = await ctx.spillShellOutput(
+        tee.text(),
+        tee.overflowed ? `[output cut at ${SPILL_MAX_BYTES} bytes]` : undefined
+      )
+      if (spilled) parts.push(spillNote(spilled))
+    }
     if (result.timedOut) parts.push(shellTimeoutHint(timeoutMs ?? DEFAULT_TIMEOUT_MS))
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
     // A `cd` carries over to later commands, but file tools keep resolving from the

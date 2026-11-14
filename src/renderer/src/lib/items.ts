@@ -358,6 +358,23 @@ function planFromArgs(args: Record<string, unknown>): PlanPayload {
 
 const nowIso = (): string => new Date().toISOString()
 
+/** The notice a run the user stopped ends on, live and after a reload. */
+export const STOPPED_NOTICE = 'Stopped.'
+
+/**
+ * A "retrying (N/6)" line put in the past tense once the run is over, so it doesn't
+ * read as still retrying above how the run ended.
+ */
+function settleRetry(items: DisplayItem[], ending: string): DisplayItem[] {
+  const last = items[items.length - 1]
+  if (last?.kind !== 'notice' || !last.retry) return items
+  const n = last.retry.attempt
+  return [
+    ...items.slice(0, -1),
+    { ...last, text: `⟳ Connection issue: tried ${n} more time${n === 1 ? '' : 's'}${ending}`, retry: undefined }
+  ]
+}
+
 /**
  * The index of the user message that started the turn ending before `end`: the
  * latest one that is neither steered into a running turn nor the compaction summary.
@@ -432,6 +449,7 @@ function retractStreamed(items: DisplayItem[], textChars: number, reasoningChars
   if (!text && !reasoning) return items.slice(0, -1)
   const kept: AssistantItem = { kind: 'assistant', id: last.id, text, streaming: true }
   if (reasoning) kept.reasoning = reasoning
+  if (last.at) kept.at = last.at
   return [...items.slice(0, -1), kept]
 }
 
@@ -820,26 +838,16 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         it.kind === 'elicitation' && !it.outcome ? { ...it, outcome: 'cancelled' as const } : it
       )
       if (e.stopReason === 'aborted') {
-        return [...finalized, { kind: 'notice', id: nextId(), text: 'Stopped.', tone: 'info' }]
+        // Stopped while a "retrying (3/6)" line was the last thing shown: the retries
+        // are over too.
+        return [...settleRetry(finalized, '.'), { kind: 'notice', id: nextId(), text: STOPPED_NOTICE, tone: 'info' }]
       }
       return finalized
     }
     case 'error': {
-      const finalized = finalizeStreaming(items)
       // The run gave up while a "retrying (6/6)" line was the last thing shown: say
       // the retries are over, so it doesn't read as still in progress above the error.
-      const last = finalized[finalized.length - 1]
-      const settled =
-        last?.kind === 'notice' && last.retry
-          ? [
-              ...finalized.slice(0, -1),
-              {
-                ...last,
-                text: `⟳ Connection issue: tried ${last.retry.attempt} more time${last.retry.attempt === 1 ? '' : 's'}, then stopped.`,
-                retry: undefined
-              }
-            ]
-          : finalized
+      const settled = settleRetry(finalizeStreaming(items), ', then stopped.')
       return [...settled, { kind: 'notice', id: nextId(), text: e.message, tone: 'error' }]
     }
     case 'usage': {
@@ -1000,7 +1008,7 @@ export function itemsFromMessages(
         r.reason === 'limit'
           ? { kind: 'notice', id: nextId(), text: `⚠ ${runEndNoticeText(r)}`, tone: 'error' }
           : r.reason === 'aborted' || !r.message
-            ? { kind: 'notice', id: nextId(), text: 'Stopped.', tone: 'info' }
+            ? { kind: 'notice', id: nextId(), text: STOPPED_NOTICE, tone: 'info' }
             : { kind: 'notice', id: nextId(), text: r.message, tone: 'error' }
       )
     }

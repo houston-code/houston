@@ -45,6 +45,16 @@
   --sig-input-text: var(--sig-input);
   --sig-error-text: #e8737b;
   --sig-unread-text: var(--sig-unread);
+  /* Chat label colors, as text on a sidebar row: each clears 4.5:1 on the row's
+     sidebar, hover and selected surfaces (themeContrast.test.ts). */
+  --label-blue: #6ea8ff;
+  --label-green: #5cc98a;
+  --label-orange: #f0954a;
+  --label-purple: #b39dff;
+  --label-red: #f27a80;
+  --label-teal: #4fc4c4;
+  --label-yellow: #e0bf45;
+  --label-pink: #f283c0;
   /* Shadows read as noise on a near-black canvas — Graphite stays flat. */
   --shadow-card: none;
   --shadow-accent: none;
@@ -105,6 +115,14 @@
   --sig-input-text: #8a5c00;
   --sig-error-text: var(--danger);
   --sig-unread-text: #1d4ed8;
+  --label-blue: #1d4ed8;
+  --label-green: #17703a;
+  --label-orange: #a3420b;
+  --label-purple: #6a3dc4;
+  --label-red: #b42318;
+  --label-teal: #0e6767;
+  --label-yellow: #805a00;
+  --label-pink: #a3285f;
   /* Soft warm elevation for cards, and an indigo glow for accent buttons/bubbles. */
   --shadow-card: 0 1px 3px rgba(47, 40, 30, 0.08);
   --shadow-accent: 0 4px 12px rgba(79, 70, 229, 0.25);
@@ -770,6 +788,13 @@ body.is-resizing {
 .section + .section {
   margin-top: 8px;
 }
+/* A section's rows, and one row with the spawned chats under it. */
+.section__rows,
+.conv-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
 /* The insertion line marking where a dragged chat will land within a section. */
 .conv-drop-line {
   height: 2px;
@@ -799,6 +824,19 @@ body.is-resizing {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+.section-head__toggle:disabled {
+  cursor: default;
+}
+/* A group's name being renamed, in the toggle's place. */
+.section-head__rename {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px;
+  color: var(--text-dim);
 }
 .section-head__chevron {
   font-size: 9px;
@@ -856,6 +894,105 @@ body.is-resizing {
 }
 .section-head--pinned .section-head__name {
   color: var(--warn);
+}
+.section__clear-filter {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-style: normal;
+  cursor: pointer;
+  text-decoration: underline;
+}
+/* A section header's label filter: shown on hover or focus, and always while on.
+   Transparent rather than hidden, so it stays in the tab order and its menu can
+   hand focus back to it. */
+.section-head__labels {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  opacity: 0;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.section-head:hover .section-head__labels,
+.section-head:focus-within .section-head__labels,
+.section-head__labels--on,
+.section-head__labels[aria-expanded='true'] {
+  opacity: 1;
+}
+.section-head__labels:hover {
+  color: var(--text);
+  background: var(--bg-input);
+}
+.section-head__labels--on {
+  color: var(--accent);
+}
+.section-head__labels:focus-visible,
+.label-edit__color:focus-visible,
+.label-edit__delete:focus-visible,
+.section__clear-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The label manager: one row per label (color, name, delete). */
+.label-manager {
+  width: 260px;
+}
+.label-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+}
+.label-edit__color,
+.label-edit__delete {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.label-edit__color .label-dot {
+  width: 12px;
+  height: 12px;
+}
+.label-edit__color:hover,
+.label-edit__delete:hover {
+  background: var(--bg-hover);
+}
+.label-edit__delete:hover {
+  color: var(--danger);
+}
+.label-edit__name {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 3px 6px;
+}
+.label-edit__name:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.menu__inline-edit {
+  padding: 4px 6px;
 }
 .section__empty {
   color: var(--text-dim);
@@ -1004,6 +1141,101 @@ body.is-resizing {
   flex: 1;
   min-width: 0;
 }
+/* The title line: the title truncates first, so the label chips stay readable. */
+.conv__title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.conv__title-row .conv__title {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.conv__labels {
+  display: inline-flex;
+  gap: 3px;
+  flex-shrink: 0;
+  max-width: 55%;
+  overflow: hidden;
+}
+/* A label chip: the label's color as text, with a tinted border and wash. */
+.label-chip {
+  --label: var(--text-dim);
+  display: inline-block;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--label) 45%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--label) 10%, transparent);
+  color: var(--label);
+  font-size: 10px;
+  line-height: 14px;
+}
+.label-chip--more {
+  flex-shrink: 0;
+}
+.label-dot {
+  --label: var(--text-dim);
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--label);
+  vertical-align: 0;
+  flex-shrink: 0;
+}
+[data-color='blue'] {
+  --label: var(--label-blue);
+}
+[data-color='green'] {
+  --label: var(--label-green);
+}
+[data-color='orange'] {
+  --label: var(--label-orange);
+}
+[data-color='purple'] {
+  --label: var(--label-purple);
+}
+[data-color='red'] {
+  --label: var(--label-red);
+}
+[data-color='teal'] {
+  --label: var(--label-teal);
+}
+[data-color='yellow'] {
+  --label: var(--label-yellow);
+}
+[data-color='pink'] {
+  --label: var(--label-pink);
+}
+/* The row's open button: no button chrome of its own, the row draws the surface
+   and its focus ring. */
+button.conv__main {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: inherit;
+}
+button.conv__main:focus-visible {
+  outline: none;
+}
+.conv:has(> button.conv__main:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.conv__title,
+.conv__meta {
+  display: block;
+}
 .conv__title {
   font-size: 13px;
   line-height: 1.3;
@@ -1029,8 +1261,11 @@ body.is-resizing {
   position: relative;
   flex-shrink: 0;
 }
+/* The row and group ⋯ buttons show on hover, while keyboard focus is in the row or
+   header, and while their own menu is open. Transparent rather than hidden, so they
+   stay in the tab order and a closing menu can hand focus back to them. */
 .conv__action {
-  visibility: hidden;
+  opacity: 0;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -1041,8 +1276,15 @@ body.is-resizing {
   border-radius: 5px;
 }
 .conv:hover .conv__action,
-.section-head:hover .conv__action {
-  visibility: visible;
+.conv:focus-within .conv__action,
+.section-head:hover .conv__action,
+.section-head:focus-within .conv__action,
+.conv__action[aria-expanded='true'] {
+  opacity: 1;
+}
+.conv__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .conv__action:hover {
   color: var(--text);
@@ -1456,9 +1698,11 @@ body.is-resizing {
   cursor: row-resize;
   z-index: 2;
 }
-.terminal-dock__resizer:hover {
+.terminal-dock__resizer:hover,
+.terminal-dock__resizer:focus-visible {
   background: var(--accent);
   opacity: 0.4;
+  outline: none;
 }
 .terminal-dock__tabs {
   display: flex;
@@ -1494,6 +1738,21 @@ body.is-resizing {
 .terminal-tab--active {
   color: var(--text);
   border-color: var(--accent);
+}
+/* The title is the tab's button; it inherits the pill's look. */
+.terminal-tab__title {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.terminal-tab__title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 .terminal-tab--exited .terminal-tab__title {
   opacity: 0.6;
@@ -3075,6 +3334,15 @@ body.is-resizing {
 .msg--user {
   margin-bottom: var(--msg-turn-gap);
 }
+/* In compact density that room is smaller than the buttons, which then hang over the
+   top of the next row. Each row paints over the ones before it, so raise the message
+   being hovered or tabbed through: its buttons stay on top and take the click. */
+.msg--assistant:hover,
+.msg--assistant:focus-within,
+.msg--user:hover,
+.msg--user:focus-within {
+  z-index: 1;
+}
 .msg--user {
   display: flex;
   flex-wrap: wrap;
@@ -3287,12 +3555,14 @@ body.is-resizing {
   color: var(--accent);
   border-color: var(--accent);
 }
+/* Every hover button under a message (copy, rewind, mark unread, fork, retry) shows
+   while it has keyboard focus, so tabbing to one never lands on an invisible control. */
+.msg__copy:focus-visible {
+  opacity: 1;
+}
 /* The rewind button sits just left of the copy button on the user's own turns. */
 .msg__copy--user.msg__rewind {
   right: 26px;
-}
-.msg__rewind:focus-visible {
-  opacity: 1;
 }
 .msg--user:hover .msg__rewind:disabled {
   opacity: 0.4;
@@ -3313,12 +3583,6 @@ body.is-resizing {
 .msg__mark-unread + .msg__fork {
   left: 52px;
 }
-.msg__fork:focus-visible {
-  opacity: 1;
-}
-.msg__mark-unread:focus-visible {
-  opacity: 1;
-}
 .msg__mark-unread:hover {
   color: var(--sig-unread);
   border-color: var(--sig-unread);
@@ -3336,9 +3600,6 @@ body.is-resizing {
 }
 .msg__mark-unread + .msg__fork + .msg__retry {
   left: 78px;
-}
-.msg__retry:focus-visible {
-  opacity: 1;
 }
 /* Where unseen output starts: a labelled rule in the unread blue, above the first
    reply the user hasn't seen. */
@@ -3845,6 +4106,30 @@ h6.md-h {
 .tool-row__head--clickable:hover {
   background: var(--bg-hover);
 }
+/* The row's disclosure button: its status, verb and target, laid out as part of the
+   head. It looks like nothing of its own; focus rings the whole head. */
+.tool-row__toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tool-row__toggle:focus-visible {
+  outline: none;
+}
+.tool-row__head--clickable:has(> .tool-row__toggle:focus-visible) {
+  outline: 2px solid var(--accent);
+  /* Inside the card, which clips anything past its edge. */
+  outline-offset: -2px;
+}
 .tool-row__glyph {
   font-size: 11px;
   width: 13px;
@@ -4196,7 +4481,7 @@ button.finding__head:focus-visible,
   flex-basis: 100%;
   margin: 0;
   font-size: 0.85em;
-  color: var(--text-muted, #888);
+  color: var(--text-dim);
 }
 /* The optional "why not" that rides along with a denial, so the agent is told what
    to do instead. Full-width under the verdict buttons. */
@@ -4212,7 +4497,7 @@ button.finding__head:focus-visible,
   border-radius: 6px;
 }
 .tool-row__approval-reason::placeholder {
-  color: var(--text-muted, #888);
+  color: var(--text-dim);
 }
 .tool-row__approval-reason:focus-visible {
   outline: 2px solid var(--accent, #6aa9ff);
@@ -4470,6 +4755,29 @@ button.finding__head:focus-visible,
   object-fit: contain;
   border-radius: 8px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+.image-viewer__image--fit {
+  cursor: zoom-in;
+}
+/* Actual size: the image at 100%, scrolled inside the stage. */
+.image-viewer__scroller {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+.image-viewer__scroller:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.image-viewer__image--actual {
+  display: block;
+  max-width: none;
+  max-height: none;
+  margin: 0 auto;
+  cursor: zoom-out;
 }
 .image-viewer__arrow {
   flex: none;
@@ -5038,8 +5346,12 @@ pre.diff {
   transition: background 0.12s ease;
 }
 .preview-dock__resizer:hover::after,
+.preview-dock__resizer:focus-visible::after,
 body.is-resizing .preview-dock__resizer::after {
   background: var(--accent);
+}
+.preview-dock__resizer:focus-visible {
+  outline: none;
 }
 .preview-dock__header {
   display: flex;
@@ -5059,6 +5371,7 @@ body.is-resizing .preview-dock__resizer::after {
   color: var(--text);
 }
 .preview-dock__close {
+  flex-shrink: 0;
   border: none;
   background: transparent;
   color: var(--text-dim);
@@ -5185,7 +5498,7 @@ body.is-resizing .preview-dock__resizer::after {
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-dim);
   font: inherit;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -5218,6 +5531,12 @@ body.is-resizing .preview-dock__resizer::after {
 }
 .preview-dock__input--error {
   border-color: var(--danger, #e5534b);
+}
+.preview-dock__add-error {
+  margin: 0;
+  padding: 0 8px 8px;
+  font-size: 12px;
+  color: var(--danger);
 }
 
 /* ---- Background tasks: title-bar count + the dock's Tasks tab ---- */
@@ -5294,8 +5613,15 @@ body.is-resizing .preview-dock__resizer::after {
 .dock-tabs {
   display: flex;
   gap: 2px;
+  /* A narrow dock scrolls its tabs rather than wrapping their labels. */
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 2px;
 }
 .dock-tabs__tab {
+  flex-shrink: 0;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -6007,13 +6333,52 @@ body.is-resizing .preview-dock__resizer::after {
 .changes-file__path {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-family: var(--mono);
 }
-.changes-file__old {
+/* A path on one line: the folder (and a rename's old path) gives way first, with an
+   ellipsis; the file name keeps its width unless it alone is too long. */
+.path-label {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.path-label__old,
+.path-label__dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.path-label__old {
   color: var(--text-dim);
+  white-space: pre;
+}
+.path-label__base {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A, M, D, R or U before the path: what happened to the file. */
+.changes-file__status {
+  flex-shrink: 0;
+  width: 1.4em;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text-dim);
+}
+.changes-file__status--added,
+.changes-file__status--untracked {
+  color: var(--ok);
+}
+.changes-file__status--deleted {
+  color: var(--danger);
+}
+.changes-file__status--renamed {
+  color: var(--accent);
 }
 .changes-file__body {
   padding-bottom: 6px;
@@ -6421,6 +6786,7 @@ body.is-resizing .preview-dock__resizer::after {
 }
 /* Flat filter results show the full relative path in mono, like the @-mention list. */
 .files-row__name--path {
+  display: flex;
   font-family: var(--mono);
   font-size: 12px;
 }
@@ -6787,6 +7153,9 @@ body.is-resizing .preview-dock__resizer::after {
   border-radius: 8px;
   font-size: 13px;
   text-align: center;
+  /* A long path or JSON blob in an error breaks onto the next line instead of being
+     clipped at the row's edge. */
+  overflow-wrap: anywhere;
 }
 .notice--error {
   background: rgba(255, 107, 107, 0.12);
@@ -7358,6 +7727,23 @@ body:has(.coachmark) .get-started {
   max-height: 240px;
   border-radius: 8px;
   border: 1px solid var(--border);
+}
+/* A thumbnail opens the image full size in the viewer. */
+.bubble__image-open {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  max-width: 100%;
+  border-radius: 8px;
+  cursor: zoom-in;
+}
+.bubble__image-open .bubble__image {
+  display: block;
+}
+.bubble__image-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---- @-mention autocomplete ---- */
@@ -8994,7 +9380,7 @@ body:has(.coachmark) .get-started {
   font-size: 12px;
 }
 
-/* ---- MCP Servers: add from catalog, paste JSON ---- */
+/* ---- MCP Servers: recommended, registry, paste JSON ---- */
 .mcp-add {
   display: flex;
   flex-direction: column;
@@ -9097,6 +9483,36 @@ body:has(.coachmark) .get-started {
 }
 .mcp-paste__problems {
   padding-left: 18px;
+}
+.mcp-registry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mcp-registry__search {
+  display: flex;
+  gap: 8px;
+}
+.mcp-registry__search input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+.mcp-registry__search input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+.mcp-registry__link {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.mcp-registry__unsupported {
+  font-size: 11px;
 }
 .mcp-paste {
   display: flex;
@@ -9661,8 +10077,12 @@ body:has(.coachmark) .get-started {
   transition: background 0.12s ease;
 }
 .plan-panel__resizer:hover::after,
+.plan-panel__resizer:focus-visible::after,
 body.is-resizing .plan-panel__resizer::after {
   background: var(--accent);
+}
+.plan-panel__resizer:focus-visible {
+  outline: none;
 }
 .plan-panel__head {
   flex: 0 0 auto;

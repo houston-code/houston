@@ -111,7 +111,7 @@ export interface AnthropicCreateClient {
     create(
       body: Record<string, unknown>,
       options?: { signal?: AbortSignal }
-    ): Promise<{ content: unknown; usage?: unknown }>
+    ): Promise<{ content: unknown; usage?: unknown; stop_reason?: unknown }>
   }
 }
 
@@ -150,21 +150,35 @@ export async function anthropicWebSearch(
   client: AnthropicCreateClient,
   req: ProviderWebSearchRequest
 ): Promise<ProviderWebSearchResult> {
-  const res = await client.messages.create(
-    {
-      model: req.model,
-      max_tokens: NATIVE_SEARCH_MAX_TOKENS,
-      system: NATIVE_SEARCH_INSTRUCTIONS,
-      messages: [{ role: 'user', content: nativeSearchPrompt(req.query) }],
-      tools: [ANTHROPIC_WEB_SEARCH_TOOL]
-    },
-    { signal: req.signal }
-  )
-  // Reported before parsing: a search-tool error throws below, but the reply was billed.
-  const usage = anthropicSearchUsage(res.usage)
-  if (usage) req.onUsage?.(usage)
-  return parseAnthropicSearch(res.content, req.maxResults)
+  const messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = [
+    { role: 'user', content: nativeSearchPrompt(req.query) }
+  ]
+  const blocks: unknown[] = []
+  for (let resumed = 0; ; resumed++) {
+    const res = await client.messages.create(
+      {
+        model: req.model,
+        max_tokens: NATIVE_SEARCH_MAX_TOKENS,
+        system: NATIVE_SEARCH_INSTRUCTIONS,
+        messages: [...messages],
+        tools: [ANTHROPIC_WEB_SEARCH_TOOL]
+      },
+      { signal: req.signal }
+    )
+    // Reported before parsing: a search-tool error throws below, but the reply was billed.
+    const usage = anthropicSearchUsage(res.usage)
+    if (usage) req.onUsage?.(usage)
+    if (Array.isArray(res.content)) blocks.push(...(res.content as unknown[]))
+    // `pause_turn`: the API paused a long server-tool turn. Sending its content back as
+    // the assistant turn lets it pick up where it stopped; a bounded number of times.
+    if (res.stop_reason !== 'pause_turn' || resumed >= MAX_SEARCH_RESUMES) break
+    messages.push({ role: 'assistant', content: res.content })
+  }
+  return parseAnthropicSearch(blocks, req.maxResults)
 }
+
+/** How many times a paused search turn is resumed before its results so far are used. */
+export const MAX_SEARCH_RESUMES = 2
 
 /**
  * Whether a Claude host is the first-party API, where the search tool is

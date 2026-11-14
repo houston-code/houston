@@ -182,14 +182,29 @@ describe('subagent rows', () => {
   it('opens the full transcript, copies it as Markdown, and closes on Escape', async () => {
     const { container } = render(<ToolGroup items={[row()]} onApprove={vi.fn()} />)
     fireEvent.click(head(container))
-    fireEvent.click(screen.getByRole('button', { name: 'Open transcript' }))
+    const opener = screen.getByRole('button', { name: 'Open transcript' })
+    opener.focus()
+    fireEvent.click(opener)
     const dialog = screen.getByRole('dialog', { name: /Subagent transcript/ })
+    // Drawn over the whole window, not inside the row (whose card would clip it).
+    expect(container.contains(dialog)).toBe(false)
+    expect(dialog.closest('.tool-row')).toBeNull()
     expect(within(dialog).getByText('Subagent ag1 · Trace the download flow')).toBeInTheDocument()
     expect(within(dialog).getByText('Step 1')).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Copy as Markdown' }))
     await vi.waitFor(() => expect(copyText).toHaveBeenCalledWith(expect.stringContaining('## Trace the download flow')))
     fireEvent.keyDown(dialog, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    // Focus goes back to the button that opened it.
+    expect(document.activeElement).toBe(opener)
+  })
+
+  it('says the report was copied', async () => {
+    const { container } = render(<ToolGroup items={[row()]} onApprove={vi.fn()} />)
+    fireEvent.click(head(container))
+    fireEvent.click(screen.getByRole('button', { name: 'Copy report' }))
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument()
+    expect(copyText).toHaveBeenCalledWith('## Download flow\n\n- `sendFile` is unsafe')
   })
 
   it('links a review row to what each of its agents did', () => {

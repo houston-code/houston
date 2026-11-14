@@ -1,5 +1,6 @@
 import type { RenderNode } from './toolDisplay'
 import { parseAt } from './messageMeta'
+import { STOPPED_NOTICE } from './items'
 
 /**
  * What the transcript tells a screen reader that sighted users get from the layout:
@@ -50,6 +51,11 @@ export function spokenText(markdown: string): string {
  */
 export function liveAnnouncement(last: RenderNode | undefined, announceReplies: boolean): string {
   if (!last) return ''
+  // A stopped or failed turn ends with a notice saying so.
+  if (last.kind === 'notice') {
+    if (last.item.text === STOPPED_NOTICE) return 'The run was stopped.'
+    return last.item.tone === 'error' ? `Error: ${last.item.text}` : ''
+  }
   if (last.kind === 'toolgroup') {
     if (last.items.some((i) => i.status === 'awaiting-approval')) return 'The agent is waiting for your approval.'
     if (announceReplies) {

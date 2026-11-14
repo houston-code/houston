@@ -259,23 +259,46 @@ const FETCHING_COMMAND =
   /(?:^|[\s;&|(`$])(?:curl|wget|xh|https?|aria2c|lynx|w3m|links|nc|ncat|gh|git\s+(?:clone|fetch|pull|ls-remote)|(?:npm|pnpm|yarn)\s+(?:view|info)|pip3?\s+download)(?=[\s;&|)`]|$)/
 
 /**
- * The first tool call in the conversation whose output may carry someone else's
- * text: a network or MCP tool, a subagent (which may have browsed), or a shell
- * command that fetches. Null when there is none. Such text can try to plant an
- * instruction that fires in a later, unrelated session, so once any is in the
- * conversation every memory write asks the user first, in every approval mode.
- * Read from the whole log rather than this run alone: what an earlier turn fetched
- * is still in the model's context.
+ * Tools that start a session which later reports back into this conversation (a
+ * spawned session's summary, quoted in an automated note). Count as a source only once
+ * answered: the call still in flight (the one being gated right now) has started
+ * nothing yet, and counting it would make every launch look tainted by itself.
+ */
+const REPORTING_TOOLS: ReadonlySet<string> = new Set(['spawn_session', 'propose_session'])
+
+/**
+ * The first source in the conversation of text that may be someone else's: a tool
+ * call whose output may carry it (a network or MCP tool, a subagent, which may have
+ * browsed, a session that reports back, or a shell command that fetches), or a
+ * message marked as carrying it (`taintSource`: a note quoting spawned sessions'
+ * reports, or a session seeded by a chat that was itself tainted). Null when there is
+ * none. Such text can try to plant an instruction that fires in a later, unrelated
+ * session, so once any is in the conversation every memory write asks the user first,
+ * in every approval mode, and so does launching a session from it (see
+ * `taintedLaunch` in approval.ts). Read from the whole log rather than this run alone:
+ * what an earlier turn fetched is still in the model's context.
  */
 export function memoryTaintSource(
   messages: readonly ChatMessage[],
-  kindOf: (name: string) => ToolKind | undefined
+  kindOf: (name: string) => ToolKind | undefined,
+  /**
+   * A reporting call to leave out: the proposal being started is what is asking, and
+   * its own report can't have arrived yet.
+   */
+  exceptCallId?: string
 ): string | null {
+  let answered: Set<string> | undefined
+  const isAnswered = (id: string): boolean => {
+    answered ??= new Set(messages.flatMap((m) => (m.role === 'tool' && m.toolCallId ? [m.toolCallId] : [])))
+    return answered.has(id)
+  }
   for (const m of messages) {
+    if (typeof m.taintSource === 'string' && m.taintSource) return m.taintSource
     for (const call of m.toolCalls ?? []) {
       const kind = kindOf(call.name)
       if (kind === 'network' || kind === 'mcp' || call.name.startsWith('mcp__')) return call.name
       if (call.name === 'dispatch_agent' || call.name === 'dispatch_writable_agent') return call.name
+      if (REPORTING_TOOLS.has(call.name) && call.id !== exceptCallId && isAnswered(call.id)) return call.name
       if (
         call.name === 'run_shell' &&
         typeof call.arguments.command === 'string' &&

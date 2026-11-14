@@ -752,7 +752,9 @@ describe('SettingsModal', () => {
         }
       })
       expect(screen.getByText('Applying adds 1 rule and changes the order.')).toBeInTheDocument()
-      expect(screen.getByText(/Rule 2: Never applies: rule 1/)).toBeInTheDocument()
+      // The deny is never shadowed (it wins wherever it sits); `git *` is redundant after `*`.
+      expect(screen.queryByText(/Rule 2: /)).toBeNull()
+      expect(screen.getByText(/Rule 3: Redundant: rule 1/)).toBeInTheDocument()
       fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
       // Back to the list, in the new order.
       expect([...document.querySelectorAll<HTMLInputElement>('.rule__match')].map((i) => i.value)).toEqual(['*', 'rm *', 'git *'])
@@ -790,7 +792,7 @@ describe('SettingsModal', () => {
   describe('rule order', () => {
     const ordered = [
       { action: 'allow' as const, tool: 'run_shell', match: '*' },
-      { action: 'deny' as const, tool: 'run_shell', match: 'rm *' },
+      { action: 'ask' as const, tool: 'run_shell', match: 'rm *' },
       { action: 'ask' as const, tool: 'web_fetch', match: 'https://a.example/*' }
     ]
     const patterns = (): string[] =>
@@ -811,6 +813,20 @@ describe('SettingsModal', () => {
       expect(screen.getByText('Never applies: rule 1 (allow run_shell *) matches first.')).toBeInTheDocument()
       expect(screen.getByText('Approves every run_shell call without asking.')).toBeInTheDocument()
       expect(screen.getByText('2 rules need attention.')).toBeInTheDocument()
+    })
+
+    it('warns that a deny covering an allow wins wherever it sits', () => {
+      installApi()
+      renderModal({
+        permissionRules: [
+          { action: 'allow' as const, tool: 'run_shell', match: 'rm *' },
+          { action: 'deny' as const, tool: 'run_shell', match: '*' }
+        ]
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      expect(
+        screen.getByText('Never applies: rule 2 (deny run_shell *) matches it, and a deny always wins.')
+      ).toBeInTheDocument()
     })
 
     it('moves a rule up and down, and the warning follows the new order', async () => {

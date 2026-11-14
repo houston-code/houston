@@ -166,7 +166,10 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
           role: 'user',
           content: turn.text,
           invokedAs: turn.invokedAs,
-          at: new Date().toISOString()
+          at: new Date().toISOString(),
+          // The model wrote this text; when the chat it came from had read outside text,
+          // say so, or the new session would trust it as the user's own words.
+          ...(input.taintSource ? { taintSource: input.taintSource } : {})
         }
         const seeded: ChatMessage[] = [...(input.history ?? []), userMessage]
         deps.seedMessages(conv.id, seeded)

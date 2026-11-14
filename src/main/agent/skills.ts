@@ -70,6 +70,11 @@ export interface Skill extends SkillSpecFields {
    * that can't call it.
    */
   requiresTools?: readonly string[]
+  /**
+   * False when the frontmatter says `user-invocable: false`: the model can still
+   * load it, but the clients don't offer it as a `/name` slash command.
+   */
+  userInvocable?: false
 }
 
 /**
@@ -215,13 +220,17 @@ async function loadSkillsFrom(
     if (!spec) continue
     const { problems: _problems, ...parsed } = spec
     const skillDir = display(e.name)
+    const invocable = fields['user-invocable']
     const resources = await collectSkillResources(join(dir, e.name), skillDir)
     skills.push({
       ...parsed,
       path: `${skillDir}/SKILL.md`,
       ...(root ? { root } : {}),
       ...(resources.length ? { resources } : {}),
-      ...(source ? { source } : {})
+      ...(source ? { source } : {}),
+      ...(typeof invocable === 'string' && /^(false|no|off|0)$/i.test(invocable.trim())
+        ? { userInvocable: false as const }
+        : {})
     })
   }
   return skills
@@ -369,15 +378,20 @@ export function skillCommandTemplate(name: string): string {
 /**
  * Slash commands for the loaded skills (`/<skill-name>`), for the command menus.
  * Only names that are safe as a command (letters, digits, `-`, `_`) are offered, and
- * never a built-in skill's name.
+ * never a built-in skill's name or one whose frontmatter says `user-invocable: false`
+ * (the model can still load that one with the skill tool).
  */
 export function skillCommands(skills: readonly Skill[]): Command[] {
   const reserved = new Set(BUILTIN_SKILLS.map((s) => s.name.toLowerCase()))
   return skills
-    .filter((s) => /^[A-Za-z0-9][\w-]{0,63}$/.test(s.name) && !reserved.has(s.name.toLowerCase()))
+    .filter(
+      (s) =>
+        s.userInvocable !== false && /^[A-Za-z0-9][\w-]{0,63}$/.test(s.name) && !reserved.has(s.name.toLowerCase())
+    )
     .map((s) => ({
       name: s.name,
       description: s.description.slice(0, 80),
+      args: '[task]',
       template: skillCommandTemplate(s.name),
       autoRun: true,
       skill: true

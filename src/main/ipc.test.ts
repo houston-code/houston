@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '@shared/constants'
@@ -905,6 +905,108 @@ describe('capability listing IPC (skills / agents)', () => {
 })
 
 /**
+ * A custom command's per-turn options reach the run only through main's own record:
+ * the renderer gets a token, never the rules, and a token works once.
+ */
+describe('custom command preparation IPC', () => {
+  registerIpc()
+  const handler = (channel: string): ((...args: unknown[]) => unknown) => {
+    const fn = h.handlers.get(channel)
+    if (!fn) throw new Error(`no handler registered for ${channel}`)
+    return fn
+  }
+  const from = { sender: { id: 5 } }
+  type Prepared = { ok: true; turn: { text: string; invokedAs: unknown; grant?: string }; notes: string[] } | { ok: false; error: string }
+  const prepare = (ws: string, name: string, args = ''): Promise<Prepared> =>
+    handler(IPC.commandPrepare)(from, ws, name, args, `/${name}${args ? ` ${args}` : ''}`) as Promise<Prepared>
+  const runReq = (): Record<string, unknown> => h.runAndDrain.mock.calls.at(-1)![2] as Record<string, unknown>
+
+  let ws: string
+  beforeEach(() => {
+    vi.clearAllMocks()
+    h.activeRun.mockReturnValue(null)
+    ws = realpathSync(mkdtempSync(join(tmpdir(), 'houston-ipc-cmd-')))
+    mkdirSync(join(ws, '.houston/commands'), { recursive: true })
+    writeFileSync(join(ws, '.houston/commands/quick.md'), '---\ndescription: Quick\neffort: low\nallowed-tools: glob\n---\nLook at $ARGUMENTS')
+  })
+  afterEach(() => {
+    updateSettings({ trustedFolders: [] })
+    rmSync(ws, { recursive: true, force: true })
+  })
+
+  it("runs the turn on the command's effort, ignoring an untrusted folder's tools, and keeps the chat's settings", async () => {
+    const res = await prepare(ws, 'quick', 'the logs')
+    if (!res.ok) throw new Error(res.error)
+    expect(res.turn.text).toBe('Look at the logs')
+    expect(res.notes.join('\n')).toMatch(/ignoring allowed-tools in \/quick/)
+    expect(JSON.stringify(res)).not.toContain('"glob"')
+    const conv = createConversation({ workspace: ws, providerId: 'p', model: 'm' })
+    await handler(IPC.agentStart)(from, {
+      runId: 'r1', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', reasoningEffort: 'high',
+      userText: res.turn.text, invokedAs: res.turn.invokedAs, commandGrant: res.turn.grant
+    })
+    expect(runReq()).toMatchObject({ reasoningEffort: 'low' })
+    expect(runReq().turnAllowRules).toBeUndefined()
+    expect(getConversation(conv.id)?.reasoningEffort).toBe('high')
+    // Spent: sending the same token again runs on the chat's own effort.
+    await handler(IPC.agentStart)(from, {
+      runId: 'r2', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', reasoningEffort: 'high',
+      userText: 'again', commandGrant: res.turn.grant
+    })
+    expect(runReq()).toMatchObject({ reasoningEffort: 'high' })
+    deleteConversation(conv.id)
+  })
+
+  it("pre-approves a trusted folder's command tools, for a chat in that folder only", async () => {
+    const { loadProjectConfig } = await import('./agent/projectConfig')
+    const { elevatedHash } = await loadProjectConfig(ws)
+    updateSettings({ trustedFolders: [{ path: ws, decision: 'trusted', hash: elevatedHash, decidedAt: 1 }] })
+    const res = await prepare(ws, 'quick')
+    if (!res.ok) throw new Error(res.error)
+    expect(res.turn.grant).toMatch(/^[0-9a-f]{32}$/)
+    const other = createConversation({ workspace: tmpdir(), providerId: 'p', model: 'm' })
+    await handler(IPC.agentStart)(from, {
+      runId: 'r3', conversationId: other.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: 'x', commandGrant: res.turn.grant
+    })
+    expect(runReq().turnAllowRules).toBeUndefined()
+    const again = await prepare(ws, 'quick')
+    if (!again.ok) throw new Error(again.error)
+    const conv = createConversation({ workspace: ws, providerId: 'p', model: 'm' })
+    await handler(IPC.agentStart)(from, {
+      runId: 'r4', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: again.turn.text, commandGrant: again.turn.grant
+    })
+    expect(runReq().turnAllowRules).toEqual([{ action: 'allow', tool: 'glob', match: '*' }])
+    deleteConversation(conv.id)
+    deleteConversation(other.id)
+  })
+
+  it('refuses a command send that races a live run rather than queue it without its options', async () => {
+    const res = await prepare(ws, 'quick')
+    if (!res.ok) throw new Error(res.error)
+    const conv = createConversation({ workspace: ws, providerId: 'p', model: 'm' })
+    h.activeRun.mockReturnValue('live')
+    const send = vi.fn()
+    updateSettings({ desktopNotifications: false })
+    configureHasKey(() => false)
+    await handler(IPC.agentStart)({ sender: { id: 5, send, isDestroyed: () => false } }, {
+      runId: 'r5', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: res.turn.text, commandGrant: res.turn.grant
+    })
+    expect(h.runAndDrain).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledWith(IPC.agentEvent, expect.objectContaining({ type: 'error', message: expect.stringContaining('once the current turn ends') }))
+    expect(getConversation(conv.id)?.queuedInput).toBeUndefined()
+    deleteConversation(conv.id)
+  })
+
+  it('says so for a command that is gone, and lists skills with the custom commands', async () => {
+    expect(await prepare(ws, 'nope')).toEqual({ ok: false, error: 'No command /nope in this folder any more.' })
+    mkdirSync(join(ws, '.houston/skills/pdf'), { recursive: true })
+    writeFileSync(join(ws, '.houston/skills/pdf/SKILL.md'), '---\nname: pdf\ndescription: PDFs\n---\nbody')
+    const listed = (await handler(IPC.commandsList)(from, ws)) as Array<{ name: string; skill?: boolean }>
+    expect(listed.find((c) => c.name === 'pdf')).toMatchObject({ skill: true })
+  })
+})
+
+/**
  * agentStart/agentRetry accept the approval policy from the renderer. An unknown value
  * would fail OPEN downstream (needsApproval auto-approves any non-'ask' policy;
  * isBlockedByPlan stops guarding), so the handlers must validate it at the boundary —
@@ -1343,3 +1445,35 @@ describe('rate-limit state', () => {
   })
 })
 
+/**
+ * The Files panel's list, preview and Open handlers take the workspace from the
+ * renderer. Only a project the app already knows (a recent project or a chat's
+ * folder) is served, so a renderer bug can't browse, read or open an arbitrary folder.
+ */
+describe('workspace file handlers', () => {
+  registerIpc()
+  const call = (ch: string, ...args: unknown[]): unknown => h.handlers.get(ch)!({ sender: {} }, ...args)
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-ipc-files-'))
+    writeFileSync(join(dir, 'a.txt'), 'hello')
+    updateSettings({ recentWorkspaces: [] })
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('refuses a folder the app does not know', async () => {
+    expect(await call(IPC.workspaceListDir, dir, '')).toEqual([])
+    expect(await call(IPC.workspaceReadFile, dir, 'a.txt')).toEqual({
+      kind: 'error',
+      message: 'That folder is not an open project.'
+    })
+    expect(call(IPC.workspaceOpenPath, dir, 'a.txt')).toEqual({ ok: false, error: 'That folder is not an open project.' })
+    expect(await call(IPC.workspaceListDir, 42, '')).toEqual([])
+  })
+
+  it('serves a recent project', async () => {
+    updateSettings({ recentWorkspaces: [dir] })
+    expect(await call(IPC.workspaceListDir, dir, '')).toEqual([{ name: 'a.txt', path: 'a.txt', isDirectory: false }])
+    expect(await call(IPC.workspaceReadFile, dir, 'a.txt')).toMatchObject({ kind: 'text', text: 'hello' })
+  })
+})

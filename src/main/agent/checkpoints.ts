@@ -1,10 +1,11 @@
-import { constants as fsConstants, promises as fs, readFileSync } from 'node:fs'
+import { promises as fs, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { isAbsolute, join, relative } from 'node:path'
 import type { ChatMessage } from '@shared/agent'
 import { isRewindableTurn } from '@shared/rewind'
 import { writeFileAtomic } from '../atomic-write'
 import { resolveInRoots } from './tools'
+import { removeFileContained, writeFileContained } from './safeWrite'
 import { parsePatch } from './apply-patch'
 import { getUserDataDir } from '../userData'
 
@@ -463,33 +464,29 @@ async function readCapped(
 /**
  * Write `content` back (decoding base64 when `binary`), or delete the file when
  * `content` is null. Recreates parent dirs.
+ *
+ * Goes through the contained-write helpers (./safeWrite), which re-derive containment
+ * within `roots` at the moment they act: the callers' own containment check ran
+ * earlier, and a sandboxed shell can swap a folder on the path for a symlink to
+ * somewhere outside the project in between. A delete removes a symlink as a link,
+ * never its target.
  */
-async function applyState(
+function applyState(
+  roots: string[],
   abs: string,
   content: string | null,
   binary = false,
   opts: { noFollow?: boolean } = {}
-): Promise<void> {
+): void {
   if (content === null) {
-    // rm on a symlink removes the link, never its target.
-    await fs.rm(abs, { force: true })
+    removeFileContained(roots, abs)
   } else {
-    await fs.mkdir(dirname(abs), { recursive: true })
     // `noFollow` (the rewind path, which refuses a symlinked file outright): a symlink
-    // swapped in at the file itself between that check and this write fails the open
-    // rather than redirecting the write. Not defined on Windows, where it is 0. The
+    // at the file itself is refused, even one swapped in after that check. The
     // single-turn revert keeps following a symlink inside the roots, as it always has.
-    const flags =
-      fsConstants.O_WRONLY |
-      fsConstants.O_CREAT |
-      fsConstants.O_TRUNC |
-      (opts.noFollow ? (fsConstants.O_NOFOLLOW ?? 0) : 0)
-    const handle = await fs.open(abs, flags, 0o666)
-    try {
-      await handle.writeFile(binary ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf8'))
-    } finally {
-      await handle.close()
-    }
+    writeFileContained(roots, abs, binary ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf8'), {
+      followSymlink: !opts.noFollow
+    })
   }
 }
 
@@ -1062,12 +1059,12 @@ export async function restoreCheckpoint(runId: string): Promise<number> {
   for (const [abs, snap] of cp.files) {
     // Re-validate containment at apply time, not just at record time. A path that
     // was inside the roots when snapshotted can be moved OUT of them by a symlink
-    // planted since (e.g. a sandboxed `ln -s /outside ws/sub` on a parent dir), and
-    // applyState writes/removes with raw fs that would follow it. Re-run the same
-    // realpath gate the write tools use and skip anything that now escapes.
+    // planted since (e.g. a sandboxed `ln -s /outside ws/sub` on a parent dir). Re-run
+    // the same realpath gate the write tools use and skip anything that now escapes;
+    // applyState then re-checks again at the write itself, for a swap after this.
     if (!resolveOrNull(cp.roots, abs)) continue
     try {
-      await applyState(abs, snap.before, snap.beforeBinary)
+      applyState(cp.roots, abs, snap.before, snap.beforeBinary)
       snap.reverted = true
       restored++
     } catch {
@@ -1094,7 +1091,7 @@ export async function reapplyCheckpoint(runId: string): Promise<number> {
     // symlink planted since the snapshot must not let a redo write through it.
     if (!resolveOrNull(cp.roots, abs)) continue
     try {
-      await applyState(abs, snap.after, snap.afterBinary)
+      applyState(cp.roots, abs, snap.after, snap.afterBinary)
       snap.reverted = false
       reapplied++
     } catch {
@@ -1236,7 +1233,7 @@ export async function revertRunsGuarded(
       }
       if (!opts.dryRun) {
         try {
-          await applyState(abs, snap.before, snap.beforeBinary, { noFollow: true })
+          applyState(cp.roots, abs, snap.before, snap.beforeBinary, { noFollow: true })
         } catch {
           conflicts.add(displayPath(cp.roots, abs))
           continue
@@ -1291,7 +1288,7 @@ export async function reapplyRunsGuarded(
         continue
       }
       try {
-        await applyState(abs, snap.after, snap.afterBinary, { noFollow: true })
+        applyState(cp.roots, abs, snap.after, snap.afterBinary, { noFollow: true })
         snap.reverted = false
         reapplied.add(abs)
       } catch {
@@ -1380,6 +1377,6 @@ export async function writeChangeState(
   binary = false
 ): Promise<boolean> {
   if (!(await currentState(roots, abs))) return false
-  await applyState(abs, content, binary, { noFollow: true })
+  applyState(roots, abs, content, binary, { noFollow: true })
   return true
 }

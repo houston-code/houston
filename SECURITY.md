@@ -107,7 +107,9 @@ side effects aren't checkpointed. So a shell command that can throw away work in
 project (`git reset --hard`, a forced `git clean`, `git checkout -- .`, `rm -r` of
 anything but build output and dependencies, `find … -delete`, deleting a branch or
 stash, a forced or deleting `git push`) **asks in every mode**, full auto and "Allow
-for run" included; only an explicit `allow` rule for the command skips it. So does a
+for run" included; only an explicit `allow` rule for the command skips it (one that
+is exact for the command, or whose pattern names the destructive part itself, never a
+prefix such as `git push` that merely matches it). So does a
 command that destroys data the project doesn't hold and a checkpoint can't restore: a
 database reset or drop (`prisma migrate reset`, `rails db:drop`, `manage.py flush`,
 `dropdb`, or `DROP`/`TRUNCATE` SQL handed to a database client), removing Docker
@@ -117,12 +119,19 @@ across line continuations), but like the workspace-escape check it is a static
 tripwire: a command assembled from variables isn't seen. A new install starts in full
 auto only where the OS sandbox confines shell commands, and in ask elsewhere.
 
+The optional verify-on-stop command runs outside the tool-approval gate, so it carries
+the same limits itself. A command Houston inferred from the project's files (such as
+`npm test`) runs only where the OS sandbox confines it, or after the user allowed
+unsandboxed shell commands for the run; elsewhere it is skipped with a notice. A
+user-set command gets network exactly when the agent's own shell commands do, since it
+runs project scripts the agent can edit. Each one is followed by the git check below.
+
 The sandbox also leaves the project's `.git` writable, so ordinary git (commits,
 `git config`, upstreams, hook installers) works inside it. What a command could plant
 there for the user's **own** git to run later, outside the sandbox (a hook,
 `core.fsmonitor`, a filter driver or other command-valued setting, a `commondir`
 redirect, or a nested repository registered as a submodule that carries one), is
-**detected after each shell command** rather than blocked: Houston compares those
+**detected after each shell command** (verify-on-stop included) rather than blocked: Houston compares those
 parts of each root's repository with their state before the command and, on a change,
 asks the user to keep or undo it (an unattended run undoes it). Houston's own git
 calls run hardened against all of these regardless. This is detection, not
@@ -143,6 +152,27 @@ if the isolated read fails, the content is withheld. GitHub text and search resu
 score as an attempt stay inline with a warning, because the agent needs their exact text.
 The scoring is a heuristic that can be worded around, so this is defense in depth behind
 the approval flow, not a guarantee that a model never acts on injected text.
+
+Once a conversation has taken in such text (or a subagent's or spawned session's
+report), the actions that would let an injected instruction outlive it **ask in every
+mode**, past allow rules and "Allow for run": saving or deleting a memory, and
+launching a session with `spawn_session` or `schedule_run`, whose first message the
+model writes and the new session would otherwise read as the user's. A session launched
+from such a conversation (a spawned one, each run of such a schedule, a proposal the
+user starts) carries that mark, so its own memory writes and launches ask too. A
+scheduled run never runs under a more autonomous mode than the user's current default,
+whatever mode the chat that created it was in.
+
+"Allow for run" is scoped so one approval doesn't widen into unrelated autonomy: it
+covers a tool kind for the chat, except that `schedule_run`, `spawn_session`, and
+`dispatch_writable_agent` each need their own grant, each MCP server is granted
+separately, and network egress is granted per destination. A writable subagent runs
+shell commands, so dispatching one asks wherever shell asks. A PreToolUse hook's
+`approve` stands in only for the ordinary prompt of the user's own mode or rules: it
+is ignored from a project's hooks, and it never skips a check that asks in every mode
+(a managed or project `ask` rule, a shell command that escapes the project or discards
+work, a credential read or write, a tainted memory write or launch, or unconfined shell
+before the user's per-run consent to it).
 
 Reports that demonstrate a way to **bypass** a control that is supposed to hold (for
 example, escaping the shell sandbox, writing outside the workspace without approval,

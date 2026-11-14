@@ -5,7 +5,7 @@ plain turn, per client config, in the loop's ~4 chars/token estimate
 (compaction.ts estimateTokens + estimateToolTokens). No rules file or git
 snapshot, so this is the floor every request pays.
 
-desktop: total 9256 tokens = system prompt 4213 (16852 chars) + 20 tool schemas 5043 (20169 chars)
-cli: total 8614 tokens = system prompt 3730 (14918 chars) + 20 tool schemas 4884 (19533 chars)
+desktop: total 9255 tokens = system prompt 4212 (16845 chars) + 20 tool schemas 5043 (20169 chars)
+cli: total 8612 tokens = system prompt 3728 (14911 chars) + 20 tool schemas 4884 (19533 chars)
 headless: total 8162 tokens = system prompt 3600 (14398 chars) + 19 tool schemas 4562 (18248 chars)
-plan-mode: total 9999 tokens = system prompt 4505 (18017 chars) + 21 tool schemas 5494 (21976 chars)
+plan-mode: total 9997 tokens = system prompt 4503 (18010 chars) + 21 tool schemas 5494 (21976 chars)

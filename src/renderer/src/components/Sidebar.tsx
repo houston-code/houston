@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type RefObject } from 'react'
 import type { ConversationMeta } from '@shared/agent'
-import type { ChatGroup, SidebarGroupBy } from '@shared/types'
+import type { ChatGroup, ChatLabel, LabelColor, SidebarGroupBy } from '@shared/types'
+import { MAX_LABEL_NAME, cleanLabelName, cycleLabelColor } from '@shared/chatLabels'
 import type { EditorId, EditorStatus } from '@shared/editors'
 import {
   signalLabel,
@@ -11,10 +12,13 @@ import {
   type ChatStatusMap
 } from '@shared/chatStatus'
 import {
-  buildSidebarSections,
+  autoSectionId,
+  childrenShown,
   descendantsOf,
   dropIndexForY,
   reorderedIds,
+  sidebarChatOrder,
+  sidebarSections,
   type SidebarSection
 } from '../lib/chatGroups'
 import { listEditors, fileManagerName } from '../lib/editors'
@@ -32,6 +36,18 @@ import { ShareButton } from './ShareButton'
  * own chat drags and ignore unrelated drags (e.g. files into the composer).
  */
 const CONV_DRAG_MIME = 'application/x-houston-conv-id'
+/**
+ * The section a dragged chat comes from, and for a chat in a group, the automatic
+ * section it would land in once out of it. Carried in the drag's type names, since a
+ * drop target can read those (not the data) while the pointer is over it; hex keeps
+ * them exact, as the browser lowercases type names.
+ */
+const DRAG_FROM_MIME = 'application/x-houston-conv-from-'
+const DRAG_LANDS_MIME = 'application/x-houston-conv-lands-'
+/** Stands for every custom group in {@link DRAG_FROM_MIME}: any group's chat can leave it. */
+const FROM_GROUP = 'group'
+const hexOf = (s: string): string =>
+  Array.from({ length: s.length }, (_, i) => s.charCodeAt(i).toString(16).padStart(4, '0')).join('')
 
 /** Which chats the sidebar shows: live chats ("active") or archived ones. */
 export type ConversationStatusFilter = 'active' | 'archived'
@@ -109,17 +125,312 @@ export interface SidebarProps {
   onToggleParentCollapsed?: (id: string) => void
   /** Toggle a built-in section's collapsed state (not a custom group). */
   onToggleSectionCollapsed: (sectionId: string) => void
+  /** The user's chat labels, in display order. */
+  labels?: ChatLabel[]
+  /** Each section's label filter (label ids), by section id. */
+  labelFilters?: Record<string, string[]>
+  /** Set a section's label filter; an empty list clears it. */
+  onSetSectionLabelFilter?: (sectionId: string, labelIds: string[]) => void
+  /** Replace a chat's labels with `labelIds`. */
+  onSetChatLabels?: (id: string, labelIds: string[]) => void
+  /** Create a label named `name`; resolves to its id. */
+  onCreateLabel?: (name: string) => Promise<string>
+  onUpdateLabel?: (id: string, patch: { name?: string; color?: LabelColor }) => void
+  /** Delete a label, taking it off every chat. */
+  onDeleteLabel?: (id: string) => void
+}
+
+const NO_LABELS: ChatLabel[] = []
+
+/** The known labels among `ids`, in the order the user arranged their labels. */
+function labelsIn(ids: readonly string[], labels: readonly ChatLabel[]): ChatLabel[] {
+  const want = new Set(ids)
+  return labels.filter((l) => want.has(l.id))
+}
+
+/** A label's color swatch. */
+function LabelDot({ color }: { color: LabelColor }): JSX.Element {
+  return <span className="label-dot" data-color={color} aria-hidden="true" />
+}
+
+/** How many label chips a row shows before folding the rest into "+N". */
+const MAX_ROW_CHIPS = 2
+
+/** A chat's label chips: the first few by name, then a "+N" for the rest. */
+function LabelChips({ carried }: { carried: ChatLabel[] }): JSX.Element | null {
+  if (carried.length === 0) return null
+  const shown = carried.slice(0, MAX_ROW_CHIPS)
+  const rest = carried.slice(MAX_ROW_CHIPS)
+  return (
+    <span className="conv__labels">
+      {shown.map((l) => (
+        <span key={l.id} className="label-chip" data-color={l.color} title={l.name}>
+          {l.name}
+        </span>
+      ))}
+      {rest.length > 0 && (
+        <span className="label-chip label-chip--more" title={rest.map((l) => l.name).join(', ')}>
+          +{rest.length}
+        </span>
+      )}
+    </span>
+  )
+}
+
+/** The "Labels" submenu in a chat's ⋯ menu: tick labels on and off, or make a new one. */
+function LabelsMenu({
+  conv,
+  props,
+  onDone
+}: {
+  conv: ConversationMeta
+  props: SidebarProps
+  onDone: () => void
+}): JSX.Element {
+  const labels = props.labels ?? NO_LABELS
+  const [naming, setNaming] = useState(false)
+  const carried = conv.labels ?? []
+  const toggle = (id: string): void =>
+    props.onSetChatLabels?.(conv.id, carried.includes(id) ? carried.filter((x) => x !== id) : [...carried, id])
+  return (
+    <>
+      {labels.map((l) => {
+        const on = carried.includes(l.id)
+        return (
+          // Stays open on click, so several labels can be ticked in one go.
+          <button
+            key={l.id}
+            role="menuitemcheckbox"
+            aria-checked={on}
+            className="menu__item"
+            onClick={() => toggle(l.id)}
+          >
+            {on ? <Icon name="check" /> : <span className="menu__icon-slot" />} <LabelDot color={l.color} /> {l.name}
+          </button>
+        )
+      })}
+      {labels.length === 0 && <div className="menu__note">No labels yet</div>}
+      {naming ? (
+        <div className="menu__inline-edit">
+          <InlineEdit
+            value=""
+            placeholder="Label name"
+            ariaLabel="New label name"
+            maxLength={MAX_LABEL_NAME}
+            onCommit={(name) => {
+              const clean = cleanLabelName(name)
+              setNaming(false)
+              if (!clean || !props.onCreateLabel) return
+              void props.onCreateLabel(clean).then((id) => props.onSetChatLabels?.(conv.id, [...carried, id]))
+              onDone()
+            }}
+            onCancel={() => setNaming(false)}
+          />
+        </div>
+      ) : (
+        props.onCreateLabel && (
+          <button role="menuitem" className="menu__item" onClick={() => setNaming(true)}>
+            <Icon name="plus" /> New label
+          </button>
+        )
+      )}
+    </>
+  )
+}
+
+/** One label in the label manager: its color (click for the next one), name, and delete. */
+function LabelEditorRow({
+  label,
+  autoFocus,
+  onUpdate,
+  onDelete
+}: {
+  label: ChatLabel
+  autoFocus: boolean
+  onUpdate: (id: string, patch: { name?: string; color?: LabelColor }) => void
+  onDelete: (id: string) => void
+}): JSX.Element {
+  const [name, setName] = useState(label.name)
+  useEffect(() => setName(label.name), [label.name])
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (!autoFocus) return
+    ref.current?.focus()
+    ref.current?.select()
+  }, [autoFocus])
+  const commit = (): void => {
+    const clean = cleanLabelName(name)
+    if (!clean) {
+      setName(label.name)
+      return
+    }
+    if (clean !== label.name) onUpdate(label.id, { name: clean })
+  }
+  return (
+    <div className="label-edit">
+      <button
+        type="button"
+        className="label-edit__color"
+        title="Change color"
+        aria-label={`Color of ${label.name}: ${label.color}. Change color`}
+        onClick={() => onUpdate(label.id, { color: cycleLabelColor(label.color) })}
+      >
+        <LabelDot color={label.color} />
+      </button>
+      <input
+        ref={ref}
+        className="label-edit__name"
+        value={name}
+        maxLength={MAX_LABEL_NAME}
+        aria-label={`Name of label ${label.name}`}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commit()
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="label-edit__delete"
+        title="Delete label"
+        aria-label={`Delete label ${label.name}`}
+        onClick={() => onDelete(label.id)}
+      >
+        <Icon name="trash" />
+      </button>
+    </div>
+  )
+}
+
+/** Rename, recolor, delete, and add labels. Opened from the filter menu. */
+function LabelManager({
+  anchorRef,
+  onClose,
+  labels,
+  onCreate,
+  onUpdate,
+  onDelete
+}: {
+  anchorRef: RefObject<HTMLElement | null>
+  onClose: () => void
+  labels: ChatLabel[]
+  onCreate: (name: string) => Promise<string>
+  onUpdate: (id: string, patch: { name?: string; color?: LabelColor }) => void
+  onDelete: (id: string) => void
+}): JSX.Element {
+  // The label just made, so its name field takes focus to be typed over.
+  const [fresh, setFresh] = useState<string | null>(null)
+  return (
+    <Popover
+      anchorRef={anchorRef}
+      onClose={onClose}
+      role="dialog"
+      ariaLabel="Manage labels"
+      // Wider than the filter button's left side of the sidebar, so it opens rightward
+      // (over the main pane) instead of running off the window's left edge.
+      align="left"
+      className="menu label-manager"
+      roving={false}
+    >
+      <div className="menu__label">Labels</div>
+      {labels.length === 0 && (
+        <div className="menu__note">No labels yet. Add one here or from a chat's ⋯ menu.</div>
+      )}
+      {labels.map((l) => (
+        <LabelEditorRow key={l.id} label={l} autoFocus={fresh === l.id} onUpdate={onUpdate} onDelete={onDelete} />
+      ))}
+      <button className="menu__item" onClick={() => void onCreate('New label').then(setFresh)}>
+        <Icon name="plus" /> New label
+      </button>
+    </Popover>
+  )
+}
+
+/** The tag button on a section header: filter the section to chats with any of the ticked labels. */
+function SectionLabelFilter({ section, props }: { section: SidebarSection; props: SidebarProps }): JSX.Element | null {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const labels = props.labels ?? NO_LABELS
+  // Offer the labels the section's chats carry, plus any the filter still names.
+  const offered = labelsIn([...section.labelIds, ...section.labelFilter], labels)
+  if (!props.onSetSectionLabelFilter || props.search || offered.length === 0) return null
+  const active = section.labelFilter
+  const set = (ids: string[]): void => props.onSetSectionLabelFilter?.(section.id, ids)
+  return (
+    <div className="conv__menu-wrap">
+      <button
+        ref={btnRef}
+        className={`section-head__labels${active.length ? ' section-head__labels--on' : ''}`}
+        title="Filter by label"
+        aria-label={`Filter ${section.name} by label${active.length ? `, ${active.length} selected` : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Icon name="tag" size={12} />
+        {active.length > 0 && <span className="section-head__labels-count">{active.length}</span>}
+      </button>
+      {open && (
+        <Popover
+          anchorRef={btnRef}
+          onClose={() => setOpen(false)}
+          role="menu"
+          ariaLabel={`Filter ${section.name} by label`}
+        >
+          <div className="menu__label">Show chats labeled</div>
+          {offered.map((l) => {
+            const on = active.includes(l.id)
+            return (
+              <button
+                key={l.id}
+                role="menuitemcheckbox"
+                aria-checked={on}
+                className="menu__item"
+                onClick={() => set(on ? active.filter((x) => x !== l.id) : [...active, l.id])}
+              >
+                {on ? <Icon name="check" /> : <span className="menu__icon-slot" />} <LabelDot color={l.color} /> {l.name}
+              </button>
+            )
+          })}
+          {active.length > 0 && (
+            <>
+              <div className="menu__sep" />
+              <button
+                role="menuitem"
+                className="menu__item"
+                onClick={() => {
+                  set([])
+                  setOpen(false)
+                }}
+              >
+                <Icon name="close" /> Clear filter
+              </button>
+            </>
+          )}
+        </Popover>
+      )}
+    </div>
+  )
 }
 
 /** A single-line input used for renaming a chat or a group in place. */
 function InlineEdit({
   value,
   onCommit,
-  onCancel
+  onCancel,
+  placeholder,
+  ariaLabel,
+  maxLength
 }: {
   value: string
   onCommit: (next: string) => void
   onCancel: () => void
+  placeholder?: string
+  ariaLabel?: string
+  maxLength?: number
 }): JSX.Element {
   const [text, setText] = useState(value)
   const ref = useRef<HTMLInputElement>(null)
@@ -137,6 +448,9 @@ function InlineEdit({
       ref={ref}
       className="inline-edit"
       value={text}
+      placeholder={placeholder}
+      aria-label={ariaLabel}
+      maxLength={maxLength}
       onChange={(e) => setText(e.target.value)}
       onClick={(e) => e.stopPropagation()}
       onBlur={commit}
@@ -223,6 +537,35 @@ function nestedTag(signal: ChatSignal, n: number): string {
   }
 }
 
+/**
+ * The folded parent's tag tooltip: "1 of 3 spawned sessions under this chat is
+ * running", "All 2 spawned sessions under this chat need input".
+ */
+function nestedTitle(signal: ChatSignal, n: number, total: number): string {
+  const one = n === 1
+  const verb =
+    signal === 'input'
+      ? one
+        ? 'needs input'
+        : 'need input'
+      : signal === 'error'
+        ? 'failed'
+        : signal === 'working'
+          ? one
+            ? 'is running'
+            : 'are running'
+          : one
+            ? 'is unread'
+            : 'are unread'
+  const who =
+    total === 1
+      ? 'The spawned session under this chat'
+      : n === total
+        ? `All ${total} spawned sessions under this chat`
+        : `${n} of ${total} spawned sessions under this chat`
+  return `${who} ${verb}`
+}
+
 function ConvRow({
   conv,
   active,
@@ -237,7 +580,8 @@ function ConvRow({
   signal,
   reason,
   tabStop: isTabStop = true,
-  onFocusRow
+  onFocusRow,
+  dragTypes
 }: {
   conv: ConversationMeta
   active: boolean
@@ -267,9 +611,12 @@ function ConvRow({
   /** This row is the list's one Tab stop; the arrow keys reach the others. */
   tabStop?: boolean
   onFocusRow?: (id: string) => void
+  /** The extra drag types naming where the row is dragged from (see DRAG_FROM_MIME). */
+  dragTypes?: () => string[]
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const carried = labelsIn(conv.labels ?? [], props.labels ?? NO_LABELS)
   // The open chat shows no unread dot (it's being looked at), so its toggle offers
   // Mark as unread, matching what the row shows.
   const isUnread = props.chatStatus[conv.id]?.unread !== undefined && !active
@@ -278,12 +625,20 @@ function ConvRow({
   // Editors are probed lazily the first time this row's menu opens (null = not yet).
   const [editors, setEditors] = useState<EditorStatus[] | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
+  const mainBtnRef = useRef<HTMLButtonElement>(null)
   // Where a right-click opened the menu; unset opens it under the ⋯ button.
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | undefined>(undefined)
   const close = (): void => {
     setMenuOpen(false)
     setMenuAt(undefined)
   }
+  // The ⋯ button is no Tab stop of its own, so when its menu closes (and hands focus
+  // back to it) focus moves on to the row's button, where the keyboard user was.
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (wasOpen.current && !menuOpen && document.activeElement === btnRef.current) mainBtnRef.current?.focus()
+    wasOpen.current = menuOpen
+  }, [menuOpen])
   const openMenu = (at?: { x: number; y: number }): void => {
     setMenuAt(at)
     setMenuOpen(true)
@@ -297,6 +652,51 @@ function ConvRow({
     if (menuOpen) close()
     else openMenu()
   }
+  // Tag archived chats only when they surface outside the Archived view (i.e. in
+  // search results), so the active list isn't noisy.
+  const archivedTag = !!conv.archived && props.statusFilter === 'active'
+  const folder = conv.worktree ? baseName(conv.worktree.repoRoot) : baseName(conv.workspace)
+
+  const meta = (
+    <span className="conv__meta">
+      {archivedTag && (
+        <span className="conv__tag" title="Archived">
+          Archived
+        </span>
+      )}
+      {reason && (
+        <span className="conv__reason">
+          {reason}
+          {' · '}
+        </span>
+      )}
+      {nested && !nested.expanded && (
+        <span
+          className={`conv__tag conv__tag--${nested.childSignal === 'idle' ? 'count' : nested.childSignal}`}
+          title={
+            nested.childSignal === 'idle'
+              ? 'Spawned sessions under this chat'
+              : nestedTitle(nested.childSignal, nested.childSignalCount, nested.count)
+          }
+        >
+          {nested.childSignal === 'idle'
+            ? `${nested.count} spawned`
+            : nestedTag(nested.childSignal, nested.childSignalCount)}
+        </span>
+      )}
+      {conv.worktree ? (
+        <>
+          {folder}{' '}
+          <span className="conv__branch" title={`Worktree on branch ${conv.worktree.branch}`}>
+            <Icon name="gitBranch" size={11} className="conv__branch-icon" />
+            {conv.worktree.branch}
+          </span>
+        </>
+      ) : (
+        folder
+      )}
+    </span>
+  )
 
   return (
     <div
@@ -305,23 +705,13 @@ function ConvRow({
       // a nested chat goes where its parent goes.
       data-depth={depth}
       data-signal={signal}
-      // Keyboard-reachable so a row can be opened without the mouse. Not renaming:
-      // the inline input owns focus/keys then. `aria-current` marks the open chat.
-      tabIndex={renaming || !isTabStop ? -1 : 0}
-      data-conv-id={conv.id}
-      onFocus={(e) => {
-        if (e.target === e.currentTarget) onFocusRow?.(conv.id)
-      }}
-      aria-current={active ? 'true' : undefined}
-      // The row's name carries its state, so a screen reader hears "needs approval"
-      // without having to find the dot.
-      aria-label={[conv.title, reason ?? signalLabel(signal)].filter(Boolean).join(', ')}
       // Renaming swaps in a text input; dragging would hijack its selection.
       draggable={!renaming && depth === 0}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData(CONV_DRAG_MIME, conv.id)
         e.dataTransfer.setData('text/plain', conv.id)
+        for (const type of dragTypes?.() ?? []) e.dataTransfer.setData(type, conv.id)
         setDragging(true)
       }}
       onDragEnd={() => setDragging(false)}
@@ -333,19 +723,6 @@ function ConvRow({
         e.preventDefault()
         e.stopPropagation()
         openMenu(e.clientX || e.clientY ? { x: e.clientX, y: e.clientY } : undefined)
-      }}
-      onKeyDown={(e) => {
-        // Only when the row itself is focused — not a nested control (⋯ menu).
-        if (!renaming && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
-          e.preventDefault()
-          props.onSelect(conv.id)
-        }
-        // ⌥U / Alt+U toggles read state. Matched on the physical key: on macOS, Option+U
-        // is a dead key whose `key` is "¨", not "u".
-        if (!renaming && e.target === e.currentTarget && canToggleRead && e.altKey && e.code === 'KeyU') {
-          e.preventDefault()
-          props.onSetUnread?.(conv.id, !isUnread)
-        }
       }}
     >
       {/* Every row reserves the fold arrow's slot at its left edge (empty unless spawned
@@ -386,8 +763,8 @@ function ConvRow({
           ? { role: 'img', 'aria-label': signalLabel(signal), title: signalLabel(signal) }
           : { 'aria-hidden': true })}
       />
-      <div className="conv__main">
-        {renaming ? (
+      {renaming ? (
+        <div className="conv__main">
           <InlineEdit
             value={conv.title}
             onCommit={(t) => {
@@ -396,50 +773,51 @@ function ConvRow({
             }}
             onCancel={onStopRename}
           />
-        ) : (
-          <div className="conv__title" title={conv.title} onDoubleClick={onStartRename}>
-            {conv.title}
-          </div>
-        )}
-        <div className="conv__meta">
-          {/* Tag archived chats only when they surface outside the Archived view
-              (i.e. in search results), so the active list isn't noisy. */}
-          {conv.archived && props.statusFilter === 'active' && (
-            <span className="conv__tag" title="Archived">Archived</span>
-          )}
-          {reason && (
-            <span className="conv__reason">
-              {reason}
-              {' · '}
-            </span>
-          )}
-          {nested && !nested.expanded && (
-            <span
-              className={`conv__tag conv__tag--${nested.childSignal === 'idle' ? 'count' : nested.childSignal}`}
-              title={
-                nested.childSignal === 'idle'
-                  ? 'Spawned sessions under this chat'
-                  : `${nested.childSignalCount} of the ${nested.count} spawned sessions under this chat: ${nestedTag(nested.childSignal, nested.childSignalCount)}`
-              }
-            >
-              {nested.childSignal === 'idle'
-                ? `${nested.count} spawned`
-                : nestedTag(nested.childSignal, nested.childSignalCount)}
-            </span>
-          )}
-          {conv.worktree ? (
-            <>
-              {baseName(conv.worktree.repoRoot)}{' '}
-              <span className="conv__branch" title={`Worktree on branch ${conv.worktree.branch}`}>
-                <Icon name="gitBranch" size={11} className="conv__branch-icon" />
-                {conv.worktree.branch}
-              </span>
-            </>
-          ) : (
-            baseName(conv.workspace)
-          )}
+          {meta}
         </div>
-      </div>
+      ) : (
+        // The row's button opens the chat (a click anywhere on the row does too). Its
+        // name says everything the row shows, so a screen reader hears "needs approval",
+        // "Pinned", the folder and the branch without hunting for the dot or the star.
+        // `aria-current` marks the open chat. The list is one Tab stop (see Sidebar):
+        // only that row's button takes Tab; the arrow keys reach the others.
+        <button
+          ref={mainBtnRef}
+          type="button"
+          className="conv__main"
+          tabIndex={isTabStop ? 0 : -1}
+          data-conv-id={conv.id}
+          onFocus={() => onFocusRow?.(conv.id)}
+          aria-current={active ? 'true' : undefined}
+          aria-label={[
+            conv.title,
+            carried.length ? `labels: ${carried.map((l) => l.name).join(', ')}` : undefined,
+            reason ?? signalLabel(signal),
+            archivedTag ? 'Archived' : undefined,
+            conv.pinned ? 'Pinned' : undefined,
+            folder,
+            conv.worktree ? `branch ${conv.worktree.branch}` : undefined
+          ]
+            .filter(Boolean)
+            .join(', ')}
+          onKeyDown={(e) => {
+            // ⌥U / Alt+U toggles read state. Matched on the physical key: on macOS,
+            // Option+U is a dead key whose `key` is "¨", not "u".
+            if (canToggleRead && e.altKey && e.code === 'KeyU') {
+              e.preventDefault()
+              props.onSetUnread?.(conv.id, !isUnread)
+            }
+          }}
+        >
+          <span className="conv__title-row">
+            <span className="conv__title" title={conv.title} onDoubleClick={onStartRename}>
+              {conv.title}
+            </span>
+            <LabelChips carried={carried} />
+          </span>
+          {meta}
+        </button>
+      )}
 
       {/* Pinned sits at the trailing edge, so it never pushes the title right. */}
       {conv.pinned && (
@@ -451,6 +829,9 @@ function ConvRow({
         <button
           ref={btnRef}
           className="conv__action"
+          // Not a Tab stop: the row's button is. From the keyboard the menu opens with
+          // Shift+F10 or the context-menu key on the row.
+          tabIndex={-1}
           title="More"
           aria-label={`More actions for ${conv.title}`}
           aria-haspopup="menu"
@@ -586,6 +967,11 @@ function ConvRow({
                 </button>
               )}
             </MenuExpander>
+            {props.onSetChatLabels && (
+              <MenuExpander label="Labels" icon="tag">
+                <LabelsMenu conv={conv} props={props} onDone={close} />
+              </MenuExpander>
+            )}
             <div className="menu__sep" />
             <button
               role="menuitem"
@@ -630,7 +1016,8 @@ function GroupHeader({
   renaming,
   onStartRename,
   onStopRename,
-  attention
+  attention,
+  searching
 }: {
   section: SidebarSection
   props: SidebarProps
@@ -639,19 +1026,57 @@ function GroupHeader({
   onStopRename: () => void
   /** For a collapsed section: the strongest state among its chats that wants the user, and how many show it. */
   attention?: { signal: ChatSignal; count: number }
+  /** A search shows every section open, so collapsing waits until it is cleared. */
+  searching?: boolean
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
+  // Where a right-click opened the menu; unset opens it under the ⋯ button.
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | undefined>(undefined)
   const btnRef = useRef<HTMLButtonElement>(null)
+  const toggleRef = useRef<HTMLButtonElement>(null)
   const isGroup = section.kind === 'group'
   // Every section header collapses; only custom groups also rename / delete.
   const toggleCollapsed = (): void =>
     isGroup ? props.onToggleGroupCollapsed(section.id) : props.onToggleSectionCollapsed(section.id)
+  const closeMenu = (): void => {
+    setMenuOpen(false)
+    setMenuAt(undefined)
+  }
+  // A rename started from the keyboard hands focus back to the header when it ends,
+  // unless the user moved on to something else (a click elsewhere commits it too).
+  const wasRenaming = useRef(renaming)
+  useEffect(() => {
+    if (wasRenaming.current && !renaming) {
+      const active = document.activeElement
+      if (!active || active === document.body) toggleRef.current?.focus()
+    }
+    wasRenaming.current = renaming
+  }, [renaming])
+  const chevron = (
+    <span className="section-head__chevron" aria-hidden="true">
+      {section.collapsed ? '▸' : '▾'}
+    </span>
+  )
 
   return (
-    <div className={`section-head section-head--${section.kind}`}>
-      <button className="section-head__toggle" onClick={toggleCollapsed}>
-        <span className="section-head__chevron">{section.collapsed ? '▸' : '▾'}</span>
-        {renaming ? (
+    <div
+      className={`section-head section-head--${section.kind}`}
+      // Right-click (or the context-menu key, Shift+F10) opens a group's options, as on a chat row.
+      onContextMenu={
+        isGroup && !renaming
+          ? (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              setMenuAt(e.clientX || e.clientY ? { x: e.clientX, y: e.clientY } : undefined)
+              setMenuOpen(true)
+            }
+          : undefined
+      }
+    >
+      {renaming ? (
+        // The name's input sits beside the toggle's place, never inside a button.
+        <div className="section-head__rename">
+          {chevron}
           <InlineEdit
             value={section.name}
             onCommit={(t) => {
@@ -660,24 +1085,44 @@ function GroupHeader({
             }}
             onCancel={onStopRename}
           />
-        ) : (
-          <span className="section-head__name" onDoubleClick={() => isGroup && onStartRename()}>
-            {section.name}
+        </div>
+      ) : (
+        <button
+          ref={toggleRef}
+          className="section-head__toggle"
+          aria-expanded={!section.collapsed}
+          disabled={searching}
+          onClick={toggleCollapsed}
+          onKeyDown={(e) => {
+            // F2 renames a group, as it renames a file in most file managers.
+            if (isGroup && e.key === 'F2') {
+              e.preventDefault()
+              onStartRename()
+            }
+          }}
+        >
+          {chevron}
+          <span className="section-head__name">{section.name}</span>
+          <span className="section-head__count">
+            {section.labelFilter.length > 0
+              ? `${section.conversations.length} of ${section.total}`
+              : section.total || ''}
           </span>
-        )}
-        <span className="section-head__count">{section.conversations.length || ''}</span>
-        {attention && (
-          <span
-            className="section-head__attention"
-            role="img"
-            aria-label={`${attention.count} ${signalLabel(attention.signal)?.toLowerCase()}`}
-            title={`${attention.count} ${signalLabel(attention.signal)?.toLowerCase()}`}
-          >
-            <span className="conv__status" data-signal={attention.signal} aria-hidden="true" />
-            {attention.count}
-          </span>
-        )}
-      </button>
+          {attention && (
+            <span
+              className="section-head__attention"
+              role="img"
+              aria-label={nestedTag(attention.signal, attention.count)}
+              title={nestedTag(attention.signal, attention.count)}
+            >
+              <span className="conv__status" data-signal={attention.signal} aria-hidden="true" />
+              {attention.count}
+            </span>
+          )}
+        </button>
+      )}
+
+      {!renaming && <SectionLabelFilter section={section} props={props} />}
 
       {isGroup && !renaming && (
         <div className="conv__menu-wrap">
@@ -688,23 +1133,24 @@ function GroupHeader({
             aria-label={`Options for group ${section.name}`}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
-            onClick={() => setMenuOpen((v) => !v)}
+            onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
           >
             ⋯
           </button>
           {menuOpen && (
             <Popover
               anchorRef={btnRef}
-              onClose={() => setMenuOpen(false)}
+              onClose={closeMenu}
               role="menu"
               ariaLabel={`Options for group ${section.name}`}
+              at={menuAt}
             >
               <button
                 role="menuitem"
                 className="menu__item"
                 onClick={() => {
                   onStartRename()
-                  setMenuOpen(false)
+                  closeMenu()
                 }}
               >
                 <Icon name="pencil" /> Rename group
@@ -714,7 +1160,7 @@ function GroupHeader({
                 className="menu__item menu__item--danger"
                 onClick={() => {
                   props.onDeleteGroup(section.id)
-                  setMenuOpen(false)
+                  closeMenu()
                 }}
               >
                 <Icon name="trash" /> Delete group
@@ -744,7 +1190,8 @@ function FilterButton({
   unreadFirst,
   onToggleUnreadFirst,
   groupBy,
-  onSetGroupBy
+  onSetGroupBy,
+  labelManager
 }: {
   filter: ConversationStatusFilter
   counts: { active: number; archived: number }
@@ -756,8 +1203,16 @@ function FilterButton({
   onToggleUnreadFirst?: () => void
   groupBy?: SidebarGroupBy
   onSetGroupBy?: (by: SidebarGroupBy | undefined) => void
+  /** Present when labels can be managed: the labels and their edit handlers. */
+  labelManager?: {
+    labels: ChatLabel[]
+    onCreate: (name: string) => Promise<string>
+    onUpdate: (id: string, patch: { name?: string; color?: LabelColor }) => void
+    onDelete: (id: string) => void
+  }
 }): JSX.Element {
   const [open, setOpen] = useState(false)
+  const [managing, setManaging] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
   // "active" is the default view; anything else counts as a filter being applied.
   const filtered = filter !== 'active'
@@ -854,7 +1309,32 @@ function FilterButton({
               ))}
             </>
           )}
+          {labelManager && (
+            <>
+              <div className="menu__sep" />
+              <button
+                role="menuitem"
+                className="menu__item"
+                onClick={() => {
+                  setOpen(false)
+                  setManaging(true)
+                }}
+              >
+                <Icon name="tag" /> Manage labels
+              </button>
+            </>
+          )}
         </Popover>
+      )}
+      {managing && labelManager && (
+        <LabelManager
+          anchorRef={btnRef}
+          onClose={() => setManaging(false)}
+          labels={labelManager.labels}
+          onCreate={labelManager.onCreate}
+          onUpdate={labelManager.onUpdate}
+          onDelete={labelManager.onDelete}
+        />
       )}
     </div>
   )
@@ -875,7 +1355,9 @@ function dropIndexFromEvent(section: Element, clientY: number): number {
  * Ungrouped sections double as drop targets for drag-to-reorder: a chat can be
  * dropped at a precise slot to reposition it, and dropping a chat from another
  * section both moves it in and places it. A drop indicator marks where it will
- * land. Pinned is not a drop target — pinning is independent of grouping.
+ * land. Pinned is not a drop target — pinning is independent of grouping. An
+ * automatic (folder or date) section takes only its own chats and chats leaving a
+ * group, since its other chats are placed by their folder or date.
  */
 function SidebarSectionView({
   section,
@@ -909,15 +1391,44 @@ function SidebarSectionView({
   const [dropAt, setDropAt] = useState<number | null>(null)
 
   const droppable = section.kind === 'group' || section.kind === 'ungrouped' || section.kind === 'auto'
+  // A filtered section hides some of its chats, so a drop there can't be placed among
+  // them: it only moves the chat in, and no insertion line is drawn.
+  const filtered = section.labelFilter.length > 0
   // Group sections move the chat into the group; Ungrouped clears its group.
   const targetGroupId = section.kind === 'group' ? section.id : null
   const rowCount = section.conversations.length
 
+  // Where this section's rows say they are dragged from. A grouped chat also says
+  // which automatic section it would land in once out of its group.
+  const dragTypesFor =
+    (c: ConversationMeta) =>
+    (): string[] => {
+      const types = [DRAG_FROM_MIME + hexOf(section.kind === 'group' ? FROM_GROUP : section.id)]
+      if (section.kind === 'group' && props.groupBy) {
+        const latest = Math.max(c.updatedAt, ...descendantsOf(c.id, section.children).map((d) => d.updatedAt))
+        const lands = autoSectionId(c, props.groupBy, props.now ?? Date.now(), () => latest)
+        types.push(DRAG_LANDS_MIME + hexOf(lands))
+      }
+      return types
+    }
+  // An automatic section's chats are placed by their folder or date, so it takes a
+  // drop only to reorder its own chats, or to take a chat out of a group. That chat
+  // lands in the section its own folder or date picks, so it gets a slot here only
+  // when that is this section.
+  const fromHere = (types: readonly string[]): boolean => types.includes(DRAG_FROM_MIME + hexOf(section.id))
+  const accepts = (types: readonly string[]): boolean =>
+    types.includes(CONV_DRAG_MIME) &&
+    (section.kind !== 'auto' || fromHere(types) || types.includes(DRAG_FROM_MIME + hexOf(FROM_GROUP)))
+  const placesAtSlot = (types: readonly string[]): boolean =>
+    section.kind !== 'auto' || fromHere(types) || types.includes(DRAG_LANDS_MIME + hexOf(section.id))
+
   const onDragOver = (e: DragEvent): void => {
-    if (!e.dataTransfer.types.includes(CONV_DRAG_MIME)) return // not one of our chat drags
+    if (!accepts(e.dataTransfer.types)) return // not a chat drag this section takes
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-    setDropAt(dropIndexFromEvent(e.currentTarget, e.clientY))
+    setDropAt(
+      !filtered && placesAtSlot(e.dataTransfer.types) ? dropIndexFromEvent(e.currentTarget, e.clientY) : null
+    )
   }
   const onDragLeave = (e: DragEvent): void => {
     // dragleave also fires when crossing into child rows; only clear the
@@ -931,6 +1442,19 @@ function SidebarSectionView({
     const draggedId =
       e.dataTransfer.getData(CONV_DRAG_MIME) || e.dataTransfer.getData('text/plain')
     if (!draggedId) return
+    if (section.kind === 'auto') {
+      if (!accepts(e.dataTransfer.types)) return
+      // Out of its group and into the section its own folder or date picks.
+      if (!placesAtSlot(e.dataTransfer.types)) {
+        props.onMove(draggedId, null)
+        return
+      }
+    }
+    if (filtered) {
+      const from = props.conversations.find((c) => c.id === draggedId)?.groupId ?? null
+      if (from !== targetGroupId) props.onMove(draggedId, targetGroupId)
+      return
+    }
 
     const index = dropIndexFromEvent(e.currentTarget, e.clientY)
     const currentIds = section.conversations.map((c) => c.id)
@@ -966,10 +1490,11 @@ function SidebarSectionView({
   // A row plus, unless folded away, the spawned chats nested under it (recursively).
   // A parent holding the open chat stays unfolded, so the open chat is never hidden.
   // Every row reserves the fold arrow's slot, so titles line up at every level.
+  // Each row is a list item; a parent's spawned chats are a list inside its item.
   const renderTree = (c: ConversationMeta, depth: number): JSX.Element => {
     const kids = section.children[c.id] ?? []
     const all = kids.length ? descendantsOf(c.id, section.children) : []
-    const expanded = !collapsedParents.has(c.id) || all.some((d) => d.id === currentId)
+    const expanded = !kids.length || childrenShown(c.id, section.children, collapsedParents, currentId)
     const own = ownSignal(c)
     const childSignals = all.map(ownSignal)
     const childSignal = strongestSignal(childSignals)
@@ -978,7 +1503,7 @@ function SidebarSectionView({
     const signal = expanded ? own : strongestSignal([own, childSignal])
     const reason = signalReason(props.chatStatus[c.id], own)
     return (
-      <>
+      <div className="conv-item" role="listitem">
         <ConvRow
           conv={c}
           active={c.id === currentId}
@@ -992,6 +1517,7 @@ function SidebarSectionView({
           signal={signal}
           tabStop={c.id === tabStopId}
           onFocusRow={onFocusRow}
+          dragTypes={dragTypesFor(c)}
           {...(reason ? { reason } : {})}
           {...(kids.length
             ? {
@@ -1006,13 +1532,13 @@ function SidebarSectionView({
             : {})}
         />
         {expanded && kids.length > 0 && (
-          <div className="conv-children" role="group" aria-label={`Spawned from ${c.title}`}>
+          <div className="conv-children" role="list" aria-label={`Spawned from ${c.title}`}>
             {kids.map((k) => (
               <Fragment key={k.id}>{renderTree(k, depth + 1)}</Fragment>
             ))}
           </div>
         )}
-      </>
+      </div>
     )
   }
 
@@ -1023,28 +1549,42 @@ function SidebarSectionView({
       onDragLeave={droppable ? onDragLeave : undefined}
       onDrop={droppable ? onDrop : undefined}
     >
-      {section.kind === 'ungrouped' && groups.length === 0 ? null : (
+      {section.headless ? null : (
         <GroupHeader
           section={section}
           props={props}
           renaming={renamingGroup === section.id}
           onStartRename={() => setRenamingGroup(section.id)}
           onStopRename={() => setRenamingGroup(null)}
+          searching={!!props.search}
           {...(sectionAttention ? { attention: sectionAttention } : {})}
         />
       )}
-      {!section.collapsed &&
-        section.conversations.map((c, i) => (
-          <Fragment key={c.id}>
-            {dropAt === i && <div className="conv-drop-line" aria-hidden="true" />}
-            {renderTree(c, 0)}
-          </Fragment>
-        ))}
-      {!section.collapsed && rowCount > 0 && dropAt === rowCount && (
-        <div className="conv-drop-line" aria-hidden="true" />
+      {!section.collapsed && rowCount > 0 && (
+        <div className="section__rows" role="list" aria-label={section.name}>
+          {section.conversations.map((c, i) => (
+            <Fragment key={c.id}>
+              {dropAt === i && <div className="conv-drop-line" aria-hidden="true" />}
+              {renderTree(c, 0)}
+            </Fragment>
+          ))}
+          {dropAt === rowCount && <div className="conv-drop-line" aria-hidden="true" />}
+        </div>
       )}
-      {section.kind === 'group' && !section.collapsed && rowCount === 0 && (
+      {section.kind === 'group' && !section.collapsed && section.total === 0 && (
         <div className="section__empty">Drop a chat here, or use the ⋯ menu</div>
+      )}
+      {filtered && !section.collapsed && rowCount === 0 && section.total > 0 && (
+        <div className="section__empty section__empty--filtered">
+          No chats match this filter.{' '}
+          <button
+            type="button"
+            className="section__clear-filter"
+            onClick={() => props.onSetSectionLabelFilter?.(section.id, [])}
+          >
+            Clear filter
+          </button>
+        </div>
       )}
     </div>
   )
@@ -1053,29 +1593,15 @@ function SidebarSectionView({
 const NO_PARENTS: ReadonlySet<string> = new Set()
 
 /**
- * The chat rows the list shows, top to bottom: open sections' chats, each followed by
- * its spawned chats unless they are folded away (a parent holding the open chat
- * stays unfolded, as it renders).
+ * The chat rows the list shows, top to bottom (the same order ⌘1–9 and ⌃Tab follow:
+ * see sidebarChatOrder).
  */
 export function visibleRowIds(
-  sections: readonly SidebarSection[],
+  sections: SidebarSection[],
   collapsedParents: ReadonlySet<string>,
   currentId: string | null
 ): string[] {
-  const out: string[] = []
-  for (const section of sections) {
-    if (section.collapsed) continue
-    const walk = (c: ConversationMeta): void => {
-      out.push(c.id)
-      const kids = section.children[c.id] ?? []
-      if (kids.length === 0) return
-      const open =
-        !collapsedParents.has(c.id) || descendantsOf(c.id, section.children).some((d) => d.id === currentId)
-      if (open) kids.forEach(walk)
-    }
-    section.conversations.forEach(walk)
-  }
-  return out
+  return sidebarChatOrder(sections, collapsedParents, currentId).map((c) => c.id)
 }
 
 /** Up/Down/Home/End on a focused chat row move focus to another row. */
@@ -1099,18 +1625,18 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   const shortcut = props.toggleShortcut ? ` (${props.toggleShortcut})` : ''
   const newChatTitle = `New chat${props.newChatShortcut ? ` (${props.newChatShortcut})` : ''}`
   const settingsTitle = `Settings${props.settingsShortcut ? ` (${props.settingsShortcut})` : ''}`
-  // A chat wants attention when it waits on the user or has something unseen.
-  const wantsAttention = (id: string): boolean => {
-    const st = props.chatStatus[id]
-    return !!st && (st.pending.length > 0 || (st.unread !== undefined && id !== currentId))
-  }
-  const sections = buildSidebarSections(
+  const sections = sidebarSections({
     conversations,
     groups,
-    props.collapsedSections,
-    props.unreadFirst ? wantsAttention : undefined,
-    props.groupBy ? { by: props.groupBy, now: props.now ?? Date.now() } : undefined
-  )
+    collapsedSections: props.collapsedSections,
+    search: props.search,
+    chatStatus: props.chatStatus,
+    currentId,
+    ...(props.unreadFirst ? { unreadFirst: true } : {}),
+    ...(props.groupBy ? { groupBy: props.groupBy } : {}),
+    ...(props.now !== undefined ? { now: props.now } : {}),
+    ...(props.labelFilters ? { labelFilters: props.labelFilters } : {})
+  })
   const unreadCount = Object.values(props.chatStatus).filter((st) => st.unread !== undefined).length
   const needInput = Object.values(props.chatStatus).filter((st) => st.pending.length > 0).length
   // The collapsed rail hides every row, so its expand button says what's waiting.
@@ -1206,6 +1732,16 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           {...(props.onToggleUnreadFirst ? { onToggleUnreadFirst: props.onToggleUnreadFirst } : {})}
           groupBy={props.groupBy}
           {...(props.onSetGroupBy ? { onSetGroupBy: props.onSetGroupBy } : {})}
+          {...(props.onCreateLabel && props.onUpdateLabel && props.onDeleteLabel
+            ? {
+                labelManager: {
+                  labels: props.labels ?? NO_LABELS,
+                  onCreate: props.onCreateLabel,
+                  onUpdate: props.onUpdateLabel,
+                  onDelete: props.onDeleteLabel
+                }
+              }
+            : {})}
         />
       </div>
 
@@ -1216,7 +1752,9 @@ export function Sidebar(props: SidebarProps): JSX.Element {
               ? 'No matching chats.'
               : props.statusFilter === 'archived'
                 ? 'No archived chats.'
-                : 'No chats yet.'}
+                : props.statusCounts.archived > 0
+                  ? `No active chats. ${props.statusCounts.archived} archived.`
+                  : 'No chats yet.'}
           </div>
         )}
 

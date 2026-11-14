@@ -14,10 +14,16 @@ import { join } from 'node:path'
  */
 export const SAFE_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'commit.gpgsign=false']
 
-/** The files under `.git` that change what a git command executes. */
+/**
+ * The files under `.git` that change what a git command executes: the config, hooks, and
+ * attributes, plus the files that point git somewhere else for them. `commondir` makes git
+ * read its config and hooks from another directory (one the run could have filled), and
+ * `config.worktree` and the `worktrees/` tree are read as config or followed the same way,
+ * so a redirect is refused before the action's own git runs in the checkout.
+ */
 function controlFiles(gitDir) {
   // The directories themselves too, so swapping one for a symlink shows up.
-  const files = ['config', 'info', 'info/attributes', 'hooks']
+  const files = ['config', 'config.worktree', 'commondir', 'info', 'info/attributes', 'hooks', 'worktrees']
   const walk = (rel) => {
     const abs = join(gitDir, rel)
     if (!lstatSync(abs, { throwIfNoEntry: false })?.isDirectory()) return
@@ -29,6 +35,7 @@ function controlFiles(gitDir) {
     }
   }
   walk('hooks')
+  walk('worktrees')
   return files
 }
 
@@ -72,6 +79,29 @@ export function secretValues(env, extra = []) {
   }
   for (const v of extra) if (typeof v === 'string' && v.trim().length >= 8) out.add(v.trim())
   return [...out]
+}
+
+/**
+ * The secrets plus the form a persisted checkout credential takes: actions/checkout writes
+ * `AUTHORIZATION: basic <base64 of x-access-token:TOKEN>` into the git config, so a run that
+ * read the config would carry the token in that encoding, not verbatim.
+ */
+export function withEncodedForms(secrets) {
+  const out = new Set(secrets)
+  for (const s of secrets) out.add(Buffer.from(`x-access-token:${s}`).toString('base64'))
+  return [...out]
+}
+
+/** The `git config --get-regexp` pattern for an HTTP extra header, with or without a URL. */
+export const EXTRAHEADER_KEYS = '^http\\.(.+\\.)?extraheader$'
+
+/**
+ * Whether `git config --get-regexp` output lists an `http.*.extraheader`: a credential the
+ * caller's checkout persisted (actions/checkout without `persist-credentials: false`). The
+ * agent can read the checkout's git config, so such a run could echo the token. Pure.
+ */
+export function hasPersistedCredential(configOutput) {
+  return /^http\.(.+\.)?extraheader(\s|$)/im.test(configOutput)
 }
 
 /** True when `text` contains any of the secret values verbatim. */

@@ -28,10 +28,8 @@ export function isParallelizableRead(
 }
 
 /**
- * One entry in a partitioned turn: the original call plus the index it held in the
- * model's tool_use list. The index is what lets us reassemble every tool_result in
- * the original call order after the parallel reads and sequential rest have run out
- * of order relative to each other.
+ * One entry in a segmented turn: the original call plus the index it held in the
+ * model's tool_use list, so a segment says exactly which calls it covers.
  */
 export interface IndexedCall {
   call: ToolCall
@@ -40,45 +38,43 @@ export interface IndexedCall {
 }
 
 /**
- * The result of splitting a turn's calls into the leading group that can run
- * concurrently (parallelizable reads with no preceding encumbered call) and the
- * group that must run sequentially in their original relative order (the first
- * non-parallelizable call — a write, shell, network, MCP, gated, hooked, or
- * ask_user — and everything after it, including any reads).
+ * One step of a turn's dispatch, in call order: a batch of parallel-safe calls that
+ * run concurrently, or a single call that runs on its own (a barrier).
  */
-export interface Partition {
-  /** Leading parallelizable reads — safe to dispatch all at once via Promise.all. */
-  parallel: IndexedCall[]
-  /** Everything from the first encumbered call on — dispatched one at a time, in order. */
-  sequential: IndexedCall[]
-}
+export type CallSegment =
+  | { parallel: true; calls: IndexedCall[] }
+  | { parallel: false; call: IndexedCall }
 
 /**
- * Partition a turn's tool calls into a concurrently-runnable read group and a
- * strictly-sequential "rest" group, tagging each with its original index so
- * results can be re-sorted into the model-visible order afterward.
+ * Split a turn's tool calls into segments, in their original order: each MAXIMAL
+ * run of parallelizable calls (`isParallel`: read-only kind, no gating rule, no
+ * hook, not ask_user) is one concurrent batch, and every other call (a write,
+ * shell, network, MCP, gated, hooked, or ask_user call) is a barrier segment of its
+ * own. The caller runs the segments one after another, so a batch starts only after
+ * the barrier before it has finished and the barrier after it waits for the whole
+ * batch: a read placed after a write in the same turn still observes the write, and
+ * the results come back in call order when each segment is flushed in order.
  *
- * `isParallel(call)` is the loop's per-call predicate (read-only kind, no gating
- * rule, no hook, not ask_user). We only parallelize the CONTIGUOUS LEADING run of
- * parallelizable reads, up to the FIRST non-parallelizable call; that call and
- * everything after it (including any later reads) run sequentially in order. This
- * preserves intra-turn causality — a read that follows a write/shell in the same
- * turn observes the just-written result rather than racing ahead of it. When there
- * are no encumbered calls this reduces to the all-reads fast path (empty
- * `sequential`); when the first call is encumbered it reduces to a fully-sequential
- * run (empty `parallel`).
+ * Lazy: `isParallel` is asked about a call only when the segment holding it is
+ * requested, so a batch after a barrier is classified once that barrier has run (a
+ * rule its approval added, an "Always deny" say, is already in force). The call that
+ * ends a batch is asked again after the batch; a call judged a barrier only ever
+ * takes the full gate, so judging one early never loosens anything.
  */
-export function partitionCalls(
+export function* callSegments(
   calls: ToolCall[],
   isParallel: (call: ToolCall) => boolean
-): Partition {
-  let split = 0
-  while (split < calls.length && isParallel(calls[split])) split++
-  const parallel: IndexedCall[] = calls
-    .slice(0, split)
-    .map((call, index) => ({ call, index }))
-  const sequential: IndexedCall[] = calls
-    .slice(split)
-    .map((call, i) => ({ call, index: split + i }))
-  return { parallel, sequential }
+): Generator<CallSegment, void, undefined> {
+  let start = 0
+  while (start < calls.length) {
+    let end = start
+    while (end < calls.length && isParallel(calls[end])) end++
+    if (end > start) {
+      yield { parallel: true, calls: calls.slice(start, end).map((call, i) => ({ call, index: start + i })) }
+      start = end
+    } else {
+      yield { parallel: false, call: { call: calls[start], index: start } }
+      start++
+    }
+  }
 }
