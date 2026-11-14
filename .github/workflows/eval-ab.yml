@@ -1,0 +1,209 @@
+name: Prompt A/B (live)
+
+# A paired live A/B of the task evals for a pull request that changes what the model is
+# told: the system prompt (src/main/agent/prompt.ts), the tool descriptions and schemas
+# (src/main/agent/tools.ts, memoryTools.ts), the product guide compiled into the prompt
+# (docs/houston-guide.md), or anything else that moves the agent goldens. Add the
+# `eval-ab` label to run it on any other pull request, or to run it again after a push.
+#
+# WHAT IT ANSWERS. The goldens show that the prompt changed, not whether the agent got
+# better or worse at real work. This runs the harder task subset on the base commit (A)
+# and on the pull request's merge commit (B), two attempts per task on claude-haiku-5-5,
+# and posts `npm run eval:compare`'s scorecard as a comment: per-task deltas, the sign
+# test, and the stamps (model, prompt hash, commit) that say what each side ran.
+#
+# IT NEVER GATES. The result is non-deterministic and billed, so it is not a required
+# check and its scorecard is information for the reviewer. Each side's eval run exits
+# non-zero when a task falls below its weekly baseline; that is still a valid side of
+# the comparison, so the job only fails when a side wrote no run record at all.
+#
+# SECRETS AND TRUST. This is a `pull_request` workflow, never `pull_request_target`: it
+# runs the pull request's own code, so the model key reaches only pull requests from
+# branches in this repository (GitHub withholds secrets from forks, and the plan job
+# skips them so they don't fail at the key check). The key is step-scoped in the `ab`
+# job, which holds a read-only token. The job that runs the comparison holds no secret,
+# and the job that comments runs none of the pull request's code. As in eval-live.yml,
+# the eval driver auto-approves every tool call, so a live model really can run shell
+# commands here; the ephemeral runner and the read-only token contain it. Do not add a
+# publish credential.
+#
+# CONCURRENCY. Its own group per pull request, not eval-live's: that group cancels in
+# progress, and sharing it would let a PR's A/B kill the weekly scored run.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-ab-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # No Electron runtime and no packaged browser are exercised here.
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  # Decides whether this event should spend a live run: the `eval-ab` label is on the
+  # pull request, or its diff touches the prompt surface. A label other than `eval-ab`
+  # being added never starts one, so labelling a PR for something else costs nothing.
+  plan:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+      && (github.event.action != 'labeled' || github.event.label.name == 'eval-ab')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'eval-ab') }}
+        run: |
+          set -euo pipefail
+          if [ "$LABELLED" = "true" ]; then
+            echo "The eval-ab label is set."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$DRAFT" = "true" ]; then
+            echo "Draft pull request without the eval-ab label: skipped until it is ready for review."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files="$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')"
+          if printf '%s\n' "$files" | grep -Eq '^(src/main/agent/(prompt|tools|memoryTools)\.ts|src/main/agent/goldens/.+|docs/houston-guide\.md)$'; then
+            echo "The diff touches the prompt surface."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No prompt, tool description or guide change, and no eval-ab label: skipped."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # One live run per side. A is the base commit, B the merge commit GitHub built for
+  # this pull request, so the only difference between them is the pull request itself.
+  ab:
+    needs: [plan]
+    if: needs.plan.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    # The harder tasks at two attempts each, on Haiku: well under an hour per side.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        side: [base, head]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.side == 'base' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node
+        with:
+          install: full
+      - name: Score the harder tasks
+        env:
+          HOUSTON_EVAL_LIVE: '1'
+          HOUSTON_EVAL_PROVIDER: anthropic
+          HOUSTON_EVAL_MODEL: claude-haiku-5-5
+          HOUSTON_EVAL_ATTEMPTS: '2'
+          HOUSTON_EVAL_TASKS: hard
+          SIDE: ${{ matrix.side }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY is empty or unset, so the live A/B cannot run."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/eval-ab"
+          export HOUSTON_EVAL_OUT="$RUNNER_TEMP/eval-ab/$SIDE.json"
+          status=0
+          npm run eval || status=$?
+          if [ ! -s "$HOUSTON_EVAL_OUT" ]; then
+            echo "::error::The $SIDE run wrote no run record (eval exited $status), so there is nothing to compare."
+            exit 1
+          fi
+          echo "The $SIDE run exited $status. A task below its baseline fails the run, but its record still counts."
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: eval-ab-${{ matrix.side }}
+          retention-days: 14
+          path: ${{ runner.temp }}/eval-ab/${{ matrix.side }}.json
+          if-no-files-found: error
+
+  # Builds the scorecard from the two records. Holds no secret.
+  compare:
+    needs: [ab]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node
+        with:
+          install: full
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: eval-ab-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/eval-ab
+      - name: Compare B against A
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/eval-ab"
+          HOUSTON_EVAL_A="$dir/base.json" HOUSTON_EVAL_B="$dir/head.json" \
+            HOUSTON_EVAL_COMPARE_OUT="$dir/scorecard.txt" npm run eval:compare
+          {
+            echo '### Prompt A/B (live)'
+            echo
+            echo "Harder eval tasks on claude-haiku-5-5, 2 attempts each. A is the base commit (\`${BASE_SHA:0:12}\`), B this pull request merged onto it (\`${MERGE_SHA:0:12}\`)."
+            echo
+            echo '```'
+            cat "$dir/scorecard.txt"
+            echo '```'
+            echo
+            echo "Live results vary from run to run, so this is information for review, not a gate. Add the \`eval-ab\` label again to re-run it."
+          } > "$dir/comment.md"
+          cat "$dir/comment.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: eval-ab-scorecard
+          retention-days: 14
+          path: ${{ runner.temp }}/eval-ab/comment.md
+          if-no-files-found: error
+
+  # Posts the scorecard. Checks out and runs nothing from the pull request.
+  comment:
+    needs: [compare]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: eval-ab-scorecard
+          path: ${{ runner.temp }}/scorecard
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/scorecard/comment.md"

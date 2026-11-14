@@ -193,6 +193,14 @@ export interface ProviderConfig {
   /** Known/curated model ids. Users can edit these or fetch live from the provider. */
   models: ModelOption[]
   defaultModel?: string
+  /**
+   * The model side requests run on: chat titles, compaction summaries, next-message
+   * suggestions, and the isolated reader for flagged web content. Absent means the
+   * provider's curated cheap sibling (`SMALL_MODELS` in model-facts.ts) when it is in
+   * `models` and cheaper than the chat's model; `''` means always the chat's model.
+   * A failed side request on it is retried on the chat's model. See `smallModelFor`.
+   */
+  smallModel?: string
   /** Whether the provider needs an API key at all (local endpoints often don't). */
   requiresKey: boolean
   /**
@@ -641,9 +649,18 @@ export interface AppSettings {
    * Compact the conversation when the estimated context exceeds this many tokens.
    * Unset means automatic: a fraction of the selected model's context window
    * (COMPACTION_WINDOW_FRACTION), falling back to a fixed default when the window
-   * is unknown. Set a number to override that sizing; 0 disables compaction.
+   * is unknown. Set a number to compact sooner; it can lower the automatic
+   * threshold but never raise it (see resolveCompactionThreshold). 0 disables
+   * compaction.
    */
   compactionThreshold?: number
+  /**
+   * Compact when the estimated context exceeds this share (1 to 100) of the selected
+   * model's context window. Like `compactionThreshold` it only lowers the automatic
+   * threshold; when both are set the lower one applies. Ignored when the window is
+   * unknown. 0 disables compaction.
+   */
+  compactionThresholdPercent?: number
   /**
    * Cap (bytes) on a single shell command's output fed back to the model, keeping
    * both ends. Guards the context window from one runaway command. Must be > 0;
@@ -781,6 +798,12 @@ export interface AppSettings {
    * of behind its toggle once the reply starts. Off by default.
    */
   showReasoning?: boolean
+  /**
+   * Screen readers hear each finished reply's text (and the name of a tool that failed)
+   * through the transcript's polite live region, instead of only "Response ready".
+   * Off by default.
+   */
+  announceReplies?: boolean
   /**
    * Cross-session memory: the agent sees the memories saved in earlier sessions and
    * can read them (docs/memory-design.md). On unless set to false.

@@ -58,7 +58,8 @@ describe('git probes per operation', () => {
 
   it('planScope probes the config once for the whole plan', async () => {
     const plan = await planScope(repo)
-    expect(plan).toEqual({ kind: 'git', walk: true, explicit: [] })
+    // The tracked .gitignore is a hidden file the walk skips, so it is handed over explicitly.
+    expect(plan).toEqual({ kind: 'git', walk: true, explicit: ['.gitignore'] })
     expect(probes()).toBe(1)
     // A folder git ignores but that holds tracked files: the other branch of the plan.
     execFileSync('git', ['add', '-f', 'build'], { cwd: repo })

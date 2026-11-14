@@ -4,8 +4,8 @@ import type { WhatsNew } from '@shared/update'
 /**
  * Small one-shot card shown after the app is updated and relaunched, with a 1–2
  * line summary of what changed (bundled highlights for the running version). It
- * sits in the bottom-right corner as a non-modal popup — no backdrop, no focus
- * steal — so it never blocks the app; the ✕ (or Escape while it has focus)
+ * sits at the top-right of the chat column as a non-modal popup (no backdrop, no
+ * focus steal), so it never blocks the app; the ✕ (or Escape while it has focus)
  * dismisses it. Dismissing is enough: the main process already recorded the new
  * version, so it won't reappear until the next upgrade.
  */

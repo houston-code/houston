@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { applyAccent, applyAppearance, resolveTheme } from './theme'
+import { afterEach, describe, it, expect } from 'vitest'
+import { applyAccent, applyAppearance, rememberTheme, rememberedTheme, resolveTheme } from './theme'
 
 describe('resolveTheme', () => {
   it('honors explicit dark/light regardless of OS', () => {
@@ -10,6 +10,23 @@ describe('resolveTheme', () => {
   it('follows the OS preference for "system"', () => {
     expect(resolveTheme('system', true)).toBe('light')
     expect(resolveTheme('system', false)).toBe('dark')
+  })
+})
+
+describe('rememberedTheme', () => {
+  afterEach(() => localStorage.clear())
+
+  it('reads back the last saved theme for the first paint of the next launch', () => {
+    rememberTheme('light')
+    expect(rememberedTheme()).toBe('light')
+    rememberTheme('dark')
+    expect(rememberedTheme()).toBe('dark')
+  })
+
+  it('follows the OS ("system") with nothing saved yet or an unknown value', () => {
+    expect(rememberedTheme()).toBe('system')
+    localStorage.setItem('houston.theme', 'sepia')
+    expect(rememberedTheme()).toBe('system')
   })
 })
 

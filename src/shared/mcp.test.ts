@@ -5,6 +5,8 @@ import {
   isMcpToolName,
   sanitizeServerId,
   flattenMcpContent,
+  MAX_EMBEDDED_RESOURCE_CHARS,
+  MAX_MCP_IMAGES,
   flattenMcpResourceContents,
   parseHeaderLines,
   parseElicitationFields,
@@ -41,8 +43,111 @@ describe('flattenMcpContent', () => {
     )
   })
 
-  it('notes non-text blocks by type', () => {
-    expect(flattenMcpContent([{ type: 'image', data: '...' }])).toBe('[image content]')
+  it('notes other non-text blocks by type', () => {
+    expect(flattenMcpContent([{ type: 'audio', data: 'AAAA', mimeType: 'audio/wav' }])).toBe('[audio content]')
+    expect(flattenMcpContent([{ type: 'some\nthing' }])).toBe('[some thing content]')
+  })
+
+  // 1x1 PNG, and the first bytes of a JPEG, GIF and WebP.
+  const PNG =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1]).toString('base64')
+  const GIF = Buffer.from('GIF89a\u0001\u0000\u0001\u0000', 'latin1').toString('base64')
+  const WEBP = Buffer.from('RIFF\u0010\u0000\u0000\u0000WEBPVP8 ', 'latin1').toString('base64')
+
+  it('attaches a valid image and notes it in the text', () => {
+    const attached: unknown[] = []
+    const out = flattenMcpContent(
+      [
+        { type: 'text', text: 'Here is the chart:' },
+        { type: 'image', data: PNG, mimeType: 'image/png' }
+      ],
+      { attachImage: (img) => attached.push(img) }
+    )
+    expect(attached).toEqual([{ mediaType: 'image/png', data: PNG }])
+    expect(out).toBe('Here is the chart:\n[image (image/png, 70 B): attached below]')
+  })
+
+  it('sends the type the bytes show, not the one the server claimed', () => {
+    const attached: Array<{ mediaType: string }> = []
+    for (const [data, claimed] of [
+      [JPEG, 'image/png'],
+      [GIF, 'image/gif'],
+      [WEBP, 'application/octet-stream']
+    ]) {
+      flattenMcpContent([{ type: 'image', data, mimeType: claimed }], { attachImage: (img) => attached.push(img) })
+    }
+    expect(attached.map((a) => a.mediaType)).toEqual(['image/jpeg', 'image/gif', 'image/webp'])
+  })
+
+  it('refuses images a provider would reject, without attaching them', () => {
+    const attached: unknown[] = []
+    const opts = { attachImage: (img: unknown) => attached.push(img) }
+    const tiff = Buffer.from([0x49, 0x49, 0x2a, 0, 8, 0, 0, 0]).toString('base64')
+    const huge = 'A'.repeat(8 * 1024 * 1024)
+    expect(flattenMcpContent([{ type: 'image', data: 'not base64!', mimeType: 'image/png' }], opts)).toBe(
+      '[image (image/png) that is not valid base64]'
+    )
+    expect(flattenMcpContent([{ type: 'image', mimeType: 'image/png' }], opts)).toBe('[image (image/png) with no data]')
+    expect(flattenMcpContent([{ type: 'image', data: tiff, mimeType: 'image/tiff' }], opts)).toBe(
+      '[image (image/tiff, 8 B) in a format that cannot be shown]'
+    )
+    expect(flattenMcpContent([{ type: 'image', data: huge, mimeType: 'image/png' }], opts)).toBe(
+      '[image (image/png, 6.0 MB): too large to show; the limit is 5 MB]'
+    )
+    expect(attached).toEqual([])
+  })
+
+  it(`attaches at most ${MAX_MCP_IMAGES} images from one result`, () => {
+    const attached: unknown[] = []
+    const blocks = Array.from({ length: MAX_MCP_IMAGES + 2 }, () => ({ type: 'image', data: PNG, mimeType: 'image/png' }))
+    const out = flattenMcpContent(blocks, { attachImage: (img) => attached.push(img) })
+    expect(attached).toHaveLength(MAX_MCP_IMAGES)
+    expect(out.match(/attached below/g)).toHaveLength(MAX_MCP_IMAGES)
+    expect(out.match(/a result can attach at most/g)).toHaveLength(2)
+  })
+
+  it('says why an image is not shown when there is nowhere to attach it', () => {
+    const block = { type: 'image', data: PNG, mimeType: 'image/png' }
+    expect(flattenMcpContent([block], { noImageReason: 'the current model cannot view images' })).toBe(
+      '[image (image/png, 70 B): not shown, the current model cannot view images]'
+    )
+    expect(flattenMcpContent([block])).toBe('[image (image/png, 70 B): not shown, images cannot be shown here]')
+  })
+
+  it('inlines embedded resource text, capped, and notes a binary one', () => {
+    expect(
+      flattenMcpContent([{ type: 'resource', resource: { uri: 'file:///notes.md', mimeType: 'text/markdown', text: '# Notes' } }])
+    ).toBe('[resource file:///notes.md (text/markdown)]\n# Notes')
+    const long = flattenMcpContent([
+      { type: 'resource', resource: { uri: 'file:///big.txt', text: 'x'.repeat(MAX_EMBEDDED_RESOURCE_CHARS + 5) } }
+    ])
+    expect(long.length).toBeLessThan(MAX_EMBEDDED_RESOURCE_CHARS + 200)
+    expect(long).toContain(`[resource text cut at ${MAX_EMBEDDED_RESOURCE_CHARS} of ${MAX_EMBEDDED_RESOURCE_CHARS + 5} characters]`)
+    expect(
+      flattenMcpContent([{ type: 'resource', resource: { uri: 'file:///a.zip', mimeType: 'application/zip', blob: 'UEsDBA==' } }])
+    ).toBe('[resource file:///a.zip (application/zip), binary, 8 base64 chars, not shown]')
+    expect(flattenMcpContent([{ type: 'resource' }])).toBe('[resource content]')
+  })
+
+  it('attaches an embedded image resource like an image block', () => {
+    const attached: unknown[] = []
+    const out = flattenMcpContent(
+      [{ type: 'resource', resource: { uri: 'file:///dot.png', mimeType: 'image/png', blob: PNG } }],
+      { attachImage: (img) => attached.push(img) }
+    )
+    expect(attached).toHaveLength(1)
+    expect(out).toBe('[resource file:///dot.png (image/png)]\n[image (image/png, 70 B): attached below]')
+  })
+
+  it('renders a resource_link as its name, URI and type, on one line', () => {
+    expect(
+      flattenMcpContent([
+        { type: 'resource_link', uri: 'https://x.test/r/1', name: 'report.pdf', mimeType: 'application/pdf', description: 'Q3\nreport' }
+      ])
+    ).toBe('[resource link: report.pdf <https://x.test/r/1> (application/pdf, Q3 report)]')
+    expect(flattenMcpContent([{ type: 'resource_link', uri: 'file:///a' }])).toBe('[resource link <file:///a>]')
+    expect(flattenMcpContent([{ type: 'resource_link', uri: 'u', name: 'n'.repeat(2000) }]).length).toBeLessThan(600)
   })
 
   it('handles strings and junk gracefully', () => {

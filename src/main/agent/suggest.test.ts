@@ -85,6 +85,18 @@ describe('maybeSuggestNext', () => {
     expect(onSuggestion).not.toHaveBeenCalled()
   })
 
+  it('asks the provider\'s small model, and keeps its "nothing" without a second call', async () => {
+    h.getSettings.mockReturnValue({ suggestNextPrompt: true })
+    h.getProvider.mockReturnValue({ id: 'p', kind: 'openai', models: [{ id: 'gpt-6.1-sol' }, { id: 'gpt-6-luna' }] })
+    const streamChat = vi.fn(streamOf('none').streamChat)
+    h.createProvider.mockReturnValue({ streamChat })
+    const onSuggestion = vi.fn()
+    await maybeSuggestNext({ conversationId: 'c1', providerId: 'p', model: 'gpt-6.1-sol', onSuggestion })
+    expect(streamChat).toHaveBeenCalledTimes(1)
+    expect((streamChat.mock.calls[0] as unknown as [{ model: string }])[0].model).toBe('gpt-6-luna')
+    expect(onSuggestion).not.toHaveBeenCalled()
+  })
+
   it('asks the chat model the way a title is asked, and passes the suggestion on', async () => {
     h.getSettings.mockReturnValue({ suggestNextPrompt: true })
     const streamChat = vi.fn(streamOf('Now add tests').streamChat)

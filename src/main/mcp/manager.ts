@@ -2,7 +2,7 @@ import type { McpServerConfig, McpServerStatus } from '@shared/types'
 import { mcpEnvScope, mcpHeaderScope } from '@shared/types'
 
 export type { McpServerStatus }
-import { parseElicitationFields } from '@shared/mcp'
+import { parseElicitationFields, type McpImageOptions } from '@shared/mcp'
 import { builtinToolNames, type ToolContext, type ToolDef } from '../agent/tools'
 import { presentUntrusted, untrustedPreamble } from '../agent/untrusted'
 import { getMcpOAuth, getSecretHeaders, setMcpOAuth } from '../agentHost'
@@ -497,7 +497,7 @@ export async function getMcpToolDefs(
         // Resolve the live connection at call time so a reconnect (or removal)
         // between building the tool list and the call doesn't hit a stale client.
         execute: (args, ctx) =>
-          callLive(serverId, ctx, (client) => client.callTool(original, args, ctx?.signal), {
+          callLive(serverId, ctx, (client) => client.callTool(original, args, ctx?.signal, mcpImageOptions(ctx)), {
             envelope: `Result from MCP server "${serverId}":`,
             source: `MCP tool ${fullName}`
           })
@@ -563,6 +563,18 @@ async function callLive(
     if (elicit && elicitors.get(serverId) === elicit) elicitors.delete(serverId)
   }
   return untrusted ? presentMcpResult(out, untrusted, ctx) : out
+}
+
+/**
+ * Where a tool call's image blocks go: the run's tool-image pipeline (the one
+ * read_file and the screenshot tools use), when the run has one and its current model
+ * accepts images. Otherwise the result's text says the image was not shown and why.
+ * The text itself is fenced as untrusted as before; the image travels beside it.
+ */
+function mcpImageOptions(ctx: ToolContext | undefined): McpImageOptions {
+  if (!ctx?.attachImage) return { noImageReason: 'images cannot be shown in this context' }
+  if (ctx.modelSeesImages && !ctx.modelSeesImages()) return { noImageReason: 'the current model cannot view images' }
+  return { attachImage: ctx.attachImage }
 }
 
 /** Houston's own placeholders for an empty result: nothing a server wrote, so nothing to fence. */

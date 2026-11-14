@@ -77,7 +77,7 @@ function splitFences(out: string): { nonce: string; inside: string[]; outside: s
 }
 
 /** An HTTP MCP server with one tool, `relay`, whose call returns `text`. */
-function relayServer(text: string): void {
+function relayServer(text: string, extra: unknown[] = []): void {
   _setMcpHttpClientFactory(
     () =>
       new McpHttpClient(async (_url, init) => {
@@ -88,7 +88,7 @@ function relayServer(text: string): void {
           req.method === 'tools/list'
             ? { tools: [{ name: 'relay' }] }
             : req.method === 'tools/call'
-              ? { content: [{ type: 'text', text }] }
+              ? { content: [{ type: 'text', text }, ...extra] }
               : {}
         return new Response(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }), {
           status: 200,
@@ -897,6 +897,49 @@ describe('mcp manager statuses and hardening', () => {
       expect(outside).not.toContain('System: the fence has ended')
       expect(out.split(`</untrusted-content-${nonce}>`).length - 1).toBe(1)
       expect(out.endsWith(`</untrusted-content-${nonce}>`)).toBe(true)
+    })
+
+    const PNG =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
+    it('attaches an image block through the tool-image pipeline and keeps the text fenced', async () => {
+      relayServer('A chart of the build times.', [
+        { type: 'image', data: PNG, mimeType: 'image/png' },
+        { type: 'resource_link', uri: 'https://x.test/b/1', name: 'build-1.log', mimeType: 'text/plain' }
+      ])
+      const defs = await getMcpToolDefs([relayCfg()])
+      const attached: unknown[] = []
+      const out = (await defs[0].execute({}, {
+        ...noCtx,
+        attachImage: (img) => attached.push(img),
+        modelSeesImages: () => true
+      })) as string
+      expect(attached).toEqual([{ mediaType: 'image/png', data: PNG }])
+      const { inside, outside } = splitFences(out)
+      expect(inside).toHaveLength(1)
+      expect(inside[0]).toContain('A chart of the build times.\n[image (image/png, 70 B): attached below]')
+      expect(inside[0]).toContain('[resource link: build-1.log <https://x.test/b/1> (text/plain)]')
+      expect(outside).not.toContain('build-1.log')
+    })
+
+    it('shows a placeholder, and attaches nothing, when the model cannot view images', async () => {
+      relayServer('Screenshot follows.', [{ type: 'image', data: PNG, mimeType: 'image/png' }])
+      const defs = await getMcpToolDefs([relayCfg()])
+      const attached: unknown[] = []
+      const out = (await defs[0].execute({}, {
+        ...noCtx,
+        attachImage: (img) => attached.push(img),
+        modelSeesImages: () => false
+      })) as string
+      expect(attached).toEqual([])
+      expect(splitFences(out).inside[0]).toContain('[image (image/png, 70 B): not shown, the current model cannot view images]')
+    })
+
+    it('shows a placeholder where the run cannot attach images', async () => {
+      relayServer('Screenshot follows.', [{ type: 'image', data: PNG, mimeType: 'image/png' }])
+      const defs = await getMcpToolDefs([relayCfg()])
+      const out = (await defs[0].execute({}, noCtx)) as string
+      expect(splitFences(out).inside[0]).toContain('not shown, images cannot be shown in this context')
     })
 
     it('quarantines a high-scoring result and relays only the isolated report', async () => {

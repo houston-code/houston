@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import {
   systemNoteMessage,
   type AgentQuestion,
@@ -47,6 +48,7 @@ import {
 } from './budget'
 import {
   StallDetector,
+  FILE_READ_TOOLS,
   callSignature,
   commandFailureOf,
   failedCallKey,
@@ -54,6 +56,7 @@ import {
   type CommandFailure,
   type StallThresholds
 } from './stall'
+import { RevertTracker } from './revertTracker'
 import {
   elideStaleToolArguments,
   estimateTokens,
@@ -189,7 +192,7 @@ function subAgentSystemPrompt(
   network: boolean
 ): string {
   const role = writable
-    ? `You are an implementation subagent. Another agent has delegated a focused task to you. Carry it out end to end: read the code you will change, make the edits, and, where you can run commands, confirm they work with the project's own checks. Never delete, skip, or weaken a test to make it pass, and never describe work you did not verify as tested: say what you could not run. Then report what you did. Stay within the task you were given, match the style of the surrounding code, and leave alone any changes you didn't make.`
+    ? `You are an implementation subagent. Another agent has delegated a focused task to you. Carry it out end to end: read the code you will change, make the edits, and, where you can run commands, confirm they work with the project's own checks. Write a general solution, not one shaped to the tests: never special-case test inputs, and never delete, skip, or weaken a test to make it pass. If a test looks wrong, say so in your report rather than working around it. A syntax-only check, or a command that failed to start, doesn't count as a check. If a check fails because of your change, fix it; if something unrelated was already broken, leave it and mention it. Never describe work you did not verify as tested: say what you could not run and why. Then report what you did. Stay within the task you were given, match the style of the surrounding code, and leave alone any changes you didn't make.`
     : `You are a research subagent. Another agent has delegated a focused question to you. Investigate efficiently: locate code with search_files, glob, or ast_grep before reading, and batch independent calls into one reply. Ground every claim in code you actually read, and say plainly what you could not find or confirm. Then answer the question directly.`
   return `${role}
 
@@ -425,6 +428,51 @@ export const OUTPUT_LIMIT_NOTE = "[subagent report cut off at the model's output
 /** The result when the agent ended without any report text. */
 export const EMPTY_REPORT_NOTE = '[subagent returned no answer]'
 
+/** A command a writable subagent ran, as its tool results recorded it. */
+export interface DelegatedCommand {
+  command: string
+  exitCode: number | null
+  timedOut: boolean
+  background: boolean
+}
+
+const EVIDENCE_MAX_COMMANDS = 10
+const EVIDENCE_MAX_FILES = 20
+const EVIDENCE_MAX_COMMAND_CHARS = 160
+
+/**
+ * What a writable subagent actually ran and changed, taken from its tool results rather
+ * than its own report, appended to the dispatch result so the calling agent can check
+ * the report's claims ("tests pass") against the commands behind them. Commands are
+ * expected already redacted.
+ */
+export function delegatedEvidenceSummary(commands: DelegatedCommand[], files: string[]): string {
+  const outcome = (c: DelegatedCommand): string =>
+    c.background
+      ? 'started in the background'
+      : c.timedOut
+        ? 'timed out'
+        : c.exitCode === null
+          ? 'was stopped'
+          : `exited ${c.exitCode}`
+  const oneLine = (cmd: string): string => {
+    const flat = cmd.replace(/\s+/g, ' ').trim()
+    return flat.length > EVIDENCE_MAX_COMMAND_CHARS ? `${flat.slice(0, EVIDENCE_MAX_COMMAND_CHARS)}...` : flat
+  }
+  // The latest commands matter most: they are the checks the report rests on.
+  const shown = commands.slice(-EVIDENCE_MAX_COMMANDS)
+  const earlier = commands.length - shown.length
+  const ran = commands.length
+    ? `${earlier ? `${earlier} earlier, then ` : ''}${shown.map((c) => `\`${oneLine(c.command)}\` ${outcome(c)}`).join('; ')}`
+    : 'none'
+  const unique = [...new Set(files)]
+  const listed = unique.slice(0, EVIDENCE_MAX_FILES)
+  const changed = unique.length
+    ? `${listed.join(', ')}${unique.length > listed.length ? `, and ${unique.length - listed.length} more` : ''}`
+    : 'none'
+  return `[What this agent ran and changed, from its tool results]\nCommands run: ${ran}.\nFiles changed: ${changed}.`
+}
+
 /** The one-time reminder as a subagent nears its step limit. */
 export function subagentLandingReminder(stepsLeft: number): string {
   const n = Math.max(0, stepsLeft)
@@ -473,7 +521,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     ? `${opts.systemOverride}\n\n${subAgentConstraints(workspace, writable, shellSandboxed, shellGated, network)}`
     : subAgentSystemPrompt(workspace, writable, shellSandboxed, shellGated, network)
   if (opts.dispatchNested) {
-    system += `\n\nYou may also delegate a focused read-only sub-search to your own nested subagent via dispatch_agent, useful to explore several areas in parallel without filling your context. Nested agents are always read-only and cannot dispatch further.`
+    system += `\n\nYou may also delegate a focused read-only sub-search to your own nested subagent via dispatch_agent, useful to explore another area without filling your context. Nested agents run one at a time, so dispatch one only when the search is too large to do yourself. Nested agents are always read-only and cannot dispatch further.`
   }
   opts.onStart?.({ system, tools: tools.map((t) => t.name) })
   // Tool-execution context. Reads default their roots to [workspace]; the writable
@@ -488,6 +536,9 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   // The subagent's own record of what it has read: it must read a file before
   // changing it, like the main agent, and what the parent read doesn't count.
   const fileTracker = new FileReadTracker()
+  // Every version a file this agent wrote has had, so a write that puts one back is a
+  // revert the loop detector can count, as in the main loop.
+  const revertTracker = new RevertTracker()
   const toolCtx: ToolContext = {
     workspace,
     roots,
@@ -844,6 +895,8 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     // What the stall detector sees, keyed the way the main loop keys it (see stall.ts).
     const iterErrors: string[] = []
     const iterFailures: CommandFailure[] = []
+    // Files a write this step put back to content they already had (see RevertTracker).
+    const iterReverts: string[] = []
     for (const call of calls) {
       // Stop between calls too, not just between turns: after Stop the rest of the
       // batch must not run (a later write would still land) or ask anything (a new
@@ -964,11 +1017,16 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         const cpRunId = tool.kind === 'write' ? opts.checkpointRunId : undefined
         const targets = cpRunId ? writeTargets(call.name, call.arguments) : []
         let ran = false
+        const written = tool.kind === 'write' ? writeTargets(call.name, call.arguments) : []
         const runLocal = async (): Promise<string> => {
           for (const t of targets) await recordOriginal(cpRunId!, roots, t.path)
+          for (const t of written) await revertTracker.before(resolve(workspace, t.path))
           const out = await tool.execute(call.arguments, toolCtx)
           for (const t of targets) {
             await recordResult(cpRunId!, roots, t.path, { expectAbsent: t.deleted })
+          }
+          for (const t of written) {
+            if (!t.deleted && (await revertTracker.after(resolve(workspace, t.path)))) iterReverts.push(t.path)
           }
           // Reached only when the write landed (a failed one throws above).
           if (tool.kind === 'write' && opts.recordFiles) {
@@ -1046,7 +1104,15 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
 
     // Loop detection, as in the main loop: one corrective nudge, then stop.
     if (stall) {
-      const action = stall.observe({ calls, errors: iterErrors, commandFailures: iterFailures })
+      const action = stall.observe({
+        calls,
+        errors: iterErrors,
+        commandFailures: iterFailures,
+        // A read repeated with nothing changed since returns what the agent already has.
+        reads: calls.filter((c) => FILE_READ_TOOLS.has(c.name) && getTool(c.name)?.kind === 'read'),
+        changed: calls.some((c) => getTool(c.name)?.kind !== 'read'),
+        reverts: iterReverts
+      })
       if (action.kind === 'nudge') {
         lastStallNudge = iter
         messages.push(systemNoteMessage(action.message))

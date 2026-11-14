@@ -5,11 +5,12 @@ import { getProvider } from '../agentHost'
 import { createProvider } from '../providers'
 import { needsGeneratedTitle, peekConversation, setGeneratedTitle } from '../conversations'
 import { providerStreamError, withProviderRetry } from './retry'
+import { smallModelFor, withSmallModel } from '@shared/smallModel'
 
 /**
  * Auto-titling. A fresh chat shows the truncated first message as an instant
- * placeholder; as soon as the first turn starts we ask the conversation's own model,
- * in parallel with the turn, for a short, specific title and quietly replace it (so
+ * placeholder; as soon as the first turn starts we ask the provider's small model (see
+ * `smallModelFor`, falling back to the conversation's own model), in parallel with the turn, for a short, specific title and quietly replace it (so
  * the sidebar updates within seconds, not after a long agentic turn). If that attempt
  * misses, the turn's natural completion tries once more with the reply as extra
  * context. Best-effort throughout — any failure (no key, offline, a weak local model,
@@ -203,9 +204,18 @@ export async function maybeGenerateTitle(opts: {
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), TITLE_TIMEOUT_MS)
   try {
-    const caps = providerConfig.models.find((m) => m.id === opts.model)?.caps
-    const request = titleRequestOptions(providerConfig.kind, opts.model, caps)
-    const title = await generateTitle(provider, opts.model, conv.messages, abort.signal, request)
+    // The provider's small model first, then the chat's own when that fails or says
+    // nothing usable.
+    const title = await withSmallModel(
+      smallModelFor(providerConfig, opts.model),
+      opts.model,
+      (model) => {
+        const caps = providerConfig.models.find((m) => m.id === model)?.caps
+        const request = titleRequestOptions(providerConfig.kind, model, caps)
+        return generateTitle(provider, model, conv.messages, abort.signal, request)
+      },
+      abort.signal
+    )
     if (title && setGeneratedTitle(opts.conversationId, title)) opts.onTitle?.(title)
   } catch {
     // network/abort/provider error — silently keep the placeholder title.

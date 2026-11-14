@@ -23,7 +23,7 @@ export interface OverlayFlags {
   find: boolean
   /** The get-started "Connect a model" panel (inline, not a modal). */
   connect: boolean
-  /** The post-update "What's new" card (bottom-right, non-modal). */
+  /** The post-update "What's new" card (top-right of the chat column, non-modal). */
   whatsNew: boolean
   /** The rewind picker or its confirmation. */
   rewind: boolean
@@ -46,12 +46,12 @@ export function modalOpen(f: OverlayFlags): boolean {
 
 /**
  * Whether the native preview views must be hidden. They are WebContentsViews that
- * paint above every HTML element, so anything drawn over the right side of the
- * window (every modal and drawer, and the What's new card that sits in the corner the
- * dock occupies) would otherwise be covered by them.
+ * paint above every HTML element, so anything drawn over the dock (every modal and
+ * drawer) would otherwise be covered by them. The What's new card sits in the chat
+ * column, offset by the dock's width, so it never overlaps them and the preview stays.
  */
 export function occludesPreview(f: OverlayFlags): boolean {
-  return modalOpen(f) || f.whatsNew
+  return modalOpen(f)
 }
 
 /**

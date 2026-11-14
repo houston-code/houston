@@ -257,6 +257,21 @@ this affordable: a full three-attempt run of all 29 tasks cost about $0.66 and t
 minutes when its baseline was recorded. It solved 87% of the attempts at the 20 harder
 tasks, and the tasks it sometimes fails are where a comparison can show a change.
 
+`HOUSTON_EVAL_TASKS=hard` runs only those 20 harder tasks (`HARD_TASKS` in
+`evals/tasks/index.ts`), and a comma-separated list of task ids runs just those. It
+can't be combined with `HOUSTON_EVAL_RECORD`, since a baseline records every task, and
+an id that isn't registered stops the run. `HOUSTON_EVAL_COMPARE_OUT=<file>` also writes
+the comparison to a file.
+
+The **Prompt A/B (live)** workflow (`eval-ab.yml`) does this for a pull request. It
+starts on its own when a pull request from a branch in this repository changes
+`src/main/agent/prompt.ts`, `tools.ts`, `memoryTools.ts`, `docs/houston-guide.md` or the
+agent goldens, and on any pull request when the `eval-ab` label is added (add it again
+to re-run). It scores the harder tasks on `claude-haiku-5-5`, two attempts each, on the
+base commit and on the pull request's merge commit, and posts the `eval:compare`
+scorecard as a comment. It is not a required check and never fails on a lower score;
+it fails only when a side produced no run record.
+
 #### Writing a task
 
 To add a task, create `src/main/agent/evals/tasks/<id>/` with a `repo/` fixture

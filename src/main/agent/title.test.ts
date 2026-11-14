@@ -268,6 +268,45 @@ describe('maybeGenerateTitle', () => {
     h.setGeneratedTitle.mockReturnValue(true)
   })
 
+  it('asks the provider\'s small model first, and the chat model only when that fails', async () => {
+    h.getProvider.mockReturnValue({
+      id: 'p',
+      kind: 'anthropic',
+      models: [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    })
+    const models: string[] = []
+    const streamChat = vi.fn(async function* (req: { model: string }) {
+      models.push(req.model)
+      if (req.model === 'claude-haiku-5-5') {
+        yield { type: 'error', message: 'model not found', status: 404 } as ProviderStreamEvent
+        return
+      }
+      yield { type: 'text', text: 'Add Dark Mode' } as ProviderStreamEvent
+      yield { type: 'done', stopReason: 'end_turn' } as ProviderStreamEvent
+    })
+    h.createProvider.mockReturnValue({ streamChat })
+    await maybeGenerateTitle({ ...opts(), model: 'claude-opus-5-5' })
+    expect(models[0]).toBe('claude-haiku-5-5')
+    expect(models.at(-1)).toBe('claude-opus-5-5')
+    expect(h.setGeneratedTitle).toHaveBeenCalledWith('c1', 'Add Dark Mode')
+  })
+
+  it('titles on the small model alone when it answers', async () => {
+    h.getProvider.mockReturnValue({
+      id: 'p',
+      kind: 'anthropic',
+      models: [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    })
+    const streamChat = vi.fn(async function* () {
+      yield { type: 'text', text: 'Add Dark Mode' } as ProviderStreamEvent
+      yield { type: 'done', stopReason: 'end_turn' } as ProviderStreamEvent
+    })
+    h.createProvider.mockReturnValue({ streamChat })
+    await maybeGenerateTitle({ ...opts(), model: 'claude-opus-5-5' })
+    expect(streamChat).toHaveBeenCalledTimes(1)
+    expect((streamChat.mock.calls[0] as unknown as [{ model: string }])[0].model).toBe('claude-haiku-5-5')
+  })
+
   it('titles from the user message alone and pushes it live', async () => {
     h.createProvider.mockReturnValue(
       scripted([{ type: 'text', text: 'Add Dark Mode' }, { type: 'done', stopReason: 'end_turn' }])

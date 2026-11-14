@@ -21,6 +21,8 @@ describe('resolveApproval', () => {
     expect(resolveApproval('respond', '')).toBe('plan')
     expect(resolveApproval('review', 'default')).toBe('plan')
     expect(resolveApproval('fix-ci', '')).toBe('auto-edit')
+    expect(resolveApproval('implement', 'default')).toBe('auto-edit')
+    expect(resolveApproval('task', '')).toBe('plan')
   })
 
   it('takes an explicit policy and refuses anything else', () => {
@@ -134,5 +136,16 @@ describe('parseRunOutput', () => {
 
   it('reports no result when the run never got that far', () => {
     expect(parseRunOutput('{"type":"text","delta":"x"}').result).toBeNull()
+  })
+
+  it('keeps each review finding in its last state, in the order they were raised', () => {
+    const f = (id, status, call = 'c1') =>
+      JSON.stringify({ type: 'review_finding', parentCallId: call, finding: { id, status, severity: 'high', title: id } })
+    const r = parseRunOutput([f('a', 'candidate'), f('b', 'candidate'), f('a', 'confirmed'), f('a', 'rejected', 'c2'), '{"type":"review_finding"}'].join('\n'))
+    expect(r.findings.map((x) => [x.id, x.status])).toEqual([
+      ['a', 'confirmed'],
+      ['b', 'candidate'],
+      ['a', 'rejected']
+    ])
   })
 })

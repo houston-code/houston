@@ -3,6 +3,9 @@
  *
  *   HOUSTON_EVAL_A=a.json HOUSTON_EVAL_B=b.json npm run eval:compare
  *
+ * `HOUSTON_EVAL_COMPARE_OUT=<file>` also writes the scorecard to that file, which
+ * is how the eval-ab workflow posts it on the pull request.
+ *
  * Each record comes from an eval run with `HOUSTON_EVAL_OUT=<file>` (see
  * runRecord.ts for the workflow and why the comparison is per task). It lives in
  * the evals project so it runs with the same TypeScript setup as the suite, and
@@ -12,13 +15,14 @@
  * answer (including "no significant difference") is the output.
  */
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { envOr } from './config'
 import { compareRuns, formatComparison, isRunRecord, type EvalRunRecord } from './runRecord'
 
 const A = envOr(process.env, 'HOUSTON_EVAL_A', '')
 const B = envOr(process.env, 'HOUSTON_EVAL_B', '')
+const OUT = envOr(process.env, 'HOUSTON_EVAL_COMPARE_OUT', '')
 
 function load(file: string): EvalRunRecord {
   const path = resolve(file)
@@ -34,6 +38,8 @@ describe.runIf(A !== '' || B !== '')('eval A/B comparison', () => {
     expect(A && B, 'Name both runs: HOUSTON_EVAL_A=<file> HOUSTON_EVAL_B=<file> npm run eval:compare').toBeTruthy()
     const a = load(A)
     const b = load(B)
-    console.log(formatComparison(compareRuns(a, b), a, b, { a: basename(A), b: basename(B) }))
+    const scorecard = formatComparison(compareRuns(a, b), a, b, { a: basename(A), b: basename(B) })
+    console.log(scorecard)
+    if (OUT) writeFileSync(resolve(OUT), `${scorecard}\n`)
   })
 })

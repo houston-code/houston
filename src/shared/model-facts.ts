@@ -360,6 +360,29 @@ const GEMINI_VISION: Rows<boolean> = [
   [/gemini/, false]
 ]
 
+// ── Small models ──────────────────────────────────────────────────────────────────
+
+/**
+ * Each provider kind's cheap sibling for side requests (chat titles, compaction
+ * summaries, next-message suggestions, the isolated reader for flagged web content),
+ * as that host spells the id. Kinds whose ids are the user's own (Azure deployment
+ * names, OpenAI-compatible hosts) have none. Used only when the provider's model list
+ * has the id and it is cheaper than the chat's model (see `smallModelFor`).
+ */
+export const SMALL_MODELS = {
+  anthropic: 'claude-haiku-5-5',
+  vertex: 'claude-haiku-5-5',
+  foundry: 'claude-haiku-5-5',
+  bedrock: 'anthropic.claude-haiku-5-5',
+  openai: 'gpt-6-luna',
+  gemini: 'gemini-3.5-flash-lite'
+} as const satisfies Record<string, string>
+
+/** The curated small model for a provider kind, or null when it has none. */
+export function curatedSmallModel(kind: string): string | null {
+  return (SMALL_MODELS as Record<string, string>)[kind] ?? null
+}
+
 // ── Resolution ────────────────────────────────────────────────────────────────────
 
 /** Display-order family rules per provider kind. Hosted-Claude kinds rank by the Claude
@@ -488,6 +511,33 @@ export function providerSendsXhigh(
       return anthropicSupportsXhigh(model)
     case 'openai':
       return !customBaseUrl
+    default:
+      return false
+  }
+}
+
+/**
+ * Whether a PDF read_file attaches reaches the model as a document. Mirrors the request
+ * builders: the Claude hosts send `document` blocks, hosted OpenAI (the Responses API)
+ * sends `input_file`, and Gemini sends inline data, the last two only for the multimodal
+ * models that read them. Chat Completions hosts and a proxied OpenAI base URL have no
+ * document part, so a PDF sent there would silently vanish.
+ */
+export function providerAcceptsPdf(
+  kind: 'anthropic' | 'openai' | 'gemini' | 'openai-compatible' | 'bedrock' | 'vertex' | 'azure-openai' | 'foundry',
+  model: string,
+  customBaseUrl: boolean
+): boolean {
+  switch (kind) {
+    case 'anthropic':
+    case 'bedrock':
+    case 'vertex':
+    case 'foundry':
+      return true
+    case 'openai':
+      return !customBaseUrl && modelHasVision(model)
+    case 'gemini':
+      return modelHasVision(model)
     default:
       return false
   }

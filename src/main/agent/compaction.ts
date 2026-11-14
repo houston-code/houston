@@ -6,11 +6,20 @@ import {
   type ToolSchema
 } from '@shared/agent'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
-import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
+import {
+  COMPACTION_WINDOW_FRACTION,
+  hasUserCompactionLimit,
+  type CompactionLimit
+} from '@shared/compactionThreshold'
 import { APPROVAL_DENIED } from '@shared/promptOutcome'
 
 // Re-exported from shared so existing main-process imports/tests keep their path.
 export { COMPACTION_SUMMARY_PREFIX }
+export {
+  COMPACTION_WINDOW_FRACTION,
+  PRICE_TIER_HEADROOM_FRACTION,
+  resolveCompactionThreshold
+} from '@shared/compactionThreshold'
 
 /**
  * Context compaction. Long sessions otherwise grow the message log without bound
@@ -38,33 +47,37 @@ export const KEEP_RECENT_USER_TURNS = 3
 export const COMPACTION_TAIL_FRACTION = 0.5
 
 /**
- * Fraction of the model's context window at which proactive compaction kicks in.
- * The remaining fifth is headroom for the next turn's growth (tool results, the
- * model's output, attachments) and for the slack in the ~4-chars-per-token
- * estimate, so a turn that lands right at the threshold still fits comfortably.
+ * Window size at which stale tool results start going out as stubs, ahead of the
+ * compaction threshold. On a large window the threshold sits hundreds of thousands
+ * of tokens up, and every request below it re-sends every old file read and build
+ * log; stubbing them costs no model call, and `recall_history` or a re-run brings
+ * any of them back. Summarization still waits for the threshold.
  */
-export const COMPACTION_WINDOW_FRACTION = 0.8
+export const EARLY_EVICTION_TOKENS = 160_000
 
 /**
- * The effective compaction threshold in tokens. An explicit setting always wins
- * (0 disables compaction, matching the documented semantics); otherwise the
- * threshold scales to the selected model's context window — a fixed count is
- * mis-sized in both directions for a bring-your-own-model product (far too eager
- * on a 1M-token model, far too late on a 16k local one). When the window is
- * unknown (a custom/local model with no capability metadata) fall back to the
- * fixed default.
+ * An early eviction must free at least this share of its trigger. Each advance
+ * rewrites the window from the first new stub on (one prompt-cache miss), and a
+ * window that sits above the trigger after one would otherwise advance again on
+ * every iteration for a sliver of room each time.
  */
-export function resolveCompactionThreshold(
-  explicit: number | undefined,
-  contextWindow: number | null
+export const EARLY_EVICTION_MIN_GAIN_FRACTION = 0.1
+
+/**
+ * The window size at which the loop advances its eviction watermark without
+ * summarizing: {@link EARLY_EVICTION_TOKENS} when that is below the automatic
+ * threshold, else the threshold itself (eviction then runs only alongside
+ * compaction, as it always has). The user's own trigger (a token count, or a share
+ * of a known window) governs both, and 0 turns both off.
+ */
+export function resolveEvictionTrigger(
+  limit: number | CompactionLimit | undefined,
+  threshold: number,
+  contextWindow: number | null = null
 ): number {
-  if (typeof explicit === 'number' && Number.isFinite(explicit)) {
-    return explicit > 0 ? Math.floor(explicit) : 0
-  }
-  if (typeof contextWindow === 'number' && contextWindow > 0) {
-    return Math.floor(contextWindow * COMPACTION_WINDOW_FRACTION)
-  }
-  return DEFAULT_COMPACTION_THRESHOLD
+  if (threshold <= 0) return 0
+  if (hasUserCompactionLimit(limit, contextWindow)) return threshold
+  return Math.min(threshold, EARLY_EVICTION_TOKENS)
 }
 
 /**
@@ -122,6 +135,17 @@ const SUMMARY_MIN_TOKENS = 2048
 export function summaryMaxTokens(contextWindow: number | null | undefined): number {
   if (!contextWindow || contextWindow <= 0) return SUMMARY_MAX_TOKENS
   return Math.min(SUMMARY_MAX_TOKENS, Math.max(SUMMARY_MIN_TOKENS, Math.floor(contextWindow / 4)))
+}
+
+/**
+ * Whether a summary request of `requestTokens` (estimated) leaves room for its output
+ * cap on a model with this window, within the same share of the window compaction
+ * keeps a conversation under. A model whose window is unknown never qualifies: the
+ * loop uses it to decide whether a smaller model can write the summary at all.
+ */
+export function summaryFits(requestTokens: number, contextWindow: number | null | undefined): boolean {
+  if (!contextWindow || contextWindow <= 0) return false
+  return requestTokens + summaryMaxTokens(contextWindow) <= Math.floor(contextWindow * COMPACTION_WINDOW_FRACTION)
 }
 
 /**
@@ -705,6 +729,27 @@ export function hasEvictableToolResults(
     if (isEvictable(messages[i], minBytes)) return true
   }
   return false
+}
+
+/**
+ * Rough tokens that moving the eviction boundary up to `to` would free in
+ * `messages[from..to)`, on the same ~4-chars-per-token basis as
+ * {@link estimateTokens}: each result that would be stubbed, less its stub.
+ */
+export function evictableTokens(
+  messages: ChatMessage[],
+  from: number,
+  to: number,
+  minBytes: number = EVICT_MIN_BYTES
+): number {
+  let tokens = 0
+  for (let i = Math.max(0, from); i < Math.min(to, messages.length); i++) {
+    const m = messages[i]
+    if (!isEvictable(m, minBytes)) continue
+    const stub = evictionStub(m.toolName, '', 0).length
+    tokens += Math.max(0, Math.ceil((m.content.length - stub) / 4)) + messageAttachmentTokens(m)
+  }
+  return tokens
 }
 
 /**

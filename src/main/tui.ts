@@ -66,12 +66,13 @@ import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { throttleNotice } from '@shared/rateLimit'
-import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, modelCapabilities } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import type { ContextParts, ModelUsage, RunLimitReason } from '@shared/agent'
 import { latestRunEnd, limitNoticeText, runEndNoticeText, runOutcomePhrase, type RunOutcome } from '@shared/runEnd'
 import { renderContextReport } from '@shared/contextBreakdown'
+import { compactionLimitFrom, compactionThresholdNote } from '@shared/compactionThreshold'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
@@ -5223,7 +5224,9 @@ function handleInfoCommand(
   }
   if (name === 'context') {
     const window = state.model ? contextWindowFor(state.model) : null
-    deps.io.out(`${renderContextReport(state.contextParts ?? null, state.contextTokens ?? 0, window)}\n`)
+    const tier = state.model ? longContextTierAbove(state.model) : null
+    const compaction = compactionThresholdNote(compactionLimitFrom(deps.getSettings()), window, tier)
+    deps.io.out(`${renderContextReport(state.contextParts ?? null, state.contextTokens ?? 0, window, tier, compaction)}\n`)
     return
   }
   if (name === 'theme') {

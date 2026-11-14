@@ -23,7 +23,8 @@ import {
  * filter, context lines, and a files-with-matches output mode. Both search the
  * same files (see ./fileScope): inside a git repo, every tracked file plus the
  * untracked files the ignore rules allow; elsewhere, everything outside a fixed set
- * of dependency/build directories. Hidden files are skipped either way.
+ * of dependency/build directories. Hidden files are skipped either way, except
+ * tracked ones (`.github/`, `.husky/`) that aren't credential files.
  */
 
 /** Dotfiles the JS walk still searches (ripgrep skips every hidden file). */
@@ -304,6 +305,8 @@ export async function searchContents(o: SearchOptions): Promise<string> {
   // The file-glob filter, compiled once per search rather than once per file.
   // matchBase mirrors ripgrep's gitignore-style globs (see scanFile).
   const inGlob = o.glob ? globTester(o.glob, { matchBase: true }) : null
+  // For tracked hidden paths, which are searched: `*.yml` must match `.github/workflows/ci.yml`.
+  const inGlobDot = o.glob ? globTester(o.glob, { matchBase: true, dot: true }) : null
   const isFile = statSync(o.startAbs).isFile()
   // A file argument is searched as given, like ripgrep does; only a directory
   // needs the git-or-fallback decision.
@@ -319,7 +322,7 @@ export async function searchContents(o: SearchOptions): Promise<string> {
           .map((rel) => join(o.startAbs, rel))
           .filter(isRegularFile)
           .map((full) => relative(o.workspace, full).split(sep).join('/'))
-          .filter((rel) => !inGlob || inGlob(rel))
+          .filter((rel) => !inGlobDot || inGlobDot(rel))
       : []
     const all: string[] = []
     for (const run of planRuns(o.searchRel || '.', extras, undefined, !git || plan.walk)) {
@@ -357,13 +360,16 @@ export async function searchContents(o: SearchOptions): Promise<string> {
   if (isFile) {
     await scanFile(o.startAbs, o.workspace, regex, out, o.max, matchOpts, inGlob)
   } else if (listed) {
+    // Tracked hidden files are searched like any other tracked file (see planScope).
+    const trackedHidden = new Set(git ? plan.explicit.filter((rel) => hasHiddenSegment(rel)) : [])
     for (const rel of listed) {
       if (out.length >= o.max) break
-      if (hasHiddenSegment(rel, KEEP_HIDDEN)) continue
+      const hidden = trackedHidden.has(rel)
+      if (!hidden && hasHiddenSegment(rel, KEEP_HIDDEN)) continue
       const full = join(o.startAbs, rel)
       // Regular files only, as the walk's Dirent check: never follow a symlink.
       if (!isRegularFile(full)) continue
-      await scanFile(full, o.workspace, regex, out, o.max, matchOpts, inGlob)
+      await scanFile(full, o.workspace, regex, out, o.max, matchOpts, hidden ? inGlobDot : inGlob)
     }
   } else {
     await jsWalk(o.startAbs, o.workspace, regex, out, o.max, matchOpts, inGlob)

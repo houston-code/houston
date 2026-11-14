@@ -101,7 +101,16 @@ import {
   chatStatusSnapshot,
   onChatStatusChanged
 } from './agent/loop'
-import { killShell, killShellsFor, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
+import {
+  killShell,
+  killShellsFor,
+  listShells,
+  listPreviewServers,
+  onShellsChanged,
+  runningShellsFor,
+  shellTail
+} from './agent/shells'
+import { removeWorktreeOnArchive } from './archiveWorktree'
 import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
 import { runAndDrain, drainQueue, startWakeTurn, type DrainIO } from './agent/drain'
 import { setWakeHost } from './agent/backgroundEvents'
@@ -174,6 +183,7 @@ import {
   forkConversationAt,
   deleteConversation,
   otherConversationsInWorktree,
+  detachConversationWorktree,
   importConversation,
   organizeConversation,
   reorderConversations,
@@ -1397,15 +1407,33 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return { deleted: true, worktree }
     }
   )
-  // Rename / pin / move-to-group. Does not affect the recency ordering.
+  // Rename / pin / archive / move-to-group. Does not affect the recency ordering.
+  // Archiving also removes the chat's worktree when that loses nothing (clean and
+  // merged); awaited so the list the renderer re-reads next already shows the chat
+  // back at its repo root.
   handle(
     IPC.conversationOrganize,
-    (
+    async (
       _event,
       id: string,
       patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
     ) => {
       organizeConversation(id, patch)
+      if (patch.archived !== true) return
+      await removeWorktreeOnArchive(id, {
+        peek: (cid) => peekConversation(cid) ?? undefined,
+        sharedCount: otherConversationsInWorktree,
+        busy: (cid) => {
+          const conv = peekConversation(cid)
+          return (
+            activeRunForConversation(cid) !== null ||
+            (conv !== null && runningShellsFor(cid, conv.workspace).length > 0)
+          )
+        },
+        isDisposable: (wt) => isWorktreeDisposable(wt),
+        remove: (wt) => removeWorktree(wt),
+        detach: detachConversationWorktree
+      })
     }
   )
   // Drag-to-reorder within a sidebar section. Also does not affect recency.

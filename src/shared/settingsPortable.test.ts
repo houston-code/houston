@@ -122,6 +122,7 @@ describe('import checks per preference', () => {
     ['webReads', 'allow', 'always'],
     ['systemPromptExtra', 'be brief', 42],
     ['compactionThreshold', 0, -1],
+    ['compactionThresholdPercent', 50, 101],
     ['shellOutputMaxBytes', 65536, 10],
     ['maxIterations', 40, 1.5],
     ['autoExtendTurns', false, 'no'],
@@ -153,6 +154,7 @@ describe('import checks per preference', () => {
     ['previewAutoOpen', false, 'no'],
     ['toolOutputExpanded', true, 'open'],
     ['showReasoning', false, 1],
+    ['announceReplies', true, 'aloud'],
     ['memoryEnabled', false, 'yes'],
     ['keybindings', { 'open-settings': 'Mod+,', 'toggle-sidebar': null }, { 'open-settings': 5 }],
     ['sandboxEgress', { mode: 'allowlist', allow: ['corp.example'], deny: [] }, { mode: 'open' }]

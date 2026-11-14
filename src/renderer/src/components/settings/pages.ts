@@ -86,7 +86,7 @@ export const PAGES: SettingsPage[] = [
       {
         id: 'providers',
         Component: ProvidersSection,
-        keywords: ['api key', 'token', 'credentials', 'login', 'sign in', 'llm', 'endpoint', 'base url', 'region'],
+        keywords: ['api key', 'token', 'credentials', 'login', 'sign in', 'llm', 'endpoint', 'base url', 'region', 'small model', 'side tasks', 'cheap model', 'titles'],
         values: (s) => s.providers.flatMap((p) => [p.label, p.kind, p.baseUrl, ...p.models.map((m) => m.id)])
       },
       {
@@ -121,7 +121,7 @@ export const PAGES: SettingsPage[] = [
       },
       {
         id: 'context-window',
-        keys: ['compactionThreshold', 'shellOutputMaxBytes'],
+        keys: ['compactionThreshold', 'compactionThresholdPercent', 'shellOutputMaxBytes'],
         Component: ContextWindowSection,
         keywords: ['compaction', 'compact', 'tokens', 'output limit', 'truncate', 'memory']
       },
@@ -310,7 +310,7 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'accentColor', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning'],
+        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'accentColor', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning', 'announceReplies'],
         Component: AppearanceSection,
         keywords: [
           'theme',
@@ -332,7 +332,10 @@ export const PAGES: SettingsPage[] = [
           'expand',
           'collapse',
           'reasoning',
-          'thinking'
+          'thinking',
+          'screen reader',
+          'accessibility',
+          'announce'
         ]
       }
     ]

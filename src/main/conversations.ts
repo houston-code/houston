@@ -1259,6 +1259,20 @@ export function setConversationSettings(id: string, patch: ConversationSettingsP
 }
 
 /**
+ * Point a chat whose worktree was removed back at the repo it came from, so it still
+ * opens (and can be continued) from the repo root. Keeps its messages; drops the
+ * worktree record so nothing tries to use or remove the gone checkout again. Does
+ * not bump `updatedAt`. Unknown ids are a no-op.
+ */
+export function detachConversationWorktree(id: string, repoRoot: string): void {
+  const conv = read(id)
+  if (!conv?.worktree) return
+  conv.workspace = repoRoot
+  delete conv.worktree
+  write(conv)
+}
+
+/**
  * Apply a user-driven organization change (rename, pin, move to/clear group). Unlike
  * {@link updateConversationMeta} this does NOT bump `updatedAt`, so pinning or filing a
  * chat doesn't reorder it to the top of the recency list. `groupId: null` clears it.

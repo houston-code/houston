@@ -5,6 +5,7 @@ import {
   SCRIPTED_MODEL,
   envOr,
   resolveEvalConfig,
+  selectTasks,
   type Env
 } from './config'
 
@@ -135,5 +136,59 @@ describe('resolveEvalConfig', () => {
     expect(resolveEvalConfig({ HOUSTON_EVAL_TRACE: '1' }, providers).trace).toBe(true)
     expect(resolveEvalConfig(live({ HOUSTON_EVAL_TRACE: '1' }), providers).trace).toBe(true)
     expect(resolveEvalConfig(live({ HOUSTON_EVAL_TRACE: '' }), providers).trace).toBe(false)
+  })
+
+  it('reads the task subset in either driver, and leaves it unset when empty', () => {
+    expect(resolveEvalConfig({ HOUSTON_EVAL_TASKS: 'hard' }, providers).tasks).toBe('hard')
+    expect(resolveEvalConfig(live({ HOUSTON_EVAL_TASKS: ' a,b ' }), providers).tasks).toBe('a,b')
+    expect('tasks' in resolveEvalConfig(live({ HOUSTON_EVAL_TASKS: '' }), providers)).toBe(false)
+  })
+
+  // A recorded subset would replace the baseline file and drop the other tasks from the gate.
+  it('refuses to record a baseline for a subset of the tasks', () => {
+    expect(() =>
+      resolveEvalConfig(live({ HOUSTON_EVAL_RECORD: '1', HOUSTON_EVAL_TASKS: 'hard' }), providers)
+    ).toThrow(/records every task/)
+    expect(resolveEvalConfig(live({ HOUSTON_EVAL_RECORD: '1', HOUSTON_EVAL_TASKS: '' }), providers).record).toBe(
+      true
+    )
+  })
+})
+
+describe('selectTasks', () => {
+  const t = (id: string): { id: string } => ({ id })
+  const all = [t('a'), t('b'), t('c'), t('d')]
+  const hard = [t('c'), t('d')]
+
+  it('runs every task when no subset is named', () => {
+    expect(selectTasks(all, hard, undefined)).toEqual(all)
+    expect(selectTasks(all, hard, '  ')).toEqual(all)
+  })
+
+  it('runs the harder subset for "hard"', () => {
+    expect(selectTasks(all, hard, 'hard').map((x) => x.id)).toEqual(['c', 'd'])
+  })
+
+  it('runs named ids in registry order', () => {
+    expect(selectTasks(all, hard, ' d, a ,').map((x) => x.id)).toEqual(['a', 'd'])
+  })
+
+  // A typo must not shrink the run and still report green.
+  it('rejects an id that is not registered', () => {
+    expect(() => selectTasks(all, hard, 'a,nope')).toThrow(/aren't registered: nope/)
+  })
+
+  it('rejects a spec that selects nothing', () => {
+    expect(() => selectTasks(all, hard, ',')).toThrow(/selects no tasks/)
+  })
+})
+
+describe('the harder subset', () => {
+  it('is a non-empty, registered part of the task list', async () => {
+    const { HARD_TASKS, TASKS } = await import('./tasks')
+    expect(HARD_TASKS.length).toBeGreaterThan(0)
+    expect(HARD_TASKS.length).toBeLessThan(TASKS.length)
+    for (const task of HARD_TASKS) expect(TASKS).toContain(task)
+    expect(selectTasks(TASKS, HARD_TASKS, 'hard')).toEqual(HARD_TASKS)
   })
 })
