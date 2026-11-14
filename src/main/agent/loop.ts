@@ -74,6 +74,10 @@ import { runQuarantineExtraction } from './untrusted'
 import { smallModelFor, withSmallModel } from '@shared/smallModel'
 import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
+import { isOllamaProvider, ollamaContextLengthCached, ollamaContextNotice } from '../providers/ollama'
+
+/** How long a run waits on Ollama for the context it runs a model with. */
+const OLLAMA_PROBE_TIMEOUT_MS = 3000
 import { buildSystemPrompt, promptId } from './prompt'
 import { createLiveOutput } from './liveOutput'
 import { applyRunOverrides } from './run-overrides'
@@ -3456,6 +3460,8 @@ export async function startRun(
       costCeilingUsd: settings.costCeilingUsd
     })
     let cumulativeCostUsd = 0
+    // Whether this run has checked the context an Ollama server runs its model with.
+    let ollamaContextChecked = false
     let landed = false
     // A run that is still landing file writes, or still finding things out, gets more
     // room instead of a wrap-up (see shouldExtend): `budget.maxIterations` grows in
@@ -3969,6 +3975,25 @@ export async function startRun(
       }
 
       let sendMessages = buildWindow()
+
+      // Ollama runs a model with the context it was loaded with, not the model's own,
+      // and cuts a longer prompt from the front without an error. Check once per run,
+      // on the first request (later ones only grow), and say so with the fix.
+      if (!ollamaContextChecked) {
+        ollamaContextChecked = true
+        const cfg = getProvider(route.providerId)
+        if (cfg && isOllamaProvider(cfg) && cfg.baseUrl) {
+          const probe = await ollamaContextLengthCached(
+            cfg.baseUrl,
+            route.model,
+            AbortSignal.any([abort.signal, AbortSignal.timeout(OLLAMA_PROBE_TIMEOUT_MS)])
+          ).catch(() => null)
+          const needed = estimateTokens(system, sendMessages) + toolTokens
+          if (probe && probe.contextLength < needed) {
+            emit({ type: 'notice', message: ollamaContextNotice(route.model, probe.contextLength, needed) })
+          }
+        }
+      }
 
       // Re-read the thinking controls fresh each model turn rather than using the
       // run-start `settings` snapshot, so changing the reasoning level mid-run takes

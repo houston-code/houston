@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ChatMessage, ChatRequest, ProviderStreamEvent } from '@shared/agent'
-import { toOpenAIMessages, createOpenAIProvider, modelOptionFromListing } from './openai'
+import { toOpenAIMessages, createOpenAIProvider, hostReplaysReasoningDetails, modelOptionFromListing } from './openai'
 import { EXTENDED_STREAM_IDLE_TIMEOUT_MS, requestedStreamIdleWindow } from './idle-fetch'
 
 // Mock the lazily-imported SDK so we can feed a synthetic chat-completions stream
@@ -706,5 +706,84 @@ describe('openai adapter: tool calls cut off at the output limit', () => {
       type: 'tool_call',
       call: { id: 'call_1', name: 'read_file', arguments: { path: 'a.ts' } }
     })
+  })
+})
+
+describe('openai adapter: reasoning from compatible hosts', () => {
+  beforeEach(() => h.create.mockReset())
+  const reasoningOf = (events: ProviderStreamEvent[]): string =>
+    events.filter((e) => e.type === 'reasoning').map((e) => (e as { text: string }).text).join('')
+  const delta = (d: Record<string, unknown>): unknown => ({ choices: [{ delta: d }] })
+
+  it('reads reasoning_content and reasoning into reasoning events', async () => {
+    const a = await run([delta({ reasoning_content: 'think ' }), delta({ reasoning_content: 'more' }), textChunk('Answer.'), stopChunk()])
+    expect(reasoningOf(a)).toBe('think more')
+    expect(textOf(a)).toBe('Answer.')
+    const b = await run([delta({ reasoning: 'ollama thoughts' }), textChunk('Hi.'), stopChunk()])
+    expect(reasoningOf(b)).toBe('ollama thoughts')
+  })
+
+  it('reads reasoning_details without doubling the text the host also sends as reasoning', async () => {
+    const events = await run([
+      delta({ reasoning: 'Step one. ', reasoning_details: [{ type: 'reasoning.text', text: 'Step one. ', index: 0 }] }),
+      delta({ reasoning: 'Step two.', reasoning_details: [{ type: 'reasoning.text', text: 'Step two.', index: 0 }] }),
+      textChunk('Done.'),
+      stopChunk()
+    ])
+    expect(reasoningOf(events)).toBe('Step one. Step two.')
+  })
+
+  it('routes a leading <think> block in the content to reasoning, then recovers the call after it', async () => {
+    const events = await run([
+      textChunk('<think>\nI need the file.'),
+      textChunk('\n</think>\n'),
+      textChunk('{"name":"read_file","arguments":{"path":"a.ts"}}'),
+      stopChunk()
+    ])
+    expect(reasoningOf(events)).toBe('I need the file.\n')
+    expect(events.some((e) => e.type === 'text')).toBe(false)
+    expect(events.find((e) => e.type === 'tool_call')).toMatchObject({ call: { name: 'read_file', arguments: { path: 'a.ts' } } })
+  })
+
+  it('keeps reasoning_details for replay only on OpenRouter, and sends them back to the same model', async () => {
+    const chunks = [
+      delta({ reasoning_details: [{ type: 'reasoning.text', text: 'Plan ', index: 0, format: 'anthropic-claude-v1' }] }),
+      delta({ reasoning_details: [{ type: 'reasoning.text', text: 'it.', index: 0, signature: 'sig' }] }),
+      textChunk('Ok.'),
+      stopChunk()
+    ]
+    const local = await run(chunks)
+    expect(local.find((e) => e.type === 'done')).not.toHaveProperty('reasoning')
+
+    h.create.mockResolvedValue(streamOf(chunks))
+    const routed = createOpenAIProvider('k', 'https://openrouter.ai/api/v1')
+    const events: ProviderStreamEvent[] = []
+    for await (const e of routed.streamChat({ model: 'anthropic/claude-x', messages: [{ role: 'user', content: 'hi' }] })) events.push(e)
+    const done = events.find((e) => e.type === 'done') as Extract<ProviderStreamEvent, { type: 'done' }>
+    expect(done.reasoning).toEqual([
+      {
+        text: 'Plan it.',
+        model: 'anthropic/claude-x',
+        details: [{ type: 'reasoning.text', text: 'Plan it.', index: 0, format: 'anthropic-claude-v1', signature: 'sig' }]
+      }
+    ])
+
+    const history: ChatMessage[] = [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'Ok.', reasoning: done.reasoning }
+    ]
+    const replayed = toOpenAIMessages(undefined, history, { replayReasoningFor: 'anthropic/claude-x' })
+    expect((replayed[1] as { reasoning_details?: unknown }).reasoning_details).toEqual(done.reasoning![0].details)
+    // Another model can't use them; without the option nothing is sent.
+    expect(toOpenAIMessages(undefined, history, { replayReasoningFor: 'openai/gpt-x' })[1]).not.toHaveProperty('reasoning_details')
+    expect(toOpenAIMessages(undefined, history)[1]).not.toHaveProperty('reasoning_details')
+  })
+
+  it('recognizes OpenRouter by host only', () => {
+    expect(hostReplaysReasoningDetails('https://openrouter.ai/api/v1')).toBe(true)
+    expect(hostReplaysReasoningDetails('https://eu.openrouter.ai/api/v1')).toBe(true)
+    expect(hostReplaysReasoningDetails('https://openrouter.ai.evil.test/v1')).toBe(false)
+    expect(hostReplaysReasoningDetails('http://localhost:11434/v1')).toBe(false)
+    expect(hostReplaysReasoningDetails(undefined)).toBe(false)
   })
 })
