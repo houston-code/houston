@@ -1,113 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { McpServerConfig } from '@shared/types'
-import { sanitizeServerId } from '@shared/mcp'
-import { MCP_CATALOG, addPastedServers, catalogServer, freeServerId, serverProblem, type McpCatalogEntry } from '@shared/mcpCatalog'
+import { MCP_CATALOG, addPastedServers, catalogDraft } from '@shared/mcpCatalog'
 import { parseMcpServersJson } from '@shared/mcpJson'
-import { HeadersField } from '../fields'
+import type { RegistrySearchResult } from '@shared/mcpRegistry'
+import { ReviewForm, addedMessage } from './mcpReview'
+import { RegistryPanel } from './mcpRegistry'
 
-/** Review a catalog entry before adding it: every field editable, nothing saved until Add. */
-function ReviewForm({
-  entry,
-  workspace,
-  taken,
-  onAdd,
-  onCancel
-}: {
-  entry: McpCatalogEntry
-  workspace: string | null
-  taken: string[]
-  onAdd: (server: McpServerConfig) => void
-  onCancel: () => void
-}): JSX.Element {
-  const [server, setServer] = useState<McpServerConfig>(() => {
-    const s = catalogServer(entry, workspace)
-    return { ...s, id: freeServerId(s.id, taken) }
-  })
-  // One argument per line, so a folder path with spaces stays one argument.
-  const [argsText, setArgsText] = useState((server.args ?? []).join('\n'))
-  const [switchOn, setSwitchOn] = useState(false)
-  const [tried, setTried] = useState(false)
-  const firstRef = useRef<HTMLInputElement>(null)
-  useEffect(() => firstRef.current?.focus(), [])
-
-  const remote = server.transport === 'http' || server.transport === 'sse'
-  const candidate: McpServerConfig = { ...server, args: remote ? [] : argsText.split('\n').map((a) => a.trim()).filter(Boolean) }
-  const problem = serverProblem(candidate, taken)
-  const patch = (p: Partial<McpServerConfig>): void => setServer((s) => ({ ...s, ...p }))
-
-  return (
-    <form
-      className="mcp-review"
-      aria-label={`Review ${entry.name}`}
-      onSubmit={(e) => {
-        e.preventDefault()
-        setTried(true)
-        if (!problem) onAdd({ ...candidate, enabled: switchOn })
-      }}
-    >
-      <p className="mcp-review__title">
-        {entry.name} <span className="settings-dim">from {entry.publisher}</span>
-      </p>
-      {entry.note && <p className="field__hint">{entry.note}</p>}
-      {entry.needs && <p className="field__hint">Needs {entry.needs} installed.</p>}
-      <label className="mcp-review__field">
-        <span>Id</span>
-        <input ref={firstRef} value={server.id} onChange={(e) => patch({ id: sanitizeServerId(e.target.value) })} />
-      </label>
-      {remote ? (
-        <>
-          <label className="mcp-review__field">
-            <span>URL</span>
-            <input value={server.url ?? ''} onChange={(e) => patch({ url: e.target.value })} />
-          </label>
-          <label className="mcp-review__field">
-            <span>Headers, one per line (values are stored encrypted)</span>
-            <HeadersField headers={server.headers} onChange={(headers) => patch({ headers })} />
-          </label>
-          {entry.headers && (
-            <p className="field__hint">
-              {Object.entries(entry.headers).map(([k, v]) => (
-                <span key={k}>
-                  <code>{k}</code>: {v}.{' '}
-                </span>
-              ))}
-            </p>
-          )}
-        </>
-      ) : (
-        <>
-          <label className="mcp-review__field">
-            <span>Command</span>
-            <input value={server.command} onChange={(e) => patch({ command: e.target.value })} />
-          </label>
-          <label className="mcp-review__field">
-            <span>Arguments, one per line</span>
-            <textarea rows={Math.max(2, argsText.split('\n').length)} value={argsText} onChange={(e) => setArgsText(e.target.value)} />
-          </label>
-        </>
-      )}
-      <label className="mcp-review__check">
-        <input type="checkbox" checked={switchOn} onChange={(e) => setSwitchOn(e.target.checked)} />
-        Switch it on now (it starts the next time the agent runs)
-      </label>
-      {tried && problem && (
-        <p className="mcp-review__error" role="alert">
-          {problem}
-        </p>
-      )}
-      <div className="mcp-review__actions">
-        <button type="submit" className="btn btn--sm btn--accent">
-          Add server
-        </button>
-        <button type="button" className="btn btn--sm" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </form>
-  )
-}
-
-/** The catalog: each entry with a Review button that opens the form above. */
+/** The built-in catalog ("Recommended"): each entry with a Review button that opens the form above. */
 function CatalogPanel({
   workspace,
   taken,
@@ -142,18 +41,12 @@ function CatalogPanel({
           </code>
           {reviewing === entry.id && (
             <ReviewForm
-              entry={entry}
-              workspace={workspace}
+              draft={catalogDraft(entry, workspace)}
               taken={taken}
               onCancel={() => setReviewing(null)}
               onAdd={(server) => {
                 setReviewing(null)
-                onAdd(
-                  [server],
-                  server.enabled
-                    ? `Added ${server.id}. It starts the next time the agent runs.`
-                    : `Added ${server.id}, switched off. Tick its box in the list to switch it on.`
-                )
+                onAdd([server], addedMessage(server))
               }}
             />
           )}
@@ -259,28 +152,34 @@ function PastePanel({
   )
 }
 
+type AddPanel = 'catalog' | 'registry' | 'paste'
+
 /**
- * "Add from catalog" and "Paste JSON" under the MCP server list. Both only append to
- * the working list (which then saves like any edit); nothing is connected or run
- * from here, and a server added switched off stays inert until its box is ticked.
+ * "Recommended", "Browse registry" and "Paste JSON" under the MCP server list. All
+ * three only append to the working list (which then saves like any edit); nothing is
+ * connected or run from here, and a server added switched off stays inert until its
+ * box is ticked.
  */
 export function McpAddPanels({
   servers,
   workspace,
-  onAdd
+  onAdd,
+  searchRegistry
 }: {
   servers: McpServerConfig[]
   workspace: string | null
   onAdd: (added: McpServerConfig[]) => void
+  /** Registry search; defaults to the main-process client over IPC. */
+  searchRegistry?: (query: string, cursor?: string) => Promise<RegistrySearchResult>
 }): JSX.Element {
-  const [open, setOpen] = useState<'catalog' | 'paste' | null>(null)
+  const [open, setOpen] = useState<AddPanel | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const add = (added: McpServerConfig[], msg: string): void => {
     onAdd(added)
     setMessage(msg)
     setOpen(null)
   }
-  const toggle = (which: 'catalog' | 'paste'): void => {
+  const toggle = (which: AddPanel): void => {
     setMessage(null)
     setOpen((o) => (o === which ? null : which))
   }
@@ -288,13 +187,23 @@ export function McpAddPanels({
     <div className="mcp-add">
       <div className="mcp-review__actions">
         <button type="button" className="btn btn--sm" aria-expanded={open === 'catalog'} onClick={() => toggle('catalog')}>
-          Add from catalog
+          Recommended
+        </button>
+        <button type="button" className="btn btn--sm" aria-expanded={open === 'registry'} onClick={() => toggle('registry')}>
+          Browse registry
         </button>
         <button type="button" className="btn btn--sm" aria-expanded={open === 'paste'} onClick={() => toggle('paste')}>
           Paste JSON
         </button>
       </div>
       {open === 'catalog' && <CatalogPanel workspace={workspace} taken={servers.map((s) => s.id)} onAdd={add} />}
+      {open === 'registry' && (
+        <RegistryPanel
+          taken={servers.map((s) => s.id)}
+          onAdd={add}
+          search={searchRegistry ?? ((q, c) => window.api.searchMcpRegistry(q, c))}
+        />
+      )}
       {open === 'paste' && <PastePanel current={servers} onAdd={add} />}
       {message && (
         <p className="field__hint" role="status">

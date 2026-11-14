@@ -335,7 +335,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Hand a task to one of your .houston/agents (/agent <name> <task>)',
     clients: ['gui', 'tui']
   },
-  { name: 'mcp', group: 'Extend', description: 'List MCP servers (add, remove, login, logout)', clients: ['gui', 'tui'] },
+  { name: 'mcp', group: 'Extend', description: 'List MCP servers (add, remove, login, logout, registry search)', clients: ['gui', 'tui'] },
   {
     name: 'trust', group: 'Setup',
     description: "Show this folder's project-config trust (/trust forget re-decides)",

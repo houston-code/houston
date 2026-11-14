@@ -16,6 +16,7 @@ import type {
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
+import type { RegistryServer } from '@shared/mcpRegistry'
 import { limitNoticeText } from '@shared/runEnd'
 import { APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
 import {
@@ -6746,5 +6747,117 @@ describe('waking at an idle composer', () => {
     expect(tryWake!('conv-1')).toBe(true)
     await done$
     expect(rec.runs).toHaveLength(1)
+  })
+})
+
+describe('runTui: /mcp search and /mcp add-from-registry', () => {
+  // A mocked registry client: these tests never reach the network.
+  const weather: RegistryServer = {
+    name: 'io.github.acme/weather',
+    description: 'Forecasts',
+    version: '1.2.3',
+    repositoryUrl: 'https://github.com/acme/weather',
+    packages: [
+      {
+        registryType: 'npm',
+        identifier: '@acme/weather-mcp',
+        version: '1.2.3',
+        transport: 'stdio',
+        env: [
+          { kind: 'env', name: 'WEATHER_KEY', description: 'API key', required: true, secret: true },
+          { kind: 'env', name: 'WEATHER_REGION', description: 'Region', required: false, secret: false, default: 'eu' }
+        ],
+        packageArguments: [],
+        runtimeArguments: []
+      }
+    ],
+    remotes: []
+  }
+  const remoteOnly: RegistryServer = {
+    name: 'com.example/hosted',
+    description: 'Hosted',
+    version: '2.0.0',
+    packages: [],
+    remotes: [{ type: 'streamable-http', url: 'https://hosted.example/mcp', headers: [] }]
+  }
+  const registry = (servers: readonly RegistryServer[]): NonNullable<TuiDeps['mcpRegistry']> => ({
+    search: vi.fn(async () => ({ ok: true as const, page: { servers: [...servers] } })),
+    get: vi.fn(async (name: string) => {
+      const server = servers.find((s) => s.name === name)
+      return server ? { ok: true as const, server } : { ok: false as const, error: 'The registry has no server with that name.' }
+    })
+  })
+
+  it('parses the registry verbs', () => {
+    expect(parseSettingsAction('search weather tools')).toEqual({ op: 'search', query: 'weather tools' })
+    expect(parseSettingsAction('search')).toEqual({ op: 'search', query: '' })
+    expect(parseSettingsAction('add-from-registry io.github.acme/weather')).toEqual({
+      op: 'registry-add',
+      name: 'io.github.acme/weather'
+    })
+    expect(parseSettingsAction('add-from-registry')).toEqual({ op: 'usage' })
+  })
+
+  it('/mcp search lists results with delivery and repository', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const reg = registry([weather])
+    d.mcpRegistry = reg
+    const t = fakeIo(['/mcp search weather', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(reg.search).toHaveBeenCalledWith('weather')
+    const out = t.text()
+    expect(out).toContain('io.github.acme/weather')
+    expect(out).toContain('npm @acme/weather-mcp 1.2.3 (stdio)')
+    expect(out).toContain('https://github.com/acme/weather')
+    expect(out).toContain('/mcp add-from-registry <name>')
+  })
+
+  it('/mcp add-from-registry pins the package, asks for variables, and adds it switched off on a yes', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.mcpRegistry = registry([weather])
+    // args (keep), WEATHER_KEY, WEATHER_REGION (skip), confirm
+    const t = fakeIo(['/mcp add-from-registry io.github.acme/weather', '', 'k-1', '', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([
+      {
+        mcpServers: [
+          {
+            id: 'weather',
+            name: 'weather',
+            transport: 'stdio',
+            command: 'npx',
+            args: ['-y', '@acme/weather-mcp@1.2.3'],
+            env: { WEATHER_KEY: 'k-1' },
+            enabled: false
+          }
+        ]
+      }
+    ])
+    expect(t.text()).toContain('switched off')
+    expect(t.text()).not.toContain('k-1')
+  })
+
+  it('/mcp add-from-registry adds nothing on no, a missing value, a remote-only entry, or an unknown name', async () => {
+    const cases: Array<[Array<string | null>, RegistryServer[], string]> = [
+      [['/mcp add-from-registry io.github.acme/weather', '', 'k', '', 'n', null], [weather], 'not added'],
+      [['/mcp add-from-registry io.github.acme/weather', '', '', '', null], [weather], 'Fill in the WEATHER_KEY variable'],
+      [['/mcp add-from-registry com.example/hosted', null], [remoteOnly], 'desktop app'],
+      [['/mcp add-from-registry io.github.acme/none', null], [weather], 'no server with that name']
+    ]
+    for (const [inputs, servers, expected] of cases) {
+      const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+      const saved: Array<Partial<AppSettings>> = []
+      d.updateSettings = (p) => saved.push(p)
+      d.mcpRegistry = registry(servers)
+      const t = fakeIo(inputs)
+      d.io = t.io
+      await runTui(opts, d)
+      expect(saved).toEqual([])
+      expect(t.text()).toContain(expected)
+    }
   })
 })

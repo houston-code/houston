@@ -123,6 +123,14 @@ import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 import { isSubagentTool, splitSubagentReport, SubagentTermLines } from '@shared/subagents'
 import { formatElapsed } from '@shared/elapsed'
+import {
+  registryDelivery,
+  registryInstallOptions,
+  type RegistryGetResult,
+  type RegistrySearchResult,
+  type RegistryServer
+} from '@shared/mcpRegistry'
+import { draftInputKey, applyDraftInputs, freeServerId, serverProblem } from '@shared/mcpCatalog'
 
 /**
  * Interactive terminal mode: a stay-resident REPL you converse with directly in
@@ -1813,6 +1821,7 @@ export const HELP_TEXT = [
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
   '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
+  '  /mcp search <query>   search the MCP Registry; /mcp add-from-registry <name> reviews one to add',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
   '  /image [path]         attach an image from your clipboard, or a file',
@@ -1911,6 +1920,10 @@ export type SettingsAction =
   | { op: 'login'; index: number }
   /** Forget a remote MCP server's OAuth tokens (/mcp logout <n>). /mcp only. */
   | { op: 'logout'; index: number }
+  /** Search the MCP Registry (/mcp search <query>; empty lists all). /mcp only. */
+  | { op: 'search'; query: string }
+  /** Review and add a registry entry by its full name (/mcp add-from-registry <name>). /mcp only. */
+  | { op: 'registry-add'; name: string }
   | { op: 'usage' }
 
 /** Parse the argument of /hooks or /mcp into an action. Bare command → list. */
@@ -1918,6 +1931,8 @@ export function parseSettingsAction(arg: string): SettingsAction {
   const [verb, ...rest] = arg.trim().split(/\s+/).filter(Boolean)
   if (!verb) return { op: 'list' }
   if (verb === 'add') return { op: 'add' }
+  if (verb === 'search') return { op: 'search', query: rest.join(' ') }
+  if (verb === 'add-from-registry') return rest.length === 1 ? { op: 'registry-add', name: rest[0] } : { op: 'usage' }
   const indexed = (op: 'remove' | 'login' | 'logout' | 'tools'): SettingsAction => {
     const n = Number.parseInt(rest[0] ?? '', 10)
     if (Number.isInteger(n) && n >= 1) return { op, index: n }
@@ -2769,6 +2784,11 @@ export interface TuiDeps {
   }
   /** Live per-server connection status for `/mcp` (from the MCP manager). */
   mcpStatuses?: () => McpServerStatus[]
+  /** Read-only MCP Registry client for `/mcp search` and `/mcp add-from-registry`. Absent ⇒ unavailable. */
+  mcpRegistry?: {
+    search: (query: string, cursor?: string) => Promise<RegistrySearchResult>
+    get: (name: string) => Promise<RegistryGetResult>
+  }
   /**
    * Whether this host persists secret VALUES (headers / stdio env) from settings
    * saves. False on the standalone CLI, whose store keeps only the keys — the
@@ -5303,7 +5323,9 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
     action.op === 'usage' ||
     action.op === 'login' ||
     action.op === 'logout' ||
-    action.op === 'tools'
+    action.op === 'tools' ||
+    action.op === 'search' ||
+    action.op === 'registry-add'
   ) {
     // login/logout/tools are /mcp verbs; on /hooks they just fall to usage.
     deps.io.out(paint('usage: /hooks   ·   /hooks add   ·   /hooks remove <n>\n', 'yellow'))
@@ -5355,6 +5377,88 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
 }
 
 /**
+ * `/mcp search` results. Registry text is the publisher's, already stripped of
+ * control characters by the normalizer; it is printed as data and never sent anywhere.
+ */
+export function renderRegistryResults(servers: RegistryServer[], query: string, paint: Painter): string {
+  if (!servers.length) return paint(query ? `· no MCP Registry servers match "${query}"` : '· the MCP Registry listed no servers', 'dim')
+  const lines = [paint(`MCP Registry${query ? `: "${query}"` : ''}`, 'bold')]
+  servers.forEach((s, i) => {
+    lines.push(`  ${i + 1}) ${paint(s.name, 'cyan')}${s.version ? `  v${s.version}` : ''}${s.status && s.status !== 'active' ? paint(`  (${s.status})`, 'yellow') : ''}`)
+    if (s.description) lines.push(`     ${s.description}`)
+    lines.push(paint(`     ${registryDelivery(s)}`, 'dim'))
+    if (s.repositoryUrl) lines.push(paint(`     ${s.repositoryUrl}`, 'dim'))
+  })
+  lines.push(paint('Add one with /mcp add-from-registry <name>. It is saved switched off.', 'dim'))
+  return lines.join('\n')
+}
+
+/**
+ * /mcp add-from-registry <name>: convert the entry's first installable local package
+ * (pinned npx, uvx or docker) into a stdio server, ask for its variables, show it,
+ * and add it switched off on a yes. Remote entries need headers, which the terminal
+ * can't store, so they are pointed at the desktop app.
+ */
+async function addFromRegistry(name: string, servers: McpServerConfig[], deps: TuiDeps, paint: Painter): Promise<void> {
+  if (!deps.mcpRegistry) return void deps.io.out(paint('· the MCP Registry is unavailable in this client\n', 'dim'))
+  const res = await deps.mcpRegistry.get(name)
+  if (!res.ok) return void deps.io.out(paint(`· ${res.error}\n`, 'yellow'))
+  const options = registryInstallOptions(res.server)
+  const local = options.find((o) => o.kind === 'stdio' && 'draft' in o)
+  if (!local || !('draft' in local)) {
+    const why = options.find((o) => o.kind === 'stdio' && 'unsupported' in o)
+    if (why && 'unsupported' in why) deps.io.out(paint(`· ${why.label}: ${why.unsupported}\n`, 'yellow'))
+    deps.io.out(
+      paint(
+        options.some((o) => o.kind === 'remote' && 'draft' in o)
+          ? '· this server is remote: add it in the desktop app (Settings > MCP Servers > Browse registry)\n'
+          : '· no package here that Houston can install\n',
+        'yellow'
+      )
+    )
+    return
+  }
+  const draft = local.draft
+  const id = freeServerId(draft.server.id, servers.map((s) => s.id))
+  deps.io.out(`${paint(draft.name, 'bold')}  ${paint(`from ${draft.publisher}`, 'dim')}\n`)
+  if (draft.note) deps.io.out(paint(`${draft.note}\n`, 'dim'))
+  if (draft.needs) deps.io.out(paint(`Needs ${draft.needs} installed.\n`, 'dim'))
+  deps.io.out(`${paint('command:', 'dim')} ${draft.server.command} ${(draft.server.args ?? []).join(' ')}\n`)
+  const argsAns = await deps.io.readLine('arguments (space-separated; Enter keeps them as shown): ')
+  if (argsAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+  const args = argsAns.trim() ? argsAns.trim().split(/\s+/) : (draft.server.args ?? [])
+  const readSecret = deps.io.readSecret ?? deps.io.readLine
+  const values: Record<string, string> = {}
+  for (const input of draft.inputs ?? []) {
+    const what = [input.description, input.default && !input.required ? `empty uses ${input.default}` : ''].filter(Boolean).join('; ')
+    if (what) deps.io.out(paint(`  ${input.name}: ${what}\n`, 'dim'))
+    const label = `${input.name}${input.required ? '' : ' (optional, Enter to skip)'}${input.secret ? ' (hidden)' : ''}: `
+    const v = await (input.secret ? readSecret(label) : deps.io.readLine(label))
+    if (v === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    values[draftInputKey(input)] = v
+  }
+  const built = { ...applyDraftInputs({ ...draft.server, id, args }, draft.inputs ?? [], values), name: id, enabled: false }
+  const problem = serverProblem(built, servers.map((s) => s.id))
+  if (problem) return void deps.io.out(paint(`· not added: ${problem}\n`, 'yellow'))
+  const envNote = built.env ? `  env: ${Object.keys(built.env).join(', ')}` : ''
+  deps.io.out(`\n${paint('server:', 'dim')} ${id}  [stdio, switched off]  ${built.command} ${(built.args ?? []).join(' ')}${envNote}\n`)
+  const ok = await deps.io.readLine('Add this server? [y/N] ', { discardPending: true })
+  if (parseApprovalAnswer(ok ?? '').decision !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
+  deps.updateSettings?.({ mcpServers: [...servers, built] })
+  deps.io.out(
+    paint(
+      `· added ${id}, switched off. Switch it on in the desktop app, or set "enabled": true for it in settings.json.\n`,
+      'dim'
+    )
+  )
+  if (built.env && deps.canStoreHeaderSecrets === false) {
+    deps.io.out(
+      paint(`· this terminal cannot store env values; put them in cli-headers.json under the scope "mcp-env:${id}"\n`, 'yellow')
+    )
+  }
+}
+
+/**
  * /mcp: list (with live connection status), add (guided, stdio only), remove, or
  * OAuth sign-in/out for a remote server. Persists via deps.updateSettings. The
  * add flow never collects a URL or auth headers; remote servers are added in the
@@ -5367,7 +5471,7 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
   if (action.op === 'usage') {
     deps.io.out(
       paint(
-        'usage: /mcp   ·   /mcp add   ·   /mcp tools <n>   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>\n',
+        'usage: /mcp   ·   /mcp add   ·   /mcp tools <n>   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>   ·   /mcp search <query>   ·   /mcp add-from-registry <name>\n',
         'yellow'
       )
     )
@@ -5378,6 +5482,14 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
     deps.io.out(
       paint('Remote (URL) servers: add them in the desktop app, then sign in with /mcp login <n> if needed.\n', 'dim')
     )
+    return
+  }
+
+  if (action.op === 'search') {
+    if (!deps.mcpRegistry) return void deps.io.out(paint('· the MCP Registry is unavailable in this client\n', 'dim'))
+    const res = await deps.mcpRegistry.search(action.query)
+    if (!res.ok) return void deps.io.out(paint(`· ${res.error}\n`, 'yellow'))
+    deps.io.out(`${renderRegistryResults(res.page.servers, action.query.trim(), paint)}\n`)
     return
   }
 
@@ -5444,6 +5556,8 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
     deps.io.out(paint(`· removed MCP server ${action.index} (${removed.name ?? removed.id}). Applies on your next message.\n`, 'dim'))
     return
   }
+
+  if (action.op === 'registry-add') return addFromRegistry(action.name, servers, deps, paint)
 
   // op === 'add' — local stdio servers only.
   deps.io.out(paint('Add a local (stdio) MCP server. For remote servers, use the desktop app (then /mcp login here if needed).\n', 'dim'))

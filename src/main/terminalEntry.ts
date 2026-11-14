@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { clearChildReportFlag, setWakeHost, takeBackgroundEvents, wakeNote } from './agent/backgroundEvents'
+import { getMcpRegistryServer, searchMcpRegistry } from './mcpRegistry'
 import { fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -791,6 +792,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // interactive flow (discovery, registration, browser, exchange) and persists
       // the tokens through the wired host store.
       mcpStatuses: () => getMcpStatuses(),
+      // Read-only MCP Registry browsing for /mcp search and /mcp add-from-registry.
+      mcpRegistry: { search: searchMcpRegistry, get: getMcpRegistryServer },
       ...(canStoreMcpOAuth()
         ? {
             mcpOAuth: {

@@ -9,13 +9,13 @@ describe('McpAddPanels', () => {
   it('stays closed until asked', () => {
     render(<McpAddPanels servers={[]} workspace="/w" onAdd={vi.fn()} />)
     expect(screen.queryByRole('list', { name: 'MCP server catalog' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Add from catalog' }).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByRole('button', { name: 'Recommended' }).getAttribute('aria-expanded')).toBe('false')
   })
 
   it('reviews a catalog entry prefilled for the project and adds it switched off', () => {
     const onAdd = vi.fn()
     render(<McpAddPanels servers={[]} workspace="/w/app" onAdd={onAdd} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Add from catalog' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Recommended' }))
     fireEvent.click(screen.getByRole('button', { name: 'Review Git' }))
     const form = screen.getByRole('form', { name: 'Review Git' })
     expect((screen.getByLabelText('Arguments, one per line') as HTMLTextAreaElement).value).toBe(
@@ -34,7 +34,7 @@ describe('McpAddPanels', () => {
     const onAdd = vi.fn()
     const servers: McpServerConfig[] = [{ id: 'filesystem', command: 'x', enabled: true }]
     render(<McpAddPanels servers={servers} workspace={null} onAdd={onAdd} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Add from catalog' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Recommended' }))
     fireEvent.click(screen.getByRole('button', { name: 'Review Filesystem' }))
     expect((screen.getByLabelText('Id') as HTMLInputElement).value).toBe('filesystem-2')
     fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
