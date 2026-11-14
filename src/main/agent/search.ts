@@ -11,7 +11,8 @@ import {
   isRegularFile,
   planRuns,
   planScope,
-  runPathArgs
+  runPathArgs,
+  type ScopeCache
 } from './fileScope'
 
 /**
@@ -284,6 +285,8 @@ export interface SearchOptions extends MatchOptions {
   rgPath: string | null
   max: number
   signal?: AbortSignal
+  /** The run's memo of which files a search root covers (see ScopeCache); absent, it is worked out afresh. */
+  scopeCache?: ScopeCache
 }
 
 /** Search file contents, preferring ripgrep and falling back to the JS walk. */
@@ -310,7 +313,7 @@ export async function searchContents(o: SearchOptions): Promise<string> {
   const isFile = statSync(o.startAbs).isFile()
   // A file argument is searched as given, like ripgrep does; only a directory
   // needs the git-or-fallback decision.
-  const plan = isFile ? ({ kind: 'plain' } as const) : await planScope(o.startAbs)
+  const plan = isFile ? ({ kind: 'plain' } as const) : await (o.scopeCache?.plan(o.startAbs) ?? planScope(o.startAbs))
   const git = plan.kind === 'git'
   if (o.rgPath) {
     // ripgrep is handed the paths its walk would wrongly skip (see planScope) as
@@ -356,7 +359,11 @@ export async function searchContents(o: SearchOptions): Promise<string> {
   // A single-file search path: scan just that file. jsWalk would readdir() it and hit
   // ENOTDIR, silently returning no matches — but ripgrep searches a file argument, so
   // the JS fallback must too, or the backends disagree.
-  const listed = git ? await gitListFiles(o.startAbs) : null
+  const listed = !git
+    ? null
+    : o.scopeCache
+      ? (await o.scopeCache.listing(o.startAbs)).listed
+      : await gitListFiles(o.startAbs)
   if (isFile) {
     await scanFile(o.startAbs, o.workspace, regex, out, o.max, matchOpts, inGlob)
   } else if (listed) {

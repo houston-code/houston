@@ -128,6 +128,7 @@ import {
   writePaths,
   writeTouchesUnknownPaths
 } from './readCache'
+import { ScopeCache } from './fileScope'
 import { createShellSession, shellCwdLabel, type ShellSession } from './shell-session'
 import { getMcpToolDefs, releaseMcpRun } from '../mcp/manager'
 import {
@@ -3099,6 +3100,7 @@ export async function startRun(
       recordEvidence: (e) => recordEvidence(e),
       checkTodos,
       fileTracker,
+      scopeCache,
       ghExec,
       getSecret: getKey,
       collectSecrets: () => knownSecrets,
@@ -3554,6 +3556,10 @@ export async function startRun(
     // user editing in their editor, a git checkout — are caught instead by the stat
     // revalidation every hit performs. See readCache.ts.
     const readCache = new ReadCache({ stat: statPath })
+    // Which files each search root covers (tracked, ignored, hidden), so search_files,
+    // ast_grep, and glob don't re-run git to plan every call. Per run like the read
+    // cache, and cleared with it on every mutating call below. See ScopeCache.
+    const scopeCache = new ScopeCache()
     // Map a tool's `path` argument to a canonical absolute path the way the file
     // tools do, so cache dependencies and write-invalidation keys line up exactly.
     const resolvePath = (rel: string): string => resolveInRoots(roots, rel)
@@ -3585,6 +3591,8 @@ export async function startRun(
     const invalidateForMutation = (name: string, kind: ToolKind, args: Record<string, unknown>): void => {
       // Any mutation may have switched branches (a shell `git switch`, a write to .git).
       branchStale = true
+      // ...or changed what is tracked, ignored, or present: search scope is planned afresh.
+      scopeCache.invalidate()
       if (kind === 'write') {
         const touched = writePaths(name, args, resolvePath, patchPaths)
         if (writeTouchesUnknownPaths(touched)) readCache.invalidateAll()

@@ -1,6 +1,6 @@
 import { lstatSync } from 'node:fs'
 import { Minimatch, type MinimatchOptions } from 'minimatch'
-import { hardenedGitArgs, runGitCapture } from './gitRead'
+import { hardenedGitArgs, runGitCapture, type GitCapture } from './gitRead'
 import { isSensitivePath } from './sensitive-paths'
 
 /**
@@ -46,9 +46,13 @@ export const FALLBACK_SKIP_DIRS = new Set([
  * call: check-ignore exits 0 (ignored), 1 (not ignored), or 128 (not a repo).
  */
 export async function inGitScope(dir: string, hardening?: Promise<string[]>): Promise<boolean> {
-  const res = await runGitCapture(['check-ignore', '-q', '--', dir], dir, hardening)
   // 0 = ignored (an explicit request to look inside it); 128 = not a repo.
-  return res.code === 1
+  return (await checkScope(dir, hardening)).code === 1
+}
+
+/** The check behind {@link inGitScope}, with git's exit status (null: no answer). */
+function checkScope(dir: string, hardening?: Promise<string[]>): Promise<GitCapture> {
+  return runGitCapture(['check-ignore', '-q', '--', dir], dir, hardening)
 }
 
 /**
@@ -100,11 +104,13 @@ async function listFilesInScope(dir: string, pathspec: string[], h: Promise<stri
  * explicit paths to keep "never skip a tracked file" true on every backend.
  */
 export async function gitTrackedIgnored(dir: string, hardening?: Promise<string[]>): Promise<string[]> {
-  const res = await runGitCapture(
-    ['ls-files', '--cached', '--ignored', '--exclude-standard', '-z'],
-    dir,
-    hardening
-  )
+  return trackedIgnoredOf(await runGitCapture(TRACKED_IGNORED_ARGS, dir, hardening))
+}
+
+const TRACKED_IGNORED_ARGS = ['ls-files', '--cached', '--ignored', '--exclude-standard', '-z']
+
+/** {@link gitTrackedIgnored}'s answer, from its git run. */
+function trackedIgnoredOf(res: GitCapture): string[] {
   return res.ok ? [...new Set(splitZ(res.stdout))] : []
 }
 
@@ -128,7 +134,13 @@ export function searchableTrackedHidden(rel: string): boolean {
  * other, so these are searched too. Untracked hidden files stay skipped.
  */
 export async function gitTrackedHidden(dir: string, hardening?: Promise<string[]>): Promise<string[]> {
-  const res = await runGitCapture(['ls-files', '--cached', '-z', '--', ...HIDDEN_PATHSPECS], dir, hardening)
+  return trackedHiddenOf(await runGitCapture(TRACKED_HIDDEN_ARGS, dir, hardening))
+}
+
+const TRACKED_HIDDEN_ARGS = ['ls-files', '--cached', '-z', '--', ...HIDDEN_PATHSPECS]
+
+/** {@link gitTrackedHidden}'s answer, from its git run. */
+function trackedHiddenOf(res: GitCapture): string[] {
   if (!res.ok) return []
   return [...new Set(splitZ(res.stdout))].filter((rel) => hasHiddenSegment(rel) && searchableTrackedHidden(rel))
 }
@@ -161,22 +173,169 @@ export function hasHiddenSegment(rel: string, keep: ReadonlySet<string> = new Se
 export type ScopePlan = { kind: 'plain' } | { kind: 'git'; walk: boolean; explicit: string[] }
 
 export async function planScope(dir: string): Promise<ScopePlan> {
-  // One hardening probe for the whole plan, and the two independent checks at once.
+  return (await planScopeFresh(dir)).value
+}
+
+/**
+ * A planner's answer, and whether it may be reused: false when a git call it rests on
+ * gave no answer (it timed out, git is missing, or the repository defines a filter
+ * driver Houston won't run git under), so the next caller asks again.
+ */
+interface Planned<T> {
+  value: T
+  reusable: boolean
+}
+
+async function planScopeFresh(dir: string): Promise<Planned<ScopePlan>> {
+  // One hardening probe for the whole plan. Both checks and both listings then start
+  // at once: the listings don't depend on the checks (outside a repo they fail as fast
+  // as the checks do, and their answer is dropped). Only a root under an ignore
+  // pattern needs a second round, for its full listing, and that root is rare.
   const h = shareHardening(dir)
-  const [inScope, ignoredByPattern] = await Promise.all([
-    inGitScope(dir, h),
+  const [scope, ignoredByPattern, ignored, hidden] = await Promise.all([
+    checkScope(dir, h),
     // --no-index: does a pattern match `dir` (or an ancestor), tracked files aside?
-    runGitCapture(['check-ignore', '--no-index', '-q', '--', dir], dir, h)
+    runGitCapture(['check-ignore', '--no-index', '-q', '--', dir], dir, h),
+    runGitCapture(TRACKED_IGNORED_ARGS, dir, h),
+    runGitCapture(TRACKED_HIDDEN_ARGS, dir, h)
   ])
-  if (!inScope) return { kind: 'plain' }
+  if (scope.code !== 1) return { value: { kind: 'plain' }, reusable: scope.code !== null }
   const underPattern = ignoredByPattern.code === 0
-  const [listed, hidden] = await Promise.all([
-    underPattern ? listFilesInScope(dir, [], h).then((l) => l ?? []) : gitTrackedIgnored(dir, h),
-    gitTrackedHidden(dir, h)
-  ])
+  const listed = underPattern ? await listFilesInScope(dir, [], h) : ignored.ok ? trackedIgnoredOf(ignored) : null
   // The walk skips hidden paths, so tracked ones are handed over explicitly too.
-  const explicit = new Set([...listed.filter((rel) => !hasHiddenSegment(rel)), ...hidden])
-  return { kind: 'git', walk: !underPattern, explicit: [...explicit] }
+  const explicit = new Set([...(listed ?? []).filter((rel) => !hasHiddenSegment(rel)), ...trackedHiddenOf(hidden)])
+  return {
+    value: { kind: 'git', walk: !underPattern, explicit: [...explicit] },
+    reusable: ignoredByPattern.code !== null && listed !== null && hidden.ok
+  }
+}
+
+/** What glob looks through under a root: {@link gitListFiles} and {@link gitTrackedHidden} together. */
+export interface ScopeListing {
+  /** Every file in scope, relative to the root; null when it is not in git scope (see inGitScope). */
+  listed: string[] | null
+  /** The tracked hidden files that are searched (see gitTrackedHidden); empty outside git scope. */
+  trackedHidden: string[]
+}
+
+/**
+ * {@link gitListFiles} and {@link gitTrackedHidden} for `dir` in two rounds of git
+ * rather than five: after the hardening probe, the scope check and both listings run
+ * at once, and the listings are dropped when `dir` turns out not to be in git scope
+ * (git does not walk an ignored directory's contents, so that costs no more than the check).
+ */
+export async function listScope(dir: string): Promise<ScopeListing> {
+  return (await listScopeFresh(dir)).value
+}
+
+async function listScopeFresh(dir: string): Promise<Planned<ScopeListing>> {
+  const h = shareHardening(dir)
+  const [scope, listed, hidden] = await Promise.all([
+    checkScope(dir, h),
+    listFilesInScope(dir, [], h),
+    runGitCapture(TRACKED_HIDDEN_ARGS, dir, h)
+  ])
+  if (scope.code !== 1) return { value: { listed: null, trackedHidden: [] }, reusable: scope.code !== null }
+  return { value: { listed, trackedHidden: trackedHiddenOf(hidden) }, reusable: listed !== null && hidden.ok }
+}
+
+/**
+ * How long a {@link ScopeCache} entry is reused at most: the read cache's window for
+ * a search result (TREE_READ_TTL_MS), for the same reason.
+ */
+export const SCOPE_CACHE_TTL_MS = 30_000
+
+/** Search roots a {@link ScopeCache} holds at once; past it, the oldest is dropped. */
+export const SCOPE_CACHE_MAX_ROOTS = 32
+
+interface Memo<T> {
+  /** When the planning started. */
+  at: number
+  value: Promise<T>
+}
+
+/**
+ * One run's memo of the planning above, per search root: {@link planScope} for
+ * search_files and ast_grep, {@link listScope} for glob and the JS search fallback.
+ * Planning starts several git processes before a search can, whatever the pattern,
+ * while what it reads (which files are tracked, ignored, hidden, or present) only
+ * changes when something changes the index, an ignore file, or the tree. So it is
+ * worked out once and reused until any of these:
+ *
+ *  - the run makes a call that may have changed that. The loop invalidates it on
+ *    every call that isn't a read (any write, apply_patch, a shell command, a git or
+ *    gh tool that writes, a writable subagent), where it invalidates the read cache;
+ *  - {@link SCOPE_CACHE_TTL_MS} passes, which bounds how long a change the run never
+ *    saw (the user's own `git add`, a background command) goes unnoticed;
+ *  - the run ends. The loop makes one per run, and shares it with nothing else.
+ *
+ * Only an answer every git call behind it gave is kept (see {@link Planned}), and
+ * callers asking for one root while it is being planned share that planning. A hit
+ * is exactly what planning returned, so callers still check each listed path on disk
+ * when they use it, and must not change the arrays they are handed.
+ */
+export class ScopeCache {
+  private readonly plans = new Map<string, Memo<ScopePlan>>()
+  private readonly listings = new Map<string, Memo<ScopeListing>>()
+  private readonly now: () => number
+  private readonly ttlMs: number
+
+  constructor(opts: { now?: () => number; ttlMs?: number } = {}) {
+    this.now = opts.now ?? Date.now
+    this.ttlMs = opts.ttlMs ?? SCOPE_CACHE_TTL_MS
+  }
+
+  /** {@link planScope} for `dir`, from memory when this run has planned it already. */
+  plan(dir: string): Promise<ScopePlan> {
+    return this.memo(this.plans, dir, planScopeFresh)
+  }
+
+  /** {@link listScope} for `dir`, from memory when this run has listed it already. */
+  listing(dir: string): Promise<ScopeListing> {
+    return this.memo(this.listings, dir, listScopeFresh)
+  }
+
+  /** Forget everything, so the next search plans afresh. */
+  invalidate(): void {
+    this.plans.clear()
+    this.listings.clear()
+  }
+
+  /** Entries held, for tests. */
+  get size(): number {
+    return this.plans.size + this.listings.size
+  }
+
+  private memo<T>(entries: Map<string, Memo<T>>, dir: string, fresh: (dir: string) => Promise<Planned<T>>): Promise<T> {
+    const now = this.now()
+    const held = entries.get(dir)
+    if (held && now - held.at < this.ttlMs) return held.value
+    entries.delete(dir)
+    // An answer that can't be reused is dropped once it arrives, unless an
+    // invalidation (or a newer entry) has already replaced it.
+    const forget = (): void => {
+      if (entries.get(dir) === memo) entries.delete(dir)
+    }
+    const memo: Memo<T> = {
+      at: now,
+      value: fresh(dir).then(
+        (r) => {
+          if (!r.reusable) forget()
+          return r.value
+        },
+        (e: unknown) => {
+          forget()
+          throw e
+        }
+      )
+    }
+    entries.set(dir, memo)
+    if (entries.size > SCOPE_CACHE_MAX_ROOTS) {
+      const oldest = entries.keys().next().value
+      if (oldest !== undefined) entries.delete(oldest)
+    }
+    return memo.value
+  }
 }
 
 /**
