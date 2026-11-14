@@ -146,6 +146,7 @@ import {
   type RegistryServer
 } from '@shared/mcpRegistry'
 import { draftInputKey, applyDraftInputs, freeServerId, serverProblem } from '@shared/mcpCatalog'
+import { stripInvisible, invisibleNote } from '@shared/invisibleChars'
 
 /**
  * Interactive terminal mode: a stay-resident REPL you converse with directly in
@@ -1977,11 +1978,16 @@ export const HELP_TEXT = [
   '  Shift-Tab             cycle the approval mode, also while a turn runs',
   '  Up, Down              earlier messages (this folder)',
   '  Ctrl-R                search earlier messages',
-  '  Ctrl-X Ctrl-E         edit the message in $VISUAL or $EDITOR',
+  '  Ctrl-X Ctrl-E, Ctrl-G edit the message in $VISUAL or $EDITOR',
+  '  Ctrl-_, Ctrl-^        undo, redo the last edit (Ctrl-/ and Ctrl-6 on most keyboards)',
+  '  Ctrl-S                stash the message and clear the prompt; again on an empty prompt to restore',
+  '  Ctrl-V, Alt-V         attach the image on the clipboard (pasting image file paths attaches them too)',
+  '  Esc Esc               clear the message (Up brings it back); on an empty prompt, /rewind',
   '  Ctrl-L                clear the screen',
   '  Ctrl-O                the whole session full screen: j/k, / search, { } your messages, v editor, q',
   '  Alt-T                 cycle how reasoning shows (show, summary, hide), also while a turn runs',
-  '  Ctrl-C                clear the message (twice to exit); Ctrl-D exits',
+  '  Ctrl-Z                suspend to the shell (fg to come back), also while a turn runs',
+  '  Ctrl-C                clear the message (twice to exit; Up brings it back); Ctrl-D exits',
   '  ultrathink            a word in the message: think harder for that turn',
   '',
   'While a turn runs: type and press Enter to steer it; Esc or Ctrl-C stops it.',
@@ -1995,7 +2001,11 @@ export const STARTUP_TIPS = [
   '#note saves a standing instruction to AGENTS.md',
   'Shift-Tab cycles the approval mode, even while a turn runs',
   'Ctrl-R searches your earlier messages',
-  'Ctrl-X Ctrl-E edits your message in $VISUAL or $EDITOR',
+  'Ctrl-G (or Ctrl-X Ctrl-E) edits your message in $VISUAL or $EDITOR',
+  'Ctrl-V pastes the image on your clipboard; dropping an image file attaches it',
+  'Ctrl-S stashes your message for later; Ctrl-S on an empty prompt brings it back',
+  'Ctrl-_ undoes your last edit in the prompt; Ctrl-^ redoes it',
+  'Esc Esc on an empty prompt rewinds to an earlier message',
   'type while the agent works and press Enter to steer it',
   'Shift-Enter or Ctrl-J starts a new line',
   '/resume filters saved chats as you type; Ctrl-A shows every folder',
@@ -2800,6 +2810,15 @@ async function runProviderSetup(
 
 // --- The interactive driver --------------------------------------------------
 
+/** An image pasted at the composer: the clipboard's, or files named by a paste. */
+export type ImagePasteRequest = { kind: 'clipboard' } | { kind: 'files'; paths: string[] }
+
+/** Whether the driver took the paste as images, and what to print about it. */
+export interface ImagePasteResult {
+  handled: boolean
+  notes: string[]
+}
+
 /** Abstract terminal I/O, so the driver runs headless in tests. */
 export interface TuiIo {
   /** Print to the main output stream (stdout). */
@@ -2898,6 +2917,19 @@ export interface TuiIo {
    * composer and mid-run alike; the driver decides what cycling means.
    */
   onCycleMode?: (handler: () => void) => void
+  /**
+   * Register the handler for an image pasted at the composer: Ctrl-V / Alt-V (the
+   * clipboard image), or a paste that is nothing but image file paths (a file
+   * dragged onto the terminal arrives that way). The driver stages the images and
+   * returns the notes to print; `handled: false` means "not images after all, paste
+   * the text".
+   */
+  onImagePaste?: (handler: (req: ImagePasteRequest) => ImagePasteResult) => void
+  /**
+   * Register the handler for Esc Esc on an empty composer. The composer read then
+   * resolves null, and the driver opens the /rewind picker instead of exiting.
+   */
+  onRewindKey?: (handler: () => void) => void
   /**
    * Show the approval mode on the spinner line while a turn runs — the composer's
    * status line is gone exactly when it matters most.
@@ -3028,7 +3060,7 @@ export interface TuiDeps {
   /** Absolute path to settings.json, shown by /settings, /hooks, and /mcp. */
   settingsPath?: () => string
   /** Read + validate an image file for `/image`; returns the attachment or an error. */
-  loadImage?: (path: string) => { image: ImageAttachment } | { error: string }
+  loadImage?: (path: string) => { image: ImageAttachment } | { error: string; missing?: boolean }
   /**
    * The image on the system clipboard, for a bare `/image`. The desktop app has
    * had this forever through Electron; the terminal shells out to whatever the
@@ -3621,6 +3653,38 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let modelCosts: ModelCost[] = []
   // Image attachments staged via /image, attached to (and cleared by) the next turn.
   let pendingImages: ImageAttachment[] = []
+  // Stage an image for the next turn, from the clipboard or a file. Each returns the
+  // note to print; shared by /image, /paste, Ctrl-V, and a pasted image path.
+  const MAX_STAGED_IMAGES = 8
+  const fullNote = (): string => paint(`· already have ${MAX_STAGED_IMAGES} images staged (the max)`, 'yellow')
+  const stageClipboardImage = (): string => {
+    if (!deps.clipboardImage) return paint('· pasting images is unavailable here; use /image <path>', 'dim')
+    if (pendingImages.length >= MAX_STAGED_IMAGES) return fullNote()
+    const img = deps.clipboardImage()
+    if ('error' in img) return paint(`· ${stripControlChars(img.error)}`, 'dim')
+    pendingImages.push(img.image)
+    return paint(`· attached the image from your clipboard (${pendingImages.length} staged)`, 'dim')
+  }
+  const stageLoadedImage = (path: string, loaded: ReturnType<NonNullable<TuiDeps['loadImage']>>): string => {
+    if (pendingImages.length >= MAX_STAGED_IMAGES) return fullNote()
+    if ('error' in loaded) return paint(`· ${stripControlChars(loaded.error)}`, 'yellow')
+    pendingImages.push(loaded.image)
+    return paint(`· attached ${stripControlChars(path)} (${pendingImages.length} staged)`, 'dim')
+  }
+  deps.io.onImagePaste?.((req) => {
+    if (req.kind === 'clipboard') return { handled: true, notes: [stageClipboardImage()] }
+    if (!deps.loadImage) return { handled: false, notes: [] }
+    // Only a paste that names real files is images: a path that does not exist
+    // means it was text that happened to end in .png, and pastes as text.
+    const loaded = req.paths.map((p) => ({ path: p, result: deps.loadImage!(p) }))
+    if (loaded.some((l) => 'error' in l.result && l.result.missing)) return { handled: false, notes: [] }
+    return { handled: true, notes: loaded.map((l) => stageLoadedImage(l.path, l.result)) }
+  })
+  // Esc Esc on an empty composer: run /rewind once the composer read closes.
+  let rewindRequested = false
+  deps.io.onRewindKey?.(() => {
+    rewindRequested = true
+  })
   // Estimated current context size (last turn's input tokens), for the status line.
   let contextTokens = 0
   // This session's landed edits (newest last), for `/diff last [n]`.
@@ -3701,11 +3765,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // never steering: injected into the run it reached the model as the literal text
   // "/plan" and the command never ran. Declining it queues it, so it runs as a
   // command once the turn ends.
-  deps.io.onSteer?.((text) => {
+  deps.io.onSteer?.((typed) => {
     if (!activeRunId) return false
-    const slash = parseSlashCommand(text.trim(), deps.getSettings(), templateCommands)
+    const slash = parseSlashCommand(typed.trim(), deps.getSettings(), templateCommands)
     if (slash.kind !== 'not-a-command' && slash.kind !== 'unknown') return false
-    return deps.steerRun?.(activeRunId, text) ?? false
+    // The same invisible-character strip as a message sent from the composer.
+    const cleaned = stripInvisible(typed)
+    if (!cleaned.text.trim()) return false
+    const took = deps.steerRun?.(activeRunId, cleaned.text) ?? false
+    if (took && cleaned.removed) deps.io.out(paint(`\n· ${invisibleNote(cleaned.removed)}\n`, 'dim'))
+    return took
   })
   deps.io.onInterrupt?.(() => {
     if (compactAbort) {
@@ -4084,6 +4153,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // trailing backslash or an open code fence continues onto the next line.
     let raw: string | null = null
     let resetComposer = false
+    // Set when a key (Esc Esc) stood in for typing a command: nothing to save to history.
+    let fromKey = false
     atComposer = true // Ctrl-C now means "clear/exit the composer" (see onInterrupt)
     // Ctrl-C settles either read: 'reset' discards this entry and re-prompts, 'exit'
     // (a second Ctrl-C) leaves like Ctrl-D; otherwise a null is a real EOF.
@@ -4123,7 +4194,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             activeModelSendsXhigh(deps, providerId, model)
           )
       })
-      if (text === null) {
+      if (text === null && rewindRequested) {
+        // Esc Esc on an empty composer: the same picker /rewind opens.
+        rewindRequested = false
+        raw = '/rewind'
+        fromKey = true
+      } else if (text === null) {
         resetComposer = consumeInterrupt() === 'reset'
       } else {
         raw = text
@@ -4180,6 +4256,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (resetComposer) continue // Ctrl-C discarded the input — draw a fresh prompt
     if (raw === null) break // clean Ctrl-D (or a second Ctrl-C) at the composer → exit
     let text = raw.trim()
+    // Characters that draw nothing (zero-width, bidi overrides, tag characters) can
+    // hide text the user never saw; send what they reviewed. Not on a message
+    // Houston wrote itself (a background wake).
+    if (!wakeTurn && !fromKey) {
+      const cleaned = stripInvisible(text)
+      if (cleaned.removed) {
+        text = cleaned.text.trim()
+        deps.io.out(paint(`· ${invisibleNote(cleaned.removed)}\n`, 'dim'))
+      }
+    }
     if (!text) continue
     // Set when this turn's text is a prompt Houston wrote for a command (/review,
     // /agent): saved on the message so every client shows the command, not the prompt.
@@ -4189,7 +4275,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     let turnRun: PreparedCommandRun | null = null
     // Persist composer submissions (commands included) for cross-restart recall;
     // approval/question answers go through a different read and aren't saved.
-    if (!wakeTurn) deps.persistHistory?.(text)
+    if (!wakeTurn && !fromKey) deps.persistHistory?.(text)
 
     // `#note` — remember this for next time. Checked with the other prefixes, before
     // the line is treated as something to say to the model.
@@ -4795,21 +4881,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'paste-image') {
-        if (!deps.clipboardImage) {
-          deps.io.out(paint('· pasting images is unavailable here; use /image <path>\n', 'dim'))
-          continue
-        }
-        if (pendingImages.length >= 8) {
-          deps.io.out(paint('· already have 8 images staged (the max)\n', 'yellow'))
-          continue
-        }
-        const img = deps.clipboardImage()
-        if ('error' in img) {
-          deps.io.out(paint(`· ${img.error}\n`, 'dim'))
-          continue
-        }
-        pendingImages.push(img.image)
-        deps.io.out(paint(`· attached the image from your clipboard (${pendingImages.length} staged)\n`, 'dim'))
+        deps.io.out(`${stageClipboardImage()}\n`)
         continue
       }
       if (result.kind === 'image') {
@@ -4817,17 +4889,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· image attachments are unavailable\n', 'dim'))
           continue
         }
-        if (pendingImages.length >= 8) {
-          deps.io.out(paint('· already have 8 images staged (the max)\n', 'yellow'))
+        if (pendingImages.length >= MAX_STAGED_IMAGES) {
+          deps.io.out(`${fullNote()}\n`)
           continue
         }
-        const loaded = deps.loadImage(result.path)
-        if ('error' in loaded) {
-          deps.io.out(paint(`· ${loaded.error}\n`, 'yellow'))
-          continue
-        }
-        pendingImages.push(loaded.image)
-        deps.io.out(paint(`· attached ${result.path} (${pendingImages.length} staged)\n`, 'dim'))
+        deps.io.out(`${stageLoadedImage(result.path, deps.loadImage(result.path))}\n`)
         continue
       }
       if (result.kind === 'set-approval') {

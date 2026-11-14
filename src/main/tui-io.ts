@@ -1,6 +1,6 @@
 import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
-import { spinnerFrame, type TuiIo, type Painter } from './tui'
+import { spinnerFrame, type TuiIo, type Painter, type ImagePasteRequest, type ImagePasteResult } from './tui'
 import { visibleWidth } from './tui-wrap'
 import { findUltrathink, ultrathinkHint, type KeywordRange, type UltrathinkEffect } from '@shared/ultrathink'
 import {
@@ -37,9 +37,14 @@ import {
   reduceEditor,
   renderEditor,
   setEditorText,
+  editorEmpty,
+  editorText,
+  parseImagePaths,
+  type DraftSnapshot,
   type EditorState,
   type EditorOutcome
 } from './tui-editor'
+import type { EditorKey } from './tui-keys'
 import {
   initialVimState,
   reduceVim,
@@ -66,6 +71,23 @@ const ALT_SCREEN_ON = '\x1b[?1049h'
 const ALT_SCREEN_OFF = '\x1b[?1049l'
 const HIDE_CURSOR = '\x1b[?25l'
 const SHOW_CURSOR = '\x1b[?25h'
+
+/** Two Esc presses this close together are a double press (clear the draft, or rewind). */
+export const DOUBLE_ESC_MS = 600
+
+/** What Ctrl-Z says on Windows, which has no job control to hand the terminal back to. */
+const NO_SUSPEND_NOTE = '· Ctrl-Z (suspend to the shell) is not available on Windows'
+
+/**
+ * Stop the process the way the terminal's own Ctrl-Z would, and call `onContinue`
+ * once the shell resumes it (`fg`). The whole process group gets the signal, as it
+ * does from the tty: a command Houston is running for the turn stops and resumes
+ * with it.
+ */
+function defaultSuspend(onContinue: () => void): void {
+  process.once('SIGCONT', onContinue)
+  process.kill(0, 'SIGTSTP')
+}
 
 /** Longest prefix shared by every candidate — how Tab completes an ambiguous token. */
 function commonPrefix(items: string[]): string {
@@ -166,6 +188,19 @@ export interface TerminalIoDeps {
    * a TTY), where there is no screen to paint atomically.
    */
   syncOutput?: boolean
+
+  /**
+   * Save a draft that left the composer unsent (Ctrl-C, Esc Esc, a displaced Ctrl-S
+   * stash) to history, so Up brings it back. Absent = in-read history only.
+   */
+  remember?: (text: string) => void
+  /** The host platform; Ctrl-Z is a note on Windows. Defaults to process.platform. */
+  platform?: NodeJS.Platform
+  /**
+   * Suspend the process to the shell and call `onContinue` when it is resumed.
+   * Injectable for tests; defaults to raising SIGTSTP and waiting for SIGCONT.
+   */
+  suspendProcess?: (onContinue: () => void) => void
 }
 
 /**
@@ -280,6 +315,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         }
       : undefined)
   const drainInput = deps.drainInput ?? defaultDrain
+  const platform = deps.platform ?? process.platform
+  const suspendProcess = deps.suspendProcess ?? defaultSuspend
   const paint = deps.paint ?? ((s: string) => s)
   const now = deps.now ?? Date.now
   const schedule =
@@ -406,6 +443,13 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // (and whether the viewer can open now); this reports the keypress.
   let transcriptHandler: ((during: 'composer' | 'run') => Promise<void>) | null = null
   let cycleThoughtsHandler: (() => void) | null = null
+  // Ctrl-V / Alt-V and a pasted image path: the driver owns the staged images.
+  let imagePasteHandler: ((req: ImagePasteRequest) => ImagePasteResult) | null = null
+  // Esc Esc on an empty composer: the driver opens the rewind picker.
+  let rewindHandler: (() => void) | null = null
+  // The draft Ctrl-S put aside. Kept here, across reads, so a stash survives sending
+  // something else first: that is what it is for.
+  let composerStash: DraftSnapshot | null = null
   // Fired by Shift-Tab, at the composer or mid-run. The driver owns what the modes
   // ARE and what changing one means; this just reports the keypress.
   let cycleModeHandler: (() => void) | null = null
@@ -472,6 +516,30 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         case 'cycle-thoughts':
           cycleThoughtsHandler?.()
           break
+        case 'suspend':
+          // Ctrl-Z mid-run: hand the terminal back and stop. The run is not
+          // cancelled; it carries on from where it was once `fg` resumes us.
+          if (platform === 'win32') {
+            atomically(() => {
+              rawWrite(`${CLEAR_LINE}${paint(NO_SUSPEND_NOTE, 'dim')}\n`)
+              drawSpinner()
+            })
+            break
+          }
+          stopTimer(true)
+          stopInterruptWatch()
+          try {
+            stdin.setRawMode(false)
+          } catch {
+            /* best-effort: the shell gets a cooked terminal back */
+          }
+          suspendProcess(() => {
+            if (spinnerLabel === null || watching) return
+            startInterruptWatch()
+            startTimer()
+            drawSpinner()
+          })
+          return
         case 'char':
           draft += key.value
           drawSpinner()
@@ -750,13 +818,16 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       stopInterruptWatch()
       rl.pause()
 
-      let state: EditorState = initialEditorState(deps.history?.() ?? [], initial)
+      let state: EditorState = initialEditorState(deps.history?.() ?? [], initial, composerStash)
       let dec: DecoderState = initialDecoderState()
       // Vim keys are decided per read, and a read always starts in insert: a fresh
       // prompt is for typing, and coming back to one in normal mode would swallow
       // the first word as commands.
       const vimOn = (deps.editorMode?.() ?? 'emacs') === 'vim'
       let vim: VimState = initialVimState()
+      // The last Esc: when, and whether vim was already in normal mode for it (in
+      // vim, only two presses both made in normal mode are a double press).
+      let lastEsc = { at: -Infinity, normal: false }
       let done = false
       let drawn = false
       let prevCursorRow = 0
@@ -778,7 +849,13 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         const uses = withMenu ? findUltrathink(state.lines.join('\n')) : []
         const effect = uses.length ? (opts?.ultrathinkEffect?.() ?? 'raises') : null
         const hint = effect ? ultrathinkHint(effect) : ''
-        const below = hint && hint.length <= width() ? [...menu, paint(hint, 'dim')] : menu
+        const below = hint && hint.length <= width() ? [...menu, paint(hint, 'dim')] : [...menu]
+        // A stashed draft on an empty composer: say how to get it back, or it is lost
+        // to anyone who pressed Ctrl-S by accident.
+        const stashHint = 'stashed draft: Ctrl-S brings it back'
+        if (withMenu && state.stashed && editorEmpty(state) && stashHint.length <= width()) {
+          below.push(paint(stashHint, 'dim'))
+        }
         const marks = effect === 'raises' ? marksByLine(state.lines, uses) : undefined
         return renderEditor(state, {
           // The mode marker rides in front of the prompt, so which mode you are in
@@ -875,6 +952,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const finish = (value: string | null, echo = false): void => {
         if (done) return
         done = true
+        composerStash = state.stashed
         pending = null
         openComposer = null
         atomically(() => {
@@ -897,6 +975,36 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       openComposer = {
         empty: () => state.lines.every((l) => l.length === 0),
         close: () => finish(null)
+      }
+
+      /** Print notes above the composer, then draw it again under them. */
+      const noteAbove = (lines: string[]): void => {
+        atomically(() => {
+          eraseRegion()
+          if (lines.length) rawWrite(lines.map((l) => `${l}\n`).join(''))
+          draw()
+        })
+      }
+
+      /**
+       * Ctrl-Z: give the terminal back exactly as the shell left it (cooked mode,
+       * bracketed paste and modified keys off, the cursor shape reset, all in
+       * teardown) and stop. On `fg`, take it again and repaint the draft.
+       */
+      const suspendComposer = (): void => {
+        if (platform === 'win32') return noteAbove([paint(NO_SUSPEND_NOTE, 'dim')])
+        eraseRegion()
+        teardown()
+        suspendProcess(() => {
+          if (done) return
+          try {
+            setup()
+            if (vimOn) rawWrite(vim.mode === 'normal' ? CURSOR_BLOCK : CURSOR_BAR)
+          } catch {
+            /* best-effort: the read still settles through close/cancel */
+          }
+          draw()
+        })
       }
 
       /** Tab: ask the injected completer about the token under the cursor. */
@@ -988,11 +1096,35 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
             noteFocus(key.on)
             continue
           }
+          // A pasted (or dropped) list of image files attaches them, when every one is
+          // a real file; anything else pastes as text, as it always has.
+          if (key.type === 'paste' && imagePasteHandler && !state.search) {
+            const paths = parseImagePaths(key.value, { windows: platform === 'win32' })
+            const r = paths ? imagePasteHandler({ kind: 'files', paths }) : null
+            if (r?.handled) {
+              noteAbove(r.notes)
+              continue
+            }
+          }
+          // The decoder has no clock, so a double Esc is recognized here.
+          let k: EditorKey = key
+          if (key.type === 'escape') {
+            const t = now()
+            const inNormal = vimOn && vim.mode === 'normal'
+            const double =
+              !state.search && t - lastEsc.at < DOUBLE_ESC_MS && (!vimOn || (lastEsc.normal && inNormal))
+            // An Esc that closed a search is not half of a double press, nor is the
+            // second half of one the first half of the next.
+            lastEsc = double || state.search ? { at: -Infinity, normal: false } : { at: t, normal: inNormal }
+            if (double) k = { type: 'escape', double: true }
+          } else {
+            lastEsc = { at: -Infinity, normal: false }
+          }
           let next: EditorState
           let outcome: EditorOutcome | undefined
           if (vimOn) {
             const before = vim.mode
-            const r2 = reduceVim(vim, state, key)
+            const r2 = reduceVim(vim, state, k)
             vim = r2.vim
             next = r2.state
             outcome = r2.outcome
@@ -1000,7 +1132,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
             // written when the mode actually changed, so a keystroke stays one write.
             if (vim.mode !== before) rawWrite(vim.mode === 'normal' ? CURSOR_BLOCK : CURSOR_BAR)
           } else {
-            const r2 = reduceEditor(state, key)
+            const r2 = reduceEditor(state, k)
             next = r2.state
             outcome = r2.outcome
           }
@@ -1019,8 +1151,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
             case 'interrupt': {
               // Hand off to the shared interrupt handler (which owns the
               // discard-vs-exit double-tap), then resolve this read as cancelled.
+              // The discarded draft goes to history first, so Up brings it back.
+              const discarded = editorText(state)
+              if (discarded.trim()) deps.remember?.(discarded)
               eraseRegion()
               done = true
+              composerStash = state.stashed
               pending = null
               teardown()
               startTimer()
@@ -1055,6 +1191,29 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               cycleModeHandler?.()
               draw()
               break
+            case 'remember':
+              // Left the buffer unsent (Esc Esc, a displaced stash): kept for Up.
+              deps.remember?.(outcome.text)
+              draw()
+              break
+            case 'rewind':
+              // Esc Esc on an empty composer: the driver runs the /rewind picker once
+              // this read is closed.
+              if (!rewindHandler) {
+                draw()
+                break
+              }
+              rewindHandler()
+              finish(null)
+              return
+            case 'paste-image': {
+              const r = imagePasteHandler?.({ kind: 'clipboard' })
+              noteAbove(r ? r.notes : [paint('· pasting images is unavailable here; use /image <path>', 'dim')])
+              break
+            }
+            case 'suspend':
+              suspendComposer()
+              return
             case 'complete':
               stdin.removeListener('data', onData)
               void runComplete().finally(() => {
@@ -1241,6 +1400,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     onCycleMode: (handler) => {
       cycleModeHandler = handler
+    },
+    onImagePaste: (handler) => {
+      imagePasteHandler = handler
+    },
+    onRewindKey: (handler) => {
+      rewindHandler = handler
     },
     onSteer: (handler) => {
       steerHandler = handler

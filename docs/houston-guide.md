@@ -845,22 +845,36 @@ long as it needs to be.
 | `Ctrl-W` | delete the word before the cursor |
 | `Ctrl-K` / `Ctrl-U` | delete to end / start of line |
 | `Ctrl-Y` | paste back what was just deleted |
-| `Ctrl-X Ctrl-E` | open the draft in `$VISUAL`/`$EDITOR` and come back with it |
+| `Ctrl-X Ctrl-E`, `Ctrl-G` | open the draft in `$VISUAL`/`$EDITOR` and come back with it |
+| `Ctrl-_` / `Ctrl-^` | undo / redo the last edit (on most keyboards `Ctrl-/` and `Ctrl-6`). A run of typing is one step; a paste, a delete-word or a paste-back is a step of its own |
+| `Ctrl-S` | stash the draft (text, cursor and collapsed pastes) and clear the composer; `Ctrl-S` on an empty composer brings it back. The stash survives sending other messages; stashing again keeps the older one in history |
 | `Ctrl-L` | repaint the screen |
 | `Ctrl-O` | open the transcript viewer: the whole session full screen (also `/transcript`) |
 | `Alt-T` | cycle how the model's reasoning shows (show, summary, hide), also while a turn runs |
-| `/image` | attach the image on your clipboard (also `/paste`) |
-| `Ctrl-C` | discard the draft (twice in a row to leave) |
+| `Ctrl-V`, `Alt-V` | attach the image on your clipboard (`Alt-V` where the terminal keeps `Ctrl-V` for itself, as on Windows). With no image there, it says so and leaves the draft alone |
+| `/image` | attach the image on your clipboard (also `/paste`), or `/image <path>` for a file |
+| drop or paste image files | a paste that is only paths to existing `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp` files (quoted, with escaped spaces, or as `file://` URLs; relative to the session folder) attaches them instead of inserting the text. Dragging a file onto the terminal pastes its path, so this is how drag and drop works |
+| `Esc Esc` | press twice quickly: clear the draft (`Up` brings it back); on an empty composer, open the `/rewind` list |
+| `Ctrl-C` | discard the draft (`Up` brings it back; twice in a row to leave) |
 | `Esc` | *while the agent works:* clear what you typed, or stop the run if nothing is typed |
+| `Ctrl-Z` | suspend Houston to your shell (macOS and Linux); `fg` brings it back with the draft as it was. Works while a turn runs too: the run is not cancelled, it carries on after `fg` |
 | `Ctrl-D` | leave (on an empty composer) |
 | `Shift-Tab` | switch approval mode (plan → ask → auto-edit → full auto → plan) |
+
+When you send a message, characters that draw nothing are removed first: zero-width
+spaces and joiners, bidirectional override and isolate controls, and Unicode tag
+characters, which can hide text you never saw in something you pasted. A dim note says
+how many were removed. Joiners that belong (inside an emoji like a family, or between
+letters in scripts that need them) stay. The desktop app does the same.
 
 ### Vim keys
 
 `/vim` turns on modal editing in the composer and remembers it; `/vim off` goes back.
 
 - Each prompt starts in insert mode, so typing a message never needs a mode change.
-- `Esc` goes to normal mode.
+- `Esc` goes to normal mode. `Esc Esc` never clears the draft here; pressed twice while
+  already in normal mode on an empty composer, it opens the `/rewind` list.
+- `Ctrl-_` undoes in both modes (in normal mode it is `u`).
 - The marker in front of the prompt shows the mode: `I` or `N`. Terminals that
   support it also show a bar cursor for insert and a block for normal.
 
@@ -1543,8 +1557,8 @@ goes back:
 
 ### In the terminal
 
-`/rewind` lists your messages by number, asks which one and what to rewind, shows the
-same summary, and asks you to confirm.
+`/rewind` (or `Esc` twice on an empty composer) lists your messages by number, asks
+which one and what to rewind, shows the same summary, and asks you to confirm.
 
 `/rewind 3 code` skips the questions for message 3. The modes are `both`,
 `conversation`, and `code`.
