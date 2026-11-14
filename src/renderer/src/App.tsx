@@ -84,9 +84,15 @@ import {
   SIDEBAR_NUDGE_STEP,
   SIDEBAR_RAIL_WIDTH
 } from './lib/sidebar'
-import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPanel'
-import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH } from './lib/previewPanel'
-import { clampPlanWidth, PLAN_DEFAULT_WIDTH } from './lib/planPanel'
+import {
+  clampTerminalHeight,
+  TERMINAL_DEFAULT_HEIGHT,
+  TERMINAL_MAX_HEIGHT,
+  TERMINAL_MIN_HEIGHT
+} from './lib/terminalPanel'
+import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH, PREVIEW_MAX_WIDTH, PREVIEW_MIN_WIDTH } from './lib/previewPanel'
+import { clampPlanWidth, PLAN_DEFAULT_WIDTH, PLAN_MAX_WIDTH, PLAN_MIN_WIDTH } from './lib/planPanel'
+import type { PanelSize } from './components/PanelResizer'
 import { afterPlan, forgetDockTab, readDockTab, rememberDockTab, type DockState } from './lib/dockLayout'
 import { usePreviewServers } from './hooks/usePreviewServers'
 import { ownedByChat } from './lib/chatScope'
@@ -1685,6 +1691,22 @@ export default function App(): JSX.Element {
     [terminals, persistTerminal, selectConversation]
   )
 
+  // The keyboard and double-click side of the terminal's resizer.
+  const terminalSize = useMemo<PanelSize>(
+    () => ({
+      value: terminalHeight,
+      min: TERMINAL_MIN_HEIGHT,
+      max: TERMINAL_MAX_HEIGHT,
+      defaultValue: TERMINAL_DEFAULT_HEIGHT,
+      onChange: (px) => {
+        const h = clampTerminalHeight(px)
+        setTerminalHeight(h)
+        void persistTerminal({ terminalHeight: h })
+      }
+    }),
+    [terminalHeight, persistTerminal]
+  )
+
   // Drag the panel's top edge: update the height CSS variable live (no re-render of
   // the transcript while dragging), then commit to state/settings on release.
   // Dragging up grows the panel, so height increases as the cursor's Y decreases.
@@ -1834,6 +1856,21 @@ export default function App(): JSX.Element {
     [previewWidth, persistPreview]
   )
 
+  const previewSize = useMemo<PanelSize>(
+    () => ({
+      value: previewWidth,
+      min: PREVIEW_MIN_WIDTH,
+      max: PREVIEW_MAX_WIDTH,
+      defaultValue: PREVIEW_DEFAULT_WIDTH,
+      onChange: (px) => {
+        const w = clampPreviewWidth(px)
+        setPreviewWidth(w)
+        void persistPreview({ previewWidth: w })
+      }
+    }),
+    [previewWidth, persistPreview]
+  )
+
   // ---- Plan-review panel (Plan mode: docked, resizable width, persisted) ----
 
   const pendingPlan = chat.pendingPlan
@@ -1897,6 +1934,21 @@ export default function App(): JSX.Element {
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
     },
+    [planWidth, persistPlan]
+  )
+
+  const planSize = useMemo<PanelSize>(
+    () => ({
+      value: planWidth,
+      min: PLAN_MIN_WIDTH,
+      max: PLAN_MAX_WIDTH,
+      defaultValue: PLAN_DEFAULT_WIDTH,
+      onChange: (px) => {
+        const w = clampPlanWidth(px)
+        setPlanWidth(w)
+        void persistPlan({ planWidth: w })
+      }
+    }),
     [planWidth, persistPlan]
   )
 
@@ -3628,6 +3680,7 @@ export default function App(): JSX.Element {
                 controller={terminals}
                 visible={terminalOpen}
                 onResizeMouseDown={onTerminalResizeMouseDown}
+                size={terminalSize}
                 onClose={toggleTerminal}
               />
             </ItemBoundary>
@@ -3736,6 +3789,7 @@ export default function App(): JSX.Element {
             // keep them alive) while one is open so a preview can't cover it.
             occluded={occludesPreview(overlays)}
             onResizeMouseDown={onPreviewResizeMouseDown}
+            size={previewSize}
             onClose={closeDock}
             // A tab whose content is gone (Files with no folder, a plan already
             // answered) falls back to Preview rather than an empty panel.
@@ -3827,6 +3881,7 @@ export default function App(): JSX.Element {
           onSendToMain={(question, answer) => onInvoke(sideChatTurn(question, answer))}
           onContinueInNewChat={(question, answer) => void onSideChatContinue(sideChatExchangeText(question, answer))}
           onResizeMouseDown={onPlanResizeMouseDown}
+          size={planSize}
         />
       )}
 

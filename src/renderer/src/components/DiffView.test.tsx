@@ -157,6 +157,20 @@ describe('DiffView', () => {
     expect(plain.querySelector('button')).toBeNull()
   })
 
+  it('makes the line numbers one Tab stop that the arrow keys move through', () => {
+    render(<DiffView diff={diffLines('a\nb\n', 'a\nc\n')} path="f.ts" onLineClick={() => {}} />)
+    const buttons = screen.getAllByRole('button', { name: /^Comment on/ })
+    expect(buttons.map((b) => b.tabIndex)).toEqual([0, -1, -1])
+    buttons[0].focus()
+    fireEvent.keyDown(buttons[0], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(buttons[1])
+    expect(buttons.map((b) => b.tabIndex)).toEqual([-1, 0, -1])
+    fireEvent.keyDown(buttons[1], { key: 'End' })
+    expect(document.activeElement).toBe(buttons[2])
+    fireEvent.keyDown(buttons[2], { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(buttons[1])
+  })
+
   it('side by side, comments on an unchanged line from either half as the line its comments show under', () => {
     const clicks: { side: string; line: number }[] = []
     const { container } = render(

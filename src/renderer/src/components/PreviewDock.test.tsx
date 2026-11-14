@@ -216,6 +216,12 @@ describe('PreviewDock', () => {
 
     expect(input).toHaveAttribute('aria-invalid', 'true')
     expect(screen.getByText('No running dev servers.')).toBeInTheDocument() // nothing added
+    // It says why, tied to the field.
+    expect(input).toHaveAccessibleDescription(
+      'Only localhost addresses (localhost, 127.0.0.1, [::1]) or a port number can be previewed.'
+    )
+    fireEvent.change(input, { target: { value: '3000' } })
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('notes how many previewable sources are hidden by the cap', () => {

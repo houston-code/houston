@@ -75,11 +75,47 @@ describe('DiffPanel', () => {
     installApi(sampleChanges)
     render(<DiffPanel workspace="/repo" />)
 
-    expect(await screen.findByText('src/foo.ts')).toBeInTheDocument()
+    expect(await screen.findByTitle('src/foo.ts')).toBeInTheDocument()
     expect(screen.getByText('new.txt')).toBeInTheDocument()
     // The label makes the scope explicit so users don't read it as session-only.
     expect(screen.getByText(/All uncommitted changes in the working tree/)).toBeInTheDocument()
     expect(screen.getByText(/on feature\/x/)).toBeInTheDocument()
+  })
+
+  it('tags each file with what happened to it, in words for a screen reader', async () => {
+    installApi(sampleChanges)
+    render(<DiffPanel workspace="/repo" />)
+    expect(await screen.findByRole('button', { name: /Modified src\/foo\.ts/, expanded: true })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Untracked new\.txt/, expanded: true })).toBeInTheDocument()
+  })
+
+  it('says what went wrong without the IPC wrapper', async () => {
+    const { getWorkingTreeChanges } = installApi(sampleChanges)
+    getWorkingTreeChanges.mockRejectedValue(new Error("Error invoking remote method 'changes:tree': Error: git timed out"))
+    render(<DiffPanel workspace="/repo" />)
+    expect(await screen.findByText('Couldn’t read changes: git timed out')).toBeInTheDocument()
+  })
+
+  it('moves between scopes with the arrow keys, as one Tab stop', async () => {
+    const { getChatChanges } = installApi(sampleChanges)
+    render(<DiffPanel workspace="/repo" conversationId="c1" />)
+    await screen.findByTitle('src/foo.ts')
+    const radios = screen.getAllByRole('radio')
+    expect(radios.map((r) => r.tabIndex)).toEqual([-1, -1, 0])
+    fireEvent.keyDown(radios[2], { key: 'ArrowRight' })
+    expect(screen.getByRole('radio', { name: 'This turn' })).toHaveAttribute('aria-checked', 'true')
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'This turn' }))
+    fireEvent.keyDown(radios[0], { key: 'ArrowLeft' })
+    expect(screen.getByRole('radio', { name: 'Working tree' })).toHaveAttribute('aria-checked', 'true')
+    await waitFor(() => expect(getChatChanges).toHaveBeenCalledWith('c1', 'turn'))
+  })
+
+  it('skips the chat scopes with the arrow keys before the chat exists', async () => {
+    installApi(sampleChanges)
+    render(<DiffPanel workspace="/repo" />)
+    await screen.findByTitle('src/foo.ts')
+    fireEvent.keyDown(screen.getByRole('radio', { name: 'Working tree' }), { key: 'ArrowRight' })
+    expect(screen.getByRole('radio', { name: 'Working tree' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('shows an empty state when the tree is clean', async () => {
@@ -212,7 +248,7 @@ describe('DiffPanel', () => {
   it('offers the turn and chat scopes only once the chat exists', async () => {
     installApi(sampleChanges)
     const { unmount } = render(<DiffPanel workspace="/repo" />)
-    await screen.findByText('src/foo.ts')
+    await screen.findByTitle('src/foo.ts')
     expect(screen.getByRole('radio', { name: 'This turn' })).toBeDisabled()
     expect(screen.getByRole('radio', { name: 'This chat' })).toBeDisabled()
     expect(screen.getByRole('radio', { name: 'Working tree' })).toHaveAttribute('aria-checked', 'true')
@@ -237,15 +273,15 @@ describe('DiffPanel', () => {
     }
     const { getChatChanges } = installApi(sampleChanges, chat)
     const { unmount } = render(<DiffPanel workspace="/repo" conversationId="c1" />)
-    await screen.findByText('src/foo.ts')
+    await screen.findByTitle('src/foo.ts')
     fireEvent.click(screen.getByRole('radio', { name: 'This turn' }))
-    expect(await screen.findByText('src/turn.ts')).toBeInTheDocument()
+    expect(await screen.findByTitle('src/turn.ts')).toBeInTheDocument()
     expect(getChatChanges).toHaveBeenCalledWith('c1', 'turn')
     expect(screen.getByText(/changes from 2 turns are not shown/)).toBeInTheDocument()
     unmount()
     // Reopened, the view starts on the scope chosen last.
     render(<DiffPanel workspace="/repo" conversationId="c1" />)
-    await screen.findByText('src/turn.ts')
+    await screen.findByTitle('src/turn.ts')
     expect(screen.getByRole('radio', { name: 'This turn' })).toHaveAttribute('aria-checked', 'true')
   })
 
@@ -270,10 +306,10 @@ describe('DiffPanel', () => {
     getWorkingTreeChanges.mockImplementation(() => new Promise((r) => (resolveTree = r)))
     render(<DiffPanel workspace="/repo" conversationId="c1" />)
     fireEvent.click(screen.getByRole('radio', { name: 'This turn' }))
-    expect(await screen.findByText('src/turn.ts')).toBeInTheDocument()
+    expect(await screen.findByTitle('src/turn.ts')).toBeInTheDocument()
     await act(async () => resolveTree(sampleChanges))
     expect(getWorkingTreeChanges).toHaveBeenCalledTimes(1)
-    expect(screen.getByText('src/turn.ts')).toBeInTheDocument()
+    expect(screen.getByTitle('src/turn.ts')).toBeInTheDocument()
     expect(screen.queryByText(/changed no files/)).not.toBeInTheDocument()
   })
 
@@ -282,12 +318,12 @@ describe('DiffPanel', () => {
     let resolveChat: (v: ChatChanges) => void = () => {}
     getChatChanges.mockImplementation(() => new Promise((r) => (resolveChat = r)))
     render(<DiffPanel workspace="/repo" conversationId="c1" />)
-    await screen.findByText('src/foo.ts')
+    await screen.findByTitle('src/foo.ts')
     fireEvent.click(screen.getByRole('radio', { name: 'This chat' }))
     // The working tree's files and totals are not this chat's.
     expect(screen.getByText('Loading…')).toBeInTheDocument()
     expect(screen.queryByText('This chat has changed no files.')).not.toBeInTheDocument()
-    expect(screen.queryByText('src/foo.ts')).not.toBeInTheDocument()
+    expect(screen.queryByTitle('src/foo.ts')).not.toBeInTheDocument()
     expect(screen.queryByText('+3')).not.toBeInTheDocument()
     await act(async () => resolveChat({ files: [], added: 0, removed: 0, unavailable: 0 }))
     expect(screen.getByText('This chat has changed no files.')).toBeInTheDocument()
@@ -308,14 +344,14 @@ describe('DiffPanel', () => {
     await act(async () => {})
     expect(getWorkingTreeChanges).not.toHaveBeenCalled()
     rerender(<DiffPanel workspace="/repo" active />)
-    expect(await screen.findByText('src/foo.ts')).toBeInTheDocument()
+    expect(await screen.findByTitle('src/foo.ts')).toBeInTheDocument()
     expect(getWorkingTreeChanges).toHaveBeenCalledTimes(1)
     // Hidden then shown again: what it had stays up (no "Loading…") while it re-reads.
     rerender(<DiffPanel workspace="/repo" active={false} running />)
     rerender(<DiffPanel workspace="/repo" active={false} />)
     expect(getWorkingTreeChanges).toHaveBeenCalledTimes(1)
     rerender(<DiffPanel workspace="/repo" active />)
-    expect(screen.getByText('src/foo.ts')).toBeInTheDocument()
+    expect(screen.getByTitle('src/foo.ts')).toBeInTheDocument()
     expect(screen.queryByText('Loading…')).not.toBeInTheDocument()
     await waitFor(() => expect(getWorkingTreeChanges).toHaveBeenCalledTimes(2))
   })
@@ -326,7 +362,7 @@ describe('DiffPanel', () => {
       const { getWorkingTreeChanges } = installApi(sampleChanges)
       render(<DiffPanel workspace="/repo" />)
       await act(async () => {})
-      expect(screen.getByText('src/foo.ts')).toBeInTheDocument()
+      expect(screen.getByTitle('src/foo.ts')).toBeInTheDocument()
       getWorkingTreeChanges.mockResolvedValue({ isRepo: true, branch: 'feature/x', files: [], added: 0, removed: 0 })
       // A burst of focus events is one read.
       act(() => {
@@ -383,7 +419,7 @@ describe('DiffPanel', () => {
   it('offers no revert while the chat is running', async () => {
     installApi(sampleChanges)
     render(<DiffPanel workspace="/repo" conversationId="c1" running />)
-    await screen.findByText('src/foo.ts')
+    await screen.findByTitle('src/foo.ts')
     expect(screen.queryByRole('button', { name: 'Revert src/foo.ts' })).not.toBeInTheDocument()
   })
 
@@ -519,7 +555,7 @@ describe('DiffPanel', () => {
   it('takes no comments without a way to send them, and holds sending while a run is busy', async () => {
     installApi(sampleChanges)
     const { unmount } = render(<DiffPanel workspace="/repo" />)
-    await screen.findByText('src/foo.ts')
+    await screen.findByTitle('src/foo.ts')
     expect(screen.queryByRole('button', { name: 'Comment on line 1 of src/foo.ts' })).not.toBeInTheDocument()
     unmount()
     render(<DiffPanel workspace="/repo" conversationId="c2" onSendComments={vi.fn()} creating />)
@@ -599,7 +635,7 @@ describe('DiffPanel', () => {
         files: [{ ...tree.files[0], status: 'deleted' }]
       })
       render(<DiffPanel workspace="/repo" />)
-      expect(await screen.findByText('src/long.ts')).toBeInTheDocument()
+      expect(await screen.findByTitle('src/long.ts')).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /more lines? (above|below)/ })).toBeNull()
     })
   })
