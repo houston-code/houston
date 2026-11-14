@@ -7,6 +7,7 @@
  */
 import { existsSync, readdirSync } from 'node:fs'
 import { extname, isAbsolute, join } from 'node:path'
+import { joinFor } from '../../binaries'
 import { resolveBinaryPath, WIN_BASH_EXTENSIONS, type BinLookupOptions } from '../format'
 import type { LspServerConfig } from '@shared/types'
 
@@ -214,9 +215,12 @@ function nodeLocalBin(bin: string, roots: string[], opts: BinLookupOptions): str
 export function projectPython(roots: readonly string[], opts: BinLookupOptions = {}): string | null {
   const exists = opts.exists ?? existsSync
   const env = opts.env ?? process.env
-  const win = (opts.platform ?? process.platform) === 'win32'
-  const inVenv = (venv: string): string => (win ? join(venv, 'Scripts', 'python.exe') : join(venv, 'bin', 'python'))
-  const venvs = [...roots.flatMap((r) => [join(r, '.venv'), join(r, 'venv')]), ...(env.VIRTUAL_ENV ? [env.VIRTUAL_ENV] : [])]
+  const platform = opts.platform ?? process.platform
+  const win = platform === 'win32'
+  // Join for the platform asked about, so a lookup for another OS builds that OS's paths.
+  const joinP = joinFor(platform)
+  const inVenv = (venv: string): string => (win ? joinP(venv, 'Scripts', 'python.exe') : joinP(venv, 'bin', 'python'))
+  const venvs = [...roots.flatMap((r) => [joinP(r, '.venv'), joinP(r, 'venv')]), ...(env.VIRTUAL_ENV ? [env.VIRTUAL_ENV] : [])]
   for (const venv of venvs) {
     const python = inVenv(venv)
     if (exists(python)) return python

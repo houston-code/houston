@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { join } from 'node:path'
+import { posix } from 'node:path'
+
+// These cases simulate Linux, so build the expected paths the POSIX way on every host.
+const join = posix.join
 import { canRunTool, planToolRun, projectBinDirs, projectLocalBin } from './format'
 import { BUILTIN_SERVERS, projectPython, resolveServer } from './lsp/servers'
 
