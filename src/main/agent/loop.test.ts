@@ -394,6 +394,7 @@ beforeEach(() => {
   h.unusable = []
   h.gitContext = ''
   delete h.settings.fallbackModels
+  delete h.settings.doneEvidenceNote
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
@@ -10037,6 +10038,8 @@ describe('turn receipt', () => {
 
   it('ends a working turn with what actually ran, sent before done and saved on its last message', async () => {
     h.sandboxed = true
+    // The receipt is the subject here; the evidence-of-done note has its own tests below.
+    h.settings.doneEvidenceNote = false
     h.probeTools = [
       shellProbe({ 'pip install -r requirements.txt': { exitCode: 1, output: 'ERROR: network', blocked: 'network' } })
     ]
@@ -10291,6 +10294,132 @@ describe('turn receipt', () => {
     expect(notes(r).filter((n) => n.includes('changed tests'))).toEqual([])
     expect(r.messages.at(-1)?.receipt?.filesChanged).toEqual(['add.test.ts', 'sub.test.ts'])
     expect(r.messages.at(-1)?.receipt).not.toHaveProperty('testEdits')
+  })
+
+  describe('evidence-of-done note', () => {
+    const doneNotes = (r: { messages: ChatMessage[] }): string[] =>
+      notes(r).filter((n) => n.includes("Houston's record of this turn shows gaps"))
+
+    it('asks once when a turn changed code and no check passed after it', async () => {
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          call('w1', 'write_file', { path: 'app.ts', content: 'export const a = 1\n' }),
+          say('Done, all tests pass.'),
+          // The model answers the note without running anything: no second note.
+          say('There is no test suite in this project, so nothing ran.')
+        ]
+      })
+      const sent = doneNotes(r)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toContain('- No test, typecheck, build, or lint run passed after the files changed.')
+      expect(r.messages.at(-1)?.content).toBe('There is no test suite in this project, so nothing ran.')
+      expect(types(r).slice(-2)).toEqual(['receipt', 'done'])
+    })
+
+    it('lists open todo items and a failed last test run, not a missing check', async () => {
+      h.sandboxed = true
+      h.probeTools = [shellProbe({ pytest: { exitCode: 1, output: '2 failed, 10 passed in 0.3s' } })]
+      const r = await run({
+        policy: 'ask',
+        turns: [
+          call('t1', 'todo_write', {
+            todos: [
+              { content: 'Fix the parser', status: 'completed' },
+              { content: 'Handle empty input', status: 'in_progress' },
+              { content: 'Update the docs', status: 'pending' }
+            ]
+          }),
+          call('w1', 'write_file', { path: 'parser.py', content: 'x = 1\n' }),
+          call('s1', 'run_shell', { command: 'pytest' }),
+          say('All done.'),
+          say('Two tests still fail and two items are open; I stopped here.')
+        ],
+        onApproval: (_id, decide) => decide('allow')
+      })
+      const sent = doneNotes(r)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toContain(
+        '- 2 todo items are still open: "Handle empty input" (in progress), "Update the docs".'
+      )
+      expect(sent[0]).toContain('- The last test run failed (2 failed): pytest.')
+      expect(sent[0]).not.toContain('No test, typecheck')
+    })
+
+    it('says nothing when a check passed after the last change and the todos are done', async () => {
+      h.sandboxed = true
+      h.probeTools = [shellProbe({ pytest: { exitCode: 0, output: '12 passed in 0.1s' } })]
+      const r = await run({
+        policy: 'ask',
+        turns: [
+          call('t1', 'todo_write', { todos: [{ content: 'Fix the parser', status: 'in_progress' }] }),
+          call('w1', 'write_file', { path: 'parser.py', content: 'x = 1\n' }),
+          call('s1', 'run_shell', { command: 'pytest' }),
+          call('t2', 'todo_write', { todos: [{ content: 'Fix the parser', status: 'completed' }] }),
+          say('Fixed; pytest passes.')
+        ],
+        onApproval: (_id, decide) => decide('allow')
+      })
+      expect(doneNotes(r)).toEqual([])
+      expect(r.messages.at(-1)?.content).toBe('Fixed; pytest passes.')
+    })
+
+    it('says nothing for a turn that changed no files, or only prose', async () => {
+      const read = await run({ policy: 'full-auto', turns: [say('Here is how it works.')] })
+      expect(doneNotes(read)).toEqual([])
+      const prose = await run({
+        policy: 'full-auto',
+        turns: [call('w1', 'write_file', { path: 'README.md', content: '# Notes\n' }), say('Updated the readme.')]
+      })
+      expect(doneNotes(prose)).toEqual([])
+    })
+
+    it('ignores a todo list left from an earlier turn', async () => {
+      const earlier: ChatMessage[] = [
+        { role: 'user', content: 'start' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 't0', name: 'todo_write', arguments: { todos: [{ content: 'Old work', status: 'pending' }] } }]
+        },
+        { role: 'tool', toolCallId: 't0', content: 'ok' },
+        { role: 'assistant', content: 'later' },
+        { role: 'user', content: 'fix the readme' }
+      ]
+      const r = await run({
+        policy: 'full-auto',
+        messages: earlier,
+        turns: [call('w1', 'write_file', { path: 'README.md', content: '# Fixed\n' }), say('Fixed.')]
+      })
+      expect(doneNotes(r)).toEqual([])
+    })
+
+    it('carries the test-edit question in the same single note', async () => {
+      writeFileSync(join(ws, 'add.test.ts'), SUITE)
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          call('r1', 'read_file', { path: 'add.test.ts' }),
+          call('w1', 'write_file', { path: 'add.test.ts', content: SUITE.replace("it('adds'", "it.skip('adds'") }),
+          say('Fixed.'),
+          say('I skipped it on purpose: the user asked.')
+        ]
+      })
+      const all = notes(r).filter((n) => n.includes('Before you finish'))
+      expect(all).toHaveLength(1)
+      expect(all[0]).toContain('No test, typecheck, build, or lint run passed')
+      expect(all[0]).toContain('changed tests in ways that can make a failing suite pass')
+    })
+
+    it('is off with doneEvidenceNote: false', async () => {
+      h.settings.doneEvidenceNote = false
+      const r = await run({
+        policy: 'full-auto',
+        turns: [call('w1', 'write_file', { path: 'app.ts', content: 'export const a = 1\n' }), say('Done.')]
+      })
+      expect(doneNotes(r)).toEqual([])
+      expect(r.messages.at(-1)?.content).toBe('Done.')
+    })
   })
 
   it("carries an accepted plan's progress across turns until it is complete", async () => {

@@ -314,6 +314,7 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   maxIterationsCeiling: 'step limit',
   costCeilingUsd: 'cost reminder',
   stallDetection: 'loop detection',
+  doneEvidenceNote: 'check before finishing',
   verifyOnStop: 'verify on finish',
   verifyCommand: 'verification command',
   subagentHistoryMb: 'subagent history',

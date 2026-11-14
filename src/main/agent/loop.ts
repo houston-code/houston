@@ -26,7 +26,7 @@ import type {
 import type { PlanReadiness } from '@shared/planReadiness'
 import type { ChatStatusMap, PendingPrompt } from '@shared/chatStatus'
 import type { Todo } from '@shared/todos'
-import type { TurnReceipt } from '@shared/evidence'
+import type { TestEdit, TurnReceipt } from '@shared/evidence'
 import {
   systemNoteMessage,
   SYSTEM_NOTE_PREFIX,
@@ -182,6 +182,7 @@ import {
 } from './checkpoints'
 import { EvidenceLedger, type EvidenceDraft } from './evidence'
 import { detectTestEdits, isTestRelevantPath, testEditsNote } from './testTampering'
+import { doneEvidenceNote, type DoneEvidence } from './doneEvidence'
 import { listShells, peekShell } from './shells'
 import {
   backgroundEventsNote,
@@ -3492,6 +3493,27 @@ export async function startRun(
     let verifyPassesRun = 0
     // Whether the model has been told this turn that its edits loosened a test (once).
     let testEditsNoted = false
+    // Whether the evidence-of-done note went out this turn (once).
+    let doneEvidenceNoted = false
+    // What the ledger says about the turn at a natural stop, for that note. The todo
+    // list counts only if this turn wrote it: one left from an earlier turn isn't
+    // this turn's plan.
+    const doneEvidenceOf = (testEdits: TestEdit[]): DoneEvidence => {
+      let wroteTodos = false
+      for (let i = messages.length - 1; i >= runStart && !wroteTodos; i--) {
+        wroteTodos = messages[i].toolCalls?.some((c) => c.name === 'todo_write') ?? false
+      }
+      const todos = latestTodos(messages)
+      return {
+        filesChanged: run.evidence.changedFiles(),
+        passedAfterLastWrite: run.evidence.passed('any', { afterLastWrite: true }),
+        passedBeforeLastWrite: run.evidence.passed('any'),
+        lastTest: run.evidence.lastTest(),
+        ...(wroteTodos ? { todos } : {}),
+        todoGaps: todoEvidenceGaps(startTodos, todos, run.evidence),
+        testEdits
+      }
+    }
     const verifyMaxPasses = resolveVerifyMaxPasses(settings.verifyMaxPasses)
 
     // The request re-sent verbatim ahead of the tail while `cut` sits inside its turn,
@@ -4397,6 +4419,19 @@ export async function startRun(
             detail: redact(e.detail)
           }))
           run.evidence.setTestEdits(edits)
+          // The evidence-of-done note (doneEvidence.ts): once per turn, only when the
+          // ledger shows a real gap. It carries the test edits too, so they aren't
+          // raised twice.
+          if (settings.doneEvidenceNote !== false && !doneEvidenceNoted) {
+            const note = doneEvidenceNote(doneEvidenceOf(edits))
+            if (note) {
+              doneEvidenceNoted = true
+              if (edits.length) testEditsNoted = true
+              messages.push(systemNoteMessage(note))
+              persist(messages)
+              continue
+            }
+          }
           if (edits.length && !testEditsNoted) {
             testEditsNoted = true
             messages.push(systemNoteMessage(testEditsNote(edits)))
