@@ -7,8 +7,35 @@
 
 export interface ImageAttachment {
   mediaType: string
-  /** Base64-encoded image bytes (no `data:` URI prefix). */
+  /** Base64-encoded image bytes (no `data:` URI prefix). Empty when `src` is set. */
   data: string
+  /**
+   * Set only on images of a saved chat loaded for the window: a {@link MEDIA_SCHEME}
+   * URL the window displays the stored file from, in place of the bytes. The main
+   * process reads the file back whenever such an image is sent again.
+   */
+  src?: string
+}
+
+/** Scheme the app window loads a saved chat's images from (see mediaProtocol.ts). */
+export const MEDIA_SCHEME = 'houston-media'
+
+const MEDIA_URL_RE =
+  /^houston-media:\/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([0-9a-f]{64}\.[a-z0-9]{1,5})$/
+
+/** The URL for one stored file of a chat. */
+export function mediaUrl(conversationId: string, mediaRef: string): string {
+  return `${MEDIA_SCHEME}://${conversationId.toLowerCase()}/${mediaRef}`
+}
+
+/**
+ * The chat id and stored file name in a {@link mediaUrl}, or null for anything else
+ * (another scheme, a malformed id, a name that is not a content digest). Never throws.
+ */
+export function parseMediaUrl(value: unknown): { conversationId: string; mediaRef: string } | null {
+  if (typeof value !== 'string' || value.length > 200) return null
+  const m = MEDIA_URL_RE.exec(value)
+  return m ? { conversationId: m[1], mediaRef: m[2] } : null
 }
 
 export const SUPPORTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']

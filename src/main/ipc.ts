@@ -185,7 +185,11 @@ import {
   updateConversationMeta,
   setConversationSettings,
   reportChildToParent,
-  saveSideChat
+  saveSideChat,
+  getConversationForView,
+  conversationForView,
+  readStoredImage,
+  resolveStoredImages,
 } from './conversations'
 import { createSpawnBackend } from './spawnSession'
 import { setSpawnBackend } from './agent/spawn'
@@ -205,6 +209,7 @@ import {
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { registerScheduleIpc } from './scheduleIpc'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
+import { wireMediaProtocol } from './mediaProtocol'
 
 /** A preferences export is a few KB; anything past this is not one. */
 const MAX_SETTINGS_FILE_BYTES = 2_000_000
@@ -594,6 +599,17 @@ async function readClipboardImage(): Promise<ClipboardContent['image']> {
  * it. Once `ready` settles, requests run with no added hop. Without it (tests), nothing
  * waits.
  */
+
+/**
+ * The image the viewer shows, from the URL it was given: a data URL (parsed strictly:
+ * a supported type, base64, size-capped) or a stored image of a saved chat.
+ */
+function shownImage(url: unknown): { mediaType: string; bytes: Buffer } | null {
+  const inline = parseImageDataUrl(url)
+  if (inline) return { mediaType: inline.mediaType, bytes: Buffer.from(inline.data, 'base64') }
+  return readStoredImage(url)
+}
+
 export function registerIpc(ready?: Promise<unknown>): void {
   let open = ready === undefined
   const opened = ready?.then(
@@ -821,6 +837,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // in the app renderer); HTML visuals are registered for their sandboxed frames only
   // while the user has them turned on.
   wireHtmlVisualProtocol()
+  // A saved chat's images, shown in the window from their stored files.
+  wireMediaProtocol()
   handle(IPC.visualMermaid, async (_event, source: unknown, theme: unknown) => {
     const req = parseMermaidRequest(source, theme)
     if (!req) return { error: 'The diagram is empty or too large to render.' }
@@ -831,13 +849,13 @@ export function registerIpc(ready?: Promise<unknown>): void {
   )
 
   // Image viewer: copy the shown image to the clipboard. The renderer only ever holds
-  // image data URLs it was sent, but this is still an IPC boundary, so the payload is
-  // parsed strictly (a supported image type, base64, size-capped) before use.
+  // image data URLs and stored-image URLs it was sent, but this is still an IPC
+  // boundary, so the payload is parsed strictly (see shownImage) before use.
   handle(IPC.imageCopy, async (_event, dataUrl: unknown): Promise<boolean> => {
-    const img = parseImageDataUrl(dataUrl)
+    const img = shownImage(dataUrl)
     if (!img) return false
     try {
-      const decoded = nativeImage.createFromBuffer(Buffer.from(img.data, 'base64'))
+      const decoded = nativeImage.createFromBuffer(img.bytes)
       if (decoded.isEmpty()) return false
       const blob = new Blob([new Uint8Array(decoded.toPNG())], { type: 'image/png' })
       await clipboard.write([new ClipboardItem({ 'image/png': blob })])
@@ -850,7 +868,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Image viewer: save the shown image where the user picks (a user gesture, so any
   // folder they choose is fine). Resolves with the saved path, or null if cancelled.
   handle(IPC.imageSave, async (event, dataUrl: unknown, label: unknown): Promise<string | null> => {
-    const img = parseImageDataUrl(dataUrl)
+    const img = shownImage(dataUrl)
     if (!img) return null
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
     const name = imageFileName(typeof label === 'string' ? label : 'image', img.mediaType)
@@ -861,7 +879,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       filters: [{ name: 'Image', extensions: [ext] }]
     })
     if (res.canceled || !res.filePath) return null
-    writeFileSync(res.filePath, Buffer.from(img.data, 'base64'))
+    writeFileSync(res.filePath, img.bytes)
     return res.filePath
   })
 
@@ -1199,7 +1217,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.conversationGet, (_event, id: string) => {
     // A window that loads the saved chat must first have every delta sent before it.
     flushAllDeltas()
-    return getConversation(id)
+    return getConversationForView(id)
   })
   // Local-only per-model loop scorecard — aggregated on-device, never transmitted.
   handle(IPC.conversationScorecard, () => computeScorecard())
@@ -1257,11 +1275,15 @@ export function registerIpc(ready?: Promise<unknown>): void {
     if (meta) retargetQueue(id, patch)
     return meta
   })
-  handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
+  handle(IPC.conversationFork, (_event, id: string) => {
+    const fork = forkConversation(id)
+    return fork ? conversationForView(fork, fork.id) : null
+  })
   // "Fork from here" on a message: the point is checked here, at the IPC boundary.
-  handle(IPC.conversationForkAt, (_event, id: string, point: unknown) =>
-    typeof id === 'string' && isForkPoint(point) ? forkConversationAt(id, point) : null
-  )
+  handle(IPC.conversationForkAt, (_event, id: string, point: unknown) => {
+    const fork = typeof id === 'string' && isForkPoint(point) ? forkConversationAt(id, point) : null
+    return fork ? conversationForView(fork, fork.id) : null
+  })
   // /compact runs under an overall deadline and can be cancelled by chat id; retries
   // of a failed summary request are pushed back so the UI can say it's retrying.
   handle(
@@ -1508,7 +1530,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return
     }
 
-    const images = sanitizeAttachments(req.images)
+    const images = sanitizeAttachments(resolveStoredImages(req.images))
     const invokedAs = sanitizeInvocation(req.invokedAs)
     const userMessage: ChatMessage = {
       role: 'user',
