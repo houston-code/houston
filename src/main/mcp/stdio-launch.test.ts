@@ -83,8 +83,18 @@ describe('planStdioLaunch', () => {
     })
   })
 
-  it('spawns an unresolvable command unchanged (it fails with ENOENT as before)', () => {
-    expect(planStdioLaunch('nope', ['x'], env, win)).toEqual({ command: 'nope', args: ['x'] })
+  it('refuses an unresolvable bare command instead of letting spawn search the cwd', () => {
+    // Handing `nope` to spawn would let libuv try the server's cwd (the workspace)
+    // first, running a planted nope.exe there.
+    expect(() => planStdioLaunch('nope', ['x'], env, win)).toThrow(
+      /MCP server command not found on PATH: nope\. Install it/
+    )
+  })
+
+  it('refuses an unresolvable command path with a plain not-found error', () => {
+    expect(() => planStdioLaunch('C:\\missing\\server', [], env, win)).toThrow(
+      'MCP server command not found: C:\\missing\\server'
+    )
   })
 
   it.each(['say "hi"', '%PATH%', 'wow!', 'two\nlines', 'cr\rx', 'nul\0x'])(

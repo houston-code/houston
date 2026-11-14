@@ -125,6 +125,16 @@ export function seatbeltNetworkMode(
   return egressProxy ? 'loopback' : 'full'
 }
 
+/**
+ * The Seatbelt wrapper, by absolute path. A bare `sandbox-exec` is looked up on the
+ * child's PATH at spawn time, with the workspace as the working directory, so a PATH
+ * holding a relative or empty entry (`.`, `bin`, a trailing `:`) would run a
+ * `sandbox-exec` the workspace planted: an unconfined command reported as sandboxed.
+ * The system one lives here on every macOS release, and `sandboxAvailable` checks
+ * this same path.
+ */
+export const SANDBOX_EXEC_PATH = '/usr/bin/sandbox-exec'
+
 export const SeatbeltBackend: SandboxBackend = {
   id: 'seatbelt',
   sandboxed: true,
@@ -135,7 +145,7 @@ export const SeatbeltBackend: SandboxBackend = {
     const mode = seatbeltNetworkMode(allowNetwork, egressProxy)
     const profile = buildSeatbeltProfile(roots, mode)
     return {
-      file: 'sandbox-exec',
+      file: SANDBOX_EXEC_PATH,
       args: ['-p', profile, '/bin/bash', '-c', command],
       detached: true,
       windowsHide: false,

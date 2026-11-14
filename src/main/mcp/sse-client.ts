@@ -104,6 +104,35 @@ export type FetchFn = (url: string, init: RequestInit) => Promise<Response>
 export const MAX_MCP_MESSAGE_CHARS = 64 * 1024 * 1024
 
 /**
+ * A response body as text, read at most `max` characters deep. `Response.text()`
+ * buffers whatever the server sends, so a hostile or broken server answering a POST
+ * with an endless JSON body (or a huge error page) would grow the main process's
+ * memory without bound; the SSE path already caps each event at the same
+ * {@link MAX_MCP_MESSAGE_CHARS}. Past the cap the transfer is cancelled and this
+ * rejects with a "larger than" error, which fails the request it answered.
+ */
+export async function readCappedText(res: Response, max = MAX_MCP_MESSAGE_CHARS): Promise<string> {
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  const parts: string[] = []
+  let chars = 0
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    const text = decoder.decode(value, { stream: true })
+    chars += text.length
+    if (chars > max) {
+      await reader.cancel().catch(() => {})
+      throw new Error(`MCP server sent a response larger than ${max / 1024 / 1024} MB`)
+    }
+    parts.push(text)
+  }
+  parts.push(decoder.decode())
+  return parts.join('')
+}
+
+/**
  * Collects a streamed SSE body and returns each event once it is complete.
  *
  * Re-parsing the whole buffer on every network chunk re-scanned a large event from the
@@ -542,7 +571,7 @@ export class McpSseClient implements McpConnection {
       })
       // The JSON-RPC response arrives over the SSE stream, not in this body. Drain
       // the (usually empty, 202) body so the connection can be reused.
-      await res.text().catch(() => '')
+      await readCappedText(res).catch(() => '')
       if (res.status === 401) {
         // Rejected credentials won't recover on this connection: mark it dead so the
         // manager reconnects (refreshing the OAuth token) instead of reusing it.

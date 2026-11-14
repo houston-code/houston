@@ -25,10 +25,21 @@
 /**
  * Names whose *substring* marks the var as credential-bearing. Matched
  * case-insensitively anywhere in the name, so `AWS_SECRET_ACCESS_KEY`,
- * `AWS_ACCESS_KEY_ID`, `NPM_TOKEN`, `DB_PASSWORD`, `STRIPE_CREDENTIAL`, and
- * `SOME_AUTH` all hit.
+ * `AWS_ACCESS_KEY_ID`, `NPM_TOKEN`, `DB_PASSWORD`, `STRIPE_CREDENTIAL`,
+ * `SOME_AUTH`, `SENDGRID_APIKEY`, `GPG_PASSPHRASE`, and `SESSION_COOKIE` all hit.
  */
-const SECRET_NAME_PATTERN = /(_KEY|_TOKEN|_SECRET|PASSWORD|PASSWD|CREDENTIAL|_AUTH)/i
+const SECRET_NAME_PATTERN = /(_KEY|_TOKEN|_SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|_AUTH|APIKEY|COOKIE)/i
+
+/**
+ * Credential-shaped *suffixes*, matched only at the end of the name because as
+ * substrings they would hit ordinary config: `_PAT` (a personal access token,
+ * `GITHUB_PAT`) is a prefix of every `*_PATH`; `_PASS` (`SMTP_PASS`) of
+ * `*_PASSTHROUGH`; `_SESSION` (`TWITCH_SESSION`; `*_SESSION_TOKEN` already ends in
+ * `_TOKEN`) of `XDG_SESSION_TYPE` and `DBUS_SESSION_BUS_ADDRESS`, which desktop
+ * tools need. `_PWD` is `MYSQL_PWD`, and plain `PWD`/`OLDPWD` have no underscore.
+ * A DSN (`SENTRY_DSN`, `DATABASE_DSN`) embeds its credentials by design.
+ */
+const SECRET_NAME_SUFFIX_PATTERN = /(_PAT|_PASS|_PWD|_SESSION|(^|_)DSN)$/i
 
 /**
  * Whole namespaces to drop regardless of the pattern. The AWS SDK/CLI reads its
@@ -58,14 +69,43 @@ export function isSecretEnvName(name: string): boolean {
   if (KEEP_EXCEPTIONS.has(name)) return false
   if (SECRET_NAMES.has(name)) return true
   if (SECRET_NAME_PREFIXES.some((p) => name.startsWith(p))) return true
-  return SECRET_NAME_PATTERN.test(name)
+  return SECRET_NAME_PATTERN.test(name) || SECRET_NAME_SUFFIX_PATTERN.test(name)
+}
+
+/**
+ * Names whose value is a URL that may carry credentials in its userinfo
+ * (`DATABASE_URL=postgres://user:pass@db/app`, `REDIS_URL`, `AMQP_URI`). These are
+ * kept, since test suites and dev servers read them to find their services, but the
+ * userinfo is cut out (see {@link stripUrlUserinfo}): a child that needs the
+ * password has to be given it explicitly. Proxy variables (`HTTP_PROXY`, …) are not
+ * `_URL`-shaped and are left alone: a sandboxed command under the egress allowlist
+ * gets the egress proxy's own values in their place, and an MCP server behind an
+ * authenticating proxy needs them to reach anything.
+ */
+const URL_VALUED_NAME = /(^|_)(URL|URI)$/i
+
+/**
+ * A URL with its userinfo (`user:pass@`) removed, or the value unchanged when it has
+ * none. The authority is what lies between `scheme://` and the first `/`, `?`, or
+ * `#`; its last `@` ends the userinfo (an unescaped `@` in a password is common in
+ * hand-written values). Done on the string rather than with `URL`, which rejects or
+ * rewrites forms these vars routinely hold (`postgres://u:p@h1,h2/db`, a scheme
+ * `URL` doesn't know).
+ */
+export function stripUrlUserinfo(value: string): string {
+  const m = value.match(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)/i)
+  if (!m) return value
+  const at = m[2].lastIndexOf('@')
+  if (at < 0) return value
+  return m[1] + m[2].slice(at + 1) + value.slice(m[0].length)
 }
 
 /**
  * A copy of `baseEnv` with every credential-bearing var (see
  * {@link isSecretEnvName}) removed, safe to hand to a child process. `PATH`,
  * `HOME`, `TMPDIR`, `LANG`/`LC_*`, `SHELL`, and ordinary configuration all
- * survive; only credential-shaped names are dropped. `undefined` entries are
+ * survive; only credential-shaped names are dropped, and the userinfo of a
+ * `*_URL` / `*_URI` value is cut out (the var is kept). `undefined` entries are
  * skipped so the result is a clean string map.
  */
 export function sanitizeChildEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -73,7 +113,7 @@ export function sanitizeChildEnv(baseEnv: NodeJS.ProcessEnv = process.env): Node
   for (const [key, value] of Object.entries(baseEnv)) {
     if (value === undefined) continue
     if (isSecretEnvName(key)) continue
-    out[key] = value
+    out[key] = URL_VALUED_NAME.test(key) ? stripUrlUserinfo(value) : value
   }
   return out
 }

@@ -14,6 +14,7 @@ import {
   FORWARDER_SOURCE,
   egressProxyEnv,
   egressProxyUrl,
+  hostHeaderMatchesUri,
   parseConnectTarget,
   proxyAuthToken,
   startEgressProxy
@@ -25,7 +26,7 @@ function startTarget(): Promise<{ server: Server; port: number }> {
   return new Promise((resolve) => {
     const server = createHttpServer((req, res) => {
       res.writeHead(200, { 'content-type': 'text/plain' })
-      res.end(`target saw ${req.method} ${req.url}`)
+      res.end(`target saw ${req.method} ${req.url} host=${req.headers.host}`)
     })
     server.listen(0, '127.0.0.1', () => {
       resolve({ server, port: (server.address() as { port: number }).port })
@@ -33,11 +34,20 @@ function startTarget(): Promise<{ server: Server; port: number }> {
   })
 }
 
-/** Raw proxy request (absolute-form), returning the full response text. */
-function rawProxyHttp(proxyPort: number, absoluteUrl: string): Promise<string> {
+/**
+ * Raw proxy request (absolute-form), returning the full response text. The Host
+ * header defaults to the URI's authority, as a real client sends it (the proxy
+ * refuses one that disagrees); `extraHeaders` are raw `Name: value` lines.
+ */
+function rawProxyHttp(
+  proxyPort: number,
+  absoluteUrl: string,
+  extraHeaders: string[] = [`Host: ${/^https?:\/\//.test(absoluteUrl) ? new URL(absoluteUrl).host : 'placeholder'}`]
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const sock = netConnect(proxyPort, '127.0.0.1', () => {
-      sock.write(`GET ${absoluteUrl} HTTP/1.1\r\nHost: placeholder\r\nConnection: close\r\n\r\n`)
+      const headers = extraHeaders.map((h) => `${h}\r\n`).join('')
+      sock.write(`GET ${absoluteUrl} HTTP/1.1\r\n${headers}Connection: close\r\n\r\n`)
     })
     const chunks: Buffer[] = []
     sock.on('data', (c: Buffer) => chunks.push(c))
@@ -69,6 +79,29 @@ describe('parseConnectTarget', () => {
     expect(parseConnectTarget('host:0')).toBeNull()
     expect(parseConnectTarget('host:70000')).toBeNull()
     expect(parseConnectTarget('')).toBeNull()
+  })
+})
+
+describe('hostHeaderMatchesUri', () => {
+  const u = (s: string): URL => new URL(s)
+  it('accepts the same authority, folding case and the default port', () => {
+    expect(hostHeaderMatchesUri(['registry.npmjs.org'], u('http://registry.npmjs.org/x'))).toBe(true)
+    expect(hostHeaderMatchesUri(['Registry.NPMJS.org:80'], u('http://registry.npmjs.org/x'))).toBe(true)
+    expect(hostHeaderMatchesUri(['a.example:8080'], u('http://a.example:8080/'))).toBe(true)
+    expect(hostHeaderMatchesUri(['[::1]:8080'], u('http://[::1]:8080/'))).toBe(true)
+    expect(hostHeaderMatchesUri(['a.example:443'], u('https://a.example/'))).toBe(true)
+    expect(hostHeaderMatchesUri([], u('http://a.example/'))).toBe(true)
+  })
+
+  it('refuses another host, another port, a repeat, or a malformed value', () => {
+    const url = u('http://registry.npmjs.org/')
+    expect(hostHeaderMatchesUri(['other.site'], url)).toBe(false)
+    expect(hostHeaderMatchesUri(['registry.npmjs.org:8080'], url)).toBe(false)
+    expect(hostHeaderMatchesUri(['registry.npmjs.org', 'registry.npmjs.org'], url)).toBe(false)
+    expect(hostHeaderMatchesUri(['user@registry.npmjs.org'], url)).toBe(false)
+    expect(hostHeaderMatchesUri(['registry.npmjs.org/path'], url)).toBe(false)
+    expect(hostHeaderMatchesUri([''], url)).toBe(false)
+    expect(hostHeaderMatchesUri(['a.example:8080'], u('http://a.example/'))).toBe(false)
   })
 })
 
@@ -205,6 +238,73 @@ describe('startEgressProxy (TCP)', () => {
     expect(head).toContain('400')
   })
 
+  it('forwards the URI authority as the upstream Host header', async () => {
+    const res = await rawProxyHttp(proxy.endpoints.tcpPort, `http://127.0.0.1:${target.port}/h`)
+    expect(res).toContain(`target saw GET /h host=127.0.0.1:${target.port}`)
+  })
+
+  it('accepts a Host header that names the URI host with its default port spelled out', async () => {
+    // :80 is the default for http, so `127.0.0.1:80` and `127.0.0.1` name one authority.
+    // Nothing listens on 80 here, so only that the policy was asked (not refused with a
+    // 400 first) is checked; case folding is covered by the hostHeaderMatchesUri tests.
+    const decided = log.length
+    const res = await rawProxyHttp(proxy.endpoints.tcpPort, 'http://127.0.0.1/x', ['Host: 127.0.0.1:80'])
+    expect(res).not.toContain('400 Bad Request')
+    expect(log.length).toBe(decided + 1)
+  })
+
+  it('refuses a Host header that names another origin than the allowed URI (CDN fronting)', async () => {
+    const decided = log.length
+    const res = await rawProxyHttp(proxy.endpoints.tcpPort, `http://127.0.0.1:${target.port}/steal`, [
+      'Host: attacker.example'
+    ])
+    expect(res).toContain('400')
+    expect(res).toContain('Host header does not match')
+    expect(res).not.toContain('target saw')
+    // Refused before the policy was even asked, and nothing reached the upstream.
+    expect(log.length).toBe(decided)
+  })
+
+  it('refuses a Host header naming the same host on another port', async () => {
+    const res = await rawProxyHttp(proxy.endpoints.tcpPort, `http://127.0.0.1:${target.port}/p`, [
+      'Host: 127.0.0.1:1'
+    ])
+    expect(res).toContain('400')
+    expect(res).not.toContain('target saw')
+  })
+
+  it('refuses a repeated Host header', async () => {
+    const res = await rawProxyHttp(proxy.endpoints.tcpPort, `http://127.0.0.1:${target.port}/dup`, [
+      `Host: 127.0.0.1:${target.port}`,
+      'Host: attacker.example'
+    ])
+    expect(res).toContain('400')
+    expect(res).not.toContain('target saw')
+  })
+
+  it('refuses a Host header carrying userinfo or a path', async () => {
+    for (const host of [`x@127.0.0.1:${target.port}`, `127.0.0.1:${target.port}/a`]) {
+      const res = await rawProxyHttp(proxy.endpoints.tcpPort, `http://127.0.0.1:${target.port}/u`, [
+        `Host: ${host}`
+      ])
+      expect(res, host).toContain('400')
+      expect(res, host).not.toContain('target saw')
+    }
+  })
+
+  it('supplies the Host header for an HTTP/1.0 request that sent none', async () => {
+    const res = await new Promise<string>((resolve, reject) => {
+      const sock = netConnect(proxy.endpoints.tcpPort, '127.0.0.1', () => {
+        sock.write(`GET http://127.0.0.1:${target.port}/old HTTP/1.0\r\n\r\n`)
+      })
+      const chunks: Buffer[] = []
+      sock.on('data', (c: Buffer) => chunks.push(c))
+      sock.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+      sock.on('error', reject)
+    })
+    expect(res).toContain(`target saw GET /old host=127.0.0.1:${target.port}`)
+  })
+
   it('rejects origin-form requests (not a web server)', async () => {
     const res = await rawProxyHttp(proxy.endpoints.tcpPort, '/not-absolute')
     expect(res).toContain('400')
@@ -256,7 +356,7 @@ describe('startEgressProxy upstream lifetimes', () => {
     const proxy = await startEgressProxy({ checkHost: (host) => ({ allowed: host === '127.0.0.1' }) })
     try {
       const sock = netConnect(proxy.endpoints.tcpPort, '127.0.0.1', () => {
-        sock.write(`GET http://127.0.0.1:${port}/ HTTP/1.1\r\nHost: x\r\n\r\n`)
+        sock.write(`GET http://127.0.0.1:${port}/ HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`)
       })
       sock.on('error', () => {})
       await arrived
@@ -365,7 +465,7 @@ describe.skipIf(process.platform === 'win32')('startEgressProxy (unix socket + f
     const res = await new Promise<string>((resolve, reject) => {
       const sock = netConnect(proxy.endpoints.unixSocketPath as string, () => {
         sock.write(
-          `GET http://127.0.0.1:${target.port}/unix HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n`
+          `GET http://127.0.0.1:${target.port}/unix HTTP/1.1\r\nHost: 127.0.0.1:${target.port}\r\nConnection: close\r\n\r\n`
         )
       })
       const chunks: Buffer[] = []

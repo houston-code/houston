@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { COMPACTION_SUMMARY_PREFIX, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import {
   CHILD_REPORT_SUMMARY_CHARS,
@@ -962,6 +962,26 @@ describe('saving from the remembered write', () => {
     setMessages(c.id, [{ role: 'user', content: 'hi' }])
     addUsage(c.id, { inputTokens: 1, outputTokens: 1, cost: 1 })
     expect(statSync(file(c.id)).mode & 0o777).toBe(0o600)
+  })
+
+  it('keeps the conversations folder owner-only, tightening one left 0755', () => {
+    if (process.platform === 'win32') return
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const folder = dirname(file(c.id))
+    expect(statSync(folder).mode & 0o777).toBe(0o700)
+    // A folder an earlier version created world-readable, under a fresh profile path
+    // (the tightening runs once per folder per process).
+    const other = mkdtempSync(join(tmpdir(), 'houston-conv-perm-'))
+    try {
+      mkdirSync(join(other, 'conversations'), { mode: 0o755 })
+      chmodSync(join(other, 'conversations'), 0o755)
+      setUserDataDir(other)
+      resetConversationListCache()
+      createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      expect(statSync(join(other, 'conversations')).mode & 0o777).toBe(0o700)
+    } finally {
+      rmSync(other, { recursive: true, force: true })
+    }
   })
 })
 

@@ -174,10 +174,15 @@ process), Houston strips credential-bearing vars from the inherited environment
 with network could `env | curl` those secrets out, and a compromised MCP server would
 receive them all on startup.
 
-It's a **denylist** (drop names matching `/(_KEY|_TOKEN|_SECRET|PASSWORD|CREDENTIAL|_AUTH)/i`
-plus the `AWS_` namespace and the GitHub tokens), not a strict allowlist, because the
-sandbox runs an open-ended toolchain that reads an unpredictable tail of ordinary config
-vars (`NODE_ENV`, `CI`, `DATABASE_URL`, proxies, …) that must survive. This is
+It's a **denylist** (drop names containing `_KEY`, `_TOKEN`, `_SECRET`, `PASSWORD`,
+`PASSWD`, `PASSPHRASE`, `CREDENTIAL`, `_AUTH`, `APIKEY`, or `COOKIE`; names ending in
+`_PAT`, `_PASS`, `_PWD`, `_SESSION`, or `DSN`; plus the `AWS_` namespace and the GitHub
+tokens), not a strict allowlist, because the sandbox runs an open-ended toolchain that
+reads an unpredictable tail of ordinary config vars (`NODE_ENV`, `CI`, `DATABASE_URL`,
+proxies, …) that must survive. The suffixes are anchored because as substrings they
+would hit ordinary config (`_PAT` starts every `*_PATH`, `_SESSION` starts
+`XDG_SESSION_TYPE`). A var named `*_URL` or `*_URI` is kept but loses any userinfo, so
+`DATABASE_URL=postgres://user:pass@db/app` reaches the child as `postgres://db/app`. This is
 defense-in-depth: Houston's own provider keys never travel through the environment (they
 go via SDK constructor params), so it hardens the user's *ambient* shell secrets rather
 than fixing an active leak. An MCP server that legitimately needs a token still receives
@@ -195,6 +200,11 @@ OS sandbox denies every direct route out, so the proxy is the only egress path. 
 arrives at the proxy as `CONNECT host:port` and plain HTTP as an absolute-form URI;
 the hostname is visible either way, which is exactly the granularity a per-domain
 allow/deny needs. Bodies stay opaque; no masking (MITM) proxy, no trust-store changes.
+A plain-HTTP request is forwarded with its `Host` header set to the URI's host, the one
+the policy judged, and a request whose own `Host` header names another host or port
+(or repeats the header) is refused with a 400. Without that, an allowed URI sent with
+`Host: other.site` would be routed by a shared CDN edge or virtual-hosting front to an
+origin the policy never approved.
 
 The policy ([`src/shared/egress.ts`](../src/shared/egress.ts), user-visible in
 Settings → Permissions → Sandbox egress) is: deny entries win over every allow; user allow entries
@@ -269,7 +279,13 @@ to a private IP is not re-checked at connect time (the proxy refuses private IP
 *literals* only, unlike `web_fetch`, which vets and pins every address a name resolves
 to); and SSH/raw-TCP protocols simply
 don't traverse an HTTP proxy, so under the allowlist they are blocked, which is the
-conservative direction (SSH is an uninspectable channel). On Linux, per-command
+conservative direction (SSH is an uninspectable channel). Inside a `CONNECT` tunnel the
+TLS SNI and the inner HTTP `Host` header are encrypted, so a client can open a tunnel
+to an allowed host's edge and then ask it for a different origin served from the same
+edge (domain fronting). The proxy cannot see or correct that without TLS interception,
+which it deliberately does not do; the host-header check above covers plain HTTP only.
+Many CDNs refuse a mismatched SNI and `Host`, but that is the CDN's policy, not a
+Houston guarantee. On Linux, per-command
 network namespaces mean a sandboxed dev server is only reachable within its own
 command; users who need the old shared-namespace behavior can select mode `all`.
 
