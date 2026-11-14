@@ -21,6 +21,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 import { gitContext } from './git'
 import { planScope } from './fileScope'
+import { ghRepoKey } from './github'
 import { hardenedGitArgs, GIT_ENV } from './gitRead'
 
 const probes = (): number => h.calls.filter((a) => a.includes('--show-scope')).length
@@ -70,5 +71,17 @@ describe('git probes per operation', () => {
     const inside = await planScope(join(repo, 'build'))
     expect(inside).toEqual({ kind: 'git', walk: false, explicit: ['kept.js'] })
     expect(probes()).toBe(1)
+  })
+
+  it('ghRepoKey probes the config once and reads the remotes afresh on every call', async () => {
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/me/proj.git'], { cwd: repo })
+    const opts = { env: {}, authedHosts: async () => ['github.com'] }
+    h.calls.length = 0
+    expect(await ghRepoKey(repo, opts)).toBe('github.com:me/proj')
+    expect(probes()).toBe(1)
+    expect(h.calls).toHaveLength(3) // the probe, `remote -v`, and the gh-resolved listing
+    // Nothing is remembered: a remote repointed between calls is what the next one reads.
+    execFileSync('git', ['remote', 'set-url', 'origin', 'https://github.com/evil/proj.git'], { cwd: repo })
+    expect(await ghRepoKey(repo, opts)).toBe('github.com:evil/proj')
   })
 })

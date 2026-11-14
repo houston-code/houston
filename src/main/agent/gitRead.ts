@@ -167,10 +167,13 @@ export async function runGitCapture(
 /** Runs a git subcommand, resolving its stdout, or null when it fails. */
 export type GitTry = (args: string[]) => Promise<string | null>
 
-/** A {@link GitTry} over {@link runGitCapture} in `cwd`. */
-export function captureTry(cwd: string): GitTry {
+/**
+ * A {@link GitTry} over {@link runGitCapture} in `cwd`, every command sharing `hardening`
+ * when given (the same rule applies: commands of one operation only).
+ */
+export function captureTry(cwd: string, hardening?: Promise<string[]>): GitTry {
   return async (args) => {
-    const r = await runGitCapture(args, cwd)
+    const r = await runGitCapture(args, cwd, hardening)
     return r.ok ? r.stdout : null
   }
 }
