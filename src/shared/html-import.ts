@@ -40,7 +40,8 @@ const NAMED_ENTITIES: Record<string, string> = {
  */
 export function decodeHtmlEntities(text: string): string {
   return text.replace(/&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z]{1,8});/g, (match, ref: string) => {
-    if (ref[0] !== '#') return NAMED_ENTITIES[ref] ?? match
+    // Own-property only, so `&valueOf;` stays as written instead of decoding to a function's source.
+    if (ref[0] !== '#') return Object.hasOwn(NAMED_ENTITIES, ref) ? NAMED_ENTITIES[ref] : match
     const code = ref[1] === 'x' || ref[1] === 'X' ? parseInt(ref.slice(2), 16) : parseInt(ref.slice(1), 10)
     return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match
   })

@@ -270,3 +270,15 @@ describe('visual blocks in the terminal', () => {
     expect(renderMarkdownAnsi('```html\n<p>x</p>\n```', { paint })).not.toContain('↳')
   })
 })
+
+describe('renderMarkdownAnsi on hostile nesting', () => {
+  it.each([
+    ['nested bullets', '- '.repeat(5000) + 'x'],
+    ['nested quotes', '>'.repeat(8000) + ' x'],
+    ['nested ordered items', '1. '.repeat(5000) + 'x']
+  ])('renders %s without throwing', (_label, src) => {
+    expect(() => render(src)).not.toThrow()
+    expect(() => render(src, 80)).not.toThrow()
+    expect(render(src)).toContain('x')
+  })
+})

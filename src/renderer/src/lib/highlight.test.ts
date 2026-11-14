@@ -29,6 +29,27 @@ describe('languageForPath', () => {
     expect(languageForPath('LICENSE')).toBeNull()
     expect(languageForPath('data.unknownext')).toBeNull()
   })
+
+  // A repo file can be named anything. Before own-property lookups these resolved to
+  // Object.prototype members and hljs.getLanguage threw on them, crashing the window.
+  const PROTO_NAMES = ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf']
+
+  it('returns null, never throws, for files named after Object.prototype members', () => {
+    for (const name of PROTO_NAMES) {
+      expect(languageForPath(name)).toBeNull()
+      expect(languageForPath(`src/${name}`)).toBeNull()
+      expect(languageForPath(`a.${name}`)).toBeNull()
+      expect(languageForPath(`dir/x.${name.toUpperCase()}`)).toBeNull()
+    }
+  })
+
+  it('highlightFile and highlightCode return null for prototype-member names', () => {
+    for (const name of PROTO_NAMES) {
+      expect(highlightFile(name, 'x')).toBeNull()
+      expect(highlightFile(`a.${name}`, 'x')).toBeNull()
+      expect(highlightCode(name, 'x')).toBeNull()
+    }
+  })
 })
 
 describe('highlightFile', () => {

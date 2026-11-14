@@ -153,3 +153,12 @@ describe('buildMessageWithContext', () => {
     expect(out).toBe('q\n\nA\n\nB')
   })
 })
+
+describe('fenceLang with prototype-member extensions', () => {
+  it('returns no tag rather than an inherited member', () => {
+    expect(fenceLang('a.constructor')).toBe('')
+    expect(fenceLang('a.toString')).toBe('')
+    expect(fenceLang('a.valueOf')).toBe('')
+    expect(fenceLang('a.ts')).toBe('ts')
+  })
+})

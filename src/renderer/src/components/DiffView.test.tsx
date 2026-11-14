@@ -185,3 +185,14 @@ describe('DiffView', () => {
   })
 })
 
+
+describe('DiffView with a hostile file name', () => {
+  // `constructor` / `a.__proto__` used to resolve to Object.prototype members as the
+  // highlight language, and hljs threw while rendering.
+  it.each(['constructor', 'a.__proto__', 'src/x.toString', 'valueOf'])('renders %s as plain text', (path) => {
+    const { container } = render(<DiffView diff={diffLines('a', 'b')} path={path} />)
+    expect(container.textContent).toContain('a')
+    expect(container.textContent).toContain('b')
+    expect(container.querySelector('.hljs-keyword')).toBeNull()
+  })
+})

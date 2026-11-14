@@ -251,3 +251,10 @@ describe('isCustomizable', () => {
     expect(isCustomizable(byId('select-chat-n'))).toBe(false) // custom display (range)
   })
 })
+
+describe('formatChord with a prototype-member key', () => {
+  it('prints the key name, not an inherited function', () => {
+    expect(formatChord({ key: 'constructor' }, false)).toBe('constructor')
+    expect(formatChord({ key: 'toString', mod: true }, true)).toBe('⌘toString')
+  })
+})

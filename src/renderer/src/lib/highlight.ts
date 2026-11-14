@@ -30,6 +30,17 @@ const NAME_LANG: Record<string, string> = {
   gnumakefile: 'makefile'
 }
 
+/**
+ * An own-property read of one of the tables above. A plain `EXT_LANG[key]` also
+ * finds what every object inherits, so a file named `constructor` or `a.__proto__`
+ * (or a fence tagged `valueOf`) would resolve to a prototype function or object;
+ * hljs.getLanguage then calls `.toLowerCase()` on it and throws, outside any try,
+ * and the Files or Changes panel takes the window down on every reopen.
+ */
+function lookup(table: Record<string, string>, key: string): string | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined
+}
+
 /** Skip highlighting past this size — tokenizing megabytes would jank the pane. */
 export const MAX_HIGHLIGHT_BYTES = 100 * 1024
 
@@ -37,8 +48,21 @@ export const MAX_HIGHLIGHT_BYTES = 100 * 1024
 export function languageForPath(path: string): string | null {
   const base = baseName(path).toLowerCase()
   const dot = base.lastIndexOf('.')
-  const lang = dot > 0 ? EXT_LANG[base.slice(dot + 1)] : NAME_LANG[base]
-  return lang && hljs.getLanguage(lang) ? lang : null
+  const lang = dot > 0 ? lookup(EXT_LANG, base.slice(dot + 1)) : lookup(NAME_LANG, base)
+  return lang && knownLanguage(lang) ? lang : null
+}
+
+/**
+ * Whether hljs has `lang`. Its registry is prototype-free, but a guard costs
+ * nothing and keeps a hostile id (from a fence info-string, which is model or file
+ * text) from ever reaching the renderer as an exception.
+ */
+function knownLanguage(lang: string): boolean {
+  try {
+    return Boolean(hljs.getLanguage(lang))
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -65,8 +89,8 @@ export function highlightFile(path: string, text: string): string | null {
  */
 export function highlightCode(lang: string, text: string): string | null {
   if (!lang || text.length > MAX_HIGHLIGHT_BYTES) return null
-  const resolved = EXT_LANG[lang.toLowerCase()] ?? lang.toLowerCase()
-  if (!hljs.getLanguage(resolved)) return null
+  const resolved = lookup(EXT_LANG, lang.toLowerCase()) ?? lang.toLowerCase()
+  if (!knownLanguage(resolved)) return null
   const key = `${resolved}\0${text}`
   const hit = codeCache.get(key)
   if (hit !== undefined) {

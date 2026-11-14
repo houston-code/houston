@@ -129,7 +129,8 @@ export function fenceLang(path: string): string {
     css: 'css',
     scss: 'scss'
   }
-  return map[ext] ?? ''
+  // Own-property only: `x.constructor` must not yield Object's constructor as a fence tag.
+  return Object.hasOwn(map, ext) ? map[ext] : ''
 }
 
 /**
