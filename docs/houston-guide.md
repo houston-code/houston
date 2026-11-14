@@ -3220,6 +3220,28 @@ and Linux.
 - A reset keeps those, plus your permission rules, hooks, and approval mode (whose
   fresh-install default depends on whether this machine's sandbox works).
 
+### OpenTelemetry export
+
+Houston can send traces and metrics to your own OpenTelemetry collector. It is off
+until you name an endpoint; nothing is exported by default.
+
+- **Turn it on** with `"telemetry": { "otlpEndpoint": "http://localhost:4318" }` in
+  `settings.json`, or with the standard `OTEL_EXPORTER_OTLP_ENDPOINT` variable (or
+  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` for one
+  signal). Export is OTLP over HTTP. Headers, such as an auth token, go in
+  `OTEL_EXPORTER_OTLP_HEADERS`, never in settings. `OTEL_SDK_DISABLED=true` turns it off.
+  It applies to the desktop app and to the terminal clients alike.
+- **Traces:** a span per run (`invoke_agent houston`), with a child span per model
+  request (`chat <model>`, with token counts) and per tool call (`execute_tool <tool>`),
+  named with the OpenTelemetry GenAI conventions (`gen_ai.*`).
+- **Metrics:** `gen_ai.client.token.usage`, `gen_ai.client.operation.duration`,
+  `houston.cost`, `houston.tool.calls`, `houston.run.duration`, and
+  `houston.run.errors`.
+- **No content by default.** Spans carry names, ids, counts, durations, and error
+  classes. Your prompt and tool arguments and results are added only with
+  `"includeContent": true` under `telemetry`, cut to 4,000 characters each. Every
+  exported value is scrubbed of known secrets first, as the app log is.
+
 ### Searching settings
 
 The search box above the pages is focused when Settings opens (`Cmd+F` or `Ctrl+F`, or

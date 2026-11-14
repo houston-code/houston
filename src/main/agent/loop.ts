@@ -236,6 +236,7 @@ import {
   scheduleCreate,
   scheduleList
 } from './scheduler'
+import { runTelemetryFor, type RunTelemetry } from '../telemetry'
 import { matchingHooks, notificationFor, runHooks, type HookOutcome, type HookSession } from './hooks'
 import { loadAgents, type CustomAgent } from './agents'
 import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
@@ -1401,6 +1402,8 @@ export async function startRun(
   // Set once the run's hooks are known: runs Notification hooks for a wait (see emit),
   // and SessionEnd hooks as the run finishes.
   let notifyHooks: ((e: BlockingEvent) => void) | undefined
+  // OpenTelemetry for this run, when the user turned export on (telemetry/); fed from emit.
+  let runTel: (RunTelemetry & { flush(): Promise<void> }) | undefined
   let endHooks: ((reason: string) => Promise<void>) | undefined
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
   const emit = (e: DistributiveOmitRunId<AgentEvent>): void => {
@@ -1439,6 +1442,11 @@ export async function startRun(
     // observe, so they run alongside the wait instead of holding it up.
     if (notifyHooks && (BLOCKING_EVENT_TYPES as readonly string[]).includes(full.type)) {
       notifyHooks(full as BlockingEvent)
+    }
+    try {
+      runTel?.onEvent(full)
+    } catch {
+      // Telemetry never touches the run.
     }
   }
 
@@ -1993,6 +2001,21 @@ export async function startRun(
     const knownSecrets = collectSecrets()
     const redact = createSecretRedactor(knownSecrets)
     scrubError = redact
+    // Off unless an OTLP endpoint is set. Every exported string goes through the same
+    // redactor; prompt and tool content only with telemetry.includeContent.
+    try {
+      const firstUser = [...messages].reverse().find((m) => m.role === 'user')
+      runTel = runTelemetryFor(settings.telemetry, {
+        redact,
+        runId,
+        ...(conversationId ? { conversationId } : {}),
+        providerId: req.providerId,
+        model: req.model,
+        ...(typeof firstUser?.content === 'string' ? { prompt: firstUser.content } : {})
+      })
+    } catch (err) {
+      log.warn(`run ${runId}: telemetry did not start: ${err instanceof Error ? err.message : String(err)}`)
+    }
     // What tools report for the turn's receipt. Model-written text it keeps (a command,
     // a page URL, a step's description) is masked like any other text the run keeps; a
     // command's output is only scanned for a test summary and never stored.
@@ -4038,6 +4061,7 @@ export async function startRun(
         try {
           // Images go out at the model's size; the log keeps the originals.
           const outgoing = await withModelImages(sendMessages)
+          runTel?.requestStart(route.model, serving.providerId)
           for await (const ev of route.provider.streamChat({
             model: route.model,
             system,
@@ -5451,6 +5475,16 @@ export async function startRun(
         runsByConversation.delete(conversationId)
         notifyActiveRunsChanged()
         noteRunEnded(conversationId, !ended ? 'natural' : ended.cls === 'aborted' ? 'aborted' : 'error')
+      }
+    }
+    // The run's spans end and are exported (bounded), so a one-shot client that exits
+    // next still sends them.
+    if (runTel) {
+      try {
+        runTel.end()
+        await runTel.flush()
+      } catch {
+        // Telemetry never touches the run.
       }
     }
     // SessionEnd, once the run's slots are free: a slow hook never keeps the chat
