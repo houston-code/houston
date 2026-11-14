@@ -81,7 +81,13 @@ import { useChatGap } from './lib/chatGap'
 import { statusText } from './lib/statusLine'
 import { playAttentionSound } from './lib/attentionSound'
 import { RunMeterText } from './components/RunMeterText'
-import { newGroupId } from './lib/chatGroups'
+import {
+  collapsedAfterGroupDelete,
+  newGroupId,
+  sidebarChatOrder,
+  sidebarSections,
+  type SidebarLayoutInput
+} from './lib/chatGroups'
 import { checkpointNotice } from './lib/checkpointNotice'
 import { occludesPreview, ownsShiftTab, shortcutAllowedOverModal, suppressesTips, type OverlayFlags } from './lib/overlays'
 import { baseName } from './lib/paths'
@@ -1183,13 +1189,19 @@ export default function App(): JSX.Element {
       saveComposerDraft(id, '') // drop the deleted conversation's lingering draft
       if (res.worktree?.message) alert(res.worktree.message)
       if (id === currentId) {
-        nav.begin()
-        setCurrentId(null)
-        chat.reset([])
+        // Land on a new chat in the deleted chat's project, never its worktree
+        // checkout, which the delete may just have removed.
+        const meta = conversations.find((c) => c.id === id)
+        if (meta) enterNewChat(newChatFolder(meta))
+        else {
+          nav.begin()
+          setCurrentId(null)
+          chat.reset([])
+        }
       }
       await refreshConversations()
     },
-    [currentId, chat, refreshConversations, nav]
+    [currentId, conversations, chat, refreshConversations, nav, enterNewChat]
   )
 
   // "Fork from here": a new chat holding the conversation up to a message. From one
@@ -1363,12 +1375,31 @@ export default function App(): JSX.Element {
     setSettings(await window.api.saveSettings(next))
   }, [])
 
+  // Archiving the open chat takes its row out of the list, so it also leaves the chat
+  // for a new one in the same project (as marking it unread does). An Undo toast
+  // brings it back and reopens it. A search still lists archived chats, so the chat
+  // stays open then.
   const onSetArchived = useCallback(
     async (id: string, archived: boolean) => {
       await window.api.organizeConversation(id, { archived })
+      if (archived && id === currentId && !search) {
+        const meta = conversations.find((c) => c.id === id)
+        if (meta) {
+          enterNewChat(newChatFolder(meta))
+          setUndoToast({
+            text: `Archived “${meta.title}”.`,
+            undo: () => {
+              void window.api
+                .organizeConversation(id, { archived: false })
+                .then(() => refreshConversations())
+                .then(() => selectConversation(id))
+            }
+          })
+        }
+      }
       await refreshConversations()
     },
-    [refreshConversations]
+    [refreshConversations, currentId, search, conversations, enterNewChat, selectConversation]
   )
 
   const onMoveConversation = useCallback(
@@ -1458,13 +1489,19 @@ export default function App(): JSX.Element {
       const members = conversations.filter((c) => c.groupId === groupId)
       await Promise.all(members.map((c) => window.api.organizeConversation(c.id, { groupId: null })))
       const current = await window.api.getSettings()
+      const chatGroups = (current.chatGroups ?? []).filter((g) => g.id !== groupId)
+      // The last group gone, Ungrouped loses its header (and with it the controls to
+      // expand it or clear its label filter), so it can't stay collapsed or filtered.
+      const collapsedSections = collapsedAfterGroupDelete(current.collapsedSections, chatGroups.length)
       const filters = { ...(current.sectionLabelFilters ?? {}) }
       delete filters[groupId]
+      if (chatGroups.length === 0) delete filters.ungrouped
       setSettings(
         await window.api.saveSettings({
           ...current,
-          chatGroups: (current.chatGroups ?? []).filter((g) => g.id !== groupId),
-          sectionLabelFilters: filters
+          chatGroups,
+          sectionLabelFilters: filters,
+          ...(collapsedSections ? { collapsedSections } : {})
         })
       )
       await refreshConversations()
@@ -2735,21 +2772,56 @@ export default function App(): JSX.Element {
   // applied. Drives global matching, the help overlay, and palette key hints.
   const shortcuts = useMemo(() => resolveShortcuts(settings?.keybindings), [settings?.keybindings])
 
-  // Keyboard chat-switching (⌘1–9, ⌃Tab / ⌃⇧Tab) over the currently visible list.
+  // What the sidebar lays its sections out from. The Sidebar gets exactly these, and
+  // keyboard chat-switching reads the same layout, so a shortcut lands on the row the
+  // user sees. A search lists every hit outside the groups.
+  const sidebarLayout = useMemo<SidebarLayoutInput>(
+    () => ({
+      conversations: visibleConversations,
+      groups: search ? [] : settings?.chatGroups ?? [],
+      search,
+      collapsedSections: settings?.collapsedSections ?? {},
+      chatStatus,
+      currentId,
+      unreadFirst: settings?.sidebarUnreadFirst ?? false,
+      ...(settings?.sidebarGroupBy ? { groupBy: settings.sidebarGroupBy } : {}),
+      labelFilters
+    }),
+    [
+      visibleConversations,
+      search,
+      settings?.chatGroups,
+      settings?.collapsedSections,
+      settings?.sidebarUnreadFirst,
+      settings?.sidebarGroupBy,
+      labelFilters,
+      chatStatus,
+      currentId
+    ]
+  )
+  // The chats top to bottom as the sidebar shows them (collapsed sections, chats a
+  // label filter hides, and folded spawned chats left out), read when a shortcut fires
+  // so the date sections are current.
+  const sidebarOrder = useCallback(
+    () => sidebarChatOrder(sidebarSections(sidebarLayout), collapsedParents, currentId),
+    [sidebarLayout, collapsedParents, currentId]
+  )
+
+  // Keyboard chat-switching (⌘1–9, ⌃Tab / ⌃⇧Tab) over the sidebar's rows, in its order.
   const jumpToChat = useCallback(
     (index: number) => {
-      const id = chatAtIndex(visibleConversations, index)
+      const id = chatAtIndex(sidebarOrder(), index)
       if (id && id !== currentId) void selectConversation(id)
     },
-    [visibleConversations, currentId, selectConversation]
+    [sidebarOrder, currentId, selectConversation]
   )
 
   const cycleChat = useCallback(
     (dir: 1 | -1) => {
-      const id = cycleChatId(visibleConversations, currentId, dir)
+      const id = cycleChatId(sidebarOrder(), currentId, dir)
       if (id && id !== currentId) void selectConversation(id)
     },
-    [visibleConversations, currentId, selectConversation]
+    [sidebarOrder, currentId, selectConversation]
   )
 
   // Shift+Tab steps to the next approval mode and confirms it in the transcript
@@ -3325,18 +3397,14 @@ export default function App(): JSX.Element {
       }
     >
       <Sidebar
-        conversations={visibleConversations}
-        groups={search ? [] : settings.chatGroups ?? []}
-        search={search}
+        {...sidebarLayout}
         onSearch={setSearch}
         focusSearchSignal={searchFocusSignal}
-        currentId={currentId}
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
         toggleShortcut={shortcutHint('toggle-sidebar', mac, shortcuts)}
         newChatShortcut={shortcutHint('new-chat', mac, shortcuts)}
         settingsShortcut={shortcutHint('open-settings', mac, shortcuts)}
-        chatStatus={chatStatus}
         onSelect={selectConversation}
         onNew={onNewChat}
         onDelete={onDeleteConversation}
@@ -3351,9 +3419,7 @@ export default function App(): JSX.Element {
         onSetArchived={onSetArchived}
         onSetUnread={onSetUnread}
         onMarkAllRead={onMarkAllRead}
-        unreadFirst={settings.sidebarUnreadFirst ?? false}
         onToggleUnreadFirst={onToggleUnreadFirst}
-        {...(settings.sidebarGroupBy ? { groupBy: settings.sidebarGroupBy } : {})}
         onSetGroupBy={(by) => void onSetSidebarGroupBy(by)}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
@@ -3364,12 +3430,10 @@ export default function App(): JSX.Element {
         onRenameGroup={onRenameGroup}
         onDeleteGroup={onDeleteGroup}
         onToggleGroupCollapsed={onToggleGroupCollapsed}
-        collapsedSections={settings.collapsedSections ?? {}}
         onToggleSectionCollapsed={onToggleSectionCollapsed}
         collapsedParents={collapsedParents}
         onToggleParentCollapsed={(id) => void onToggleParentCollapsed(id)}
         labels={chatLabels}
-        labelFilters={labelFilters}
         onSetSectionLabelFilter={(sectionId, ids) => void onSetSectionLabelFilter(sectionId, ids)}
         onSetChatLabels={(id, ids) => void onSetChatLabels(id, ids)}
         onCreateLabel={onCreateLabel}
