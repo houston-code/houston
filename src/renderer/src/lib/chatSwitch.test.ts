@@ -91,6 +91,14 @@ describe('captureEventsAfter', () => {
 describe('finishCompact', () => {
   const compacted: CompactOutcome = { ok: true, messages: [{}], summarized: 4 }
 
+  it('says a cancelled compaction changed nothing, as information rather than an error', async () => {
+    const reload = vi.fn(async () => true)
+    const notify = vi.fn()
+    await finishCompact({ ok: false, summarized: 0, reason: 'cancelled' }, { stillOpen: () => true, reload, notify })
+    expect(reload).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith('Compaction cancelled. Nothing was changed.', 'info')
+  })
+
   it('leaves the view alone when the user opened another chat meanwhile', async () => {
     const reload = vi.fn(async () => true)
     const notify = vi.fn()
