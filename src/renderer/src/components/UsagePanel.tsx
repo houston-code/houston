@@ -3,6 +3,8 @@ import type { UsageDay, UsageReport } from '@shared/usageReport'
 import { formatTokens, formatUsd } from '@shared/usage'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { Icon } from './Icon'
+import { useRateLimits } from '../hooks/useRateLimits'
+import { rateLimitLine } from '@shared/rateLimitState'
 
 /** "Nov 13" for a YYYY-MM-DD local date. */
 function dayLabel(date: string): string {
@@ -34,6 +36,7 @@ export function UsagePanel({
   const [ceiling, setCeiling] = useState(String(costCeilingUsd || 0))
   const panelRef = useRef<HTMLElement>(null)
   useFocusTrap(panelRef, onClose)
+  const rateLimits = useRateLimits()
 
   const reload = useCallback(async () => {
     setError(null)
@@ -219,6 +222,25 @@ export function UsagePanel({
                 )}
               </section>
             </>
+          )}
+
+          {rateLimits.length > 0 && (
+            <section className="usage-view__section" aria-labelledby="usage-rate-limits">
+              <h3 className="usage-view__heading" id="usage-rate-limits">
+                Provider rate limits
+              </h3>
+              <ul className="usage-view__limits">
+                {rateLimits.map((s) => (
+                  <li key={s.providerId}>
+                    <strong>{s.providerId}</strong>: {rateLimitLine(s, Date.now())}
+                  </li>
+                ))}
+              </ul>
+              <p className="usage-view__note">
+                What each provider reported the last time it rate limited a request in this
+                session.
+              </p>
+            </section>
           )}
 
           <section className="usage-view__section" aria-labelledby="usage-limit">

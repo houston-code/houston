@@ -56,6 +56,7 @@ import type {
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
 import type { Scorecard } from '@shared/scorecard'
 import type { UsageReport } from '@shared/usageReport'
+import type { RateLimitState } from '@shared/rateLimitState'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
 import type { ChatStatusMap } from '@shared/chatStatus'
@@ -316,6 +317,14 @@ const api = {
   getScorecard: (): Promise<Scorecard> => ipcRenderer.invoke(IPC.conversationScorecard),
   /** Spend and tokens per day and per project over every saved chat (local only). */
   getUsageReport: (): Promise<UsageReport> => ipcRenderer.invoke(IPC.conversationUsageReport),
+  /** The last rate-limit state each provider reported, for the status bar and Usage view. */
+  getRateLimits: (): Promise<RateLimitState[]> => ipcRenderer.invoke(IPC.rateLimitList),
+  /** Subscribe to rate-limit changes. Returns an unsubscribe fn. */
+  onRateLimitsChanged: (cb: (states: RateLimitState[]) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, states: RateLimitState[]): void => cb(states)
+    ipcRenderer.on(IPC.rateLimitChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.rateLimitChanged, listener)
+  },
   createConversation: (input: {
     workspace: string
     providerId: string

@@ -2427,6 +2427,18 @@ body.is-resizing {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.statusbar__quota {
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.usage-view__limits {
+  margin: 0 0 6px;
+  padding-left: 18px;
+  font-size: 12.5px;
+}
 .statusbar__model {
   font-family: var(--mono);
   white-space: nowrap;
