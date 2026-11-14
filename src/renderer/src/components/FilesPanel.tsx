@@ -4,6 +4,7 @@ import { Icon } from './Icon'
 import { FilePreview } from './FilePreview'
 import { baseName } from '../lib/paths'
 import { useFocusTrap } from '../lib/useFocusTrap'
+import { tabStop, treeKeyDown } from '../lib/rovingFocus'
 
 /** Debounce before a filter query hits the fuzzy file search (keeps typing smooth). */
 const FILTER_DEBOUNCE_MS = 160
@@ -20,6 +21,29 @@ interface TreeRowProps {
   childrenByDir: Record<string, FileEntry[]>
   onToggle: (entry: FileEntry) => void
   onSelect: (entry: FileEntry) => void
+  /** The one row in the Tab order (the tree's roving tab stop). */
+  focusable: string | null
+  onFocusRow: (path: string) => void
+}
+
+/**
+ * The rows the tree shows, in order: each folder's children follow it while it is
+ * open and loaded. The arrow keys walk this order, and it picks the tab stop.
+ */
+export function visibleTreePaths(
+  entries: readonly FileEntry[] | undefined,
+  expanded: ReadonlySet<string>,
+  childrenByDir: Record<string, FileEntry[]>
+): string[] {
+  const out: string[] = []
+  const walk = (list: readonly FileEntry[] | undefined): void => {
+    for (const e of list ?? []) {
+      out.push(e.path)
+      if (e.isDirectory && expanded.has(e.path)) walk(childrenByDir[e.path])
+    }
+  }
+  walk(entries)
+  return out
 }
 
 /**
@@ -35,7 +59,9 @@ function TreeRow({
   selected,
   childrenByDir,
   onToggle,
-  onSelect
+  onSelect,
+  focusable,
+  onFocusRow
 }: TreeRowProps): JSX.Element {
   const isOpen = entry.isDirectory && expanded.has(entry.path)
   const kids = childrenByDir[entry.path]
@@ -43,15 +69,16 @@ function TreeRow({
   const isSelected = !entry.isDirectory && entry.path === selected
   return (
     <>
-      <div
-        className="files-row"
-        role="treeitem"
-        aria-expanded={entry.isDirectory ? isOpen : undefined}
-        aria-selected={entry.isDirectory ? undefined : isSelected}
-        style={{ paddingLeft: pad }}
-      >
+      <div className="files-row" role="none" style={{ paddingLeft: pad }}>
+        {/* The button is the tree item, so the focusable element is the item itself. */}
         <button
           type="button"
+          role="treeitem"
+          aria-level={depth + 1}
+          aria-expanded={entry.isDirectory ? isOpen : undefined}
+          aria-selected={entry.isDirectory ? undefined : isSelected}
+          tabIndex={entry.path === focusable ? 0 : -1}
+          onFocus={() => onFocusRow(entry.path)}
           className={`files-row__btn${isSelected ? ' files-row__btn--selected' : ''}`}
           onClick={() => (entry.isDirectory ? onToggle(entry) : onSelect(entry))}
           title={entry.path}
@@ -76,10 +103,12 @@ function TreeRow({
               childrenByDir={childrenByDir}
               onToggle={onToggle}
               onSelect={onSelect}
+              focusable={focusable}
+              onFocusRow={onFocusRow}
             />
           ))
         ) : (
-          <div className="files-row files-row--empty" style={{ paddingLeft: pad + INDENT_PX }}>
+          <div className="files-row files-row--empty" role="none" style={{ paddingLeft: pad + INDENT_PX }}>
             empty
           </div>
         ))}
@@ -253,6 +282,12 @@ export function FilesPanel({
 
   const root = childrenByDir['']
 
+  // Roving tab stop: Tab reaches the tree once, on the row last focused (or the
+  // selected file, or the first row), and the arrow keys move within it.
+  const [focusedRow, setFocusedRow] = useState<string | null>(null)
+  const shownRows = results ?? visibleTreePaths(root, expanded, childrenByDir)
+  const focusable = tabStop(shownRows, focusedRow, selected)
+
   const content = (
     <>
       <header className="changes-panel__head">
@@ -308,7 +343,7 @@ export function FilesPanel({
             </div>
           )}
 
-          <div className="files-panel__tree-body" role="tree" aria-label="Project files">
+          <div className="files-panel__tree-body" role="tree" aria-label="Project files" onKeyDown={treeKeyDown}>
             {error ? (
               <p className="changes-panel__empty">Couldn’t read files: {error}</p>
             ) : !workspace ? (
@@ -318,14 +353,14 @@ export function FilesPanel({
                 <p className="changes-panel__empty">No files match “{filter.trim()}”.</p>
               ) : (
                 results.map((p) => (
-                  <div
-                    key={p}
-                    className="files-row"
-                    role="treeitem"
-                    aria-selected={p === selected}
-                  >
+                  <div key={p} className="files-row" role="none">
                     <button
                       type="button"
+                      role="treeitem"
+                      aria-level={1}
+                      aria-selected={p === selected}
+                      tabIndex={p === focusable ? 0 : -1}
+                      onFocus={() => setFocusedRow(p)}
                       className={`files-row__btn${p === selected ? ' files-row__btn--selected' : ''}`}
                       onClick={() => setSelected(p)}
                       title={p}
@@ -352,6 +387,8 @@ export function FilesPanel({
                   childrenByDir={childrenByDir}
                   onToggle={onToggle}
                   onSelect={onSelect}
+                  focusable={focusable}
+                  onFocusRow={setFocusedRow}
                 />
               ))
             )}

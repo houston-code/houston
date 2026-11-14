@@ -2957,6 +2957,11 @@ commands, `@` for files, `#` to save a rule, ⇧Tab to switch the approval mode,
 your last prompt, and ⌘K for everything else. The row goes away once the chat has
 messages. Keys you rebind in Settings > Keyboard show as you bound them.
 
+The sidebar's chat list and the Files tree are each one stop for Tab. Inside, ↑ and ↓
+move between rows, Home and End jump to the first and last, and Enter opens the row. In
+the Files tree, → opens a folder (and then steps into it) and ← closes it (or steps out
+to its parent).
+
 Hover any icon button to see what it does: the title-bar and sidebar buttons name their
 shortcut where they have one (for example New chat ⌘N and Settings ⌘,), and the
 message box's **+**, image and **@** buttons say what they add.
