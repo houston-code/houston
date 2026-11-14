@@ -38,15 +38,15 @@ describe('TrustFolderBanner', () => {
     expect(screen.getByRole('button', { name: 'Never for this folder' })).toBeInTheDocument()
   })
 
-  it("names commands that pre-approve tools, and where they live", async () => {
+  it('names commands that pre-approve tools or run shell commands, and where they live', async () => {
     installApi({ state: 'undecided', counts: { allowRules: 0, hooks: 0, mcpServers: 0, commands: 2 } })
     const { unmount } = render(<TrustFolderBanner {...props()} />)
-    expect(await screen.findByText(/2 commands that pre-approve tools \(in \.houston\/commands\)/)).toBeInTheDocument()
+    expect(await screen.findByText(/2 commands that pre-approve tools or run shell commands \(in \.houston\/commands\)/)).toBeInTheDocument()
     unmount()
     installApi({ state: 'changed', counts: { allowRules: 1, hooks: 0, mcpServers: 0, commands: 1 } })
     render(<TrustFolderBanner {...props()} />)
     expect(
-      await screen.findByText(/\.houston\/settings\.json and \.houston\/commands changed since you trusted it \(now: 1 allow rule, 1 command that pre-approves tools\)/)
+      await screen.findByText(/\.houston\/settings\.json and \.houston\/commands changed since you trusted it \(now: 1 allow rule, 1 command that pre-approves tools or runs shell commands\)/)
     ).toBeInTheDocument()
   })
 
@@ -71,7 +71,7 @@ describe('TrustFolderBanner', () => {
     render(<TrustFolderBanner {...props()} />)
     expect(
       await screen.findByText(
-        /1 allow rule, 1 command that pre-approves tools, 1 plugin \(audit\.js\) \(in \.houston\/settings\.json, \.houston\/commands, and \.houston\/plugins\)/
+        /1 allow rule, 1 command that pre-approves tools or runs shell commands, 1 plugin \(audit\.js\) \(in \.houston\/settings\.json, \.houston\/commands, and \.houston\/plugins\)/
       )
     ).toBeInTheDocument()
     expect(screen.getByText(/projectPlugins setting/)).toBeInTheDocument()

@@ -4,6 +4,7 @@
  * workspace. Pure helpers live here so main + renderer share one definition.
  */
 import type { ReasoningEffort } from './agent'
+import { hasContext } from './commandContext'
 
 export interface Command {
   name: string
@@ -214,13 +215,16 @@ export function mergeCommands(builtin: Command[], custom: Command[]): Command[] 
 }
 
 /**
- * Whether a custom command sets a frontmatter option that changes how its turn runs
- * (model, effort, agent, allowed-tools). The desktop composer can't express those by
- * filling the message box, so such a command runs straight away, prepared by the
- * main process.
+ * Whether a custom command needs the main process to run it: a frontmatter option
+ * that changes how its turn runs (model, effort, agent, allowed-tools), or a
+ * template that pulls in `@file` or `` !`command` `` context. The desktop composer
+ * can't express those by filling the message box, so such a command runs straight
+ * away, prepared by the main process.
  */
 export function commandHasRunOptions(cmd: Command): boolean {
-  return Boolean(cmd.model || cmd.effort || cmd.agent || cmd.allowedTools)
+  if (cmd.model || cmd.effort || cmd.agent || cmd.allowedTools) return true
+  // Only a workspace's or the user's own command; the first-party templates have none.
+  return cmd.source !== undefined && cmd.template !== undefined && hasContext(cmd.template)
 }
 
 /**

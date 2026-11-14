@@ -789,11 +789,45 @@ When a command sets any of these, a dim line says what applies to the turn. In t
 desktop app such a command runs straight away rather than filling the message box,
 and waits for a running turn to end.
 
+#### Dynamic context
+
+A template can pull facts in when the command runs, so the model starts with them
+instead of going to get them:
+
+- `@path` becomes that file's contents (fenced, with its name). It must be inside the
+  project, through symlinks too, the same as for `read_file`. A file over 50 KB is cut
+  with a marker saying so; a binary file stops the command. Only a word that starts
+  with `@` and holds a `/` or a `.` counts, and one that names no file (`npm i
+  @types/node`) stays as written. A credential file (such as `.env`) asks first, every
+  time.
+- `` !`command` `` becomes what the command prints. It runs in your own shell from the
+  project folder, as a `!` line in the message box does, for up to 30 seconds, keeping
+  up to 32 KB of output.
+
+```markdown
+---
+description: Review what changed
+---
+Review these changes for bugs: !`git diff --stat`
+The style guide is @docs/STYLE.md.
+```
+
+Before a project command's shell commands run, Houston shows them exactly and asks
+(a y/N prompt in the terminal, a dialog in the desktop app). It doesn't ask for your
+own commands in `~/.houston/commands`, or in a folder you trusted. In an editor over
+ACP there's no way to ask, so a project command with shell context runs only in a
+trusted folder, and one that reads a credential file doesn't run there at all.
+
+The words you type after the command are filled in after the context and never go
+into a shell command. If you say no, a command fails or times out, or a file can't
+be read, nothing is sent and a message says why: the model never gets a half-filled
+prompt.
+
 **Trust:** a project's commands come from the repository. In a folder you haven't
 trusted (see Trusted folders), Houston ignores a project command's `allowed-tools`
 and says so; its `model`, `effort` and `agent` still apply, since every tool call
 still goes through your rules and the approval policy. Trusting the folder covers its
-commands' `allowed-tools`, and a change to them asks again. Commands in
+commands' `allowed-tools` and shell context, and a change to either asks again. Commands in
 `~/.houston/commands` are yours and apply in full.
 
 ## The terminal composer
@@ -2093,16 +2127,17 @@ untrusted repo can never auto-approve anything.
 The same project file can also define `allow` rules, `hooks`, and `mcpServers`, and the
 project can ship plugin files in `.houston/plugins/`. Those *elevate* (they auto-approve
 matching actions or run code as you), so Houston ignores them until you explicitly
-trust the folder. A project command in `.houston/commands` whose frontmatter
-pre-approves tools (`allowed-tools`) elevates the same way, and counts toward the
-same decision.
+trust the folder. A project command in `.houston/commands` that pre-approves tools
+(`allowed-tools`) or runs shell commands in its template (`` !`command` ``) elevates
+the same way, and counts toward the same decision.
 
 - **How you're asked:** the desktop app shows a banner above the composer, and the
   interactive terminal asks at session start (Trust / Not now / Never).
 - **Re-asked on change.** Your decision is bound to a fingerprint of that elevating
-  config, including each command's `allowed-tools` and the name and contents of every
-  plugin file. If it changes (say a pull adds a hook, widens a command's
-  `allowed-tools`, or adds or edits a plugin file), the folder drops back to
+  config, including each command's `allowed-tools` and template shell commands, and
+  the name and contents of every plugin file. If it changes (say a pull adds a hook,
+  widens a command's `allowed-tools`, changes a template's `` !`command` ``, or adds
+  or edits a plugin file), the folder drops back to
   untrusted and Houston asks again. The prompt names each plugin file it covers.
 - **Headless runs** never prompt; they note when an untrusted folder's extra config is
   being ignored.

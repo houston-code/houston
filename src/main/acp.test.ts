@@ -852,6 +852,32 @@ describe('ACP server: slash commands, config options and session info', () => {
     await h.end()
   })
 
+  it("refuses an untrusted project command's shell context, since an editor can't be asked, and runs a user command's", async () => {
+    const ran: string[] = []
+    const h = harness({
+      run: done,
+      deps: {
+        runContextShell: async (c) => {
+          ran.push(c)
+          return { exitCode: 0, stdout: 'v1.2', stderr: '', timedOut: false, truncated: false }
+        },
+        commands: async () => [
+          { name: 'theirs', description: 'Theirs', template: 'Tag: !`git describe`', source: 'project' },
+          { name: 'mine', description: 'Mine', template: 'Tag: !`git describe`', source: 'user' }
+        ]
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('/theirs') })
+    expect(ran).toEqual([])
+    expect(h.loop.requests).toHaveLength(0)
+    expect(replies(h, sessionId).at(-1)).toMatch(/^\/theirs wasn't sent: it runs shell commands, and there is no one here to approve them/)
+    await h.call('session/prompt', { sessionId, prompt: text('/mine') })
+    expect(ran).toEqual(['git describe'])
+    expect(h.loop.requests[0].messages.at(-1)).toEqual(expect.objectContaining({ content: 'Tag: v1.2' }))
+    await h.end()
+  })
+
   it('switches the approval mode from a command without running the model, and saves it on the chat', async () => {
     const h = harness({ run: done })
     const sessionId = await ready(h)

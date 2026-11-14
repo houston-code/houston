@@ -158,6 +158,7 @@ import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands, loadSlashCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
 import { prepareCommandRun, workspaceTrusted } from './agent/commandRun'
+import { describeContextConsent } from './agent/commandContext'
 import { putCommandGrant, takeCommandGrant } from './commandGrants'
 import { resolveCommand } from '@shared/commands'
 import type { CommandPrepareResult } from '@shared/promptInvocation'
@@ -1069,7 +1070,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // The per-turn options stay in main under a one-time token (see commandGrants.ts).
   handle(
     IPC.commandPrepare,
-    async (_event, workspace: string, name: string, args: string, typed: string): Promise<CommandPrepareResult> => {
+    async (event, workspace: string, name: string, args: string, typed: string): Promise<CommandPrepareResult> => {
       if (typeof workspace !== 'string' || !workspace || typeof name !== 'string') {
         return { ok: false, error: 'No folder is open.' }
       }
@@ -1086,7 +1087,27 @@ export function registerIpc(ready?: Promise<unknown>): void {
         cmd,
         typeof args === 'string' ? args : '',
         typeof typed === 'string' ? typed : `/${name}`,
-        { settings, trusted: await workspaceTrusted(root, settings.trustedFolders).catch(() => false) }
+        {
+          settings,
+          trusted: await workspaceTrusted(root, settings.trustedFolders).catch(() => false),
+          workspace: root,
+          // A template's shell commands (or a credential file it reads), shown exactly
+          // in a native dialog the renderer can't answer for. Cancel is the default.
+          confirmContext: async (consent) => {
+            const { title, lines } = describeContextConsent(`/${cmd.name}`, consent)
+            const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+            const opts = {
+              type: 'warning' as const,
+              buttons: ['Cancel', 'Allow'],
+              defaultId: 0,
+              cancelId: 0,
+              message: title,
+              detail: `${lines.join('\n')}\n\nCommands run in your shell, as a ! command in the message box does.`
+            }
+            const res = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+            return res.response === 1
+          }
+        }
       )
       if (!prepared) return { ok: false, error: `/${cmd.name} is not a prompt command.` }
       if (!prepared.ok) return prepared

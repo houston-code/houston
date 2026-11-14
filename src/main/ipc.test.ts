@@ -1027,6 +1027,20 @@ describe('custom command preparation IPC', () => {
     deleteConversation(conv.id)
   })
 
+  it("asks in a native dialog before a project command's shell context runs, Cancel first", async () => {
+    writeFileSync(join(ws, '.houston/commands/tag.md'), 'Tag: !`echo v1.2`')
+    h.showMessageBox.mockReset()
+    h.showMessageBox.mockResolvedValue({ response: 0 })
+    expect(await prepare(ws, 'tag')).toEqual({ ok: false, error: "/tag wasn't sent: not run: you declined its context" })
+    const asked = h.showMessageBox.mock.calls[0].at(-1) as { buttons: string[]; cancelId: number; defaultId: number; message: string; detail: string }
+    expect(asked).toMatchObject({ buttons: ['Cancel', 'Allow'], cancelId: 0, defaultId: 0 })
+    expect(asked.message).toBe('/tag wants to run this command in your shell to fill in its prompt:')
+    expect(asked.detail).toContain('$ echo v1.2')
+    h.showMessageBox.mockResolvedValue({ response: 1 })
+    const res = await prepare(ws, 'tag')
+    expect(res.ok && res.turn.text).toBe('Tag: v1.2')
+  })
+
   it('says so for a command that is gone, and lists skills with the custom commands', async () => {
     expect(await prepare(ws, 'nope')).toEqual({ ok: false, error: 'No command /nope in this folder any more.' })
     mkdirSync(join(ws, '.houston/skills/pdf'), { recursive: true })

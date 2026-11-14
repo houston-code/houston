@@ -523,6 +523,17 @@ describe('Composer slash-command templates', () => {
     expect(input.value).toBe('')
   })
 
+  it("hands a command whose template pulls in context to main, which fills it in", () => {
+    const rev: Command = { name: 'rev', description: 'Review', template: 'Review: !`git diff --stat`', source: 'project' }
+    const onRunCommand = vi.fn()
+    const props = baseProps({ commands: [rev], onRunCommand })
+    render(<Composer {...props} />)
+    const input = type('/rev ')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onRunCommand).toHaveBeenCalledWith(rev, '', '/rev')
+    expect(input.value).toBe('')
+  })
+
   it('holds a command with run options while a turn is running, keeping the text', () => {
     const quick: Command = { name: 'quick', description: 'Quick', template: 'Look', allowedTools: 'glob' }
     const onRunCommand = vi.fn()
