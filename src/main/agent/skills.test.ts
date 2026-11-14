@@ -228,7 +228,8 @@ describe('skill({ name, file }): bundled files', () => {
       const skills = await loadSkills(ws, home)
       const deploy = skills.find((s) => s.name === 'deploy')!
       const listed = deploy.resources![0]
-      expect(listed).toBe(join(dir, 'references', 'steps.md'))
+      // Listed as the skill folder plus a '/'-joined relative path, on every platform.
+      expect(listed).toBe(`${dir}/references/steps.md`)
       expect(await resolveSkillFile(ws, skills, 'deploy', listed)).toBe('Step 1: build.')
       // Relative to the skill folder works too, with or without ./
       expect(await resolveSkillFile(ws, skills, 'Deploy', 'references/steps.md')).toBe('Step 1: build.')
