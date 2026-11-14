@@ -157,6 +157,8 @@ the terminal. Only three kinds do anything:
 - Slash commands switch settings mid-session.
 - `--continue` reopens this folder's most recent chat at launch; `--resume <id>`
   reopens a specific one.
+- `--screen-reader` starts in screen-reader mode: plain lines, no redraws, and
+  numbered choices. See "Screen-reader mode".
 - **First run.** With no model ready, it lists the providers that take a key, then
   the hosts that need none: Ollama and LM Studio on their usual ports, and any
   endpoint added with `houston providers add`. It asks each host for its models
@@ -710,9 +712,9 @@ safe subset in place. In the desktop app:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/add-dir`, `/vim`, `/reduce-motion`, `/verbose`, `/output`, `/copy`, `/thoughts`,
-`/transcript`, `/spawned`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`,
-`/permissions`, and `/exit`. Typed in the
+**Terminal-only commands.** `/add-dir`, `/vim`, `/screen-reader`, `/reduce-motion`,
+`/verbose`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`, `/proposals`,
+`/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
 
@@ -891,6 +893,34 @@ one, marks, macros, and `.` repeat.
 
 Everything else in the composer (Enter to send, `Ctrl-R` history search,
 `Ctrl-X Ctrl-E`, pasting) works the same in both modes.
+
+### Screen-reader mode
+
+`/screen-reader` switches the interactive terminal to plain lines that a screen reader
+can follow, and remembers it; `/screen-reader off` switches back. `houston
+--screen-reader` (or `HOUSTON_SCREEN_READER=1` in the environment) turns it on for one
+launch. In this mode:
+
+- **Nothing is redrawn in place.** There is no spinner. What Houston is doing is
+  printed once as a line ("working", "retrying", "waiting for approval", "done in 12s").
+- **Messages say who is speaking.** Your prompt is `you:`, and each stretch of reply
+  starts with `houston:` (`houston, thinking:` for its reasoning).
+- **Tool calls are sentences**, such as `Using tool Read: src/app.ts`.
+- **Diffs are plain lines** marked `+` and `-`, with no color or line-number gutter.
+- **No color or decorative marks.** Meter bars, box lines and bullets are replaced
+  with words or dropped (the context meter reads `context 40%`).
+- **Choices are numbered lists.** An approval, a question, a plan or `/model` lists its
+  options as `1.`, `2.` and so on: type the number and press Enter. Typing anything
+  else answers in your own words (`n` and a reason at an approval, a custom answer to a
+  question), and Enter on its own takes the safe choice (deny, at an approval).
+- **The composer only appends.** Typed text is echoed once and Backspace erases one
+  character. Pasting several lines still lands as one message. Up and Down, `Shift-Tab`
+  and `Ctrl-U` print the prompt again on a new line with the text as it now stands.
+  Ctrl-R search and in-line cursor movement are off in this mode.
+- **Typing while it works** is not drawn on screen; Enter says whether the line went to
+  the running turn or was queued for after it.
+
+It also turns on reduced motion (below). `/settings` shows whether it is on.
 
 ### Reduced motion
 

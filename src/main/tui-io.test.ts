@@ -1807,3 +1807,179 @@ describe('composer: drafts, images, rewind and suspend', () => {
     t.io.stopSpinner!()
   })
 })
+
+
+/**
+ * Screen-reader mode: a screen reader follows text as it is written, so a redraw
+ * (cursor up, erase, reprint) reads as noise on every key. Nothing in this mode may
+ * move the cursor, erase, or rewind a line.
+ */
+describe('screen-reader mode', () => {
+  const ESC = String.fromCharCode(27)
+  /** Cursor movement and erase: CSI A-H, J, K, S, T, plus save/restore, and a bare CR. */
+  const REDRAW = new RegExp(`${ESC}\\[[0-9;]*[ABCDEFGHJKSTfsu]|${ESC}[78]|\\r(?!\\n)`)
+
+  function harness(over: Parameters<typeof createTerminalIo>[0] = {}) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let ticks: Array<() => void> = []
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => clock,
+      schedule: (fn) => {
+        ticks.push(fn)
+        return () => {
+          ticks = ticks.filter((t) => t !== fn)
+        }
+      },
+      paint: (s) => `${ESC}[36m${s}${ESC}[0m`,
+      ...over
+    })
+    io.setAccessibility!({ screenReader: true, reduceMotion: true })
+    return {
+      io,
+      stdin,
+      text: () => written.join(''),
+      scheduled: () => ticks.length,
+      tick: (ms = 500) => {
+        clock += ms
+      }
+    }
+  }
+
+  it('reads the composer append-only, a multi-line paste included, with no redraw escapes', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('fix ')
+    t.stdin.push('thx')
+    t.stdin.push('\x7f') // Backspace
+    t.stdin.push('is:')
+    t.stdin.push(`${ESC}[200~line one\nline two${ESC}[201~`)
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('fix this:line one\nline two')
+    const text = t.text()
+    expect(text).not.toMatch(REDRAW)
+    expect(text).toContain('you: fix thx\b \bis:line one\nline two\n')
+    // Bracketed paste is on while it reads, and off again after.
+    expect(text).toContain('[?2004h')
+    expect(text.lastIndexOf('[?2004l')).toBeGreaterThan(text.lastIndexOf('[?2004h'))
+  })
+
+  it('restates the prompt on a new line for history, instead of rewriting the line', async () => {
+    const t = harness({ history: () => ['older message'] })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push(`${ESC}[A`) // Up
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('older message')
+    expect(t.text()).toContain('you: \nyou: older message\n')
+    expect(t.text()).not.toMatch(REDRAW)
+  })
+
+  it('prints spinner states once as lines, and never animates or erases', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.io.setSpinnerLabel!('Retrying 1 of 3')
+    t.io.setSpinnerLabel!('Retrying 1 of 3') // a repeat says nothing
+    t.io.setStatus!('model · main')
+    t.io.out(`${ESC}[2mresult${ESC}[0m\n`)
+    t.io.stopSpinner!()
+    expect(t.scheduled()).toBe(0)
+    expect(t.text()).not.toMatch(REDRAW)
+    expect(t.text().split('retrying').length).toBe(2)
+    expect(t.text()).toContain('working\n')
+    // Output loses its color codes.
+    expect(t.text()).toContain('result\n')
+    expect(t.text()).not.toContain(`${ESC}[2m`)
+  })
+
+  it('answers a picker by number, re-asking on a number not on the list', async () => {
+    const t = harness()
+    const picked = t.io.select!({
+      title: 'Choose:',
+      escLabel: 'deny',
+      options: [
+        { label: 'Allow', value: 'allow' },
+        { label: 'Deny', value: 'deny' }
+      ]
+    })
+    t.stdin.push('5\r')
+    await new Promise((r) => setImmediate(r))
+    t.stdin.push('2\r')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: 'deny' })
+    const text = t.text()
+    expect(text).toContain('1. Allow\n2. Deny\n')
+    expect(text).toContain('There is no option 5. Choose 1 to 2.')
+    expect(text).not.toMatch(REDRAW)
+    expect(text).not.toContain('↑')
+  })
+
+  it('hands a typed answer at a picker back as text', async () => {
+    const t = harness()
+    const picked = t.io.select!({ title: '', options: [{ label: 'Allow', value: 'allow' }] })
+    t.stdin.push('n, use the other file')
+    t.tick() // a burst of text is treated like a paste; a human pauses before Enter
+    t.stdin.push('\r')
+    await expect(picked).resolves.toEqual({ kind: 'type', text: 'n, use the other file' })
+  })
+
+  it('reads a sub-prompt append-only, and Ctrl-C cancels it', async () => {
+    const t = harness()
+    let interrupted = 0
+    t.io.onInterrupt!(() => interrupted++)
+    const answer = t.io.readLine('Trust this folder? [y/N/never] ', { discardPending: true })
+    t.stdin.push('y\x03')
+    await expect(answer).resolves.toBeNull()
+    expect(interrupted).toBe(1)
+    expect(t.text()).not.toMatch(REDRAW)
+  })
+
+  it('mid-run typing is not drawn, and Enter says where the line went', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('also check docs\r')
+    expect(t.io.takeQueued!()).toEqual(['also check docs'])
+    expect(t.text()).toContain('queued for after this turn (1 waiting)')
+    expect(t.text()).not.toContain('also check docs')
+    expect(t.text()).not.toMatch(REDRAW)
+    t.io.stopSpinner!()
+  })
+
+  it('clearLine writes nothing', () => {
+    const t = harness()
+    t.io.clearLine!()
+    expect(t.text()).toBe('')
+  })
+
+  it('turning it on takes a running spinner down first, then never draws again', () => {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let ticks: Array<() => void> = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => 1000,
+      schedule: (fn) => {
+        ticks.push(fn)
+        return () => {
+          ticks = ticks.filter((t) => t !== fn)
+        }
+      }
+    })
+    io.startSpinner!('Working')
+    expect(ticks.length).toBe(1)
+    io.setAccessibility!({ screenReader: true })
+    expect(ticks.length).toBe(0)
+    const before = written.length
+    io.setStatus!('x')
+    io.setMode!('ask')
+    expect(written.length).toBe(before)
+    io.stopSpinner!()
+  })
+})

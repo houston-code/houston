@@ -6147,6 +6147,120 @@ describe('/vim', () => {
   })
 })
 
+describe('screen-reader mode', () => {
+  const ESC = String.fromCharCode(27)
+  const srOpts = { ...opts, color: true, screenReader: true }
+
+  it('is turned on by --screen-reader', () => {
+    expect(parseTuiArgs(['-i', '--screen-reader'], '/p')?.screenReader).toBe(true)
+    expect(parseTuiArgs(['-i'], '/p')?.screenReader).toBeUndefined()
+  })
+
+  it('labels speakers, says tool calls as sentences, and prints no escapes even with color on', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'reasoning', delta: 'hmm' },
+      { runId: 'x', type: 'text', delta: 'Looking.\n\n' },
+      { runId: 'x', type: 'tool_start', callId: 'c', name: 'read_file', args: { path: 'src/a.ts' } },
+      { runId: 'x', type: 'tool_result', callId: 'c', name: 'read_file', ok: true, output: 'x' },
+      { runId: 'x', type: 'text', delta: 'Done.\n\n' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    const applied: Array<{ screenReader?: boolean; reduceMotion?: boolean }> = []
+    t.io.setAccessibility = (a) => applied.push(a)
+    d.io = t.io
+    await runTui(srOpts, d)
+    // Screen-reader mode implies reduced motion at the adapter.
+    expect(applied[0]).toEqual({ screenReader: true, reduceMotion: true })
+    expect(t.reads[0].prompt).toBe('you: ')
+    const text = t.text()
+    expect(text).not.toContain(ESC)
+    expect(text).toContain('houston, thinking:\nhmm')
+    expect(text).toContain('Using tool Read: src/a.ts')
+    // Each stretch of reply gets its own label, after the tool line between them.
+    expect(text.split('houston:\n').length).toBe(3)
+    expect(text).toMatch(/done in \d+s/)
+    // The tool verb is not also announced as a spinner label.
+    expect(t.spinner).toEqual(['start:Working', 'stop'])
+  })
+
+  it('says it is waiting, shows a write as a plain +/- diff, and takes a typed answer from the picker', async () => {
+    const { d, rec } = deps([
+      {
+        runId: 'x',
+        type: 'tool_approval',
+        callId: 'c1',
+        name: 'edit_file',
+        kind: 'write',
+        summary: 'Edit src/a.ts',
+        args: {},
+        preview: [{ path: 'src/a.ts', diff: [{ type: 'del', text: 'old' }, { type: 'add', text: 'new' }] }]
+      } as AgentEvent,
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    const specs: string[] = []
+    t.io.select = async (spec) => {
+      specs.push(spec.title)
+      return { kind: 'type', text: 'n use the helper instead' }
+    }
+    d.io = t.io
+    await runTui(srOpts, d)
+    const text = t.text()
+    expect(text).toContain('waiting for approval')
+    expect(text).toContain('  -old\n  +new')
+    expect(text).not.toContain('│')
+    expect(specs).toEqual(['Choose:'])
+    // The typed answer was used as is: denied with its reason, no second prompt.
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'deny']])
+    expect(t.reads.map((r) => r.prompt)).toEqual(['you: ', 'you: '])
+  })
+
+  it('a question answered with typed text at the picker resolves without asking again', async () => {
+    const { d, rec } = deps([
+      {
+        runId: 'x',
+        type: 'tool_question',
+        callId: 'q1',
+        question: 'Which one?',
+        options: [{ label: 'A' }, { label: 'B' }]
+      } as AgentEvent,
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    t.io.select = async () => ({ kind: 'type', text: 'neither, use C' })
+    d.io = t.io
+    await runTui(srOpts, d)
+    expect(t.text()).toContain('waiting for your answer')
+    expect(rec.questions).toEqual([['run-1', 'q1', 'neither, use C']])
+  })
+
+  it('/screen-reader toggles it, saves it, and drops color while on', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/screen-reader on', '/cwd', '/settings', '/screen-reader off', null])
+    const applied: Array<{ screenReader?: boolean; reduceMotion?: boolean }> = []
+    t.io.setAccessibility = (a) => applied.push(a)
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui({ ...opts, color: true }, d)
+    expect(applied.map((a) => a.screenReader)).toEqual([false, true, false])
+    expect(patches).toEqual([{ tuiScreenReader: true }, { tuiScreenReader: false }])
+    expect(t.text()).toContain('screen-reader mode on')
+    expect(t.text()).toContain('screen reader:  on')
+    expect(t.text()).toContain('reduced motion: on (with screen-reader mode)')
+    // The prompt follows the mode: "you: " only while it is on.
+    expect(t.reads.map((r) => r.prompt.includes('you: '))).toEqual([false, true, true, true, false])
+  })
+
+  it('parses /screen-reader', () => {
+    const s = {} as AppSettings
+    expect(parseSlashCommand('/screen-reader', s)).toEqual({ kind: 'screen-reader' })
+    expect(parseSlashCommand('/screen-reader on', s)).toEqual({ kind: 'screen-reader', on: true })
+    expect(parseSlashCommand('/screen-reader off', s)).toEqual({ kind: 'screen-reader', on: false })
+  })
+})
+
 describe('/reduce-motion', () => {
   it('parses the toggle and its explicit forms', () => {
     const s = {} as AppSettings
@@ -6177,7 +6291,7 @@ describe('/reduce-motion', () => {
     t.io.setAccessibility = (a) => applied.push(a)
     d.io = t.io
     await runTui(opts, d)
-    expect(applied[0]).toEqual({ reduceMotion: true })
+    expect(applied[0]).toEqual({ screenReader: false, reduceMotion: true })
   })
 })
 

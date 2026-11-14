@@ -950,6 +950,13 @@ export interface AppSettings {
    * Absent = off.
    */
   reduceMotion?: boolean
+  /**
+   * The terminal's screen-reader mode (/screen-reader): plain lines only, with no
+   * spinner, no in-place redraws, no color or decorative glyphs, speaker labels on
+   * messages, and pickers as numbered lists. Also on with --screen-reader or
+   * HOUSTON_SCREEN_READER=1. Absent = off.
+   */
+  tuiScreenReader?: boolean
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /** User-defined chat labels, in display order. */

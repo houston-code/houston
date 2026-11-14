@@ -201,6 +201,11 @@ export interface TuiOptions {
    */
   reduceMotion?: boolean
   /**
+   * Screen-reader mode for this session (`--screen-reader`, HOUSTON_SCREEN_READER or
+   * the saved setting, resolved at the entry point); /screen-reader changes it.
+   */
+  screenReader?: boolean
+  /**
    * The first bad flag value (`--approval nonsense`). runTui reports it and exits
    * with a usage error before anything runs, rather than silently ignoring it.
    */
@@ -233,6 +238,7 @@ export function parseTuiArgs(
   let resumeId: string | undefined
   let usageError: string | undefined
   const addDirs: string[] = []
+  let screenReader = false
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
@@ -262,6 +268,8 @@ export function parseTuiArgs(
       i = next
     } else if (name === '--full-auto') {
       approvalPolicy = 'full-auto'
+    } else if (name === '--screen-reader') {
+      screenReader = true
     } else if (name === '--continue') {
       continueSession = true
     } else if (name === '--resume') {
@@ -287,6 +295,7 @@ export function parseTuiArgs(
     ...(continueSession ? { continueSession } : {}),
     ...(resumeId ? { resumeId } : {}),
     ...(addDirs.length ? { addDirs } : {}),
+    ...(screenReader ? { screenReader } : {}),
     ...(usageError !== undefined ? { usageError } : {})
   }
 }
@@ -436,12 +445,19 @@ export function renderTodoList(todos: Todo[], paint: Painter): string {
  * One-line summary of a tool starting, named the way the desktop's tool row names
  * it: "· Read  src/x.ts", "· Run  npm test", not the wire name ("read_file").
  */
-export function renderToolStart(name: string, args: Record<string, unknown>, paint: Painter): string {
+export function renderToolStart(
+  name: string,
+  args: Record<string, unknown>,
+  paint: Painter,
+  /** Screen-reader mode: a plain sentence, "Using tool Read: src/x.ts". */
+  opts: { sentence?: boolean } = {}
+): string {
   const { verb, target } = describeToolCall(name, args)
   // A tool the shared labels don't know keeps the old best-effort argument hint. The
   // hint is the model's argument (a command, a path), so its control characters go.
   const raw = stripControlChars((target || (verb === name ? toolArgHint(args) : '')).replace(/\s+/g, ' '))
   const hint = truncate(raw.trim(), 80)
+  if (opts.sentence) return hint ? `Using tool ${verb}: ${hint}` : `Using tool ${verb}`
   const suffix = hint ? `  ${paint(hint, 'dim')}` : ''
   return `${paint('·', 'dim')} ${paint(verb, 'cyan')}${suffix}`
 }
@@ -695,6 +711,9 @@ export function colorizeDiff(diff: string, paint: Painter, maxLines = 40): strin
 export const FAILURE_LINES = 10
 /** How many lines of a subagent's report show before collapsing (all under /verbose). */
 const REPORT_LINES = 24
+
+/** How many diff lines screen-reader mode reads out before saying how many more there are. */
+const SCREEN_READER_DIFF_LINES = 200
 
 /** How many lines of a successful result `/verbose` shows before collapsing. */
 export const VERBOSE_LINES = 40
@@ -1666,6 +1685,8 @@ export type SlashResult =
   | { kind: 'add-dir'; path: string }
   /** Turn reduced motion on or off (/reduce-motion); bare toggles. */
   | { kind: 'reduce-motion'; on?: boolean }
+  /** Turn screen-reader mode on or off (/screen-reader); bare toggles. */
+  | { kind: 'screen-reader'; on?: boolean }
   /** Revert (or restore) the files the last turn changed (/undo, /redo). */
   | { kind: 'undo'; redo: boolean }
   /**
@@ -1814,6 +1835,12 @@ export function parseSlashCommand(
       if (a === 'on') return { kind: 'vim', on: true }
       if (a === 'off') return { kind: 'vim', on: false }
       return { kind: 'vim' } // bare /vim toggles
+    }
+    case 'screen-reader': {
+      const a = arg.trim().toLowerCase()
+      if (a === 'on') return { kind: 'screen-reader', on: true }
+      if (a === 'off') return { kind: 'screen-reader', on: false }
+      return { kind: 'screen-reader' }
     }
     case 'reduce-motion': {
       const a = arg.trim().toLowerCase()
@@ -1986,6 +2013,7 @@ export const HELP_TEXT = [
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
   '  /add-dir [path]       let the agent work in another folder this session (alone: list them)',
+  '  /screen-reader [on|off]  plain lines for screen readers, numbered choices',
   '  /reduce-motion [on|off]  a still activity line instead of the spinner',
   '  /undo, /redo          revert (or restore) the files the last turn changed',
   '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
@@ -2057,7 +2085,8 @@ export const STARTUP_TIPS = [
   '/resume filters saved chats as you type; Ctrl-A shows every folder',
   'Ctrl-O opens the whole session full screen, with reasoning and full tool output',
   'Alt-T cycles how the model\'s reasoning shows: in full, one line, or hidden',
-  '/copy puts the last reply, or one of its code blocks, on your clipboard'
+  '/copy puts the last reply, or one of its code blocks, on your clipboard',
+  'using a screen reader? /screen-reader on keeps the output to plain lines'
 ]
 
 /**
@@ -3007,8 +3036,11 @@ export interface TuiIo {
   /**
    * Switch the accessibility modes the adapter owns. `reduceMotion` keeps the spinner
    * still: a fixed mark, its elapsed time refreshed only every few seconds.
+   * `screenReader` makes every write a plain line: no spinner (its label changes
+   * print once), no redraws, no escapes, an append-only composer, and pickers as
+   * numbered lists answered by typing the number.
    */
-  setAccessibility?: (a: { reduceMotion?: boolean }) => void
+  setAccessibility?: (a: { screenReader?: boolean; reduceMotion?: boolean }) => void
   /**
    * Emit an attention signal: set the tab/window title, and — only when the user
    * has switched away — ring the bell and fire the terminal's notification. This
@@ -3416,7 +3448,9 @@ export { parseMemoryCapture, type MemoryScope }
 export { parseAgentInvocation, agentInvocationPrompt } from '@shared/commands'
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
-export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {
+export function composerPrompt(policy: ApprovalPolicy, paint: Painter, screenReader = false): string {
+  // A screen reader hears who is speaking; the mode is on the status line above.
+  if (screenReader) return 'you: '
   return `${paint(policy, 'dim')} ${paint('›', 'green')} `
 }
 
@@ -3601,7 +3635,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   const settings = deps.getSettings()
   // Reassigned by /theme (takes effect from the next output); the spinner keeps the
   // initial theme since its painter lives in the terminal adapter.
-  let paint = makePainter(opts.color, resolveTheme(settings.tuiTheme ?? '') ?? opts.detectedTheme ?? 'default')
+  // Screen-reader mode drops color: nothing may depend on it, and the escapes are noise.
+  let screenReader = opts.screenReader === true
+  let theme: ThemeName = resolveTheme(settings.tuiTheme ?? '') ?? opts.detectedTheme ?? 'default'
+  const makeSessionPainter = (): Painter => makePainter(opts.color && !screenReader, theme)
+  let paint = makeSessionPainter()
   const newId = deps.newId ?? randomUUID
 
   // Trusted-folders gate: if this project's .houston/settings.json ELEVATES
@@ -3772,7 +3810,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
   // Reduced motion: the spinner stays still. Resolved at launch (env + setting).
   let reduceMotion = opts.reduceMotion ?? settings.reduceMotion === true
-  deps.io.setAccessibility?.({ reduceMotion })
+  // Screen-reader mode implies reduced motion; the preference itself is kept apart.
+  const applyAccessibility = (): void =>
+    deps.io.setAccessibility?.({ screenReader, reduceMotion: reduceMotion || screenReader })
+  applyAccessibility()
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
   // A line half-typed while a turn ran (never sent with Enter): the next composer opens with it.
@@ -4068,6 +4109,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (activeRunId) {
       deps.setRunPolicy?.(activeRunId, policy)
       deps.io.out(paint(`\n· approval → ${APPROVAL_POLICY_LABEL[policy]} (this run too)\n`, 'dim'))
+    } else if (screenReader) {
+      // The arrow-key composer shows the mode in its prompt; a screen reader is told.
+      deps.io.out(`approval: ${APPROVAL_POLICY_LABEL[policy]}\n`)
     }
   })
 
@@ -4316,7 +4360,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         raw = pendingQueued.join('\n\n')
         pendingQueued = []
       }
-      deps.io.out(`${composerPrompt(policy, paint)}${raw}\n`)
+      deps.io.out(`${composerPrompt(policy, paint, screenReader)}${raw}\n`)
     } else if (deps.io.readComposer) {
       // A thunk, not a string: Shift-Tab can change the policy WHILE this read is
       // open, and the prompt has to say what will actually happen when you hit Enter.
@@ -4325,7 +4369,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       const half = halfDraft
       halfDraft = ''
       if (draft) deps.io.out(paint('· not sent (the turn was interrupted): back in the prompt to edit or send\n', 'dim'))
-      const text = await deps.io.readComposer(() => composerPrompt(policy, paint), draft || half || undefined, {
+      const text = await deps.io.readComposer(() => composerPrompt(policy, paint, screenReader), draft || half || undefined, {
         // Read on each redraw: what the keyword would do on this chat's model right now.
         ultrathinkEffect: () =>
           ultrathinkEffect(
@@ -4356,7 +4400,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // composer with no visible way out (typing the closing ``` submits).
         const p = composer.pending
           ? paint(composer.inFence ? '… (``` to close and send) ' : '… ', 'dim')
-          : composerPrompt(policy, paint)
+          : composerPrompt(policy, paint, screenReader)
         const line = await deps.io.readLine(p)
         if (line === null) {
           const flag = consumeInterrupt()
@@ -4426,6 +4470,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       let scope: MemoryScope | null = null
+      let typedScope: string | undefined
       if (deps.io.select) {
         const r = await deps.io.select({
           title: 'Remember this where?',
@@ -4436,11 +4481,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         })
         if (r.kind === 'commit') scope = r.value as MemoryScope
         else if (r.kind === 'cancel') scope = null
+        else typedScope = r.text
       }
       if (scope === null) {
-        const ans = await deps.io.readLine('Remember for [p]roject or [e]verywhere? ', {
-          discardPending: true
-        })
+        const ans =
+          typedScope ??
+          (await deps.io.readLine('Remember for [p]roject or [e]verywhere? ', {
+            discardPending: true
+          }))
         const a = (ans ?? '').trim().toLowerCase()
         if (a === 'p' || a === 'project') scope = 'project'
         else if (a === 'e' || a === 'everywhere' || a === 'g' || a === 'global') scope = 'global'
@@ -4693,7 +4741,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'settings') {
-        renderSettingsOverview(deps, paint, { reduceMotion })
+        renderSettingsOverview(deps, paint, { reduceMotion, screenReader })
         continue
       }
       if (result.kind === 'add-dir') {
@@ -4734,12 +4782,27 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (result.kind === 'reduce-motion') {
         reduceMotion = result.on ?? !reduceMotion
         deps.updateSettings?.({ reduceMotion })
-        deps.io.setAccessibility?.({ reduceMotion })
+        applyAccessibility()
         deps.io.out(
           paint(
             reduceMotion
               ? '· reduced motion on: the activity line holds still and its timer updates every few seconds\n'
               : '· reduced motion off: the spinner animates again\n',
+            'dim'
+          )
+        )
+        continue
+      }
+      if (result.kind === 'screen-reader') {
+        screenReader = result.on ?? !screenReader
+        deps.updateSettings?.({ tuiScreenReader: screenReader })
+        applyAccessibility()
+        paint = makeSessionPainter()
+        deps.io.out(
+          paint(
+            screenReader
+              ? '· screen-reader mode on: plain lines, no spinner or redraws, and numbered choices\n'
+              : '· screen-reader mode off: the spinner, colors and arrow-key pickers are back\n',
             'dim'
           )
         )
@@ -4973,7 +5036,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         const html = deps.highlightHtml
-        const view = renderPreviewView(
+        const plainEdit = screenReader ? renderPreviewDiff(edit) : null
+        const view = plainEdit ? colorizeDiff(plainEdit, paint, SCREEN_READER_DIFF_LINES) : renderPreviewView(
           edit,
           paint,
           html
@@ -5116,7 +5180,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'set-theme') {
-        paint = makePainter(opts.color, result.theme)
+        theme = result.theme
+        paint = makeSessionPainter()
         // Persist it: a theme you have to re-pick on every launch is not a setting,
         // it is a party trick.
         deps.updateSettings?.({ tuiTheme: result.theme })
@@ -5483,13 +5548,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // The streaming round's reasoning: when it began and what it said, for the
     // one-line summary ('summary') printed when the next thing arrives.
     let thought: { start: number; text: string } | null = null
+    // Screen-reader mode: who the streamed text belongs to, so each stretch is labeled.
+    let speaking: 'reply' | 'thinking' | null = null
     const endThought = (discard: boolean): void => {
       if (!thought) return
       const t = thought
       thought = null
       // A dropped round's thought is dropped with it: its redo thinks again.
       if (discard || reasoningDisplay !== 'summary') return
-      deps.io.out(`${freshLine()}${renderThoughtSummary(t.text, nowFn() - t.start, columns(), paint)}\n`)
+      // A screen reader hears whose line it is, as it would for streamed thinking.
+      const label = screenReader ? '\nhouston, thinking:\n' : ''
+      deps.io.out(`${freshLine()}${label}${renderThoughtSummary(t.text, nowFn() - t.start, columns(), paint)}\n`)
       roundShown = true
     }
     // Liveness while the agent works (relabelled per event; erased on any output).
@@ -5498,6 +5567,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Set once a text delta has relabelled the spinner, so the rest of the reply
     // doesn't relabel it on every delta; any other event clears it.
     let saysResponding = false
+    const turnStartedAt = nowFn()
 
     const send = (e: AgentEvent): void => {
       // Attention signals ride the event stream itself, so anything that blocks the
@@ -5523,10 +5593,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         const s = md.push(e.delta)
         if (s) roundShown = true
+        // Who is speaking, once per stretch of reply, for a screen reader.
+        if (s && screenReader && speaking !== 'reply') {
+          speaking = 'reply'
+          deps.io.out('\nhouston:\n')
+        }
         deps.io.out(s)
         return
       }
       saysResponding = false
+      if (e.type !== 'reasoning' && e.type !== 'usage') speaking = null
       // A discarded round's unfinished block is dropped unrendered, never flushed:
       // its redo will print the whole reply again.
       if (e.type === 'turn_discarded') md.discard()
@@ -5540,13 +5616,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       switch (e.type) {
         case 'reasoning': {
-          deps.io.setSpinnerLabel?.('Thinking')
+          // A screen reader hears the "houston, thinking:" label instead of a spinner.
+          if (!screenReader) deps.io.setSpinnerLabel?.('Thinking')
           thought ??= { start: nowFn(), text: '' }
           thought.text += e.delta
           if (reasoningDisplay !== 'show') break
           // Model text, so it can't carry a terminal control of its own.
           const safe = stripControlCharsKeepLines(e.delta)
           if (!safe) break
+          if (screenReader && speaking !== 'thinking') {
+            deps.io.out(`${freshLine()}\nhouston, thinking:\n`)
+            speaking = 'thinking'
+          }
           deps.io.out(paint(safe, 'dim'))
           thoughtLineOpen = !safe.endsWith('\n')
           roundShown = true
@@ -5560,7 +5641,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           }
           break
         case 'tool_start': {
-          deps.io.setSpinnerLabel?.(describeToolCall(e.name, e.args).verb)
+          // A screen reader hears the tool line below; the label would say it twice.
+          if (!screenReader) deps.io.setSpinnerLabel?.(describeToolCall(e.name, e.args).verb)
           toolArgs.set(e.callId, e.args)
           if (liveCalls.size > 0) {
             for (const id of liveCalls.keys()) parallelCalls.add(id)
@@ -5579,7 +5661,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // line in front of it is only the wire name.
           if (e.name === ASK_USER_TOOL || e.name === PRESENT_PLAN_TOOL) break
           if (e.kind === 'write' && e.preview?.length) writePreviews.set(e.callId, e.preview)
-          deps.io.out(`\n${renderToolStart(e.name, e.args, paint)}\n`)
+          deps.io.out(`\n${renderToolStart(e.name, e.args, paint, { sentence: screenReader })}\n`)
           break
         }
         case 'tool_result': {
@@ -5587,8 +5669,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           liveCalls.delete(e.callId)
           parallelCalls.delete(e.callId)
           // With no tool left running the model is writing again, so the spinner stops
-          // naming the last tool ("Run 45s").
-          if (liveCalls.size === 0) deps.io.setSpinnerLabel?.('Working')
+          // naming the last tool ("Run 45s"). In screen-reader mode it never named one.
+          if (liveCalls.size === 0 && !screenReader) deps.io.setSpinnerLabel?.('Working')
           // The list was just drawn from the call's args; its result is only the
           // model-facing summary of what we already showed.
           if (todoCalls.delete(e.callId) && e.ok) {
@@ -5680,6 +5762,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'tool_approval':
           if (e.kind === 'write') promptedWrites.add(e.callId)
           enqueue(async () => {
+            if (screenReader) deps.io.out('\nwaiting for approval\n')
             // Context (name, kind, unsandboxed warning) + the diff for a write.
             deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select })}\n`)
             if (e.kind === 'write') {
@@ -5691,7 +5774,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               // The preview is diffed against the files' real contents and already
               // folded to the change; render it with numbers + word marks. Only fall
               // back to deriving a diff from the args when there is no preview.
+              // A screen reader gets the unified diff: a +/- sign on every line, no
+              // gutter or color to depend on.
+              const plainPreview = screenReader && e.preview ? renderPreviewDiff(e.preview) : null
               const view =
+                (plainPreview ? colorizeDiff(plainPreview, paint, SCREEN_READER_DIFF_LINES) : null) ??
                 (e.preview ? renderPreviewView(e.preview, paint, deps.highlightHtml ? highlight : undefined) : null) ??
                 (() => {
                   const raw = extractDiff(e.args ?? toolArgs.get(e.callId) ?? {})
@@ -5701,6 +5788,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             }
             let decision: ToolApprovalDecision | null = null
             let note: string | undefined
+            // An answer the picker already took as typed text (the numbered list).
+            let typed: string | undefined
             if (deps.io.select) {
               // The shell-network consent is a yes/no question about egress, not a
               // permission rule about a command — offering "always allow"/"deny with a
@@ -5737,10 +5826,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                   decision = r.value as ToolApprovalDecision
                 }
               } else if (r.kind === 'cancel') decision = 'deny' // safe default
+              else typed = r.text
               // 'type' → fall through to the typed prompt below
             }
             if (decision === null) {
-              const ans = await deps.io.readLine('> ', { discardPending: true })
+              const ans = typed ?? (await deps.io.readLine('> ', { discardPending: true }))
               const parsed = parseApprovalAnswer(ans ?? '')
               decision = parsed.decision
               note = parsed.note
@@ -5756,6 +5846,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         case 'tool_question':
           enqueue(async () => {
+            if (screenReader) deps.io.out('\nwaiting for your answer\n')
             const multi = e.multiSelect ?? false
             // Only offer the arrow-key picker when there's something to pick: an
             // options-less question is a free-text prompt, so go straight to typing.
@@ -5767,6 +5858,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               `${usePicker ? renderQuestionHeader(e.question, paint) : renderQuestion(e.question, e.options, multi, paint)}\n`
             )
             let answer: string | null = null
+            let typedAnswer: string | undefined
             if (usePicker && deps.io.select) {
               const r = await deps.io.select({
                 title: '',
@@ -5779,11 +5871,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                 }))
               })
               if (r.kind === 'commit') answer = r.value
+              else if (r.kind === 'type' && r.text !== undefined) typedAnswer = r.text
               // cancel/type → fall through so the user can still type a custom answer
               else deps.io.out(`${renderQuestionChoices(e.options, multi, paint)}\n`)
             }
             if (answer === null) {
-              const ans = await deps.io.readLine('> ', { discardPending: true })
+              const ans = typedAnswer ?? (await deps.io.readLine('> ', { discardPending: true }))
               answer = resolveQuestionAnswer(ans ?? '', e.options, e.multiSelect ?? false)
             }
             deps.resolveQuestion(e.runId, e.callId, answer)
@@ -5795,6 +5888,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // line per field, re-prompting on invalid values.
           enqueue(async () => {
             // Everything here but the field values is the remote server's text.
+            if (screenReader) deps.io.out('\nwaiting for your input\n')
             deps.io.out(
               `\n${paint(`MCP server "${stripControlChars(e.serverId)}" requests input:`, 'cyan')} ${stripControlCharsKeepLines(e.message)}\n`
             )
@@ -5923,17 +6017,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               `${renderPlan(e.plan, paint, { actions: !deps.io.select, width: columns(), highlight })}\n`
             )
             let action: PlanAction | null = null
+            let typedAction: string | undefined
+            if (screenReader) deps.io.out('waiting for your decision on the plan\n')
             if (deps.io.select) {
               const r = await deps.io.select({
                 title: 'Your decision:',
                 options: PLAN_ACTIONS.map((a) => ({ label: a.label, value: a.action, description: a.description }))
               })
               if (r.kind === 'commit') action = r.value as PlanAction
+              else if (r.kind === 'type' && r.text !== undefined) typedAction = r.text
               // cancel/type → fall through to the typed prompt, with its keys shown
               else deps.io.out(`${renderPlanActions(paint)}\n`)
             }
             if (action === null) {
-              const ans = await deps.io.readLine('> ', { discardPending: true })
+              const ans = typedAction ?? (await deps.io.readLine('> ', { discardPending: true }))
               action = parsePlanAction(ans ?? '')
             }
             const decision = await planDecisionFor(action, e.plan, deps, paint)
@@ -6001,6 +6098,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Drain any approval/question prompts still in flight before the next composer read.
     await prompts
     activeRunId = null
+    // The spinner's end, said once (an interrupt already said "interrupted").
+    if (screenReader && interruptedQueued === null) {
+      deps.io.out(`done in ${formatElapsed(nowFn() - turnStartedAt)}\n`)
+    }
     // Anything typed while that turn ran (steers it never read included) becomes the
     // next one, or after an interrupt, the next prompt's draft.
     const unsent = [...returnedSteers, ...(interruptedQueued ?? []), ...(deps.io.takeQueued?.() ?? [])]
@@ -6174,7 +6275,11 @@ function handleInfoCommand(
  * and the safe subset editable from the terminal. Read-only — the editing verbs live
  * on /hooks and /mcp.
  */
-function renderSettingsOverview(deps: TuiDeps, paint: Painter, live: { reduceMotion: boolean }): void {
+function renderSettingsOverview(
+  deps: TuiDeps,
+  paint: Painter,
+  live: { reduceMotion: boolean; screenReader: boolean }
+): void {
   const path = deps.settingsPath?.() ?? '(unknown)'
   const lines = [
     paint('Settings', 'bold'),
@@ -6189,7 +6294,10 @@ function renderSettingsOverview(deps: TuiDeps, paint: Painter, live: { reduceMot
     `    ${paint('/memory', 'cyan')}  saved memories  ·  /memory show|edit|pin|forget <n>  ·  /memory on|off`,
     '',
     '  This terminal:',
-    `    reduced motion: ${live.reduceMotion ? 'on' : 'off'}  (/reduce-motion on|off)`,
+    `    screen reader:  ${live.screenReader ? 'on' : 'off'}  (/screen-reader on|off)`,
+    `    reduced motion: ${live.reduceMotion || live.screenReader ? 'on' : 'off'}${
+      live.screenReader && !live.reduceMotion ? ' (with screen-reader mode)' : ''
+    }  (/reduce-motion on|off)`,
     '',
     paint('  Changes here apply on your next message, no restart needed.', 'dim')
   ]

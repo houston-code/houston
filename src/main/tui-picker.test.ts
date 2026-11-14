@@ -13,6 +13,8 @@ import {
   createPickerSession,
   drivePicker,
   type PickerKey,
+  renderNumberedPicker,
+  parseNumberedPick,
   type PickerSpec,
   type PickerState
 } from './tui-picker'
@@ -344,5 +346,52 @@ describe('filtering and action pickers', () => {
     expect(renderPicker(initialPickerState(spec), paint).at(-1)).toBe(
       '↑/↓ move · enter confirm · type for a custom answer · esc cancel'
     )
+  })
+})
+
+describe('numbered picker (screen-reader mode)', () => {
+  const approval: PickerSpec = {
+    title: 'Choose:',
+    escLabel: 'deny',
+    options: [
+      { label: 'Allow', value: 'allow' },
+      { label: 'Deny', value: 'deny', description: 'tell it no' },
+      { label: 'Allow for run', value: 'session' }
+    ]
+  }
+
+  it('lists the options by number and says how to answer, with no pointer or keys', () => {
+    expect(renderNumberedPicker(approval)).toEqual([
+      'Choose:',
+      '1. Allow',
+      '2. Deny (tell it no)',
+      '3. Allow for run',
+      'Type a number and press Enter. Or type your own answer. Enter on its own: deny.'
+    ])
+    expect(renderNumberedPicker({ ...approval, multiSelect: true, title: '' }).at(-1)).toContain(
+      'separated by spaces or commas'
+    )
+  })
+
+  it('commits the numbered option, and Enter alone takes the Esc path', () => {
+    expect(parseNumberedPick(approval, ' 3 ')).toEqual({ kind: 'commit', value: 'session' })
+    expect(parseNumberedPick(approval, '')).toEqual({ kind: 'cancel' })
+  })
+
+  it('hands any other answer back as typed text, so nothing is asked twice', () => {
+    expect(parseNumberedPick(approval, 'n not that file')).toEqual({ kind: 'type', text: 'n not that file' })
+    expect(parseNumberedPick(approval, 'y')).toEqual({ kind: 'type', text: 'y' })
+    expect(parseNumberedPick({ title: '', options: [] }, '1')).toEqual({ kind: 'type', text: '1' })
+  })
+
+  it('asks again for a number that is not on the list, or two numbers for one choice', () => {
+    expect(parseNumberedPick(approval, '7')).toEqual({ kind: 'invalid', message: 'There is no option 7. Choose 1 to 3.' })
+    expect(parseNumberedPick(approval, '0')).toMatchObject({ kind: 'invalid' })
+    expect(parseNumberedPick(approval, '1 2')).toEqual({ kind: 'invalid', message: 'Choose one option. Choose 1 to 3.' })
+  })
+
+  it('takes several numbers for a multi-select, in list order, once each', () => {
+    const multi = { ...approval, multiSelect: true }
+    expect(parseNumberedPick(multi, '3, 1 3')).toEqual({ kind: 'commit', value: 'allow, session' })
   })
 })
