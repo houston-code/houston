@@ -117,6 +117,7 @@ import {
   updateConversationMeta,
   listConversations,
   getConversation,
+  conversationRunOutcome,
   peekConversation,
   searchConversations,
   forkConversation,
@@ -394,7 +395,7 @@ export function wireTerminalSessionBackends(opts: {
     })
   })
 
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn() })
+  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome) })
   setSchedulerBackend(scheduler)
   if (opts.startScheduler) scheduler.start()
 

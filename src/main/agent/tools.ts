@@ -127,6 +127,7 @@ import {
   type SpawnSessionResult
 } from './spawn'
 import { SCHEDULE_TOOL_NAMES, type ScheduledRunInfo } from './scheduler'
+import { scheduleLastRunText } from '@shared/schedules'
 import type { RenderMockup } from './mockupRender'
 import { LSP_TOOL_NAMES, makeLspTools, type LspToolAccess } from './lsp/tools'
 import { objectSchema, rootsOf, str } from './toolHelpers'
@@ -3302,7 +3303,7 @@ const listScheduledRuns: ToolDef = {
   schema: {
     name: 'list_scheduled_runs',
     description:
-      'List the scheduled background runs configured on this machine: id, name, recurrence, next/last fire time, and whether the last fire succeeded.',
+      'List the scheduled background runs configured on this machine: id, name, recurrence, next/last fire time, and how the last run went (still running, finished, failed, stopped, or hit a limit).',
     parameters: objectSchema({}, [])
   },
   async execute(_args, ctx) {
@@ -3311,10 +3312,9 @@ const listScheduledRuns: ToolDef = {
     if (all.length === 0) return 'No scheduled runs.'
     return all
       .map((s) => {
+        const outcome = scheduleLastRunText(s)
         const last = s.lastFiredAt
-          ? `; last fired ${formatFireTime(s.lastFiredAt)}${
-              s.lastResult === 'error' ? ` (failed: ${s.lastError ?? 'unknown error'})` : ''
-            }`
+          ? `; last fired ${formatFireTime(s.lastFiredAt)}${outcome ? ` (${outcome})` : ''}`
           : ''
         const next = s.paused ? 'paused' : `next run ${formatFireTime(s.nextRunAt)}`
         return `- ${s.id}: "${s.name}", ${s.spec}; ${next}${last}`

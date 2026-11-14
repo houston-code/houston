@@ -1,5 +1,7 @@
 import type { ApprovalPolicy } from '@shared/types'
-import type { ReasoningEffort } from '@shared/agent'
+import type { ReasoningEffort, RunLimitReason } from '@shared/agent'
+import type { RunOutcome } from '@shared/runEnd'
+import type { ScheduleRunResult } from '@shared/schedules'
 
 /**
  * Injection seam for scheduled (recurring or one-shot) agent runs — the engine
@@ -59,13 +61,41 @@ export interface ScheduledRunInfo extends ScheduledRunInput {
   nextRunAt: number | null
   /** Epoch ms of the most recent fire, if any. */
   lastFiredAt?: number
-  /** Whether the most recent fire started its session cleanly. */
-  lastResult?: 'ok' | 'error'
-  /** The most recent fire's failure, when lastResult is 'error'. */
+  /**
+   * How the most recent fire's run went: `running` while it is in flight, then how
+   * it ended (`ok` = finished cleanly, `error` = failed or could not start, `limit`,
+   * `stopped`). Unset when unknown (never fired, or fired before outcomes were kept).
+   */
+  lastResult?: ScheduledRunResult
+  /** Which limit the most recent run hit, when lastResult is 'limit'. */
+  lastLimit?: RunLimitReason
+  /** The most recent fire's failure, when lastResult is 'error' (at most {@link MAX_SCHEDULE_ERROR_CHARS}). */
   lastError?: string
+  /** The chat the most recent fire started, while it runs and after. Unset when it could not start. */
+  lastRunConversationId?: string
+  /**
+   * The process running the most recent fire, while lastResult is 'running', so another
+   * process (or this one after a restart) can tell a run that is still going from one
+   * whose host quit mid-run.
+   */
+  lastRunPid?: number
   createdAt: number
   /** Paused from Settings > Scheduled runs: kept, but not fired until resumed. */
   paused?: boolean
+}
+
+/** A fired run's state on its schedule (see {@link ScheduledRunInfo.lastResult}). */
+export type ScheduledRunResult = ScheduleRunResult
+
+/** Longest failure message kept on a schedule; the run's chat has the full text. */
+export const MAX_SCHEDULE_ERROR_CHARS = 500
+
+/** What a fire hands back once its session has started. */
+export interface ScheduledFire {
+  /** The chat the fire started. */
+  conversationId: string
+  /** Settles with how the run ended. */
+  ended: Promise<RunOutcome>
 }
 
 /** The shell-side capability injected at startup. */

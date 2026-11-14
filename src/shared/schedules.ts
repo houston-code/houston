@@ -1,5 +1,5 @@
 import type { ApprovalPolicy } from './types'
-import type { ReasoningEffort } from './agent'
+import type { ReasoningEffort, RunLimitReason } from './agent'
 
 /**
  * Settings > Scheduled runs: the renderer's view of the scheduler service's store
@@ -20,10 +20,51 @@ export interface ScheduleView {
   /** Epoch ms of the next planned run; null when it has none (a spent one-shot). */
   nextRunAt: number | null
   lastFiredAt?: number
-  lastResult?: 'ok' | 'error'
+  /** `running` while the last fire's run is in flight, then how it ended. */
+  lastResult?: ScheduleRunResult
+  lastLimit?: RunLimitReason
   lastError?: string
+  /** The chat the last fire started (unset when it could not start). */
+  lastRunConversationId?: string
   createdAt: number
   paused?: boolean
+}
+
+export type ScheduleRunResult = 'running' | 'ok' | 'error' | 'limit' | 'stopped'
+
+/**
+ * How a schedule's last run went, in plain words, or null when that isn't known
+ * (never fired, or fired before outcomes were kept). Shared by Settings and the
+ * agent's listing so they read the same.
+ */
+export function scheduleLastRunText(
+  s: Pick<ScheduleView, 'lastResult' | 'lastLimit' | 'lastError' | 'lastRunConversationId'>
+): string | null {
+  switch (s.lastResult) {
+    case 'running':
+      return 'still running'
+    case 'ok':
+      return 'finished'
+    case 'stopped':
+      return 'was stopped before it finished'
+    case 'limit':
+      return s.lastLimit === 'stalled'
+        ? 'stopped because it stalled without making progress'
+        : s.lastLimit === 'max-output'
+          ? 'was cut off at the model’s output limit'
+          : 'stopped at the step limit'
+    case 'error': {
+      const why = s.lastError ?? 'unknown error'
+      return s.lastRunConversationId ? `failed (${why})` : `couldn't start (${why})`
+    }
+    default:
+      return null
+  }
+}
+
+/** Whether a schedule's last run ended without finishing its work. */
+export function scheduleLastRunFailed(s: Pick<ScheduleView, 'lastResult'>): boolean {
+  return s.lastResult === 'error' || s.lastResult === 'limit' || s.lastResult === 'stopped'
 }
 
 export interface ScheduleCreateRequest {

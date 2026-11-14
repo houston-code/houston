@@ -638,7 +638,7 @@
   },
   {
     "name": "list_scheduled_runs",
-    "description": "List the scheduled background runs configured on this machine: id, name, recurrence, next/last fire time, and whether the last fire succeeded.",
+    "description": "List the scheduled background runs configured on this machine: id, name, recurrence, next/last fire time, and how the last run went (still running, finished, failed, stopped, or hit a limit).",
     "parameters": {
       "type": "object",
       "properties": {},
