@@ -2383,6 +2383,10 @@ or **OAuth** for servers that need a sign-in:
 - The spawned process gets a base environment with credentials stripped, so a token
   the server needs must be listed explicitly.
 - Environment values are treated as secrets and stored encrypted, like header values.
+- Disconnecting a server, or quitting Houston, stops everything the server started,
+  not just its own process: a launcher such as `npx`, `uvx`, or `sh -c` doesn't leave
+  the real server running. A server that hasn't exited two seconds after being asked
+  to is force-stopped.
 - On Windows, a command such as `npx` that is installed as a `.cmd` script runs
   through `cmd.exe`. Its arguments can't contain `"`, `%`, `!`, or a line break there;
   a server whose arguments need one fails to start with an error saying so.
@@ -2906,7 +2910,11 @@ be reverted with one click (and re-applied after a revert).
 - **Covers every file-editing tool,** including multi-file patches (adds, updates,
   deletes, and moves) and edits made by a writable subagent the turn dispatched.
 - **Survives restarts.** Checkpoints are kept on disk in your Houston profile, for the
-  most recent 200 turns.
+  most recent 200 turns, up to 512 MB in all; the oldest go first. Each chat's latest
+  turn is always kept.
+- **Large files are skipped.** A file over 5 MB isn't snapshotted, and neither is a
+  file that would take one turn's snapshots past about 32 MB of text, so reverting that turn
+  leaves those files as they are.
 - **Shell side effects aren't covered.** Revert only restores files the editing tools
   touched.
 

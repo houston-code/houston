@@ -91,6 +91,31 @@ const MAX_CHECKPOINTS = 50
  * turns, and disk is only read on a miss.
  */
 const MAX_DISK_CHECKPOINTS = 200
+/**
+ * Most bytes the run files on disk may take, across all conversations; the oldest are
+ * pruned first, as with the count cap. The count alone let a handful of runs that
+ * each snapshotted large files grow the directory without bound.
+ */
+export const MAX_DISK_CHECKPOINT_BYTES = 512_000_000
+let diskBudgetBytes = MAX_DISK_CHECKPOINT_BYTES
+/**
+ * Most snapshot text one run may hold, in characters (before and after content of
+ * all its files). A file that would take the run past it is left out, as an
+ * oversized file is, so one turn that rewrites many large files can't fill the disk
+ * or the memory budget by itself.
+ */
+export const MAX_RUN_SNAPSHOT_CHARS = 32_000_000
+let runBudgetChars = MAX_RUN_SNAPSHOT_CHARS
+
+/** For tests: a smaller disk budget (null restores the default). */
+export function _setCheckpointDiskBudget(bytes: number | null): void {
+  diskBudgetBytes = bytes ?? MAX_DISK_CHECKPOINT_BYTES
+}
+
+/** For tests: a smaller per-run snapshot budget (null restores the default). */
+export function _setRunSnapshotBudget(chars: number | null): void {
+  runBudgetChars = chars ?? MAX_RUN_SNAPSHOT_CHARS
+}
 /** Runs remembered per conversation chain; the oldest drop off first. */
 const MAX_CHAIN_ENTRIES = 100
 /**
@@ -601,7 +626,28 @@ function scheduleWriteIndex(): Promise<void> {
   })
 }
 
-/** Delete the oldest run files beyond the cap, mirroring the in-memory bound. */
+/**
+ * Runs whose file the disk prune must keep, by the same rule as memory eviction: a
+ * run still being recorded or written, and each conversation's latest run (the one
+ * in progress, or the one its revert/redo affordance offers). A run evicted from
+ * memory mid-run is read back from its file by the next record call, so pruning
+ * that file would lose its earlier snapshots.
+ */
+function protectedRuns(): Set<string> {
+  return new Set([
+    ...lastRunByConversation.values(),
+    ...dirtyRuns,
+    ...persistingRuns,
+    ...busyRuns.keys(),
+    ...opening.keys()
+  ])
+}
+
+/**
+ * Delete the oldest run files beyond the count cap or the byte budget, mirroring the
+ * in-memory bound. The newest file and the {@link protectedRuns} are always kept, so
+ * the budget is a bound on everything else.
+ */
 function schedulePrune(): Promise<void> {
   const dir = checkpointsDirOrNull()
   if (!dir) return Promise.resolve()
@@ -613,18 +659,26 @@ function schedulePrune(): Promise<void> {
       return
     }
     const runFiles = entries.filter((f) => f.endsWith('.json') && f !== 'index.json')
-    if (runFiles.length <= MAX_DISK_CHECKPOINTS) return
-    const stats: { f: string; mtime: number }[] = []
+    const stats: { f: string; mtime: number; size: number }[] = []
     for (const f of runFiles) {
       try {
-        stats.push({ f, mtime: (await fs.stat(join(dir, f))).mtimeMs })
+        const st = await fs.stat(join(dir, f))
+        stats.push({ f, mtime: st.mtimeMs, size: st.size })
       } catch {
         // vanished mid-scan — nothing to prune
       }
     }
+    let count = stats.length
+    let bytes = stats.reduce((n, s) => n + s.size, 0)
+    if (count <= MAX_DISK_CHECKPOINTS && bytes <= diskBudgetBytes) return
     stats.sort((a, b) => a.mtime - b.mtime)
-    for (const s of stats.slice(0, Math.max(0, stats.length - MAX_DISK_CHECKPOINTS))) {
+    const keep = protectedRuns()
+    for (const s of stats.slice(0, -1)) {
+      if (count <= MAX_DISK_CHECKPOINTS && bytes <= diskBudgetBytes) break
+      if (keep.has(s.f.slice(0, -'.json'.length))) continue
       await fs.rm(join(dir, s.f), { force: true })
+      count--
+      bytes -= s.size
     }
   })
 }
@@ -879,6 +933,8 @@ async function recordOriginalPinned(runId: string, roots: string[], abs: string)
 
   const { content, binary, capped } = await readCapped(abs)
   if (capped) return // too big to snapshot — leave this file out of the checkpoint
+  // Past the run's budget: left out the same way, so a revert leaves it as it is.
+  if (checkpointChars(cp) + (content?.length ?? 0) > runBudgetChars) return
   cp.files.set(abs, {
     before: content,
     ...(binary ? { beforeBinary: true } : {}),
@@ -915,11 +971,15 @@ async function recordResultPinned(runId: string, abs: string, opts?: { expectAbs
   // would see the file as changed by someone else and leave it.
   const cp = checkpoints.get(runId) ?? (await loadRunIntoMemory(runId))
   const snap = cp?.files.get(abs)
-  if (!snap) return
+  if (!cp || !snap) return
 
   const { content, binary, capped } = await readCapped(abs)
   snap.afterBinary = binary
   if (capped) {
+    snap.afterCaptured = false
+  } else if (checkpointChars(cp) - (snap.after?.length ?? 0) + (content?.length ?? 0) > runBudgetChars) {
+    // Past the run's budget: not kept, so redo skips this file (as an oversized one).
+    snap.after = null
     snap.afterCaptured = false
   } else if (content === null) {
     // The file is missing or unreadable. For a deliberate delete that's the
