@@ -170,8 +170,10 @@ describe('decodeInput — navigation and editing keys', () => {
     expect(feed('\x1bz')).toEqual([])
   })
 
-  it('decodes the transcript viewer keys', () => {
+  it('decodes the transcript viewer and reasoning display keys', () => {
     expect(feed('\x0f')).toEqual([{ type: 'transcript' }])
+    expect(feed('\x1bt')).toEqual([{ type: 'cycle-thoughts' }])
+    expect(feed('\x1bT')).toEqual([{ type: 'cycle-thoughts' }])
     expect(feed('\x1b[5~')).toEqual([{ type: 'page-up' }])
     expect(feed('\x1b[6~')).toEqual([{ type: 'page-down' }])
   })

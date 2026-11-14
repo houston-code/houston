@@ -402,9 +402,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   const decodeChunk = (data: Buffer | string): string => (typeof data === 'string' ? data : utf8.write(data))
 
   let interruptHandler: (() => void) | null = null
-  // Ctrl-O, at the composer or mid-run. The driver decides what it means (and
-  // whether the viewer can open now); this reports the keypress.
+  // Ctrl-O and Alt-T, at the composer or mid-run. The driver decides what they mean
+  // (and whether the viewer can open now); this reports the keypress.
   let transcriptHandler: ((during: 'composer' | 'run') => Promise<void>) | null = null
+  let cycleThoughtsHandler: (() => void) | null = null
   // Fired by Shift-Tab, at the composer or mid-run. The driver owns what the modes
   // ARE and what changing one means; this just reports the keypress.
   let cycleModeHandler: (() => void) | null = null
@@ -467,6 +468,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           break
         case 'transcript':
           void transcriptHandler?.('run')
+          break
+        case 'cycle-thoughts':
+          cycleThoughtsHandler?.()
           break
         case 'char':
           draft += key.value
@@ -1032,6 +1036,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
                 draw()
               })
               break
+            case 'cycle-thoughts':
+              // The driver prints a line saying what changed; it lands where the
+              // composer was, and the composer is drawn again under it, draft intact.
+              atomically(() => {
+                eraseRegion()
+                cycleThoughtsHandler?.()
+                draw()
+              })
+              break
             case 'transcript':
               // runOverlay re-attaches the listener itself, via setup().
               void runOverlay(() => transcriptHandler?.('composer') ?? Promise.resolve())
@@ -1192,6 +1205,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     pager,
     onTranscript: (handler) => {
       transcriptHandler = handler
+    },
+    onCycleThoughts: (handler) => {
+      cycleThoughtsHandler = handler
     },
     // Erase the current terminal line (e.g. the composer's typed-but-abandoned input
     // on Ctrl-C) so the next prompt redraws clean.

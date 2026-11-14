@@ -70,6 +70,8 @@ export type EditorOutcome =
   | { kind: 'cycle-mode' }
   /** Ctrl-O: the adapter opens the transcript viewer, then restores the composer as it was. */
   | { kind: 'transcript' }
+  /** Alt-T: the adapter steps the reasoning display and redraws. */
+  | { kind: 'cycle-thoughts' }
 
 /** A paste at least this many lines (or this many characters) collapses to a token. */
 export const PASTE_COLLAPSE_LINES = 5
@@ -421,6 +423,9 @@ export function reduceEditor(s: EditorState, key: EditorKey): { state: EditorSta
     case 'transcript':
       // The draft survives the viewer: it is a look back, not an edit.
       return { state: s, outcome: { kind: 'transcript' } }
+
+    case 'cycle-thoughts':
+      return { state: s, outcome: { kind: 'cycle-thoughts' } }
 
     case 'page-up':
     case 'page-down':

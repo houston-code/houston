@@ -914,6 +914,13 @@ export interface AppSettings {
   tuiEditor?: 'emacs' | 'vim'
   /** The terminal's /verbose: show each tool's output as it runs. Absent = off. */
   tuiVerbose?: boolean
+  /**
+   * How the terminal shows the model's reasoning as it streams (/thoughts, Alt-T):
+   * 'show' prints it as it arrives, 'summary' one line per thought when it ends,
+   * 'hide' nothing. The transcript viewer (Ctrl-O) always has it in full. Absent =
+   * 'summary'.
+   */
+  reasoningDisplay?: 'show' | 'summary' | 'hide'
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /** User-defined chat labels, in display order. */

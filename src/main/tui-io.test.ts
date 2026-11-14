@@ -1390,14 +1390,28 @@ describe('the transcript viewer (pager)', () => {
     await open
   })
 
-  it('mid-run, Ctrl-O goes to the driver, which decides', () => {
+  it('mid-run, Ctrl-O and Alt-T go to the driver, which decides', () => {
     const t = harness()
     const seen: string[] = []
     t.io.onTranscript!(async (during) => void seen.push(`transcript:${during}`))
+    t.io.onCycleThoughts!(() => seen.push('thoughts'))
     t.io.startSpinner!('Working')
     t.stdin.push('\x0f')
-    expect(seen).toEqual(['transcript:run'])
+    t.stdin.push('\x1bt')
+    expect(seen).toEqual(['transcript:run', 'thoughts'])
     t.io.stopSpinner!()
+  })
+
+  it('Alt-T at the composer lets the driver print its note, then redraws the draft', async () => {
+    const t = harness()
+    t.io.onCycleThoughts!(() => t.io.out('· thoughts: hidden\n'))
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('draft')
+    t.stdin.push('\x1bt')
+    const out = t.text()
+    expect(out.lastIndexOf('draft')).toBeGreaterThan(out.indexOf('· thoughts: hidden'))
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('draft')
   })
 })
 

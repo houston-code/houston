@@ -306,6 +306,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'thoughts', group: 'Terminal', args: '[show|summary|hide]',
+    description: "How the model's reasoning shows as it streams (Alt-T cycles it)",
+    clients: ['tui']
+  },
+  {
     name: 'transcript', group: 'Terminal',
     description: 'The whole session full screen, with reasoning and full tool output (Ctrl-O)',
     clients: ['tui']
@@ -444,6 +449,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   'add-dir': 'in the app, add folders the agent may use under Settings, Workspace, Additional folders',
   verbose: 'in the app, open a tool row to see its full output',
   output: 'in the app, open a tool row to see its full output',
+  thoughts: 'in the app, reasoning folds above each reply; Settings > Appearance > Always show reasoning keeps it open',
   transcript: 'in the app, the chat itself is the full transcript: open a tool row or the reasoning to see it in full',
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
   proposals: 'in the app, proposed sessions appear as cards in the chat, with Start and Dismiss',

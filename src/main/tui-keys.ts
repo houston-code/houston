@@ -64,6 +64,8 @@ export type EditorKey =
   | { type: 'cycle-mode' }
   /** Ctrl-O: open the transcript viewer. */
   | { type: 'transcript' }
+  /** Alt-T: step to the next way of showing the model's reasoning. */
+  | { type: 'cycle-thoughts' }
   /** Page Up / Page Down: the composer ignores them; the transcript viewer pages. */
   | { type: 'page-up' }
   | { type: 'page-down' }
@@ -426,6 +428,7 @@ export function decodeInput(
         else if (alt === 'f' || alt === 'F') keys.push({ type: 'word-right' })
         else if (alt === '\x7f' || alt === '\b') keys.push({ type: 'kill-word' })
         else if (alt === '\r' || alt === '\n') keys.push({ type: 'newline' })
+        else if (alt === 't' || alt === 'T') keys.push({ type: 'cycle-thoughts' })
         // Any other Alt-combo is unbound: swallow it rather than inserting the char.
         continue
       }

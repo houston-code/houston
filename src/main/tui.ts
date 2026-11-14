@@ -128,7 +128,7 @@ import {
   type UndoRewindResult
 } from '@shared/rewind'
 import { ComposerBuffer } from './tui-composer'
-import { renderTranscript, transcriptPlain, type PagerSource } from './tui-pager'
+import { renderTranscript, sanitizeLines, transcriptPlain, type PagerSource } from './tui-pager'
 import { parseMemoryAction, runMemoryCommand, type MemoryAction, type MemoryCommandState } from './tui-memory'
 import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
@@ -1655,6 +1655,8 @@ export type SlashResult =
   | { kind: 'changes'; last?: number }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
+  /** How the model's reasoning shows as it streams (/thoughts); bare steps to the next. */
+  | { kind: 'thoughts'; mode?: ReasoningDisplay; bad?: string }
   /** Open the transcript viewer (/transcript, Ctrl-O). */
   | { kind: 'transcript' }
   /** Reprint a past tool result in full (/output [n]). */
@@ -1797,6 +1799,11 @@ export function parseSlashCommand(
       if (a === 'on') return { kind: 'verbose', on: true }
       if (a === 'off') return { kind: 'verbose', on: false }
       return { kind: 'verbose' } // bare /verbose toggles
+    }
+    case 'thoughts': {
+      const a = arg.trim().toLowerCase()
+      if (!a) return { kind: 'thoughts' }
+      return isReasoningDisplay(a) ? { kind: 'thoughts', mode: a } : { kind: 'thoughts', bad: a }
     }
     case 'transcript':
       return { kind: 'transcript' }
@@ -1953,6 +1960,7 @@ export const HELP_TEXT = [
   '  /changes              what is different in the working tree (also /diff)',
   "  /diff last [n]        show the diff of this session's last edit (n edits back)",
   '  /verbose [on|off]     show each tool\'s full output as it runs',
+  '  /thoughts [mode]      how reasoning shows as it streams: show | summary | hide (Alt-T)',
   '  /transcript           the whole session full screen, with reasoning and full tool output (Ctrl-O)',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
@@ -1979,6 +1987,7 @@ export const HELP_TEXT = [
   '  Ctrl-X Ctrl-E         edit the message in $VISUAL or $EDITOR',
   '  Ctrl-L                clear the screen',
   '  Ctrl-O                the whole session full screen: j/k, / search, { } your messages, v editor, q',
+  '  Alt-T                 cycle how reasoning shows (show, summary, hide), also while a turn runs',
   '  Ctrl-C                clear the message (twice to exit); Ctrl-D exits',
   '  ultrathink            a word in the message: think harder for that turn',
   '',
@@ -1997,7 +2006,8 @@ export const STARTUP_TIPS = [
   'type while the agent works and press Enter to steer it',
   'Shift-Enter or Ctrl-J starts a new line',
   '/resume filters saved chats as you type; Ctrl-A shows every folder',
-  'Ctrl-O opens the whole session full screen, with reasoning and full tool output'
+  'Ctrl-O opens the whole session full screen, with reasoning and full tool output',
+  'Alt-T cycles how the model\'s reasoning shows: in full, one line, or hidden'
 ]
 
 /**
@@ -2009,6 +2019,63 @@ export function pickTips(seed: number, count = 2, tips: readonly string[] = STAR
   const start = ((Math.floor(seed) % tips.length) + tips.length) % tips.length
   const n = Math.min(count, tips.length)
   return Array.from({ length: n }, (_, i) => tips[(start + i) % tips.length])
+}
+
+/** How the model's reasoning shows as it streams (the `reasoningDisplay` setting). */
+export type ReasoningDisplay = 'show' | 'summary' | 'hide'
+export const REASONING_DISPLAYS: readonly ReasoningDisplay[] = ['show', 'summary', 'hide']
+export const DEFAULT_REASONING_DISPLAY: ReasoningDisplay = 'summary'
+
+export function isReasoningDisplay(v: unknown): v is ReasoningDisplay {
+  return typeof v === 'string' && (REASONING_DISPLAYS as readonly string[]).includes(v)
+}
+
+/** Alt-T and a bare /thoughts: show, then summary, then hide, then show again. */
+export function nextReasoningDisplay(d: ReasoningDisplay): ReasoningDisplay {
+  return REASONING_DISPLAYS[(REASONING_DISPLAYS.indexOf(d) + 1) % REASONING_DISPLAYS.length]
+}
+
+/** The line saying what a reasoning display now does. */
+export function reasoningDisplayNote(d: ReasoningDisplay): string {
+  switch (d) {
+    case 'show':
+      return '· thoughts: shown in full as they stream (Alt-T or /thoughts to change)'
+    case 'summary':
+      return '· thoughts: one line each, with how long it took (Ctrl-O shows them in full)'
+    case 'hide':
+      return '· thoughts: hidden while they stream (Ctrl-O shows them in full)'
+  }
+}
+
+/** `12s`, `1m 05s`: how long a thought took, never under a second. */
+export function formatThoughtDuration(ms: number): string {
+  const sec = Math.max(1, Math.round(ms / 1000))
+  if (sec < 60) return `${sec}s`
+  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, '0')}s`
+}
+
+/**
+ * The opening of a thought, on one line: a bold heading on its own line (how some
+ * models title a reasoning summary) or else the first sentence. '' for none.
+ */
+export function firstSentence(text: string): string {
+  const lines = sanitizeLines(text)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  if (!lines.length) return ''
+  const heading = /^(?:#+\s*)?\*\*(.+?)\*\*:?$/.exec(lines[0])
+  if (heading) return heading[1].trim()
+  const flat = lines.join(' ').replace(/\*\*|__|`/g, '').replace(/^#+\s*/, '').replace(/\s+/g, ' ').trim()
+  const m = /^(.+?[.!?])(?=\s|$)/.exec(flat)
+  return (m ? m[1] : flat).trim()
+}
+
+/** The `reasoningDisplay: 'summary'` line for a finished thought, fitted to `width`. */
+export function renderThoughtSummary(text: string, ms: number, width: number, paint: Painter): string {
+  const head = `· thought for ${formatThoughtDuration(ms)}`
+  const gist = firstSentence(text)
+  const line = gist ? `${head}: ${gist}` : head
+  return paint(truncateVisible(line, Math.max(head.length, width - 1)), 'dim')
 }
 
 /** Where /help's descriptions start: two spaces, then the command padded to 22. */
@@ -2866,6 +2933,8 @@ export interface TuiIo {
    * once the handler settles) or mid-run, as `during` says.
    */
   onTranscript?: (handler: (during: 'composer' | 'run') => Promise<void>) => void
+  /** Register the handler for Alt-T (cycle the reasoning display), at the composer or mid-run. */
+  onCycleThoughts?: (handler: () => void) => void
 }
 
 export interface TuiDeps {
@@ -3481,6 +3550,25 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // transcript is a conversation, and most results are noise until they aren't.
   // Remembered across sessions once chosen.
   let verbose = settings.tuiVerbose === true
+  // How the model's reasoning shows as it streams (/thoughts, Alt-T): one line per
+  // thought by default, since a long chain of thought buries the reply. Remembered
+  // like /verbose; the transcript viewer always has it in full.
+  let reasoningDisplay: ReasoningDisplay = isReasoningDisplay(settings.reasoningDisplay)
+    ? settings.reasoningDisplay
+    : DEFAULT_REASONING_DISPLAY
+  // Whether streamed reasoning left the cursor mid-line, so a note printed while a
+  // turn runs starts on a line of its own.
+  let thoughtLineOpen = false
+  const freshLine = (): string => {
+    const nl = thoughtLineOpen ? '\n' : ''
+    thoughtLineOpen = false
+    return nl
+  }
+  const setReasoningDisplay = (d: ReasoningDisplay): void => {
+    reasoningDisplay = d
+    deps.updateSettings?.({ reasoningDisplay: d })
+    deps.io.out(`${freshLine()}${paint(reasoningDisplayNote(d), 'dim')}\n`)
+  }
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
   // A line half-typed while a turn ran (never sent with Enter): the next composer opens with it.
@@ -3686,6 +3774,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
   }
 
+  // Alt-T, at the composer or mid-run: the live turn's next thought already follows it.
+  deps.io.onCycleThoughts?.(() => setReasoningDisplay(nextReasoningDisplay(reasoningDisplay)))
   // Ctrl-O and /transcript: the whole session full screen. Not while a turn runs:
   // the viewer would have to hold back the run's output and its approval prompts,
   // so it says when it can open instead.
@@ -3707,7 +3797,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
   deps.io.onTranscript?.(async (during) => {
     if (during === 'run') {
-      deps.io.out(paint('\n· the transcript opens at the prompt once this turn ends (Ctrl-O or /transcript)\n', 'dim'))
+      deps.io.out(`${freshLine()}${paint('· the transcript opens at the prompt once this turn ends (Ctrl-O or /transcript)', 'dim')}\n`)
       return
     }
     await openTranscript()
@@ -4349,6 +4439,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             'dim'
           )
         )
+        continue
+      }
+      if (result.kind === 'thoughts') {
+        if (result.bad) {
+          deps.io.out(
+            paint(`· no thoughts mode "${stripControlChars(result.bad)}": use /thoughts show, summary or hide\n`, 'yellow')
+          )
+          continue
+        }
+        setReasoningDisplay(result.mode ?? nextReasoningDisplay(reasoningDisplay))
         continue
       }
       if (result.kind === 'transcript') {
@@ -5076,6 +5176,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
     }
     flushStreamedText = flushMd
+    // The streaming round's reasoning: when it began and what it said, for the
+    // one-line summary ('summary') printed when the next thing arrives.
+    let thought: { start: number; text: string } | null = null
+    const endThought = (discard: boolean): void => {
+      if (!thought) return
+      const t = thought
+      thought = null
+      // A dropped round's thought is dropped with it: its redo thinks again.
+      if (discard || reasoningDisplay !== 'summary') return
+      deps.io.out(`${freshLine()}${renderThoughtSummary(t.text, nowFn() - t.start, columns(), paint)}\n`)
+      roundShown = true
+    }
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
@@ -5089,6 +5201,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // The title is ambient (it just describes the tab) so it is always set; the
       // bell + notification honor the user's existing "notify me" setting.
       if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
+      // Anything but more reasoning ends the thought in progress.
+      if (e.type !== 'reasoning') {
+        endThought(e.type === 'turn_discarded')
+        thoughtLineOpen = false
+      }
       if (e.type === 'text') {
         retryStreak = 0 // the request got through
         const s = md.push(e.delta)
@@ -5108,11 +5225,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         retryStreak = 0
       }
       switch (e.type) {
-        case 'reasoning':
+        case 'reasoning': {
           deps.io.setSpinnerLabel?.('Thinking')
-          deps.io.out(paint(stripControlCharsKeepLines(e.delta), 'dim'))
+          thought ??= { start: nowFn(), text: '' }
+          thought.text += e.delta
+          if (reasoningDisplay !== 'show') break
+          // Model text, so it can't carry a terminal control of its own.
+          const safe = stripControlCharsKeepLines(e.delta)
+          if (!safe) break
+          deps.io.out(paint(safe, 'dim'))
+          thoughtLineOpen = !safe.endsWith('\n')
           roundShown = true
           break
+        }
         case 'turn_discarded':
           // What already reached the terminal can't be erased in line mode, so strike
           // it out in words; the retry or fallback line that follows says why.
@@ -5550,6 +5675,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // can't crash the run (a throw here has no catch on the startRun side).
       persistMessages(m)
     })
+    // A run that ended mid-thought (no event after it) still gets its line.
+    endThought(false)
     flushStreamedText = () => {}
     deps.io.stopSpinner?.()
     // Drain any approval/question prompts still in flight before the next composer read.

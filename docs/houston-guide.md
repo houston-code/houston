@@ -695,8 +695,9 @@ safe subset in place. In the desktop app:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/add-dir`, `/vim`, `/verbose`, `/output`, `/transcript`,
-`/spawned`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`. Typed in the
+**Terminal-only commands.** `/add-dir`, `/vim`, `/verbose`, `/output`, `/thoughts`,
+`/transcript`, `/spawned`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`,
+`/permissions`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
 
@@ -806,6 +807,7 @@ long as it needs to be.
 | `Ctrl-X Ctrl-E` | open the draft in `$VISUAL`/`$EDITOR` and come back with it |
 | `Ctrl-L` | repaint the screen |
 | `Ctrl-O` | open the transcript viewer: the whole session full screen (also `/transcript`) |
+| `Alt-T` | cycle how the model's reasoning shows (show, summary, hide), also while a turn runs |
 | `/image` | attach the image on your clipboard (also `/paste`) |
 | `Ctrl-C` | discard the draft (twice in a row to leave) |
 | `Esc` | *while the agent works:* clear what you typed, or stop the run if nothing is typed |
@@ -847,7 +849,6 @@ conversation, not a log. To see more:
 - **`/output`** reprints the last tool result in full, after the fact. `/output 3`
   goes three results back. Nothing extra is stored for this: the whole output was
   always kept in the conversation.
-
 - **`Ctrl-O`** (or `/transcript`) opens the transcript viewer: the whole session full
   screen, on the terminal's alternate screen so your scrollback is left as it was. It
   shows your messages, the replies, the model's reasoning, every tool call with its
@@ -895,6 +896,20 @@ a program (an app, a script such as `.command`, `.sh`, `.bat` or `.exe`, a `.des
 launcher, or a file marked executable) is shown in its folder instead of opened, and a
 link to a different kind of file (`notes.md` pointing at `run.command`) or to a folder
 isn't opened at all. This applies to every **Open** in the app.
+
+### Reasoning in the terminal
+
+While the model thinks, the terminal shows its reasoning one of three ways:
+
+- **summary** (the default): nothing streams; when the thought ends, one dim line
+  says how long it took and how it began, like `· thought for 12s: Reading the config`.
+- **show**: the reasoning streams in full, dimmed, as it arrives.
+- **hide**: nothing is printed; the spinner still says Thinking.
+
+`/thoughts show`, `/thoughts summary` or `/thoughts hide` picks one, and plain
+`/thoughts` or `Alt-T` steps to the next (`Alt-T` works while a turn runs too). The
+choice is remembered for later sessions. Whatever you pick, `Ctrl-O` shows every
+thought in full.
 
 ## What actually ran (the receipt)
 
