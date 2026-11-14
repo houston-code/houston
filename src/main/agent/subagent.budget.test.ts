@@ -481,6 +481,34 @@ describe('subagent cost ceiling', () => {
     expect(notes(seen[2])).toHaveLength(1)
   })
 
+  it("makes the agent's next step its last once the run's spend reaches the hard limit", async () => {
+    const seen: ChatRequest[] = []
+    let spent = 0
+    const result = await runSubAgent({
+      ...base,
+      workspace: ws,
+      budget: { maxCostUsd: 1 },
+      spentUsd: () => spent,
+      provider: scripted(
+        [
+          [{ type: 'tool_call', call: { id: 'a', name: 'list_dir', arguments: { path: '.' } } }, { type: 'done', stopReason: 'tool_use' }],
+          // Tries to keep working on the capped step: the call is dropped.
+          [{ type: 'tool_call', call: { id: 'b', name: 'glob', arguments: { pattern: '*' } } }, { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'text', text: 'never asked' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        seen
+      ),
+      onStep: () => {
+        spent = 1.5
+      }
+    })
+    expect(seen).toHaveLength(2)
+    const final = (req: ChatRequest): boolean => req.messages.some((m) => m.content.endsWith(SUBAGENT_FINAL_STEP_NOTE))
+    expect(final(seen[0])).toBe(false)
+    expect(final(seen[1])).toBe(true)
+    expect(result).toMatch(/reached the run's cost limit/)
+  })
+
   it('never lands on cost without a ceiling', async () => {
     const seen: ChatRequest[] = []
     await runSubAgent({

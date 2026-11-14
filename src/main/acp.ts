@@ -24,6 +24,7 @@ import {
   type PlanDecision,
   type PlanPayload,
   type ReasoningEffort,
+  type RunLimitReason,
   type ToolApprovalDecision,
   type ConversationSettingsPatch,
   REASONING_EFFORTS,
@@ -1358,7 +1359,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     refreshTitle(s)
     if (s.cancelled || turn.state.stopReason === 'aborted') return { stopReason: 'cancelled' }
     if (turn.state.error) throw new AcpError(ACP_ERROR.internal, turn.state.error)
-    if (turn.state.limit === 'max-steps') return { stopReason: 'max_turn_requests' }
+    if (turn.state.limit === 'max-steps' || turn.state.limit === 'max-cost') return { stopReason: 'max_turn_requests' }
     if (turn.state.limit === 'max-output' || turn.state.stopReason === 'max_tokens') return { stopReason: 'max_tokens' }
     return { stopReason: 'end_turn' }
   }
@@ -1369,7 +1370,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     const state: {
       stopReason: string | null
       error: string | null
-      limit: 'max-steps' | 'max-output' | 'stalled' | null
+      limit: RunLimitReason | null
     } = { stopReason: null, error: null, limit: null }
     // Tool calls already announced to the editor (a gated call is announced at its
     // approval prompt, before `tool_start`).

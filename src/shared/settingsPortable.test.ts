@@ -127,6 +127,7 @@ describe('import checks per preference', () => {
     ['autoExtendTurns', false, 'no'],
     ['maxIterationsCeiling', 200, 0],
     ['costCeilingUsd', 2.5, Number.NaN],
+    ['maxCostUsd', 4, -1],
     ['stallDetection', true, 1],
     ['verifyOnStop', true, 'yes'],
     ['verifyCommand', 'npm test', ['npm']],

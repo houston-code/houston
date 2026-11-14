@@ -49,6 +49,7 @@ export function accumulateModelUsage(
     cost: number
     cacheReadTokens?: number
     cacheWriteTokens?: number
+    costUnknown?: boolean
   }
 ): ModelUsage[] {
   // An older event carries no model. It still counts toward the session, so label
@@ -63,6 +64,7 @@ export function accumulateModelUsage(
   t.cost += turn.cost
   t.cacheReadTokens += turn.cacheReadTokens ?? 0
   t.cacheWriteTokens += turn.cacheWriteTokens ?? 0
+  if (turn.costUnknown) t.costUnknown = true
   return out
 }
 
@@ -156,6 +158,15 @@ export function longContextTierAbove(model: string, caps?: ModelCaps, at: Date =
 }
 
 /**
+ * Whether Houston knows a price for `model` (host-listed or from the model facts). A
+ * model without one costs 0 in {@link turnCostUsd}, which means "unknown", not "free":
+ * show it as such, and never count it as staying within a cost limit.
+ */
+export function isPriced(model: string, caps?: ModelCaps, at: Date = new Date()): boolean {
+  return resolvePricing(model, caps, at) !== null
+}
+
+/**
  * Fallback prompt-cache price multipliers, relative to a model's base input rate:
  * a cached prefix that is *read* bills at 10% of the input price, and *writing* a
  * (5-minute) cache entry bills at 125%. These are Anthropic's published
@@ -218,6 +229,15 @@ export function turnCostUsd(
 /** Non-negative finite token count, else 0. */
 function clampTokens(v: number | undefined): number {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0
+}
+
+/**
+ * A cost for display, saying "cost unknown" rather than $0.00 when (some of) it came
+ * from a model with no known price: `$1.23 + unknown` when part of it is known.
+ */
+export function formatCost(cost: number, unknown?: boolean): string {
+  if (!unknown) return formatUsd(cost)
+  return Number.isFinite(cost) && cost > 0 ? `${formatUsd(cost)} + unknown` : 'cost unknown'
 }
 
 /** Format a USD amount with precision that scales to the magnitude: `$0.0042`, `$0.071`, `$1.23`. */

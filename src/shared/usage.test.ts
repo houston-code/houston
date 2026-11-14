@@ -3,6 +3,8 @@ import {
   accumulateModelUsage,
   contextPercent,
   contextWindowFor,
+  isPriced,
+  formatCost,
   formatTokens,
   formatUsd,
   modelCapabilities,
@@ -343,6 +345,28 @@ describe('turnCostUsd', () => {
     expect(cost).toBeGreaterThanOrEqual(0)
     // Whole input treated as cache read (0.1x): 1000 * 5 * 0.1 / 1e6.
     expect(cost).toBeCloseTo((1_000 * 5 * 0.1) / 1_000_000, 6)
+  })
+})
+
+describe('isPriced / formatCost', () => {
+  it('knows a listed model or a host-listed price, and nothing else', () => {
+    expect(isPriced('claude-opus-4-8')).toBe(true)
+    expect(isPriced('my-local-model')).toBe(false)
+    expect(isPriced('my-local-model', { inputPrice: 0.1, outputPrice: 0.2 })).toBe(true)
+  })
+
+  it('says "cost unknown" instead of $0.00, and marks a partly known total', () => {
+    expect(formatCost(0)).toBe('$0.00')
+    expect(formatCost(0, true)).toBe('cost unknown')
+    expect(formatCost(1.234, true)).toBe('$1.23 + unknown')
+    expect(formatCost(1.234, false)).toBe('$1.23')
+  })
+
+  it('keeps a model marked unknown once any of its rounds was', () => {
+    let t = accumulateModelUsage([], { model: 'm', inputTokens: 1, outputTokens: 1, cost: 0, costUnknown: true })
+    t = accumulateModelUsage(t, { model: 'm', inputTokens: 1, outputTokens: 1, cost: 0 })
+    expect(t[0].costUnknown).toBe(true)
+    expect(accumulateModelUsage([], { model: 'p', inputTokens: 1, outputTokens: 1, cost: 1 })[0].costUnknown).toBeUndefined()
   })
 })
 

@@ -41,6 +41,12 @@ export interface BudgetLimits {
    * disables the cost-based trigger (iterations-only landing).
    */
   costCeilingUsd: number
+  /**
+   * Hard USD cost cap for a single run. Once accumulated cost reaches it, the next
+   * iteration is the last (tools off, a summary) and the run ends with a `max-cost`
+   * limit. `0` disables it.
+   */
+  maxCostUsd: number
 }
 
 /**
@@ -52,7 +58,8 @@ export interface BudgetLimits {
 export const DEFAULT_BUDGET_LIMITS: BudgetLimits = {
   maxIterations: DEFAULT_MAX_ITERATIONS,
   landingMargin: 3,
-  costCeilingUsd: 0
+  costCeilingUsd: 0,
+  maxCostUsd: 0
 }
 
 /** Which budget threshold tripped the landing nudge. */
@@ -100,14 +107,54 @@ export function resolveBudgetLimits(override?: Partial<BudgetLimits>): BudgetLim
       : DEFAULT_BUDGET_LIMITS.landingMargin
   const landingMargin = Math.min(rawMargin, Math.max(0, maxIterations - 1))
 
-  const costCeilingUsd =
-    typeof override?.costCeilingUsd === 'number' &&
-    Number.isFinite(override.costCeilingUsd) &&
-    override.costCeilingUsd > 0
-      ? override.costCeilingUsd
-      : 0
+  const positive = (v: number | undefined): number =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0
+  const maxCostUsd = positive(override?.maxCostUsd)
+  let costCeilingUsd = positive(override?.costCeilingUsd)
+  // A hard cap with no earlier reminder below it gets one: the model is told to wrap
+  // up at COST_CAP_REMINDER_FRACTION of the cap, so the stop rarely lands mid-edit.
+  if (maxCostUsd > 0 && (costCeilingUsd === 0 || costCeilingUsd >= maxCostUsd)) {
+    costCeilingUsd = maxCostUsd * COST_CAP_REMINDER_FRACTION
+  }
 
-  return { maxIterations, landingMargin, costCeilingUsd }
+  return { maxIterations, landingMargin, costCeilingUsd, maxCostUsd }
+}
+
+/** Share of a hard cost cap at which the wrap-up reminder fires when none is set lower. */
+export const COST_CAP_REMINDER_FRACTION = 0.8
+
+/**
+ * Whether the run's accumulated cost has reached its hard cap, so the iteration
+ * about to run must be its last. Never true without a positive cap.
+ */
+export function overCostCap(costUsd: number, limits: Pick<BudgetLimits, 'maxCostUsd'>): boolean {
+  return limits.maxCostUsd > 0 && costUsd >= limits.maxCostUsd
+}
+
+/**
+ * The note pushed before the step a hard cost cap makes the last. Like
+ * {@link FINAL_STEP_NOTE}, the loop drops any tool call made in it.
+ */
+export const COST_CAP_NOTE =
+  "This run has reached its cost limit, so this is its last step: tool calls made now will NOT run. " +
+  'Reply to the user in plain text only: what you finished, what is still left, and that they can ' +
+  'say "continue" (or raise the limit) to pick it up.'
+
+/** Shown when the capped step produced only tool calls and no text. User-facing. */
+export const COST_CAP_FALLBACK =
+  "I reached this turn's cost limit before finishing, so I've stopped here. " +
+  'Say "continue" to pick up where I left off.'
+
+/**
+ * The one-time notice for a run whose cost cap can't be enforced because the model
+ * that served a turn has no known price: its turns count as nothing toward the cap,
+ * which must not pass silently. User-facing.
+ */
+export function costCapUnenforceableNotice(model: string): string {
+  return (
+    `Houston has no price for ${model}, so its cost is unknown and the cost limit can't be enforced ` +
+    'for it. Its turns count as nothing toward the limit, so keep an eye on the step limit instead.'
+  )
 }
 
 /** Inputs to the landing decision, evaluated once per iteration. */

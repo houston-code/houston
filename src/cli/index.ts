@@ -79,7 +79,7 @@ Options:
                         line, then a {"type":"result",...} summary line
   --effort <level>      (-p) reasoning effort for this run: off | low | medium | high | xhigh
   --max-turns <n>       (-p) hard cap on model steps for this run
-  --max-cost <usd>      (-p) tell the agent to wrap up once the run costs this much
+  --max-cost <usd>      (-p) stop the run once its estimated cost reaches this (exit 3)
   --verify <command>    (-p) after the agent edits, run this check and send failures back
   --no-memory           (-p) run without the memories saved in earlier sessions
   --allowed-tools <list>

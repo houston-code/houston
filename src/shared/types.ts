@@ -746,6 +746,13 @@ export interface AppSettings {
    */
   costCeilingUsd?: number
   /**
+   * Hard USD cost cap for a single run. Once the run's estimated cost (its own turns
+   * plus subagents and provider-run searches) reaches this, the next step is the last:
+   * tools off, the model summarizes, and the run ends with a `max-cost` limit. A run on
+   * a model with no known price can't be held to it and is warned once. 0/unset: no cap.
+   */
+  maxCostUsd?: number
+  /**
    * Enable stall / loop detection. When the model cycles unproductively (repeats
    * the same tool call, keeps hitting the same error, or makes no file change for
    * several turns), inject one corrective reminder; if it persists, stop the run.

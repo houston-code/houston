@@ -562,6 +562,25 @@ export function LoopControlSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           }
         />
       </label>
+      <label className="field">
+        <span>
+          Stop a turn once its estimated cost reaches this many US dollars: the model gets
+          one last step, without tools, to summarize, and the turn ends (0 for no limit).
+          A model with no known price can&apos;t be held to it, and Houston says so.
+        </span>
+        <input
+          type="number"
+          min={0}
+          step={0.5}
+          value={settings.maxCostUsd ?? 0}
+          onChange={(e) =>
+            setSettings((s) => ({
+              ...s,
+              maxCostUsd: Math.max(0, Number(e.target.value) || 0)
+            }))
+          }
+        />
+      </label>
       <label className="field field--checkbox">
         <input
           type="checkbox"
