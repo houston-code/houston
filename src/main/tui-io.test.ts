@@ -3,7 +3,8 @@ import { ULTRATHINK_HINT, ULTRATHINK_HINT_ALREADY, ULTRATHINK_HINT_NONE } from '
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
-import { resolveColor, createTerminalIo, marksByLine, pickerPhysicalRows, type ReadlineLike } from './tui-io'
+import { resolveColor, createTerminalIo, marksByLine, physicalCursorRow, pickerPhysicalRows, type ReadlineLike } from './tui-io'
+import { visibleWidth } from './tui-wrap'
 
 describe('resolveColor', () => {
   it('requires a TTY by default', () => {
@@ -406,6 +407,53 @@ describe('readComposer (raw-mode composer)', () => {
     const before = t.text()
     redraw!()
     expect(t.text()).toBe(before)
+  })
+
+  it('repaints at the new width when the terminal is resized, climbing the rewrapped rows', async () => {
+    let cols = 80
+    let resize: (() => void) | null = null
+    let unsubscribed = 0
+    const t = harness({
+      columns: () => cols,
+      onResize: (l) => {
+        resize = l
+        return () => {
+          unsubscribed++
+          resize = null
+        }
+      }
+    })
+    const read = t.io.readComposer!('> ')
+    // One logical row of 42 cells (prompt + 40 chars), cursor at its end.
+    t.stdin.push('x'.repeat(40))
+    expect(resize).not.toBeNull()
+    const before = t.written.length
+    // Narrowed to 20 columns: the terminal rewrapped that row onto three, and the
+    // cursor (column 42) now sits two rows below the top of the draw.
+    cols = 20
+    resize!()
+    const repaint = t.written.slice(before).join('')
+    expect(repaint.startsWith('\x1b[2A\r\x1b[0J')).toBe(true)
+    // Redrawn at the new width: no row is wider than it.
+    const lastDraw = repaint.slice(repaint.lastIndexOf('\x1b[0J') + 4)
+    // eslint-disable-next-line no-control-regex
+    const moves = /\x1b\[\d*[A-Z]|\r/g
+    for (const row of lastDraw.split('\n')) expect(visibleWidth(row.replace(moves, ''))).toBeLessThan(20)
+    expect(lastDraw).toContain('x')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('x'.repeat(40))
+    // The read is over: the listener is gone, and a late resize draws nothing.
+    expect(unsubscribed).toBe(1)
+  })
+
+  it('counts the physical rows a resize leaves above the cursor', () => {
+    // Rows that still fit take one row each.
+    expect(physicalCursorRow(['> ab', '… cd'], 1, 4, 80)).toBe(1)
+    // A 25-cell row on a 10-column terminal takes three; the cursor at column 15 of
+    // the next row is one row into it.
+    expect(physicalCursorRow(['y'.repeat(25), 'z'.repeat(20)], 1, 15, 10)).toBe(4)
+    // Colour codes take no cells, and an empty row still takes one.
+    expect(physicalCursorRow(['\x1b[36m> \x1b[0m', ''], 1, 0, 5)).toBe(1)
   })
 
   it('leaves only the submitted line in the scrollback, not the command menu under it', async () => {
