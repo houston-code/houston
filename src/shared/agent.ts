@@ -692,6 +692,32 @@ export interface ConversationCompaction {
   anchor?: number
   /** Tool results before this index are sent as eviction stubs. Only ever advances. */
   evictBefore?: number
+  /**
+   * Live workspace state (git branch, shell directory, running background shells)
+   * captured when `cut` or `evictBefore` last advanced and shown in the pinned block.
+   * Frozen with them so the block stays byte-identical until the next advance.
+   */
+  workspaceState?: PinnedWorkspaceState
+}
+
+/** One background shell as the pinned working-memory block lists it. */
+export interface PinnedShell {
+  id: string
+  command: string
+  /** Where it started, from the project root (absent at the root itself). */
+  cwd?: string
+  /** Short status, e.g. `running` or `running, http://localhost:5173`. */
+  status: string
+}
+
+/** Workspace facts the pinned block carries (see workingMemory.ts). Every field optional. */
+export interface PinnedWorkspaceState {
+  branch?: string
+  /** The foreground shell's directory when it is not the project root. */
+  shellCwd?: string
+  shells?: PinnedShell[]
+  /** Running shells left out of `shells` by its cap. */
+  moreShells?: number
 }
 
 /**
