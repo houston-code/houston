@@ -193,6 +193,14 @@ export interface ProviderConfig {
   /** Known/curated model ids. Users can edit these or fetch live from the provider. */
   models: ModelOption[]
   defaultModel?: string
+  /**
+   * The model side requests run on: chat titles, compaction summaries, next-message
+   * suggestions, and the isolated reader for flagged web content. Absent means the
+   * provider's curated cheap sibling (`SMALL_MODELS` in model-facts.ts) when it is in
+   * `models` and cheaper than the chat's model; `''` means always the chat's model.
+   * A failed side request on it is retried on the chat's model. See `smallModelFor`.
+   */
+  smallModel?: string
   /** Whether the provider needs an API key at all (local endpoints often don't). */
   requiresKey: boolean
   /**

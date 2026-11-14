@@ -531,6 +531,24 @@ Anything else reads "The last turn failed" with Retry and Run the doctor.
 **Details** shows the provider's own message, which is also in the transcript.
 `/retry` works in both clients.
 
+### A smaller model for side tasks
+
+Some requests Houston makes for you need far less than your chat's model: naming a
+chat, summarizing older turns when it compacts, suggesting your next message, and
+reading a web page flagged as possible prompt injection. Each provider sends these to
+a cheaper sibling of the same family: Claude Haiku 5.5 on Anthropic, Bedrock, Vertex
+and Foundry, GPT-6 Luna on OpenAI, and Gemini 3.5 Flash-Lite on Gemini.
+
+- It is used only when that model is in the provider's model list and costs less
+  than the chat's model. A summary goes to it only when the conversation fits its
+  context window.
+- If a request on it fails, the chat's own model does it instead.
+- Change it per provider in Settings, *Models*, **Model for side tasks**: pick any
+  model in the list, or **The chat's model** to turn this off. In settings.json it is
+  the provider's `smallModel` (`""` for the chat's model).
+- `/cost` and the usage panel list what the summaries and web-page reads spent under
+  the model that ran them.
+
 ### Fallback models
 
 Name backup models for Houston to try when your selected model can't serve a turn:
@@ -1949,6 +1967,12 @@ project's agent wins if both use the same name.
 - **Writable** (`write: true`) subagents are dispatched with `dispatch_writable_agent`,
   which asks for approval because it grants write access. One approval covers the
   whole delegated task's local actions, confined to the project.
+- **Its report comes with evidence.** A writable subagent works under the same rules
+  as the main agent about tests: it never deletes, skips, or weakens one to pass, and
+  never calls unchecked work tested. Its report reaches the main agent followed by
+  what its tools actually ran and changed (each command with its exit code, and the
+  files it edited), so a claim like "all tests pass" can be checked against the
+  commands behind it.
 
 ### Permissions still apply
 
@@ -2013,6 +2037,8 @@ A subagent works under the same step budget as the main agent:
   things out or making edits, up to the same hard limit, with the same loop detection
 - near the end it's told to wrap up, and its last step can't run tools, so it always
   ends with a report of what it has
+- loop detection sees what the main agent's does: the same file read again with
+  nothing changed, and a file edited back and forth between the same versions
 - a custom agent's `max_turns` replaces all of this with a fixed limit
 - a review's agents keep the base budget without extending, since a review runs many
   at once
@@ -2028,7 +2054,7 @@ A subagent works under the same step budget as the main agent:
 - **Cheaper legwork.** A dispatch can pass `model` to run one-off work on a cheaper
   sibling model.
 - **One level of nesting.** A dispatched agent may dispatch its own nested read-only
-  researchers (never writable, and no deeper).
+  researchers (never writable, and no deeper). They run one at a time.
 
 ### Running one yourself
 
@@ -2460,6 +2486,11 @@ remote **HTTP** (streamable) or **SSE** endpoint.
 
 - **Naming.** Their tools are offered to the agent as `mcp__<id>__<tool>`.
 - **Approval.** MCP tools always require approval.
+- **Results.** Text in a tool's result reaches the agent fenced as untrusted content.
+  Images are attached for the agent to see (up to 8 per result, 5 MB each) when the
+  current model accepts images; otherwise the result says an image was left out and
+  why. An embedded resource's text is included (up to 20,000 characters), and a
+  resource link shows as its name, address and type.
 - **Many tools, loaded lazily.** With more than 15 MCP tools connected, Houston loads
   their schemas on demand: they join the `find_tools` catalog (see "Tools loaded on
   demand" under "Context, worktrees, and history"), and the agent pulls in only the
@@ -2961,7 +2992,8 @@ When a conversation grows too large, Houston keeps it inside the model's context
 window:
 
 1. it first trims large tool output the agent has moved past (the agent can re-read
-   anything it still needs)
+   anything it still needs). On a large-window model this starts well before the
+   window is nearly full, at about 160k tokens.
 2. then it summarizes the older part of the conversation, including the earlier steps
    of one long request
 
@@ -2971,6 +3003,9 @@ window:
   shell's folder, and the background shells still running.
 - **Sized to the model.** The threshold is set automatically from the selected model's
   context window: a large-window model compacts later, a small local model sooner.
+  When a model bills long prompts at a higher rate past some size, compaction keeps
+  the conversation under that size, and `/context` says where the conversation stands
+  against it. A fixed threshold in Settings governs both trimming and summarizing.
 - **Built up, not redone.** The summary is saved with the conversation, so later turns
   extend it instead of re-summarizing from scratch.
 - **Nothing disappears on screen.** The full transcript stays visible; only what's sent

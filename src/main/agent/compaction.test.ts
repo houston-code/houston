@@ -10,6 +10,8 @@ import {
   EVICT_KEEP_RECENT_ITERATIONS,
   EVICT_KEEP_RECENT_TURNS,
   EVICT_MIN_BYTES,
+  EARLY_EVICTION_TOKENS,
+  PRICE_TIER_HEADROOM_FRACTION,
   SUMMARY_MAX_TOKENS,
   argumentStub,
   buildAnchorMessages,
@@ -21,6 +23,7 @@ import {
   estimateContextParts,
   estimateTokens,
   evictStaleToolResults,
+  evictableTokens,
   evictionBoundary,
   evictionStub,
   findCompactionCut,
@@ -31,8 +34,10 @@ import {
   isContextOverflowError,
   isValidCompactionState,
   resolveCompactionThreshold,
+  resolveEvictionTrigger,
   summaryMaxTokens
 } from './compaction'
+import { longContextTierAbove } from '@shared/usage'
 
 /** A conversation of `turns` complete turns: user → assistant(tool) → tool → assistant. */
 function conversation(turns: number): ChatMessage[] {
@@ -128,6 +133,77 @@ describe('resolveCompactionThreshold', () => {
     expect(resolveCompactionThreshold(Number.NaN, 200_000)).toBe(
       Math.floor(200_000 * COMPACTION_WINDOW_FRACTION)
     )
+  })
+})
+
+describe('resolveCompactionThreshold with a long-context price tier', () => {
+  it('stays under the tier boundary, less headroom, when that is below 80% of the window', () => {
+    // Haiku 5.5 bills 5x past 100k on a much larger window.
+    expect(resolveCompactionThreshold(undefined, 1_000_000, 100_000)).toBe(
+      Math.floor(100_000 * (1 - PRICE_TIER_HEADROOM_FRACTION))
+    )
+    expect(resolveCompactionThreshold(undefined, 1_000_000, 272_000)).toBe(244_800)
+  })
+
+  it('keeps the window rule when the tier sits above it', () => {
+    expect(resolveCompactionThreshold(undefined, 200_000, 272_000)).toBe(160_000)
+  })
+
+  it('caps the unknown-window default under a tier too', () => {
+    expect(resolveCompactionThreshold(undefined, null, 50_000)).toBe(
+      Math.min(DEFAULT_COMPACTION_THRESHOLD, 45_000)
+    )
+  })
+
+  it('ignores a missing or junk tier', () => {
+    expect(resolveCompactionThreshold(undefined, 1_000_000, null)).toBe(800_000)
+    expect(resolveCompactionThreshold(undefined, 1_000_000, 0)).toBe(800_000)
+    expect(resolveCompactionThreshold(undefined, 1_000_000, Number.NaN)).toBe(800_000)
+  })
+
+  it('never overrides an explicit setting, including 0 (disabled)', () => {
+    expect(resolveCompactionThreshold(500_000, 1_000_000, 100_000)).toBe(500_000)
+    expect(resolveCompactionThreshold(0, 1_000_000, 100_000)).toBe(0)
+  })
+
+  it('reads the tier from model facts for the models that have one', () => {
+    expect(longContextTierAbove('claude-haiku-5-5')).toBe(100_000)
+    expect(longContextTierAbove('claude-opus-4-8')).toBeNull()
+    // A host that lists its own flat price has no heuristic tier.
+    expect(longContextTierAbove('claude-haiku-5-5', { inputPrice: 1, outputPrice: 2 })).toBeNull()
+  })
+})
+
+describe('resolveEvictionTrigger', () => {
+  it('starts evicting well before a large window compacts', () => {
+    expect(resolveEvictionTrigger(undefined, 800_000)).toBe(EARLY_EVICTION_TOKENS)
+  })
+
+  it('is the threshold itself when the threshold is already lower', () => {
+    expect(resolveEvictionTrigger(undefined, 90_000)).toBe(90_000)
+  })
+
+  it('follows an explicit threshold, and 0 turns it off', () => {
+    expect(resolveEvictionTrigger(700_000, 700_000)).toBe(700_000)
+    expect(resolveEvictionTrigger(0, 0)).toBe(0)
+    expect(resolveEvictionTrigger(undefined, 0)).toBe(0)
+  })
+})
+
+describe('evictableTokens', () => {
+  it('counts only the results that would be stubbed, less the stub', () => {
+    const big = 'x'.repeat(EVICT_MIN_BYTES * 4)
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read_file', arguments: {} }] },
+      { role: 'tool', content: big, toolCallId: 'a', toolName: 'read_file' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'b', name: 'read_file', arguments: {} }] },
+      { role: 'tool', content: 'small', toolCallId: 'b', toolName: 'read_file' }
+    ]
+    const n = evictableTokens(msgs, 0, msgs.length)
+    expect(n).toBeGreaterThan(big.length / 4 - 50)
+    expect(n).toBeLessThanOrEqual(big.length / 4)
+    expect(evictableTokens(msgs, 3, msgs.length)).toBe(0)
   })
 })
 

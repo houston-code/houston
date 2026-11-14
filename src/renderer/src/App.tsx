@@ -544,8 +544,9 @@ export default function App(): JSX.Element {
     []
   )
 
-  // Apply the saved color theme, following the OS while on "system".
-  useApplyTheme(settings?.theme ?? 'system')
+  // Apply the saved color theme, following the OS while on "system", and cache it for
+  // the first paint of the next launch. Until settings load, the cached one stays.
+  useApplyTheme(settings ? (settings.theme ?? 'system') : undefined, { remember: true })
   useApplyAccent(settings?.accentColor)
   useApplyAppearance({
     chatFontSize: settings?.chatFontSize,

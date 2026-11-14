@@ -56,3 +56,29 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
 export function applyTheme(theme: Theme): void {
   document.documentElement.dataset.theme = resolveTheme(theme, osPrefersLight())
 }
+
+/**
+ * The theme the user last saved, cached in this machine's local storage. Settings
+ * reach the renderer over IPC, after the first paint, so main.tsx applies this one
+ * before rendering anything: a light-theme user no longer sees a dark window flash
+ * on every launch and new window. Anything unknown (or no storage) is "system".
+ */
+const THEME_KEY = 'houston.theme'
+const THEMES: readonly Theme[] = ['system', 'dark', 'light']
+
+export function rememberedTheme(): Theme {
+  try {
+    const v = localStorage.getItem(THEME_KEY)
+    return v && (THEMES as readonly string[]).includes(v) ? (v as Theme) : 'system'
+  } catch {
+    return 'system'
+  }
+}
+
+export function rememberTheme(theme: Theme): void {
+  try {
+    localStorage.setItem(THEME_KEY, theme)
+  } catch {
+    /* storage unavailable: the next launch follows the OS until settings load */
+  }
+}

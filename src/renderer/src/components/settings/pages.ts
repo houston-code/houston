@@ -86,7 +86,7 @@ export const PAGES: SettingsPage[] = [
       {
         id: 'providers',
         Component: ProvidersSection,
-        keywords: ['api key', 'token', 'credentials', 'login', 'sign in', 'llm', 'endpoint', 'base url', 'region'],
+        keywords: ['api key', 'token', 'credentials', 'login', 'sign in', 'llm', 'endpoint', 'base url', 'region', 'small model', 'side tasks', 'cheap model', 'titles'],
         values: (s) => s.providers.flatMap((p) => [p.label, p.kind, p.baseUrl, ...p.models.map((m) => m.id)])
       },
       {

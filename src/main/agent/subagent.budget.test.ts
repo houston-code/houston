@@ -306,6 +306,55 @@ describe('subagent loop detection', () => {
     expect(report).toMatch(/kept repeating/)
   })
 
+  it('catches a file re-read with nothing changed, even among varied calls', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'one\n')
+    for (let i = 1; i <= 30; i++) writeFileSync(join(ws, `f${i}.txt`), `file ${i}\n`)
+    const got = collect()
+    const seen: ChatRequest[] = []
+    // Each step re-reads a.txt beside a read of a different file every time, so no two
+    // steps make the same set of calls: only the repeated read with nothing changed is a loop.
+    const provider: Provider = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
+        seen.push({ ...req, messages: [...req.messages] })
+        const n = seen.length
+        yield { type: 'tool_call', call: { id: `r${n}`, name: 'read_file', arguments: { path: 'a.txt' } } }
+        yield { type: 'tool_call', call: { id: `f${n}`, name: 'read_file', arguments: { path: `f${n}.txt` } } }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    await runSubAgent({
+      ...base,
+      workspace: ws,
+      budget: { maxIterations: 30, autoExtend: false },
+      provider,
+      onStep: (s) => got.steps.push(s),
+      onEnd: (e) => (got.end = e)
+    })
+    expect(got.end?.status).toBe('stalled')
+    expect(got.steps.some((s) => s.kind === 'notice' && /Repeating itself/.test(s.summary))).toBe(true)
+  })
+
+  it('catches a writable agent putting a file back and forth between two versions', async () => {
+    const got = collect()
+    // Alternating contents: no two consecutive steps make the same call, so only the
+    // revert count can see the loop.
+    const report = await runSubAgent({
+      ...base,
+      workspace: ws,
+      writable: true,
+      shellSandboxed: true,
+      budget: { maxIterations: 30, autoExtend: false },
+      provider: looping((n) => ({ name: 'write_file', arguments: { path: 'flip.txt', content: n % 2 ? 'b\n' : 'a\n' } })),
+      onStep: (s) => got.steps.push(s),
+      onEnd: (e) => (got.end = e)
+    })
+    expect(got.end?.status).toBe('stalled')
+    expect(got.steps.some((s) => s.kind === 'notice' && /Repeating itself/.test(s.summary))).toBe(true)
+    expect(report).toMatch(/kept repeating/)
+    // Well before the step limit: the detector, not the budget, ended it.
+    expect(got.steps.filter((s) => s.tool === 'write_file').length).toBeLessThan(15)
+  })
+
   it('can be turned off', async () => {
     const got = collect()
     await runSubAgent({
