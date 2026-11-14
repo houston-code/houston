@@ -9133,8 +9133,8 @@ describe('session flags in the interactive session', () => {
         { tool: 'run_shell', match: 'git *' }
       ],
       disallowedTools: [{ tool: 'write_file', match: '*' }],
-      appendSystemPrompt: ['@/proj/rules.md'],
-      mcpConfig: ['/proj/servers.json'],
+      appendSystemPrompt: [`@${resolvePath('/proj', 'rules.md')}`],
+      mcpConfig: [resolvePath('/proj', 'servers.json')],
       title: 'fix the login[31m'
     })
     expect(o?.usageError).toBeUndefined()

@@ -84,7 +84,9 @@ export async function createSessionWorktree(
   }
   try {
     const wt = await createWorktree({ workspace: cwd, branch, base }, exec)
-    return { ok: true, worktree: { ...wt, base } }
+    // git reports paths with forward slashes on Windows; store them the platform's way so
+    // they match the folder the session runs in and the chats that record it.
+    return { ok: true, worktree: { ...wt, path: resolvePath(wt.path), repoRoot: resolvePath(wt.repoRoot), base } }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     // A name taken between the check and the create (or a ref git won't take) is
