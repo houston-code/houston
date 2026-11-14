@@ -1205,7 +1205,13 @@ What maps to what:
 - **Sessions** are ordinary Houston conversations in the editor's folder: the editor
   can list and reopen them, and they also appear in the desktop app and in
   `houston -i --resume <id>`.
-- **Modes** are the approval policies: Plan, Ask, Auto-edit, and Full auto.
+- **Modes** are the approval policies: Plan, Ask, Auto-edit, and Full auto. The
+  mode you pick is saved on the chat and restored when it is reopened.
+- **Config options**: the model and the reasoning effort, saved on the chat.
+- **Slash commands**: `/review`, `/init`, `/compact`, `/agent`, the mode commands,
+  `/model`, `/reasoning`, `/skills`, `/agents`, `/help`, and the workspace's own
+  `.houston/commands`.
+- **Session info**: the chat's title, once it has one.
 - **Approvals** use the editor's permission prompt (Allow, Always allow, Deny, Always
   deny). "Always allow" saves a permission rule, exactly as in the app. A plan from
   Plan mode is accepted or sent back the same way.

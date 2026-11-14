@@ -58,7 +58,7 @@ describe('prompt visibility guard', () => {
     'main/tui.ts': { count: 2, why: 'the terminal turn (carries invokedAs) and the !shell escape record' },
     'main/spawnSession.ts': { count: 1, why: "a spawned session's brief, tagged via spawnedTurn" },
     'main/headless.ts': { count: 1, why: 'the headless CLI prompt, which the user wrote' },
-    'main/acp.ts': { count: 1, why: "an ACP editor's session/prompt, which the user wrote" },
+    'main/acp.ts': { count: 1, why: "an ACP editor's session/prompt: the user's words, or a slash command's turn carrying its invokedAs" },
     'main/agent/loop.ts': { count: 2, why: "the user's own mid-run steers, and PreCompact context sent only to the summarizer" },
     'main/agent/compaction.ts': {
       count: 3,
