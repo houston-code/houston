@@ -344,6 +344,8 @@ export interface ToolContext {
     title?: string
     prompt: string
     worktree?: { branch: string; base?: string }
+    /** Run in this chat's own checkout rather than a new worktree (the default in a git repository). */
+    sameCheckout?: boolean
     context?: SessionContext
   }) => Promise<SpawnSessionResult>
   /**
@@ -3248,7 +3250,7 @@ export function parseContextArg(args: Record<string, unknown>): SessionContext {
 const WORKTREE_PARAM = {
   type: 'object',
   description:
-    'Optional: run the session on a new git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.',
+    'Optional: the new git branch + worktree (an isolated checkout) the session runs on, so parallel sessions never collide. In a git repository the session gets one by default, on a branch named after its title; set this to choose the branch name or its base.',
   properties: {
     branch: {
       type: 'string',
@@ -3297,6 +3299,11 @@ const spawnSessionTool: ToolDef = {
             'Optional short title for the chat as it appears in the sidebar (a few words). Omit to derive one from the prompt.'
         },
         worktree: WORKTREE_PARAM,
+        same_checkout: {
+          type: 'boolean',
+          description:
+            "Optional: true runs the session in this chat's own folder instead of a new worktree. Only when the user asked for that or the session will only read: two sessions writing one checkout overwrite each other's changes. Can't be combined with worktree."
+        },
         context: CONTEXT_PARAM
       },
       ['prompt']
@@ -3309,11 +3316,16 @@ const spawnSessionTool: ToolDef = {
     const title = str(args, 'title').trim()
     const worktree = parseWorktreeArg(args)
     const context = parseContextArg(args)
+    const sameCheckout = args.same_checkout === true || args.same_checkout === 'true'
+    if (sameCheckout && worktree) {
+      throw new Error('Pass either worktree or same_checkout: true, not both.')
+    }
 
     const result = await ctx.spawnSession({
       prompt,
       ...(title ? { title } : {}),
       ...(worktree ? { worktree } : {}),
+      ...(sameCheckout ? { sameCheckout } : {}),
       ...(context === 'fork' ? { context } : {})
     })
     return formatSpawnResult(result)
