@@ -11,7 +11,9 @@ import { defaultSettings } from './defaults'
  * (details hold file paths, folder names and error text). Names the user chose (MCP
  * servers, custom providers) are counted rather than named, and the settings and
  * workspace rows (paths) are left out. No logs, paths or keys are ever included, and
- * the user sees this exact text before anything opens.
+ * the user sees this exact text before anything opens. Recent crash dumps are named
+ * (file names only, which are random ids) so the user knows there is one to attach;
+ * the dumps themselves never go anywhere unless the user attaches them.
  */
 
 /** Doctor rows whose detail is a path; their status is always ok, so they add nothing. */
@@ -33,7 +35,7 @@ function counts(statuses: readonly string[]): string {
   return [...n].map(([status, k]) => `${k} ${status}`).join(', ') || 'none'
 }
 
-export function issueReportBody(facts: DoctorFacts): string {
+export function issueReportBody(facts: DoctorFacts, crashDumps: readonly string[] = []): string {
   const report = buildDoctorReport(facts)
   const lines: string[] = []
   for (const group of report.groups) {
@@ -73,7 +75,16 @@ export function issueReportBody(facts: DoctorFacts): string {
     '### Diagnostics',
     '',
     ...lines,
-    ''
+    '',
+    ...(crashDumps.length
+      ? [
+          '### Crash reports',
+          '',
+          `Houston saved ${crashDumps.length === 1 ? 'a crash dump' : `${crashDumps.length} crash dumps`} on this computer recently: ${crashDumps.map((n) => `\`${n}\``).join(', ')}. ` +
+            'Crash dumps stay on your computer and are never sent. If you attach one, it can hold part of what was in memory, so only share it if you are comfortable with that.',
+          ''
+        ]
+      : [])
   ].join('\n')
 }
 

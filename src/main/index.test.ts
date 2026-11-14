@@ -22,6 +22,7 @@ const appendSwitch = vi.fn()
 const requestSingleInstanceLock = vi.fn(() => true)
 const quit = vi.fn()
 const ipcOn = vi.fn()
+const crashStart = vi.fn()
 
 vi.mock('electron', () => ({
   app: {
@@ -41,7 +42,8 @@ vi.mock('electron', () => ({
   systemPreferences: { getUserDefault, setUserDefault },
   protocol: { registerSchemesAsPrivileged },
   nativeImage: { createFromBuffer: vi.fn() },
-  BrowserWindow: vi.fn()
+  BrowserWindow: vi.fn(),
+  crashReporter: { start: crashStart }
 }))
 
 // Keep the import graph hermetic — registerIpc only runs inside the (never-fired)
@@ -71,6 +73,14 @@ describe('main entry app identity', () => {
     expect(setName.mock.invocationCallOrder[0]).toBeLessThan(
       whenReady.mock.invocationCallOrder[0]
     )
+  })
+
+  it('starts the crash reporter with uploading off, after setName and before whenReady', async () => {
+    await import('./index')
+
+    expect(crashStart).toHaveBeenCalledWith({ uploadToServer: false })
+    expect(setName.mock.invocationCallOrder[0]).toBeLessThan(crashStart.mock.invocationCallOrder[0])
+    expect(crashStart.mock.invocationCallOrder[0]).toBeLessThan(whenReady.mock.invocationCallOrder[0])
   })
 
   it('wires the userData seam from getPath, after setName and before whenReady', async () => {

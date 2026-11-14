@@ -67,6 +67,7 @@ import {
 } from './checkpoints'
 import { toAnthropicMessages } from '../providers/anthropic'
 import { resetUserDataDir, setUserDataDir } from '../userData'
+import { flushLogSync } from '../logger'
 import {
   createConversation,
   getConversation,
@@ -10754,6 +10755,8 @@ describe('a run that ends without a reply', () => {
   })
 
   const logLines = (): string[] => {
+    // The logger buffers lines; put them on disk before reading.
+    flushLogSync()
     const path = join(userData, 'logs', 'houston.log')
     return existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean) : []
   }
@@ -10805,6 +10808,22 @@ describe('a run that ends without a reply', () => {
     // No blank assistant message is saved, and the turn reads as unanswered.
     expect(r.messages).toHaveLength(1)
     expect(r.messages[0].runEnds?.[0]).toMatchObject({ reason: 'error' })
+  })
+
+  it('logs a provider retry, with any secret in the error scrubbed', async () => {
+    h.secrets = ['sk-live-retry-secret-value']
+    const r = await run({
+      turns: [
+        [{ type: 'error', message: 'Overloaded for key sk-live-retry-secret-value', status: 529 }],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'full-auto'
+    })
+    expect(r.events.some((e) => e.type === 'retry')).toBe(true)
+    const line = logLines().find((l) => l.includes('provider retry 1'))
+    expect(line).toContain('[INFO]')
+    expect(line).toContain('Overloaded')
+    expect(logLines().join('\n')).not.toContain('sk-live-retry-secret-value')
   })
 
   it('keeps the text of a reply a filter cut short, with a notice', async () => {
