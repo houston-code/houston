@@ -92,10 +92,30 @@ export function pushBackgroundEvent(conversationId: string, ev: BackgroundEvent,
   if (opts.wake) requestWake(conversationId)
 }
 
+/** Listeners told when a spawned session's report lands for a chat (see {@link onChildReport}). */
+const childReportListeners = new Set<(conversationId: string) => void>()
+
+/**
+ * Be told each time a spawned session's report lands for a chat (its id is passed), so a
+ * `wait_for` on that session can return it. Returns an unsubscribe function.
+ */
+export function onChildReport(fn: (conversationId: string) => void): () => void {
+  childReportListeners.add(fn)
+  return () => childReportListeners.delete(fn)
+}
+
 /** Note that a finished spawned session's report is waiting for `conversationId`, and wake it. */
 export function noteChildReport(conversationId: string): void {
   reportsWaiting.add(conversationId)
-  requestWake(conversationId)
+  // A waiter takes the report first, so the chat isn't also woken with it.
+  for (const fn of childReportListeners) {
+    try {
+      fn(conversationId)
+    } catch {
+      // A listener's failure never blocks delivery.
+    }
+  }
+  if (reportsWaiting.has(conversationId)) requestWake(conversationId)
 }
 
 /** Whether anything is waiting for the chat: an event here, or a session report on disk. */

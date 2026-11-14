@@ -2115,6 +2115,11 @@ The agent doesn't have to keep checking on its background commands:
   idle,** it continues on its own in a new turn that opens with a Houston note (it
   shows as a notice, not as a message from you). Spawned sessions that finish wake
   their parent chat the same way.
+- **Waiting on purpose.** When the agent has nothing to do until a background command
+  or a session it spawned finishes, it can wait for it with `wait_for` instead of
+  checking again and again. A wait lasts at most 10 minutes (5 by default); if the work
+  is still going, the agent is told and can wait again or move on. **Stop** ends the
+  wait. What a wait returns isn't repeated as a note at the next step.
 
 What doesn't wake a chat:
 

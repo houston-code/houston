@@ -79,6 +79,7 @@ import {
   runningShellsFor,
   stopShell
 } from './shells'
+import { WAIT_FOR_DEFAULT_SECONDS, WAIT_FOR_MAX_SECONDS, WAIT_FOR_NAME, waitSeconds } from './waitFor'
 import { detachedLaunchNote } from './detached'
 import { reviewGitChanges, type GitGuard } from './gitGuard'
 import { foreignListenerNote, urlPort, type PortListener } from './portOwner'
@@ -340,6 +341,12 @@ export interface ToolContext {
    * the `skill` tool; returns the SKILL.md body, or an "unknown skill" note.
    */
   useSkill?: (name: string) => Promise<string>
+  /**
+   * Wait for a background shell or a spawned session of this chat to finish, up to
+   * `seconds` (injected by the loop). Backs `wait_for`; resolves with what to tell the
+   * model, including when the wait timed out or the turn was stopped.
+   */
+  waitFor?: (id: string, seconds: number) => Promise<string>
   /**
    * Spawn a separate chat seeded with `prompt` and start it running in the
    * background (injected by the loop, which fills in the run's provider, model,
@@ -2189,7 +2196,7 @@ const runShell: ToolDef = {
       })
       const watching = notifyOn.length ? ` Lines containing ${notifyOn.map((p) => JSON.stringify(p)).join(', ')} will be reported as they print.` : ''
       const reported = ctx.conversationId ? ` You will be told when it exits.${watching}` : ''
-      const started = `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).${reported}`
+      const started = `Started background shell ${id}. Read its output with read_shell_output({ shell_id: "${id}" }), wait for it to finish with wait_for({ id: "${id}" }), and stop it with kill_shell({ shell_id: "${id}" }).${reported}`
       return sandboxAvailable() ? started : `${started}\n${UNSANDBOXED_SHELL_NOTE}`
     }
 
@@ -2377,6 +2384,35 @@ const killShellTool: ToolDef = {
     })()
     const gitNote = await gitGuardAfter(ctx)
     return gitNote ? `${text}\n${gitNote}` : text
+  }
+}
+
+const waitForTool: ToolDef = {
+  // Only waits on work the agent already started; it starts, changes, and reads nothing new.
+  kind: 'read',
+  summarize: (a) => `Wait for ${str(a, 'id') || 'background work'}`,
+  schema: {
+    name: WAIT_FOR_NAME,
+    description: `Wait until a background shell (run_shell with background: true) or a session you started with spawn_session finishes, then get its result: a shell's exit code and last lines, or a session's outcome and the start of its answer. Use it when you have nothing useful to do until that work is done, instead of polling read_shell_output or ending your turn. Waits at most timeout_seconds (default ${WAIT_FOR_DEFAULT_SECONDS}, max ${WAIT_FOR_MAX_SECONDS}); if it is still running then, you are told so and can wait again. The user can stop the wait with Stop.`,
+    parameters: objectSchema(
+      {
+        id: {
+          type: 'string',
+          description: 'The shell id run_shell returned, or the session id spawn_session returned.'
+        },
+        timeout_seconds: {
+          type: 'number',
+          description: `How long to wait at most, in seconds (default ${WAIT_FOR_DEFAULT_SECONDS}, max ${WAIT_FOR_MAX_SECONDS}).`
+        }
+      },
+      ['id']
+    )
+  },
+  async execute(args, ctx) {
+    const id = str(args, 'id').trim()
+    if (!id) throw new Error('id is required: a shell id from run_shell or a session id from spawn_session.')
+    if (!ctx.waitFor) throw new Error('Waiting on background work is not available in this context.')
+    return ctx.waitFor(id, waitSeconds(args.timeout_seconds))
   }
 }
 
@@ -3215,7 +3251,7 @@ function firstLine(s: string): string {
 
 /** The tool-result text for a completed spawn — shown in the card and read by the model. */
 function formatSpawnResult(r: SpawnSessionResult): string {
-  const lines = [`Started session "${r.title}", now running in the background.`]
+  const lines = [`Started session "${r.title}" (id ${r.conversationId}), now running in the background.`]
   lines.push(
     r.worktree
       ? `Worktree: branch ${r.worktree.branch} at ${r.worktree.path}`
@@ -5582,6 +5618,7 @@ export const TOOLS: ToolDef[] = [
   runShell,
   readShellOutputTool,
   killShellTool,
+  waitForTool,
   webFetch,
   viewLocalhost,
   showImages,
@@ -5695,6 +5732,8 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
     if (name === PROPOSE_SESSION_NAME) return opts.spawn && opts.proposals !== false
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(name)) return opts.scheduler
     if (name === PRESENT_PLAN_NAME) return opts.planMode
+    // Plan mode starts no shells or sessions, so there is nothing new to wait on.
+    if (name === WAIT_FOR_NAME) return !opts.planMode
     if (name === ASK_USER_NAME) return opts.askUser !== false
     if ((LSP_TOOL_NAMES as readonly string[]).includes(name)) return opts.lsp === true
     if (name === RECALL_MEMORY_NAME) return opts.memory === true

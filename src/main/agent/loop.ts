@@ -183,14 +183,16 @@ import {
 } from './checkpoints'
 import { EvidenceLedger, type EvidenceDraft } from './evidence'
 import { detectTestEdits, isTestRelevantPath, testEditsNote } from './testTampering'
-import { listShells, peekShell } from './shells'
+import { listShells, onShellsChanged, peekShell, shellWaitState } from './shells'
 import {
   backgroundEventsNote,
   backgroundEventsNotice,
   childReportWaiting,
   clearChildReportFlag,
+  discardShellEvents,
   hasBackgroundNews,
   noteRunEnded,
+  onChildReport,
   noteRunStarted,
   takeBackgroundEvents
 } from './backgroundEvents'
@@ -227,6 +229,7 @@ import {
   acceptedProposalCalls,
   forkableHistory,
   isSpawnBackendConfigured,
+  SPAWN_SESSION_NAME,
   spawnSession as engineSpawnSession,
   type SessionContext
 } from './spawn'
@@ -284,8 +287,10 @@ import {
   setCompaction,
   setConversationError,
   setPromptSnapshot,
+  takeChildReport,
   takeChildReports
 } from '../conversations'
+import { waitForBackground } from './waitFor'
 import {
   buildPinnedMessages,
   latestTodos,
@@ -1122,6 +1127,23 @@ export function earlierProposalTitles(messages: ChatMessage[]): Set<string> {
     if (typeof t === 'string' && t.trim()) titles.add(t.replace(/\s+/g, ' ').trim().toLowerCase())
   }
   return titles
+}
+
+/**
+ * Whether `childId` is a session chat `conversationId` started, so `wait_for` may wait
+ * on it: the child names this chat as where it came from, the user started it from one
+ * of this chat's proposal cards, or a spawn_session result in this chat names it.
+ */
+export function ownSession(conversationId: string, childId: string, messages: ChatMessage[]): boolean {
+  const child = peekConversation(childId)
+  if (!child) return false
+  if (child.spawnedFrom?.conversationId === conversationId) return true
+  const proposals = peekConversation(conversationId)?.proposals ?? {}
+  if (Object.values(proposals).some((p) => p.status === 'started' && p.conversationId === childId)) return true
+  const named = `(id ${childId})`
+  return messages.some(
+    (m) => m.role === 'tool' && m.toolName === SPAWN_SESSION_NAME && typeof m.content === 'string' && m.content.includes(named)
+  )
 }
 
 /**
@@ -3221,6 +3243,36 @@ export async function startRun(
       // Back the `skill` tool: resolve a skill name to its full instructions (or a
       // note listing what's available) from the skills loaded for this run.
       useSkill: (name) => resolveSkillInstructions(workspace, skills, name),
+      // Back `wait_for`: wait on this chat's own background shells and spawned sessions,
+      // taking what it returns off the background inbox so it isn't told twice.
+      waitFor: (id: string, seconds: number) =>
+        waitForBackground(id, seconds, {
+          signal: abort.signal,
+          shell: (shellId) => {
+            const s = shellWaitState(shellId, conversationId, workspace)
+            return s && { ...s, command: redact(s.command), tail: s.tail.map((l) => redact(l)) }
+          },
+          onShellsChanged: (fn) => onShellsChanged(() => fn()),
+          shellSeen: (shellId) => {
+            if (conversationId) discardShellEvents(conversationId, shellId, { exited: true })
+          },
+          ...(conversationId
+            ? {
+                isOwnSession: (childId: string) => ownSession(conversationId, childId, messages),
+                takeReport: (childId: string) => {
+                  const r = takeChildReport(conversationId, childId)
+                  // Nothing else waiting: the inbox has no report left to deliver.
+                  if (r && !(peekConversation(conversationId)?.childReports?.length)) clearChildReportFlag(conversationId)
+                  return r && { ...r, title: redact(r.title), summary: redact(r.summary) }
+                },
+                onReport: (fn: () => void) =>
+                  onChildReport((parentId) => {
+                    if (parentId === conversationId) fn()
+                  })
+              }
+            : { takeReport: () => null, onReport: () => () => {} }),
+          sessionRunning: (childId) => activeRunForConversation(childId) !== null
+        }),
       // Back `spawn_session` when a backend is wired (desktop only). Fills in the
       // run-scoped fields the tool doesn't take: provider/model, the workspace, and
       // `run.policy` (read live) so the spawned session inherits the parent's CURRENT

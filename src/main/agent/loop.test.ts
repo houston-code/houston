@@ -73,13 +73,15 @@ import {
   reportChildToParent,
   setCompaction,
   setMessages,
-  setPromptSnapshot
+  setPromptSnapshot,
+  takeChildReports
 } from '../conversations'
 import { resetSpawnBackend, setSpawnBackend, type SpawnSessionInput } from './spawn'
 import { resetSubAgentSessions } from './subagentSessions'
 import {
   MAX_CONSECUTIVE_WAKES,
   hasBackgroundNews,
+  noteChildReport,
   pushBackgroundEvent,
   resetBackgroundEventsForTest,
   setWakeHost,
@@ -9867,6 +9869,59 @@ describe('session proposals, forked spawns, and finished-child reports', () => {
     expect(spawned[0].parentConversationId).toBe(conv.id)
   })
 
+  it("wait_for returns a spawned session's report when it lands, and takes it off the inbox", async () => {
+    const parent = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const child = createConversation({
+      workspace: ws,
+      providerId: 'anthropic',
+      model: 'claude-test',
+      spawnedFrom: { conversationId: parent.id, title: 'Parent' }
+    })
+    const stranger = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    let call = 0
+    const provider: Provider = {
+      async *streamChat() {
+        call++
+        if (call === 1) {
+          // The child finishes shortly after the wait starts.
+          setTimeout(() => {
+            setMessages(child.id, [
+              { role: 'user', content: 'write docs' },
+              { role: 'assistant', content: 'Docs written for /auth.' }
+            ])
+            reportChildToParent(parent.id, child.id)
+            noteChildReport(parent.id)
+          }, 50)
+          yield { type: 'tool_call', call: { id: 'w1', name: 'wait_for', arguments: { id: child.id, timeout_seconds: 20 } } }
+          yield { type: 'tool_call', call: { id: 'w2', name: 'wait_for', arguments: { id: stranger.id } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'ok' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const r = await run({ conversationId: parent.id, provider, policy: 'full-auto' })
+    const content = (id: string): string => String(r.messages.find((m) => m.role === 'tool' && m.toolCallId === id)?.content ?? '')
+    expect(content('w1')).toMatch(/^Session "[^"]*" finished\..*"Docs written for \/auth\."/)
+    expect(content('w2')).toMatch(/^No background shell or spawned session/)
+    // Delivered once: nothing left for the next turn's inbox.
+    expect(takeChildReports(parent.id)).toEqual([])
+    expect(r.messages.some((m) => m.role === 'user' && m.content.includes('Sessions you started have ended'))).toBe(false)
+  }, 30_000)
+
+  it('names the session id in the spawn_session result, so wait_for can use it', async () => {
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [{ type: 'tool_call', call: { id: 's1', name: 'spawn_session', arguments: { prompt: 'docs' } } }, { type: 'done', stopReason: 'tool_use' }],
+        [{ type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const out = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 's1')?.content
+    expect(out).toContain('(id child)')
+  })
+
   it("starts a spawned session on this chat's model, effort and current policy", async () => {
     const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
     await run({
@@ -11506,6 +11561,57 @@ describe('background news delivery', () => {
     const noteAt = r.messages.findIndex((m) => m.content.includes('background shell bb22'))
     expect(noteAt).toBeGreaterThan(toolAt)
     expect(r.messages.at(-1)!.role).toBe('assistant')
+  })
+
+  it('wait_for blocks until a background shell exits, returns its exit, and the inbox does not repeat it', async () => {
+    const requests: ChatMessage[][] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        requests.push(JSON.parse(JSON.stringify(req.messages)) as ChatMessage[])
+        const n = requests.length
+        if (n === 1) {
+          const command = `node -e "setTimeout(() => { console.log('built ok'); process.exit(4) }, 300)"`
+          yield { type: 'tool_call', call: { id: 'r1', name: 'run_shell', arguments: { command, background: true } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        if (n === 2) {
+          const started = String(req.messages.find((m) => m.role === 'tool' && m.toolCallId === 'r1')?.content ?? '')
+          const id = /Started background shell (\S+)\./.exec(started)?.[1] ?? ''
+          yield { type: 'tool_call', call: { id: 'w1', name: 'wait_for', arguments: { id, timeout_seconds: 30 } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const r = await run({
+      conversationId: 'conv-wait-shell',
+      provider,
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const waited = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'w1')
+    expect(waited?.content).toMatch(/exited with code 4\. Its last lines:\n[\s\S]*built ok/)
+    // The exit was told once, by wait_for: no note about it at the next step.
+    expect(requests[2]!.some((m) => m.role === 'user' && m.content.includes('Background work you started has news'))).toBe(false)
+    expect(hasBackgroundNews('conv-wait-shell')).toBe(false)
+  }, 30_000)
+
+  it("wait_for refuses another chat's shell and unknown ids", async () => {
+    const r = await run({
+      conversationId: 'conv-wait-unknown',
+      policy: 'full-auto',
+      turns: [
+        [{ type: 'tool_call', call: { id: 'w1', name: 'wait_for', arguments: { id: 'zzzz' } } }, { type: 'done', stopReason: 'tool_use' }],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const waited = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'w1')
+    expect(waited?.content).toMatch(/^No background shell or spawned session with id zzzz in this chat/)
+    // A read-kind tool: no approval prompt.
+    expect(r.events.some((e) => e.type === 'tool_approval')).toBe(false)
   })
 
   it('counts wake turns toward the streak and holds waking after a failed turn', async () => {

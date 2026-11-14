@@ -595,6 +595,22 @@ function sameChat(s: Shell, conversationId: string | undefined, workspace: strin
   return conversationId !== undefined ? s.conversationId === conversationId : s.conversationId === undefined && s.workspace === workspace
 }
 
+/**
+ * A background shell of this chat as `wait_for` reports it: whether it still runs, its
+ * exit code, its command, and its last lines (secrets masked, see {@link shellTail}).
+ * Undefined when `id` is unknown or belongs to another chat.
+ */
+export function shellWaitState(
+  id: string,
+  conversationId: string | undefined,
+  workspace: string,
+  tailLines = 20
+): { running: boolean; exitCode: number | null; command: string; tail: string[] } | undefined {
+  const s = shells.get(id)
+  if (!s || !sameChat(s, conversationId, workspace)) return undefined
+  return { running: s.running, exitCode: s.exitCode, command: s.command, tail: shellTail(id, tailLines) ?? [] }
+}
+
 /** The background shells still running for a chat, oldest first. */
 export function runningShellsFor(conversationId: string | undefined, workspace: string): RunningShell[] {
   return [...shells.values()]

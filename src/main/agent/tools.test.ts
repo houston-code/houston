@@ -150,6 +150,7 @@ describe('tool registry', () => {
       'spawn_session',
       'todo_write',
       'view_localhost',
+      'wait_for',
       'web_fetch',
       'web_search',
       'write_file'
