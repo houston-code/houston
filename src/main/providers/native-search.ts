@@ -21,7 +21,7 @@
  * response shapes without a network call.
  */
 
-import type { ProviderWebSearchRequest, ProviderWebSearchResult } from '@shared/agent'
+import type { ProviderWebSearchRequest, ProviderWebSearchResult, ProviderWebSearchUsage } from '@shared/agent'
 
 /** The instructions for the side request: search once, then summarize briefly. */
 export const NATIVE_SEARCH_INSTRUCTIONS =
@@ -108,7 +108,41 @@ export function parseAnthropicSearch(content: unknown, maxResults: number): Prov
 /** The slice of the Anthropic client this needs (`messages.create`, non-streaming). */
 export interface AnthropicCreateClient {
   messages: {
-    create(body: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<{ content: unknown }>
+    create(
+      body: Record<string, unknown>,
+      options?: { signal?: AbortSignal }
+    ): Promise<{ content: unknown; usage?: unknown }>
+  }
+}
+
+/** A non-negative finite count, else 0. */
+function count(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0
+}
+
+/**
+ * The Messages API `usage` as a search usage, or undefined when absent. Its
+ * `input_tokens` counts only the uncached part, so cache reads and writes are added
+ * back to make the total the loop's pricing expects.
+ */
+export function anthropicSearchUsage(usage: unknown): ProviderWebSearchUsage | undefined {
+  if (!usage || typeof usage !== 'object') return undefined
+  const u = usage as {
+    input_tokens?: unknown
+    output_tokens?: unknown
+    cache_read_input_tokens?: unknown
+    cache_creation_input_tokens?: unknown
+    server_tool_use?: { web_search_requests?: unknown } | null
+  }
+  const cacheRead = count(u.cache_read_input_tokens)
+  const cacheWrite = count(u.cache_creation_input_tokens)
+  const searches = count(u.server_tool_use?.web_search_requests)
+  return {
+    inputTokens: count(u.input_tokens) + cacheRead + cacheWrite,
+    outputTokens: count(u.output_tokens),
+    ...(cacheRead ? { cacheReadTokens: cacheRead } : {}),
+    ...(cacheWrite ? { cacheWriteTokens: cacheWrite } : {}),
+    ...(searches ? { searches } : {})
   }
 }
 
@@ -126,7 +160,9 @@ export async function anthropicWebSearch(
     },
     { signal: req.signal }
   )
-  return parseAnthropicSearch(res.content, req.maxResults)
+  const result = parseAnthropicSearch(res.content, req.maxResults)
+  const usage = anthropicSearchUsage(res.usage)
+  return usage ? { ...result, usage } : result
 }
 
 /**
@@ -189,7 +225,36 @@ export function parseResponsesSearch(output: unknown, maxResults: number): Provi
 /** The slice of the OpenAI client this needs (`responses.create`, non-streaming). */
 export interface ResponsesCreateClient {
   responses: {
-    create(body: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<{ output?: unknown }>
+    create(
+      body: Record<string, unknown>,
+      options?: { signal?: AbortSignal }
+    ): Promise<{ output?: unknown; usage?: unknown }>
+  }
+}
+
+/**
+ * The Responses API `usage` as a search usage, or undefined when absent. Its
+ * `input_tokens` already includes the cached split. The search count is the number
+ * of `web_search_call` items in the output (the API has no usage field for it).
+ */
+export function responsesSearchUsage(usage: unknown, output: unknown): ProviderWebSearchUsage | undefined {
+  if (!usage || typeof usage !== 'object') return undefined
+  const u = usage as {
+    input_tokens?: unknown
+    output_tokens?: unknown
+    input_tokens_details?: { cached_tokens?: unknown; cache_write_tokens?: unknown } | null
+  }
+  const cacheRead = count(u.input_tokens_details?.cached_tokens)
+  const cacheWrite = count(u.input_tokens_details?.cache_write_tokens)
+  const searches = Array.isArray(output)
+    ? (output as ResponsesItem[]).filter((i) => i?.type === 'web_search_call').length
+    : 0
+  return {
+    inputTokens: count(u.input_tokens),
+    outputTokens: count(u.output_tokens),
+    ...(cacheRead ? { cacheReadTokens: cacheRead } : {}),
+    ...(cacheWrite ? { cacheWriteTokens: cacheWrite } : {}),
+    ...(searches ? { searches } : {})
   }
 }
 
@@ -210,5 +275,7 @@ export async function responsesWebSearch(
     },
     { signal: req.signal }
   )
-  return parseResponsesSearch(res.output, req.maxResults)
+  const result = parseResponsesSearch(res.output, req.maxResults)
+  const usage = responsesSearchUsage(res.usage, res.output)
+  return usage ? { ...result, usage } : result
 }

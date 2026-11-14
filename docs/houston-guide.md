@@ -530,7 +530,9 @@ back to the model provider's own web search where the provider offers one:
 
 The search runs as a short extra request on the chat's current model, so it is billed
 to the model key you already set: the provider's per-search fee plus the tokens of the
-results. Each call runs one search. Other providers (Gemini, Bedrock, Vertex, Azure,
+results. Each call runs one search. Its tokens count toward the chat's usage and cost
+display and toward a cost ceiling (`--max-cost`); the per-search fee isn't included in
+Houston's estimate, so check the provider's billing for it. Other providers (Gemini, Bedrock, Vertex, Azure,
 Foundry, Ollama and other compatible servers) still need a search key. A search key,
 once set, is always used first. Approvals and the untrusted-content fence work the same
 either way.

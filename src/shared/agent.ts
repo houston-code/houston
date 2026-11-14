@@ -350,6 +350,22 @@ export interface ProviderWebSearchResult {
   /** The model's short summary of the results, when it wrote one. */
   answer?: string
   hits: Array<{ title?: string; url?: string; content?: string }>
+  /**
+   * What the side request billed, when the API reported it. The search runs a full
+   * model request on the run's model, so the loop folds this into the run's cost.
+   */
+  usage?: ProviderWebSearchUsage
+}
+
+/** Token usage of one provider-run search request. */
+export interface ProviderWebSearchUsage {
+  /** Total input tokens, cache reads and writes included (search results bill as input). */
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  /** Searches the provider ran, where its API reports the count. */
+  searches?: number
 }
 
 export interface Provider {

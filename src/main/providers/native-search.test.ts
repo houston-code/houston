@@ -100,6 +100,34 @@ describe('anthropicWebSearch', () => {
     expect(body.messages).toEqual([{ role: 'user', content: 'Search the web for: widgets 2' }])
     expect(opts.signal).toBe(signal)
   })
+
+  it('returns what the request billed, cache tokens folded into the input total', async () => {
+    const create = vi.fn(async () => ({
+      content: anthropicReply,
+      usage: {
+        input_tokens: 12000,
+        output_tokens: 300,
+        cache_read_input_tokens: 500,
+        cache_creation_input_tokens: 200,
+        server_tool_use: { web_search_requests: 1 }
+      }
+    }))
+    const r = await anthropicWebSearch({ messages: { create } }, { model: 'm', query: 'q', maxResults: 3 })
+    expect(r.usage).toEqual({
+      inputTokens: 12700,
+      outputTokens: 300,
+      cacheReadTokens: 500,
+      cacheWriteTokens: 200,
+      searches: 1
+    })
+  })
+
+  it('reports no usage when the reply has none', async () => {
+    const create = vi.fn(async () => ({ content: anthropicReply }))
+    const r = await anthropicWebSearch({ messages: { create } }, { model: 'm', query: 'q', maxResults: 3 })
+    expect(r.usage).toBeUndefined()
+    expect(r.hits.length).toBeGreaterThan(0)
+  })
 })
 
 const responsesReply = [
@@ -165,6 +193,22 @@ describe('responsesWebSearch', () => {
     expect(body.include).toEqual(['web_search_call.action.sources'])
     expect(body.store).toBe(false)
     expect(body.input).toBe('Search the web for: widgets 2')
+  })
+
+  it('returns what the request billed and counts the searches it ran', async () => {
+    const create = vi.fn(async () => ({
+      output: responsesReply,
+      usage: { input_tokens: 9000, output_tokens: 2500, input_tokens_details: { cached_tokens: 1000 } }
+    }))
+    const r = await responsesWebSearch({ responses: { create } }, { model: 'gpt-5.4', query: 'q', maxResults: 5 })
+    expect(r.usage).toEqual({ inputTokens: 9000, outputTokens: 2500, cacheReadTokens: 1000, searches: 1 })
+  })
+
+  it('reports no usage when the reply has none, or a malformed one', async () => {
+    const none = vi.fn(async () => ({ output: responsesReply }))
+    expect((await responsesWebSearch({ responses: { create: none } }, { model: 'g', query: 'q', maxResults: 5 })).usage).toBeUndefined()
+    const junk = vi.fn(async () => ({ output: responsesReply, usage: 'nope' }))
+    expect((await responsesWebSearch({ responses: { create: junk } }, { model: 'g', query: 'q', maxResults: 5 })).usage).toBeUndefined()
   })
 })
 
