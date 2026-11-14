@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { selectBackend } from './select'
+import { log } from '../logger'
 import { runWithBackend, spawnWithBackend } from './shared'
 import type {
   SandboxBackend,
@@ -69,7 +70,12 @@ export { selectBackend, sandboxAvailable } from './select'
 let backend: SandboxBackend | undefined
 
 function activeBackend(): SandboxBackend {
-  return (backend ??= selectBackend())
+  if (!backend) {
+    backend = selectBackend()
+    // Every client selects here, so the log says which confinement this process got.
+    log.info(`sandbox backend = ${backend.id} (sandboxed=${backend.sandboxed})`)
+  }
+  return backend
 }
 
 /** Run a command under the host's sandbox backend. `result.sandboxed` is honest. */

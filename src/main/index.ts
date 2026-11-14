@@ -1,4 +1,4 @@
-import { app, screen, BrowserWindow, systemPreferences } from 'electron'
+import { app, crashReporter, screen, BrowserWindow, systemPreferences } from 'electron'
 import type { Event as ElectronEvent } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -18,6 +18,7 @@ import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates, setInstallGuard } from './updater'
 import { log } from './logger'
+import { startLocalCrashReporter, watchRendererCrashes } from './crashRecovery'
 import { getSettings, pruneRecentWorkspaces } from './store'
 import { setUserDataDir } from './userData'
 import { wireAgentHost } from './wireAgentHost'
@@ -35,7 +36,7 @@ import { parseHeadlessArgs } from './headless'
 import { drainStdio } from './stdioDrain'
 import { parseTuiArgs } from './tui'
 import { runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from './terminalEntry'
-import { activeBackendId, isSandboxed } from './sandbox'
+import { activeBackendId } from './sandbox'
 import { trustSystemCertificates } from './system-ca'
 import { configureOutboundProxy } from './outbound-proxy'
 import { flushRuleUsage } from './ruleUsage'
@@ -52,6 +53,11 @@ process.on('unhandledRejection', (reason) => log.error('unhandledRejection', rea
 // resolved userData/Keychain, so stored keys would land in / be read from an
 // inconsistent location and silently fail to persist.
 app.setName(APP_NAME)
+
+// Keep a minidump when a process crashes, on this computer only: uploading is off, so
+// nothing is sent anywhere (docs/PRIVACY.md). Started early, as Electron asks, and
+// after setName so the dumps land in this app's profile.
+startLocalCrashReporter(crashReporter)
 
 // Keep scrollbars slim and auto-hiding, even for users whose macOS "Show scroll
 // bars" setting is "Always" — which forces the chunky ~15px legacy bar that never
@@ -144,6 +150,9 @@ function createWindow(): BrowserWindow {
   })
   // ...and when the page reloads or crashes, which leaves the window but drops the dock.
   watchPreviewHost(win)
+  // A crashed or hung renderer is logged and its page reloaded (with a loop guard); the
+  // reloaded page re-adopts any run still going.
+  watchRendererCrashes(win)
 
   // On Windows/Linux, closing the last window quits the app (window-all-closed →
   // app.quit()), so the live-run confirmation has to happen here, while the window
@@ -292,7 +301,9 @@ if (acp) {
     // rest of this function runs after it.
     const started = initSecrets().then(() => {
       log.info(`Houston ${app.getVersion()} starting`)
-      log.info(`sandbox backend = ${activeBackendId()} (sandboxed=${isSandboxed()})`)
+      // Selects the sandbox backend now rather than on the first command; the
+      // selection logs which one this process got (sandbox/index.ts).
+      activeBackendId()
       // Drop recents whose folder vanished since last launch (e.g. a worktree removed
       // with its chat) so a deleted dir can't seed the next new chat's workspace.
       // Before any request is answered: this is the first thing queued on `started`.

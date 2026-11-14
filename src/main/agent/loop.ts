@@ -3652,13 +3652,16 @@ export async function startRun(
             // Report a retry in here the same way the turn loop does. Compaction can be
             // forced mid-turn, so without this a summary riding out a blip is just a run
             // sitting silent for the length of the backoff.
-            (attempt, err, max) =>
+            (attempt, err, max) => {
+              const message = redact(describeProviderError(err))
+              log.info(`run ${runId}: summary request retry ${attempt}${max !== undefined ? `/${max}` : ''} on ${serving.providerId}/${model}: ${message}`)
               emit({
                 type: 'retry',
                 attempt,
                 ...(max !== undefined ? { max } : {}),
-                message: redact(describeProviderError(err))
-              }),
+                message
+              })
+            },
             () => providerReached,
             (u) => recordSideRequestUsage(u, model, caps)
           )
@@ -4217,6 +4220,10 @@ export async function startRun(
           const max = retries.reportedMax
           const waitMs = retryDelayMs(e, attempt + 1)
           const throttle = throttleInfo(e, waitMs)
+          log.info(
+            `run ${runId}: provider retry ${attempt + 1}${max !== undefined ? `/${max}` : ''} on ` +
+              `${serving.providerId}/${serving.model} in ${waitMs}ms: ${redact(reason)}`
+          )
           emit({
             type: 'retry',
             attempt: attempt + 1,

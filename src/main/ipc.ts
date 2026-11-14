@@ -128,6 +128,7 @@ import {
 } from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal, killTerminalsOf } from './terminal'
 import { log } from './logger'
+import { createRendererErrorLogger } from './crashRecovery'
 import { dismissEnvKeyOffers, dismissedEnvKeyOffers, envKeyOffers, envKeyValue } from './envKeys'
 import { setMenuState, setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
@@ -668,6 +669,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Opening rebuilds the text in main rather than taking it from the renderer, so the
   // URL can only ever carry what issueReportBody allows.
   handle(IPC.logsReveal, () => revealLogs())
+  // Not held for startup: logging needs no credential, and an error during startup is
+  // exactly the one worth keeping.
+  const logRendererError = createRendererErrorLogger()
+  ipcMain.on(IPC.rendererError, (event, raw: unknown) => logRendererError(event.sender.id, raw))
   handle(IPC.issueReportPreview, (): string => issueReportText())
   handle(IPC.issueReportOpen, (): boolean => openIssueReport())
   // The composer's sandbox badge: a cheap read, unlike the full doctor probe.

@@ -3124,11 +3124,19 @@ The desktop app's **Help** menu is last in the menu bar on every platform.
   👍 to the ones you want fixed first.
 - **Open Logs** shows Houston's log file (`houston.log` in the app's profile folder) in
   your file manager. Keys and tokens are scrubbed from it, but it can name your folders,
-  so read it before attaching it to a public report.
+  so read it before attaching it to a public report. It records errors from the window
+  too. Set `HOUSTON_LOG_LEVEL` to `debug`, `info` (the default), `warn`, or `error` to
+  log more or less.
+- **If the window crashes or stops responding,** Houston logs it and reloads the window
+  (after 15 seconds for one that stopped responding); a run that was going keeps going
+  and reappears. A window that crashes three times within a minute is left as it is.
+  A crash also saves a crash dump on your computer. Crash dumps are never uploaded.
 - **Report an Issue…** first shows the text a new GitHub issue will start with: your
   Houston version, platform, and a summary of the diagnostics (each check's name and
   status, as in `/doctor`). It includes no logs, file paths, keys, or names you chose
-  (MCP servers and custom providers are only counted). **Open GitHub** opens the issue
+  (MCP servers and custom providers are only counted). If Houston saved crash dumps in
+  the last two weeks, it lists their file names so you can choose to attach one.
+  **Open GitHub** opens the issue
   in your browser with that text filled in; describe what happened there before you
   submit. Both are also in the command palette.
 - **Take the Tour…** plays the getting-started tips again.

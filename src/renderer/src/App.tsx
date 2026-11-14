@@ -114,6 +114,7 @@ import { TerminalChip } from './components/TerminalChip'
 import { TasksPanel } from './components/TasksPanel'
 import { ProjectCard } from './components/ProjectCard'
 import type { DockTab } from './components/PreviewDock'
+import { ItemBoundary } from './components/ItemBoundary'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { chatSettingsFor, defaultChatSettings, differsFromDefaults, withChatSettings, type ChatSettings } from './lib/chatSettings'
 import { Transcript, type RewindHandlers } from './components/Transcript'
@@ -3521,12 +3522,14 @@ export default function App(): JSX.Element {
 
         {terminalMounted && (
           <Suspense fallback={null}>
-            <TerminalDock
-              controller={terminals}
-              visible={terminalOpen}
-              onResizeMouseDown={onTerminalResizeMouseDown}
-              onClose={toggleTerminal}
-            />
+            <ItemBoundary>
+              <TerminalDock
+                controller={terminals}
+                visible={terminalOpen}
+                onResizeMouseDown={onTerminalResizeMouseDown}
+                onClose={toggleTerminal}
+              />
+            </ItemBoundary>
           </Suspense>
         )}
 
@@ -3624,6 +3627,7 @@ export default function App(): JSX.Element {
 
       {previewOpen && (
         <Suspense fallback={null}>
+          <ItemBoundary>
           <PreviewDock
             servers={previewServers}
             // The native preview views paint above every HTML overlay; hide them (but
@@ -3639,6 +3643,7 @@ export default function App(): JSX.Element {
             focusRequest={previewFocus}
             taskCount={activeTaskCount(backgroundTasks)}
             changes={
+              <ItemBoundary>
               <DiffPanel
                 // A fresh view per chat and folder: its scope data belongs to them.
                 key={`${currentId ?? ''}:${workspace ?? ''}`}
@@ -3650,9 +3655,11 @@ export default function App(): JSX.Element {
                 commitForm
                 onSendComments={canChat ? onSendReviewComments : undefined}
               />
+              </ItemBoundary>
             }
             files={
               workspace ? (
+                <ItemBoundary>
                 <FilesPanel
                   // A new "Show in Files" target (or line) remounts the tree to reveal it.
                   key={filesPanelKey(workspace, filesTarget, filesLine, filesOpenSeq)}
@@ -3662,10 +3669,12 @@ export default function App(): JSX.Element {
                   onClose={closeDock}
                   docked
                 />
+                </ItemBoundary>
               ) : undefined
             }
             plan={
               planPanelOpen && pendingPlan ? (
+                <ItemBoundary>
                 <PlanPanel
                   plan={pendingPlan.plan}
                   revising={pendingPlan.revising === true}
@@ -3673,9 +3682,11 @@ export default function App(): JSX.Element {
                   onClose={() => setPlanClosed(true)}
                   docked
                 />
+                </ItemBoundary>
               ) : undefined
             }
             tasks={
+              <ItemBoundary>
               <TasksPanel
                 tasks={backgroundTasks}
                 currentId={currentId}
@@ -3689,8 +3700,10 @@ export default function App(): JSX.Element {
                 onOpenTerminal={openBackgroundTask}
                 onClearFinished={clearFinishedTasks}
               />
+              </ItemBoundary>
             }
           />
+          </ItemBoundary>
         </Suspense>
       )}
 

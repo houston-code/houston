@@ -84,6 +84,16 @@ const api = {
     ipcRenderer.invoke(IPC.doctorFacts, workspace),
   /** Show the log file in the OS file manager (Help → Open Logs). */
   revealLogs: (): Promise<void> => ipcRenderer.invoke(IPC.logsReveal),
+  /**
+   * Record a renderer error in the main-process log (fire and forget). Main checks and
+   * caps every field and rate-limits per window.
+   */
+  reportRendererError: (err: {
+    kind: 'error' | 'unhandledrejection' | 'boundary'
+    message: string
+    stack?: string
+    componentStack?: string
+  }): void => ipcRenderer.send(IPC.rendererError, err),
   /** The text Report an Issue fills in, to show before opening it. */
   getIssueReport: (): Promise<string> => ipcRenderer.invoke(IPC.issueReportPreview),
   /** Open a new GitHub issue with that text filled in. */
