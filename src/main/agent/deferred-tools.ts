@@ -26,7 +26,7 @@ export const DEFERRED_TOOL_CATALOG: Readonly<Record<string, string>> = {
   // Specialist search and editing: search_files and edit_file cover the common case.
   ast_grep:
     'Structural code search by syntax-tree pattern with meta-variables ("console.log($A)"), for code shapes (calls, declarations, JSX) without regex false positives.',
-  notebook_edit: 'Edit one cell of a Jupyter notebook (.ipynb) by cell number; use it instead of edit_file for notebooks.',
+  notebook_edit: 'Edit one Jupyter notebook (.ipynb) cell by number; use instead of edit_file.',
   // Only useful after compaction or elided output, which most turns never reach.
   recall_history:
     'Read back earlier messages of this conversation after compaction or elided tool output, to recover a path, value, or decision you no longer see.',
@@ -43,7 +43,7 @@ export const DEFERRED_TOOL_CATALOG: Readonly<Record<string, string>> = {
   // UI verification and presentation: only when a task has a web UI or the user asks to see something.
   view_localhost:
     'Load a localhost URL (a dev server you started) in a headless browser: screenshot, page text, console output, and scripted steps to exercise a flow.',
-  browser_session: 'Test a localhost flow across calls: act, snapshot, console, network.',
+  browser_session: 'Keep a localhost page open: act, snapshot, console, network.',
   show_images: 'Show image files (screenshots, renders) to the user as a gallery or file links.',
   render_mockup:
     "Render a self-contained HTML mockup from the project into screenshots, to show a UI that doesn't exist yet.",

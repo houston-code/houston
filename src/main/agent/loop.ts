@@ -3210,6 +3210,9 @@ export async function startRun(
         })
       },
       attachImage,
+      // The route's model, read live: a fallback hop can land on one without vision.
+      // Unknown models count as not seeing images, as the composer's attach button does.
+      modelSeesImages: () => resolveCapabilities(route.model, route.caps).vision,
       attachDocument,
       // Undefined on the CLI (no backend wired) so the view_localhost guard reads
       // cleanly; the tool is already filtered out of the schema set above.

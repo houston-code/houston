@@ -21,10 +21,15 @@ import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
 import type { LookupFunction } from 'node:net'
+import { humanSize, looksBinary } from './attachments'
+import { htmlToMarkdown } from './htmlToMarkdown'
 
 const MAX_REDIRECTS = 5
 const DEFAULT_TIMEOUT_MS = 30_000
+/** Bytes read off the wire. Generous, because scripts and markup are dropped before {@link DEFAULT_MAX_CHARS} applies. */
 const DEFAULT_MAX_BYTES = 5_000_000
+/** Characters of extracted text returned. */
+const DEFAULT_MAX_CHARS = 100_000
 
 /**
  * If `h` is an IPv4-mapped / -compatible / NAT64 IPv6 literal, return the embedded
@@ -161,24 +166,56 @@ export async function resolveAndPin(
   })
 }
 
-/** Collapse an HTML document into readable plain text. */
-export function htmlToText(html: string): string {
-  return html
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(script|style|noscript|template)\b[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<\/(p|div|section|article|li|tr|h[1-6]|br)\s*>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#3?9;|&apos;/gi, "'")
-    .replace(/[ \t\f\v]+/g, ' ')
-    .replace(/[ \t]*\n[ \t]*/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+/**
+ * Decode a response body by the charset its Content-Type names, falling back to
+ * UTF-8 when there is none or the label is one the runtime doesn't know.
+ */
+export function decodeBody(body: Buffer, contentType: string): string {
+  const label = /charset\s*=\s*"?([\w.:-]+)"?/i.exec(contentType)?.[1]
+  if (label && !/^utf-?8$/i.test(label)) {
+    try {
+      return new TextDecoder(label).decode(body)
+    } catch {
+      // Unknown label: UTF-8 below.
+    }
+  }
+  return body.toString('utf8')
+}
+
+/** Media types that are binary whatever their first bytes look like (SVG and other `+xml` types are text). */
+const BINARY_TYPE = /^(image|audio|video|font)\/(?![\w.-]*\+xml$)|^application\/(zip|gzip|x-gzip|x-tar|x-7z-compressed|x-rar-compressed|wasm|vnd\.)/
+
+/**
+ * What to say instead of the body when it isn't text: a PDF (named, so the model
+ * knows what it hit and how to read it) or other binary content, rather than a
+ * wall of mojibake. Null when the body is text.
+ */
+export function nonTextNotice(body: Buffer, contentType: string): string | null {
+  const type = contentType.split(';')[0].trim().toLowerCase()
+  const size = humanSize(body.length)
+  if (type === 'application/pdf' || body.subarray(0, 5).toString('latin1') === '%PDF-') {
+    return (
+      `[PDF document (${size}): web_fetch cannot extract text from PDFs. To read it, download it with ` +
+      'run_shell (e.g. curl -L -o doc.pdf <url>) and extract its text with pdftotext.]'
+    )
+  }
+  if (looksBinary(body) || BINARY_TYPE.test(type)) {
+    return `[binary content (${type || 'unknown type'}, ${size}): not text, so there is nothing to show.]`
+  }
+  return null
+}
+
+/**
+ * Cap extracted text at `maxChars`, preferring to cut at a line break near the end
+ * so the last line shown is whole. Never splits a surrogate pair.
+ */
+export function capText(text: string, maxChars: number): { text: string; truncated: boolean } {
+  if (text.length <= maxChars) return { text, truncated: false }
+  let cut = maxChars
+  const nl = text.lastIndexOf('\n', maxChars)
+  if (nl > maxChars * 0.9) cut = nl
+  else if (/[\uD800-\uDBFF]/.test(text[cut - 1] ?? '')) cut -= 1
+  return { text: text.slice(0, cut), truncated: true }
 }
 
 /** The parts of a response the fetcher needs. Satisfied by {@link pinnedTransport} and test fakes. */
@@ -296,7 +333,10 @@ export const pinnedTransport: Transport = (req) =>
 export interface FetchOptions {
   signal?: AbortSignal
   timeoutMs?: number
+  /** Cap on bytes read off the wire, before extraction. */
   maxBytes?: number
+  /** Cap on the extracted text returned (characters), applied after HTML is converted. */
+  maxChars?: number
   /** Injectable for tests. Defaults to {@link pinnedTransport}. */
   transport?: Transport
   /** Injectable for tests. Defaults to a real DNS lookup. */
@@ -325,18 +365,22 @@ export interface FetchedDocument {
   contentType: string
   /** The URL actually fetched, after redirects. */
   url: string
-  /** The body as text (HTML converted). Attacker-controlled — see untrusted.ts. */
+  /** The body as text (HTML converted to markdown). Attacker-controlled — see untrusted.ts. */
   text: string
   truncated: boolean
-  /** How many bytes the body was capped at, when {@link truncated}. */
-  maxBytes: number
+  /** Where the body was cut, when {@link truncated}: e.g. "100000 characters" or "5000000 bytes". */
+  truncatedAt: string
+}
+
+/** The note that follows a truncated body. Our framing, so it goes outside the untrusted fence. */
+export function truncationNote(doc: FetchedDocument): string {
+  return doc.truncated ? `\n[truncated at ${doc.truncatedAt}]` : ''
 }
 
 /** Render a document the way `web_fetch` has always returned it: status line, then body. */
 export function documentAsText(doc: FetchedDocument): string {
   const header = `HTTP ${doc.status} ${doc.statusText} · ${doc.contentType || 'unknown type'} · ${doc.url}`
-  const tail = doc.truncated ? `\n[truncated at ${doc.maxBytes} bytes]` : ''
-  return `${header}\n\n${doc.text}${tail}`
+  return `${header}\n\n${doc.text}${truncationNote(doc)}`
 }
 
 /** `work`'s result, or a rejection as soon as `signal` aborts (the abandoned work settles unobserved). */
@@ -360,8 +404,9 @@ function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 /**
- * Fetch a URL and return its status, type, and body text. HTML is converted to text;
- * other text/JSON bodies are returned as-is. Redirects are followed manually so each
+ * Fetch a URL and return its status, type, and body text. HTML is converted to
+ * markdown (see htmlToMarkdown.ts); other text/JSON bodies are returned as-is; PDFs
+ * and other binary bodies get a notice instead of decoded bytes. Redirects are followed manually so each
  * hop's target is re-validated and re-pinned against the SSRF guard.
  */
 export async function fetchUrlAsDocument(
@@ -372,6 +417,7 @@ export async function fetchUrlAsDocument(
   const resolveHost = opts.resolveHost ?? defaultResolveHost
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES
+  const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS
 
   const ac = new AbortController()
   const onAbort = (): void => ac.abort()
@@ -408,17 +454,28 @@ export async function fetchUrlAsDocument(
       }
 
       const contentType = res.headers.get('content-type') ?? ''
-      const truncated = res.body.length > maxBytes
-      const body = res.body.subarray(0, maxBytes).toString('utf8')
-      const isHtml = /text\/html|application\/xhtml/i.test(contentType)
-      return {
+      const rawTruncated = res.body.length > maxBytes
+      const raw = res.body.subarray(0, maxBytes)
+      const meta = {
         status: res.status,
         statusText: sanitizeHeaderText(res.statusText),
         contentType: sanitizeHeaderText(contentType),
-        url: current.toString(),
-        text: isHtml ? htmlToText(body) : body,
-        truncated,
-        maxBytes
+        url: current.toString()
+      }
+      const notice = nonTextNotice(raw, contentType)
+      if (notice) return { ...meta, text: notice, truncated: false, truncatedAt: '' }
+
+      // Scripts, styles and markup are dropped here, so the cap below counts only
+      // the text the model will read, not the bytes it took to deliver it.
+      const body = decodeBody(raw, contentType)
+      const isHtml = /text\/html|application\/xhtml/i.test(contentType)
+      const extracted = isHtml ? htmlToMarkdown(body, { baseUrl: meta.url }) : body
+      const capped = capText(extracted, maxChars)
+      return {
+        ...meta,
+        text: capped.text,
+        truncated: capped.truncated || rawTruncated,
+        truncatedAt: capped.truncated ? `${maxChars} characters` : `${maxBytes} bytes`
       }
     }
     throw new Error('Too many redirects.')

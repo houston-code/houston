@@ -386,6 +386,44 @@ describe('removeWorktree', () => {
     expect(res.message).toMatch(/unmerged commits/)
   })
 
+  it("deletes a branch merged only into origin's default branch, which -d refuses", async () => {
+    const calls: string[][] = []
+    const exec = fakeGit(
+      {
+        'worktree remove': () => '',
+        'branch -d': () => {
+          throw new Error('not fully merged')
+        },
+        'merge-base --is-ancestor': () => '',
+        'branch -D': () => ''
+      },
+      calls
+    )
+    const res = await removeWorktree(wt, {}, exec)
+    expect(res).toEqual({ removed: true, branchDeleted: true, message: undefined })
+    expect(calls).toContainEqual(['merge-base', '--is-ancestor', 'refs/heads/feat/x', 'refs/remotes/origin/HEAD'])
+    expect(calls).toContainEqual(['branch', '-D', 'feat/x'])
+  })
+
+  it('keeps a branch -d refuses when origin lacks it too', async () => {
+    const calls: string[][] = []
+    const exec = fakeGit(
+      {
+        'worktree remove': () => '',
+        'branch -d': () => {
+          throw new Error('not fully merged')
+        },
+        'merge-base --is-ancestor': () => {
+          throw new Error('')
+        }
+      },
+      calls
+    )
+    const res = await removeWorktree(wt, {}, exec)
+    expect(res.branchDeleted).toBe(false)
+    expect(calls).not.toContainEqual(['branch', '-D', 'feat/x'])
+  })
+
   it('uses --force and -D when forced', async () => {
     const calls: string[][] = []
     const exec = fakeGit({ 'worktree remove': () => '', 'branch -D': () => '' }, calls)
@@ -414,6 +452,22 @@ describe('isWorktreeDisposable', () => {
     expect(await isWorktreeDisposable(wt, exec, onDisk)).toBe(true)
     // The branch is passed fully qualified so it can't be read as an option.
     expect(calls).toContainEqual(['merge-base', '--is-ancestor', 'refs/heads/feat/x', 'HEAD'])
+  })
+
+  it("is true when HEAD lacks the branch but origin's default branch has it (a stale main checkout)", async () => {
+    const calls: string[][] = []
+    const exec = fakeGit(
+      {
+        'status --porcelain': () => '',
+        'merge-base --is-ancestor': (args) => {
+          if (args[3] === 'HEAD') throw new Error('')
+          return ''
+        }
+      },
+      calls
+    )
+    expect(await isWorktreeDisposable(wt, exec, onDisk)).toBe(true)
+    expect(calls).toContainEqual(['merge-base', '--is-ancestor', 'refs/heads/feat/x', 'refs/remotes/origin/HEAD'])
   })
 
   it('is false when the worktree has uncommitted or untracked changes', async () => {
@@ -577,6 +631,44 @@ describe('worktree integration (real git)', () => {
         encoding: 'utf8'
       })
       expect(branches).not.toContain('temp/x')
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  }, TIMEOUT)
+
+  maybe("removes a worktree whose branch is merged only into origin's default branch", async () => {
+    const repo = initRepo()
+    try {
+      const g = (cwd: string, ...args: string[]): string =>
+        execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
+          encoding: 'utf8'
+        })
+      const wt = await createWorktree({ workspace: repo, branch: 'feat/merged' })
+      writeFileSync(join(wt.path, 'feature.txt'), 'done\n')
+      g(wt.path, 'add', 'feature.txt')
+      g(wt.path, 'commit', '-q', '-m', 'feature')
+      // Upstream merged it; the main checkout's HEAD was never pulled.
+      const tip = g(wt.path, 'rev-parse', 'HEAD').trim()
+      g(repo, 'update-ref', 'refs/remotes/origin/main', tip)
+      g(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
+      expect(await isWorktreeDisposable(wt)).toBe(true)
+      const res = await removeWorktree(wt)
+      expect(res).toEqual({ removed: true, branchDeleted: true, message: undefined })
+      expect(existsSync(wt.path)).toBe(false)
+      expect(g(repo, 'branch', '--format=%(refname:short)')).not.toContain('feat/merged')
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  }, TIMEOUT)
+
+  maybe('is not disposable when neither HEAD nor origin has the branch', async () => {
+    const repo = initRepo()
+    try {
+      const wt = await createWorktree({ workspace: repo, branch: 'feat/unmerged' })
+      writeFileSync(join(wt.path, 'wip.txt'), 'wip\n')
+      execFileSync('git', ['-C', wt.path, 'add', 'wip.txt'])
+      execFileSync('git', ['-C', wt.path, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'wip'])
+      expect(await isWorktreeDisposable(wt)).toBe(false)
     } finally {
       rmSync(repo, { recursive: true, force: true })
     }

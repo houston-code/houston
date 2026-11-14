@@ -793,6 +793,10 @@ In the desktop app:
   output or diff in view. Off by default.
 - **Always show reasoning** (same place) keeps the model's reasoning open above each
   reply instead of folding it away once the reply starts. Off by default.
+- **Read replies to screen readers** (same place) has a screen reader read each
+  finished reply's text, and name a tool that failed, instead of only saying the
+  response is ready. Off by default. Each message is its own region with a heading
+  ("You", or "Houston" and the time), so a screen reader can move message to message.
 
 In the desktop app, file paths in the transcript open the file in the Files panel's
 preview: the file a tool row names (a read opens at the line it started from), a diff's
@@ -2508,6 +2512,11 @@ remote **HTTP** (streamable) or **SSE** endpoint.
 
 - **Naming.** Their tools are offered to the agent as `mcp__<id>__<tool>`.
 - **Approval.** MCP tools always require approval.
+- **Results.** Text in a tool's result reaches the agent fenced as untrusted content.
+  Images are attached for the agent to see (up to 8 per result, 5 MB each) when the
+  current model accepts images; otherwise the result says an image was left out and
+  why. An embedded resource's text is included (up to 20,000 characters), and a
+  resource link shows as its name, address and type.
 - **Many tools, loaded lazily.** With more than 15 MCP tools connected, Houston loads
   their schemas on demand: they join the `find_tools` catalog (see "Tools loaded on
   demand" under "Context, worktrees, and history"), and the agent pulls in only the
@@ -3068,6 +3077,13 @@ checkout.
 - In a repo whose current branch has no commits yet (a fresh `git init`), the toggle
   starts off. A worktree can only branch from a branch that has commits, and isn't
   offered when no branch has any.
+- **Archiving a chat removes its worktree** when that loses nothing: no uncommitted or
+  untracked changes, and its branch is merged (into your main checkout, or into
+  origin's default branch as of the last fetch). The merged branch is deleted too. The
+  chat keeps its messages and moves to the repo root, so unarchiving it works as
+  before. A worktree is left alone when it has changes or unmerged commits, when
+  another chat (a fork) still uses it, or while the chat has a run or background
+  shells going.
 
 ### Conversations
 

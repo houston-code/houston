@@ -2,10 +2,14 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Transport, TransportRequest } from './webfetch'
+import { htmlToMarkdown } from './htmlToMarkdown'
 import {
+  capText,
+  decodeBody,
+  fetchUrlAsDocument,
   fetchUrlAsText,
-  htmlToText,
   isPrivateHost,
+  nonTextNotice,
   pinnedTransport,
   resolveAndPin,
   sanitizeHeaderText,
@@ -83,10 +87,10 @@ describe('validateFetchUrl', () => {
   })
 })
 
-describe('htmlToText', () => {
+describe('htmlToMarkdown (as web_fetch uses it)', () => {
   it('strips tags, scripts, and styles', () => {
     const html = '<html><head><style>.a{color:red}</style><script>evil()</script></head><body><h1>Title</h1><p>Hello &amp; welcome</p></body></html>'
-    const text = htmlToText(html)
+    const text = htmlToMarkdown(html)
     expect(text).toContain('Title')
     expect(text).toContain('Hello & welcome')
     expect(text).not.toContain('evil()')
@@ -94,9 +98,50 @@ describe('htmlToText', () => {
   })
 })
 
+describe('nonTextNotice', () => {
+  it('names a PDF by its content type or its magic bytes', () => {
+    expect(nonTextNotice(Buffer.from('%PDF-1.7 ...'), 'application/pdf')).toMatch(/^\[PDF document .*pdftotext/)
+    expect(nonTextNotice(Buffer.from('%PDF-1.4\n%âã'), 'application/octet-stream')).toMatch(/^\[PDF document/)
+  })
+
+  it('refuses binary bodies and binary media types, but not text ones', () => {
+    expect(nonTextNotice(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 1]), 'image/png')).toMatch(/^\[binary content \(image\/png/)
+    expect(nonTextNotice(Buffer.from('GIF89a'), 'image/gif')).toMatch(/^\[binary content/)
+    expect(nonTextNotice(Buffer.from('a\u0000b'), 'text/plain')).toMatch(/^\[binary content/)
+    expect(nonTextNotice(Buffer.from('<svg/>'), 'image/svg+xml')).toBeNull()
+    expect(nonTextNotice(Buffer.from('{"a":1}'), 'application/json')).toBeNull()
+    expect(nonTextNotice(Buffer.from('plain'), '')).toBeNull()
+  })
+})
+
+describe('decodeBody', () => {
+  it('honors the charset the Content-Type names', () => {
+    expect(decodeBody(Buffer.from([0x63, 0x61, 0x66, 0xe9]), 'text/html; charset=ISO-8859-1')).toBe('café')
+    expect(decodeBody(Buffer.from('café', 'utf8'), 'text/html; charset=utf-8')).toBe('café')
+  })
+
+  it('falls back to UTF-8 for a missing or unknown charset', () => {
+    expect(decodeBody(Buffer.from('café', 'utf8'), 'text/html')).toBe('café')
+    expect(decodeBody(Buffer.from('café', 'utf8'), 'text/html; charset=no-such-charset')).toBe('café')
+  })
+})
+
+describe('capText', () => {
+  it('leaves short text alone and cuts long text at a nearby line break', () => {
+    expect(capText('short', 10)).toEqual({ text: 'short', truncated: false })
+    const text = `${'a'.repeat(95)}\n${'b'.repeat(50)}`
+    expect(capText(text, 100)).toEqual({ text: 'a'.repeat(95), truncated: true })
+  })
+
+  it('never splits a surrogate pair', () => {
+    const { text } = capText(`${'a'.repeat(9)}\u{1F600}tail`, 10)
+    expect(text).toBe('a'.repeat(9))
+  })
+})
+
 /** Minimal fake transport returning canned responses, recording the requests it got. */
 function fakeTransport(
-  map: Record<string, { status: number; headers: Record<string, string>; body: string }>,
+  map: Record<string, { status: number; headers: Record<string, string>; body: string | Buffer }>,
   calls: TransportRequest[] = []
 ): Transport {
   return async (req) => {
@@ -108,7 +153,7 @@ function fakeTransport(
       status: r.status,
       statusText: '',
       headers: { get: (k: string) => r.headers[k.toLowerCase()] ?? null },
-      body: Buffer.from(r.body, 'utf8')
+      body: typeof r.body === 'string' ? Buffer.from(r.body, 'utf8') : r.body
     }
   }
 }
@@ -168,6 +213,78 @@ describe('fetchUrlAsText', () => {
       maxBytes: 10
     })
     expect(out).toContain('[truncated at 10 bytes]')
+  })
+
+  it('caps the extracted text, not the markup: a script-heavy page keeps its content', async () => {
+    const script = `<script>${'var x = 1;'.repeat(20_000)}</script>`
+    const style = `<style>${'.a{color:red}'.repeat(10_000)}</style>`
+    const transport = fakeTransport({
+      'https://heavy.example/': {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+        body: `<html><head>${style}</head><body>${script}<main><p>The answer is 42.</p></main></body></html>`
+      }
+    })
+    const doc = await fetchUrlAsDocument('https://heavy.example/', {
+      transport,
+      resolveHost: publicHost,
+      maxChars: 1_000
+    })
+    expect(doc.text).toContain('The answer is 42.')
+    expect(doc.text).not.toContain('var x')
+    expect(doc.truncated).toBe(false)
+  })
+
+  it('reports a character cap when the extracted text is cut', async () => {
+    const transport = fakeTransport({
+      'https://long.example/': {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+        body: `<p>${'word '.repeat(1000)}</p>`
+      }
+    })
+    const out = await fetchUrlAsText('https://long.example/', {
+      transport,
+      resolveHost: publicHost,
+      maxChars: 100
+    })
+    expect(out).toContain('[truncated at 100 characters]')
+  })
+
+  it('converts HTML with links resolved against the final URL after a redirect', async () => {
+    const transport = fakeTransport({
+      'https://a.example/': { status: 301, headers: { location: 'https://b.example/docs/' }, body: '' },
+      'https://b.example/docs/': {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+        body: '<p>See <a href="install">the install guide</a>.</p>'
+      }
+    })
+    const out = await fetchUrlAsText('https://a.example/', { transport, resolveHost: publicHost })
+    expect(out).toContain('See [the install guide](https://b.example/docs/install).')
+  })
+
+  it('returns a clear notice for a PDF instead of decoding it as UTF-8', async () => {
+    const pdf = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.from([0xe2, 0xe3, 0xcf, 0xd3, 0, 1, 2, 3])])
+    const transport = fakeTransport({
+      'https://docs.example/spec.pdf': { status: 200, headers: { 'content-type': 'application/pdf' }, body: pdf }
+    })
+    const doc = await fetchUrlAsDocument('https://docs.example/spec.pdf', { transport, resolveHost: publicHost })
+    expect(doc.text).toMatch(/^\[PDF document \(17 B\): web_fetch cannot extract text from PDFs/)
+    expect(doc.text).not.toContain('%PDF')
+    expect(doc.contentType).toBe('application/pdf')
+  })
+
+  it('returns a notice for other binary bodies', async () => {
+    const transport = fakeTransport({
+      'https://img.example/a.png': {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+        body: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d])
+      }
+    })
+    const out = await fetchUrlAsText('https://img.example/a.png', { transport, resolveHost: publicHost })
+    expect(out).toContain('[binary content (image/png, 12 B): not text, so there is nothing to show.]')
   })
 
   it('refuses a host that resolves to a private/metadata address (DNS-name SSRF)', async () => {
