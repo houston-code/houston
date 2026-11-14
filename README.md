@@ -1390,9 +1390,9 @@ the agent loop and UI never depend on a specific provider.
 - **Tool execution is sandboxed where the OS allows it.** `run_shell` runs under
   Seatbelt (`sandbox-exec`) on macOS and bubblewrap on Linux: filesystem reads
   allowed, writes restricted to the project + temp dirs, network denied until you
-  grant it (in *full auto*, a once-per-chat card after a command first fails for lack
-  of network; "Allow for run" on a shell approval; or `--allow-shell-network` on a
-  headless run). Granted network is confined to a
+  grant it (a once-per-chat question after a command first fails for lack of network,
+  in every mode; approving a shell command never grants network; or
+  `--allow-shell-network` on a headless run). Granted network is confined to a
   per-domain egress allowlist: direct sockets stay blocked and traffic flows through
   a local proxy that permits package registries, VCS hosts, and domains you add in
   Settings. Windows has no equivalent, so shell commands there run unconfined and

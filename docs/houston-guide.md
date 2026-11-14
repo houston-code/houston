@@ -2817,9 +2817,10 @@ allowlist bounds where a command can send anything.
 
 - **Full auto:** from the start, through the allowlist. Installing dependencies,
   cloning, and fetching toolchains just work.
-- **Ask / auto-edit:** after "Allow for run" on a shell command. Plain "Allow" and
-  "Always allow" run that one command offline, and until the run has the grant, each
-  shell approval prompt says so.
+- **Ask / auto-edit:** commands start offline, and Houston asks once, the first time
+  one fails for lack of network (the **shell-network consent** below). Approving a
+  command, even for the whole chat, never grants network by itself, and until the chat
+  has the grant, each shell approval prompt says the command runs offline.
 - **Egress set to "All domains":** there is no allowlist to bound it, so even full
   auto starts offline and asks once, the first time a command fails for lack of
   network (the **shell-network consent**). Declining runs commands offline instead of

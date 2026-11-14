@@ -351,9 +351,9 @@ describe('approval prompt', () => {
     expect(p).not.toContain('UNSANDBOXED')
   })
 
-  it('says a shell command runs offline and that "Allow for run" grants network', () => {
+  it('says a shell command runs offline and that network is asked separately', () => {
     const p = renderApprovalPrompt(ev({ shellOffline: true }), makePainter(false))
-    expect(p).toContain('Runs without network. Choose "Allow for run" to also allow network for this run.')
+    expect(p).toContain('Runs without network. If it needs the network, Houston asks before allowing it.')
     expect(p).not.toContain('\u2014')
     expect(renderApprovalPrompt(ev(), makePainter(false))).not.toContain('Runs without network')
   })
