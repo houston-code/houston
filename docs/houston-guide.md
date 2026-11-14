@@ -870,7 +870,11 @@ preview: the file a tool row names (a read opens at the line it started from), a
 file header, a file the receipt lists as changed, and a relative link in a reply
 (`[setup](docs/setup.md)`, `src/app.ts#L42`, or `src/app.ts:42` opens at that line).
 The preview's **Open** button hands the file to its default app. Only files inside the
-project folder open this way; web links still open in your browser.
+project folder open this way; web links still open in your browser. A file that can run
+a program (an app, a script such as `.command`, `.sh`, `.bat` or `.exe`, a `.desktop`
+launcher, or a file marked executable) is shown in its folder instead of opened, and a
+link to a different kind of file (`notes.md` pointing at `run.command`) or to a folder
+isn't opened at all. This applies to every **Open** in the app.
 
 ## What actually ran (the receipt)
 
@@ -2225,7 +2229,8 @@ the terminal. `/agent` alone (or `/agents`) lists them.
   opens it in your default app.
 
 A project file that links outside the project can't be switched, opened, or deleted
-from here.
+from here. **Open** only opens a Markdown file: one that links to another kind of file
+or is marked executable is refused.
 
 ## Background work wakes the chat
 

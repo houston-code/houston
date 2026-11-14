@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EDITORS } from '@shared/editors'
@@ -194,5 +194,40 @@ describe('openWorkspacePath', () => {
     expect(openWorkspacePath('', 'a.txt').ok).toBe(false)
     expect(openWorkspacePath(root, '').ok).toBe(false)
     expect(openPath).not.toHaveBeenCalled()
+  })
+
+  // macOS chooses the handler for a symlink by its target: a committed `notes.md`
+  // linking to an in-repo `run.command` would launch Terminal and run it on Open.
+  const posixOnly = process.platform === 'win32' ? it.skip : it
+  posixOnly('refuses a .md link to a .command without opening or revealing anything', () => {
+    writeFileSync(join(root, 'run.command'), '#!/bin/sh\necho pwned\n')
+    symlinkSync(join(root, 'run.command'), join(root, 'notes.md'))
+    const res = openWorkspacePath(root, 'notes.md', { platform: 'darwin' })
+    expect(res.ok).toBe(false)
+    expect(openPath).not.toHaveBeenCalled()
+    expect(showItemInFolder).not.toHaveBeenCalled()
+  })
+
+  posixOnly('opens a same-type link by its real path, never the link', () => {
+    mkdirSync(join(root, 'docs'))
+    writeFileSync(join(root, 'docs', 'real.md'), 'x')
+    symlinkSync(join(root, 'docs', 'real.md'), join(root, 'alias.md'))
+    expect(openWorkspacePath(root, 'alias.md', { platform: 'darwin' }).ok).toBe(true)
+    expect(openPath).toHaveBeenCalledWith(join(root, 'docs', 'real.md'))
+  })
+
+  it('shows a launchable file in its folder instead of opening it', () => {
+    writeFileSync(join(root, 'run.command'), '#!/bin/sh\n')
+    const res = openWorkspacePath(root, 'run.command', { platform: 'darwin' })
+    expect(res).toEqual({ ok: false, error: expect.stringContaining('showed it in its folder') })
+    expect(openPath).not.toHaveBeenCalled()
+    expect(showItemInFolder).toHaveBeenCalledWith(join(root, 'run.command'))
+  })
+
+  it('refuses a folder (an .app bundle is one)', () => {
+    mkdirSync(join(root, 'Evil.app'))
+    expect(openWorkspacePath(root, 'Evil.app', { platform: 'darwin' }).ok).toBe(false)
+    expect(openPath).not.toHaveBeenCalled()
+    expect(showItemInFolder).not.toHaveBeenCalled()
   })
 })

@@ -168,6 +168,8 @@ import {
 import { collectWorkingTreeChanges, collectWorkingTreeStats } from './agent/workingTree'
 import { branchSyncFor, commitAll, lookupPr, pushBranch, suggestCommitMessage } from './agent/gitActions'
 import { isKnownWorkspace } from './knownWorkspace'
+import type { OpenResult } from '@shared/editors'
+import type { FilePreview } from '@shared/files'
 import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
 import { collectChatChanges, revertChange } from './agent/changes'
 import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
@@ -227,6 +229,11 @@ import { noteThrottle, onRateLimitChange, rateLimitSnapshot } from './rateLimitS
 
 /** A preferences export is a few KB; anything past this is not one. */
 const MAX_SETTINGS_FILE_BYTES = 2_000_000
+
+/** Whether a renderer-supplied workspace is a non-empty string naming a known project. */
+function knownWorkspaceArg(workspace: unknown): boolean {
+  return typeof workspace === 'string' && workspace !== '' && isKnownWorkspace(workspace)
+}
 
 /** Whether a usable key is stored for the provider, as settings report it. */
 function providerHasKey(providerId: string): boolean {
@@ -824,29 +831,30 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // One directory level for the Finder-like Files panel. The renderer expands
   // folders lazily, so each call lists only a directory's immediate children;
   // listDirectory realpaths the workspace and confines the subpath to it.
+  // The workspace must be one the app already knows (a recent project or a chat's
+  // folder), so a renderer bug or a compromised renderer can't browse, read or open
+  // files in an arbitrary folder through these handlers.
   handle(IPC.workspaceListDir, async (_event, workspace: string, relPath: string) =>
-    listDirectory(
-      typeof workspace === 'string' ? workspace : '',
-      typeof relPath === 'string' ? relPath : ''
-    )
+    knownWorkspaceArg(workspace)
+      ? listDirectory(workspace as string, typeof relPath === 'string' ? relPath : '')
+      : []
   )
 
   // Read a file selected in the Files panel for in-app preview. Confined to the
   // workspace; returns a text/image payload or a note kind for binary/oversize.
-  handle(IPC.workspaceReadFile, async (_event, workspace: string, relPath: string) =>
-    readWorkspaceFile(
-      typeof workspace === 'string' ? workspace : '',
-      typeof relPath === 'string' ? relPath : ''
-    )
+  handle(IPC.workspaceReadFile, async (_event, workspace: string, relPath: string): Promise<FilePreview> =>
+    knownWorkspaceArg(workspace)
+      ? readWorkspaceFile(workspace as string, typeof relPath === 'string' ? relPath : '')
+      : { kind: 'error', message: 'That folder is not an open project.' }
   )
 
   // Open a file selected in the Files panel in its OS default app. A user
-  // gesture; the target is confined to the workspace before shell.openPath.
-  handle(IPC.workspaceOpenPath, (_event, workspace: string, relPath: string) =>
-    openWorkspacePath(
-      typeof workspace === 'string' ? workspace : '',
-      typeof relPath === 'string' ? relPath : ''
-    )
+  // gesture; the target is confined to the workspace, and openWorkspacePath refuses
+  // links to another file type and shows launchable files in their folder instead.
+  handle(IPC.workspaceOpenPath, (_event, workspace: string, relPath: string): OpenResult =>
+    knownWorkspaceArg(workspace)
+      ? openWorkspacePath(workspace as string, typeof relPath === 'string' ? relPath : '')
+      : { ok: false, error: 'That folder is not an open project.' }
   )
 
   // Composer "+" menu: pick files in a native dialog and return their (capped)
