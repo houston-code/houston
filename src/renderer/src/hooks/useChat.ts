@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ApprovalPolicy } from '@shared/types'
 import type {
   AgentEvent,
@@ -148,6 +148,43 @@ const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'appl
 /** A writable subagent's edits land in the dispatching turn's checkpoint too. */
 const DELEGATED_WRITE_TOOLS = new Set(['dispatch_writable_agent'])
 
+/**
+ * Events a run streams many times a second that never wait on the user: streamed text
+ * and reasoning, a running command's output, a subagent's steps. Applying each as it
+ * arrives means one render per IPC message, and when a render runs long they back up
+ * behind each other. These are applied at most once per display frame instead. Every
+ * other event (a prompt that needs the user, a tool starting or finishing, usage, the
+ * end of the run) is applied the moment it arrives, after whatever is held, so order
+ * is kept and nothing that asks for the user shows up later than it would have.
+ */
+const FRAME_BATCHED: ReadonlySet<AgentEvent['type']> = new Set(['text', 'reasoning', 'tool_progress', 'subagent_step'])
+
+/**
+ * Longest a held event waits when no frame comes (the window is hidden, so the browser
+ * isn't drawing): late enough that a hidden window renders rarely, soon enough that its
+ * state is never far behind.
+ */
+const FRAME_FALLBACK_MS = 250
+
+/** Run `fn` at the next display frame, or after {@link FRAME_FALLBACK_MS} without one. */
+function scheduleFrame(fn: () => void): () => void {
+  let done = false
+  const run = (): void => {
+    if (done) return
+    done = true
+    cancel()
+    fn()
+  }
+  const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : null
+  const timer = setTimeout(run, FRAME_FALLBACK_MS)
+  const cancel = (): void => {
+    done = true
+    if (raf !== null) cancelAnimationFrame(raf)
+    clearTimeout(timer)
+  }
+  return cancel
+}
+
 export function useChat(conversationId: string | null = null): ChatController {
   const [items, setItems] = useState<DisplayItem[]>([])
   const [running, setRunning] = useState(false)
@@ -166,9 +203,9 @@ export function useChat(conversationId: string | null = null): ChatController {
   const convIdRef = useRef<string | null>(conversationId)
   convIdRef.current = conversationId
 
-  // One handler for live events and for the ones adopt replays. It reads only refs
-  // and state setters, so it never goes stale.
-  const onEvent = useCallback((e: AgentEvent) => {
+  // Applies one event: for live events and for the ones adopt replays. It reads only
+  // refs and state setters, so it never goes stale.
+  const applyEvent = useCallback((e: AgentEvent) => {
     if (e.type === 'turn_start') {
       // The main process auto-started a follow-up turn from the queue. Adopt it
       // only when it's for the conversation we're viewing; otherwise it's a
@@ -272,9 +309,64 @@ export function useChat(conversationId: string | null = null): ChatController {
     }
   }, [])
 
+  // Streamed events held for the next frame (see FRAME_BATCHED), and the cancel for
+  // that frame while one is scheduled.
+  const heldRef = useRef<AgentEvent[]>([])
+  const frameRef = useRef<(() => void) | null>(null)
+  // Apply what is held, in order. The calls land in one task, so React renders once.
+  const flushHeld = useCallback(() => {
+    const held = heldRef.current
+    if (held.length === 0) return
+    heldRef.current = []
+    for (const e of held) applyEvent(e)
+  }, [applyEvent])
+  // At each frame, apply what arrived since the last one. While events keep coming,
+  // keep gathering frame by frame; after a frame with nothing new, the next event is
+  // applied as soon as it arrives again.
+  const onFrame = useCallback(
+    function onFrame(): void {
+      frameRef.current = null
+      if (heldRef.current.length === 0) return
+      flushHeld()
+      frameRef.current = scheduleFrame(onFrame)
+    },
+    [flushHeld]
+  )
+  // Drop anything held and the frame waiting for it (the transcript is being replaced).
+  const dropHeld = useCallback(() => {
+    heldRef.current = []
+    frameRef.current?.()
+    frameRef.current = null
+  }, [])
+  useEffect(() => dropHeld, [dropHeld])
+
+  const onEvent = useCallback(
+    (e: AgentEvent) => {
+      if (!FRAME_BATCHED.has(e.type)) {
+        flushHeld()
+        applyEvent(e)
+        return
+      }
+      // Another run's output (a background chat's) never holds a frame here. What is
+      // held is applied before anything that changes the run this view follows (send,
+      // retry, adopt) and dropped by reset, so it lands where it would have.
+      if (e.runId !== runIdRef.current) return
+      if (frameRef.current === null) {
+        // The first after a quiet frame shows at once; what follows it is gathered.
+        applyEvent(e)
+        frameRef.current = scheduleFrame(onFrame)
+        return
+      }
+      heldRef.current.push(e)
+    },
+    [applyEvent, flushHeld, onFrame]
+  )
+
   useEffect(() => window.api.onAgentEvent(onEvent), [onEvent])
 
   const send = useCallback(async (params: SendParams) => {
+    // Whatever the previous run streamed lands before this turn's bubble.
+    flushHeld()
     const runId = crypto.randomUUID()
     runIdRef.current = runId
     setItems((prev) => [
@@ -326,9 +418,10 @@ export function useChat(conversationId: string | null = null): ChatController {
         setErrored(true)
       }
     }
-  }, [])
+  }, [flushHeld])
 
   const retry = useCallback(async (params: RetryParams) => {
+    flushHeld()
     const runId = crypto.randomUUID()
     runIdRef.current = runId
     setRunning(true)
@@ -345,7 +438,7 @@ export function useChat(conversationId: string | null = null): ChatController {
         setErrored(true)
       }
     }
-  }, [])
+  }, [flushHeld])
 
   const cancel = useCallback(() => {
     if (runIdRef.current) void window.api.cancelAgent(runIdRef.current)
@@ -413,12 +506,15 @@ export function useChat(conversationId: string | null = null): ChatController {
 
   // Revert / Redo the turn's changes. The bar flips only if the user is still on the
   // chat it was clicked in: the reply can arrive after they've opened another chat,
-  // whose own checkpoint must not be overwritten. A failed call says so there.
+  // whose own checkpoint must not be overwritten. A failed call says so there. Read
+  // through a ref so these keep one identity for the life of the view.
+  const checkpointRef = useRef(checkpoint)
+  checkpointRef.current = checkpoint
   const applyCheckpoint = useCallback(
     async (action: 'revert' | 'redo'): Promise<number | null> => {
-      if (!checkpoint) return 0
+      const cp = checkpointRef.current
+      if (!cp) return 0
       const conv = convIdRef.current
-      const cp = checkpoint
       try {
         const n =
           action === 'revert'
@@ -434,7 +530,7 @@ export function useChat(conversationId: string | null = null): ChatController {
         return null
       }
     },
-    [checkpoint, notify]
+    [notify]
   )
   const revertCheckpoint = useCallback(() => applyCheckpoint('revert'), [applyCheckpoint])
   const reapplyCheckpoint = useCallback(() => applyCheckpoint('redo'), [applyCheckpoint])
@@ -466,6 +562,9 @@ export function useChat(conversationId: string | null = null): ChatController {
       nextErrored = false,
       nextFailure: ConversationError | null = null
     ) => {
+      // Held deltas belong to the transcript being replaced; a run adopted next replays
+      // its own live transcript, so applying them later would show that text twice.
+      dropHeld()
       setItems(next)
       setRunning(false)
       setMeter(null)
@@ -479,7 +578,7 @@ export function useChat(conversationId: string | null = null): ChatController {
       setFailure(nextErrored ? nextFailure : null)
       runIdRef.current = null
     },
-    []
+    [dropHeld]
   )
 
   const adopt = useCallback(
@@ -490,6 +589,7 @@ export function useChat(conversationId: string | null = null): ChatController {
       startedAt?: number,
       since: AgentEvent[] = []
     ) => {
+      flushHeld()
       runIdRef.current = runId
       setRunning(true)
       // The clock counts from the run's start. The token count can't recover rounds that
@@ -512,39 +612,69 @@ export function useChat(conversationId: string | null = null): ChatController {
       if (plan?.type === 'plan_ready') setPendingPlan({ callId: plan.callId, plan: plan.plan })
       // Then what arrived while the reopen was still reading: through the live handler,
       // so a run that finished in that gap ends here too.
-      for (const ev of since) onEvent(ev)
+      for (const ev of since) applyEvent(ev)
     },
-    [onEvent]
+    [applyEvent, flushHeld]
   )
 
   const seedCheckpoint = useCallback((next: Checkpoint | null) => {
     setCheckpoint(next)
   }, [])
 
-  return {
-    items,
-    running,
-    usage,
-    meter,
-    checkpoint,
-    errored,
-    failure,
-    send,
-    retry,
-    cancel,
-    approve,
-    answerQuestion,
-    answerElicitation,
-    pendingPlan,
-    resolvePlan,
-    setPolicy,
-    setEffort,
-    seedCheckpoint,
-    revertCheckpoint,
-    reapplyCheckpoint,
-    reset,
-    adopt,
-    startDetached,
-    notify
-  }
+  // One object per state change, not per render: every method above keeps its identity,
+  // so the controller changes only when something it reports does.
+  return useMemo(
+    () => ({
+      items,
+      running,
+      usage,
+      meter,
+      checkpoint,
+      errored,
+      failure,
+      send,
+      retry,
+      cancel,
+      approve,
+      answerQuestion,
+      answerElicitation,
+      pendingPlan,
+      resolvePlan,
+      setPolicy,
+      setEffort,
+      seedCheckpoint,
+      revertCheckpoint,
+      reapplyCheckpoint,
+      reset,
+      adopt,
+      startDetached,
+      notify
+    }),
+    [
+      items,
+      running,
+      usage,
+      meter,
+      checkpoint,
+      errored,
+      failure,
+      send,
+      retry,
+      cancel,
+      approve,
+      answerQuestion,
+      answerElicitation,
+      pendingPlan,
+      resolvePlan,
+      setPolicy,
+      setEffort,
+      seedCheckpoint,
+      revertCheckpoint,
+      reapplyCheckpoint,
+      reset,
+      adopt,
+      startDetached,
+      notify
+    ]
+  )
 }
