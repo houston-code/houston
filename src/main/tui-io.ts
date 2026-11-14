@@ -43,6 +43,14 @@ import {
 /** Carriage-return + erase-line: rewinds to column 0 and clears the current line. */
 const CLEAR_LINE = '\r\x1b[2K'
 
+/**
+ * Synchronized output (DEC private mode 2026): a terminal that supports it holds
+ * everything between these two and paints it at once, so a multi-row repaint never
+ * shows half drawn. Terminals without it ignore both.
+ */
+export const SYNC_BEGIN = '\x1b[?2026h'
+export const SYNC_END = '\x1b[?2026l'
+
 /** Longest prefix shared by every candidate — how Tab completes an ambiguous token. */
 function commonPrefix(items: string[]): string {
   if (!items.length) return ''
@@ -129,6 +137,12 @@ export interface TerminalIoDeps {
    * effect on the next prompt rather than the next launch. Absent = emacs.
    */
   editorMode?: () => 'emacs' | 'vim'
+  /**
+   * Wrap in-place repaints in synchronized-output markers. Defaults to on for the
+   * process's own terminal and off for an injected `write` (or a stdout that is not
+   * a TTY), where there is no screen to paint atomically.
+   */
+  syncOutput?: boolean
 }
 
 /**
@@ -212,6 +226,26 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       history: deps.history ? [...deps.history()].reverse() : undefined
     }) as unknown as ReadlineLike)
   const rawWrite = deps.write ?? ((s: string) => void process.stdout.write(s))
+  // Synchronized output for in-place repaints (see SYNC_BEGIN). Each repaint is
+  // built as one string and written once, so its begin and end can never come apart;
+  // `atomically` covers the few that take several writes, closing in a finally.
+  const syncOn = deps.syncOutput ?? (!deps.write && process.stdout.isTTY === true)
+  let syncDepth = 0
+  const atomically = (fn: () => void): void => {
+    if (!syncOn) return fn()
+    if (syncDepth++ === 0) rawWrite(SYNC_BEGIN)
+    try {
+      fn()
+    } finally {
+      if (--syncDepth === 0) rawWrite(SYNC_END)
+    }
+  }
+  /** One in-place repaint, painted at once where the terminal supports it. */
+  const repaint = (s: string): void => {
+    if (!s) return
+    if (syncOn && syncDepth === 0) rawWrite(SYNC_BEGIN + s + SYNC_END)
+    else rawWrite(s)
+  }
   // Resizes only matter on the process's real terminal: an injected (test) stream
   // has no window, and a process-wide listener per instance would leak.
   const onResize =
@@ -290,7 +324,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     let line = frame(statusLabel)
     if (statusLabel && visibleWidth(line) > width) line = frame('')
     tick++
-    rawWrite(CLEAR_LINE + line)
+    repaint(CLEAR_LINE + line)
   }
   const startTimer = (): void => {
     if (!cancelTimer && spinnerLabel !== null) cancelTimer = schedule(drawSpinner, 100)
@@ -309,8 +343,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     if (!s) return
     // Clear the spinner line before real output so streamed text never lands on a
     // spinner frame; the timer redraws it on the next tick, on the fresh line.
-    if (cancelTimer) rawWrite(CLEAR_LINE)
-    rawWrite(s)
+    if (cancelTimer) repaint(CLEAR_LINE + s)
+    else rawWrite(s)
   }
 
   // --- Interrupt watch. While a turn streams, the interface is paused AND the
@@ -721,7 +755,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         let s = ''
         if (prevCursorRow > 0) s += `\x1b[${prevCursorRow}A`
         s += '\r\x1b[0J'
-        rawWrite(s)
+        repaint(s)
         drawn = false
         prevCursorRow = 0
       }
@@ -737,7 +771,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         if (up > 0) s += `\x1b[${up}A`
         s += '\r'
         if (v.cursorCol > 0) s += `\x1b[${v.cursorCol}C`
-        rawWrite(s)
+        repaint(s)
         drawn = true
         prevCursorRow = v.cursorRow
         prevRows = v.rows
@@ -750,10 +784,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         if (done || !drawn) return
         const cols = deps.columns?.() ?? process.stdout.columns ?? 80
         const up = physicalCursorRow(prevRows, prevCursorRow, prevCursorCol, cols)
-        rawWrite(`${up > 0 ? `\x1b[${up}A` : ''}\r\x1b[0J`)
-        drawn = false
-        prevCursorRow = 0
-        draw()
+        atomically(() => {
+          rawWrite(`${up > 0 ? `\x1b[${up}A` : ''}\r\x1b[0J`)
+          drawn = false
+          prevCursorRow = 0
+          draw()
+        })
       }
       // A menu whose rows arrived late (an `@` file lookup): repaint, unless the read
       // is over or the region is not on screen (handed to $EDITOR).
@@ -794,13 +830,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         done = true
         pending = null
         openComposer = null
-        eraseRegion()
-        // Leave the submitted message in the scrollback, exactly as readline did:
-        // just the prompt and text, not the command menu that was open under it.
-        if (echo && value !== null) {
-          const v = view(false)
-          rawWrite(`${v.rows.join('\n')}\n`)
-        }
+        atomically(() => {
+          eraseRegion()
+          // Leave the submitted message in the scrollback, exactly as readline did:
+          // just the prompt and text, not the command menu that was open under it.
+          if (echo && value !== null) {
+            const v = view(false)
+            rawWrite(`${v.rows.join('\n')}\n`)
+          }
+        })
         teardown()
         startTimer()
         if (spinnerLabel !== null) startInterruptWatch()
@@ -928,9 +966,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               return
             }
             case 'clear-screen':
-              rawWrite('\x1b[2J\x1b[H')
-              drawn = false
-              draw()
+              atomically(() => {
+                rawWrite('\x1b[2J\x1b[H')
+                drawn = false
+                draw()
+              })
               break
             case 'cycle-mode':
               // The handler updates the driver's policy; promptNow() then renders the
@@ -1062,7 +1102,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       stopTimer(true)
       stopInterruptWatch()
       try {
-        return await runPicker(spec, rl, rawWrite, paint, stdin)
+        return await runPicker(spec, rl, repaint, paint, stdin)
       } finally {
         startTimer() // resume the spinner if a turn is still running
         if (spinnerLabel !== null) startInterruptWatch() // …and re-arm Ctrl-C
@@ -1123,13 +1163,14 @@ function runPicker(
     const priorKeypress = stdin.listeners('keypress') as Array<(...args: unknown[]) => void>
     const draw = (first: boolean): void => {
       // \r first: the up-move is counted from column 0 of the row under the picker.
-      if (!first && prevRows > 0) write(`\r\x1b[${prevRows}A\x1b[0J`) // up N physical rows, erase to end
+      // Erase and redraw go out as one write, so `write` can paint them atomically.
+      const erase = !first && prevRows > 0 ? `\r\x1b[${prevRows}A\x1b[0J` : '' // up N physical rows, erase to end
       const lines = session.lines({ width: process.stdout.columns || 0, height: process.stdout.rows || 0 })
       // Count PHYSICAL rows, not logical lines: a rendered line wider than the terminal
       // wraps to several rows, so moving up by the logical count would under-count and
       // the picker would walk down the screen, leaving duplicated rows on each keypress.
       prevRows = pickerPhysicalRows(lines, process.stdout.columns || 0)
-      write(`${lines.join('\n')}\n`)
+      write(`${erase}${lines.join('\n')}\n`)
     }
     const finish = (outcome: PickerOutcome): void => {
       if (done) return

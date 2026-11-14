@@ -3,7 +3,16 @@ import { ULTRATHINK_HINT, ULTRATHINK_HINT_ALREADY, ULTRATHINK_HINT_NONE } from '
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
-import { resolveColor, createTerminalIo, marksByLine, physicalCursorRow, pickerPhysicalRows, type ReadlineLike } from './tui-io'
+import {
+  resolveColor,
+  createTerminalIo,
+  marksByLine,
+  physicalCursorRow,
+  pickerPhysicalRows,
+  SYNC_BEGIN,
+  SYNC_END,
+  type ReadlineLike
+} from './tui-io'
 import { visibleWidth } from './tui-wrap'
 
 describe('resolveColor', () => {
@@ -1219,5 +1228,72 @@ describe('sub-prompts and the picker after the composer', () => {
     stdin.push('\r')
     expect(io.takeQueued!()).toEqual(['é'])
     io.stopSpinner!()
+  })
+})
+
+describe('synchronized output (DEC 2026)', () => {
+  const count = (s: string, sub: string): number => s.split(sub).length - 1
+  function harness(syncOutput?: boolean) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let ticks: Array<() => void> = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => 1000,
+      schedule: (fn) => {
+        ticks.push(fn)
+        return () => {
+          ticks = ticks.filter((t) => t !== fn)
+        }
+      },
+      ...(syncOutput === undefined ? {} : { syncOutput })
+    })
+    return { io, stdin, written, text: () => written.join(''), tick: () => ticks.forEach((fn) => fn()) }
+  }
+
+  it('paints each composer redraw atomically, always closing what it opens', async () => {
+    const t = harness(true)
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('abc')
+    t.stdin.push('\x0c') // Ctrl-L: a clear and a redraw, several writes in one repaint
+    t.stdin.push('\r')
+    await read
+    const out = t.text()
+    expect(count(out, SYNC_BEGIN)).toBeGreaterThan(2)
+    expect(count(out, SYNC_BEGIN)).toBe(count(out, SYNC_END))
+    // Never nested: each begin is closed before the next opens.
+    let depth = 0
+    // eslint-disable-next-line no-control-regex -- matching the markers is the point
+    for (const m of out.matchAll(/\x1b\[\?2026([hl])/g)) {
+      depth += m[1] === 'h' ? 1 : -1
+      expect(depth === 0 || depth === 1).toBe(true)
+    }
+    expect(depth).toBe(0)
+  })
+
+  it('paints the spinner and status line atomically', () => {
+    const t = harness(true)
+    t.io.startSpinner!('Working')
+    t.io.setStatus!('model · main')
+    t.tick()
+    const out = t.text()
+    expect(out).toContain(`${SYNC_BEGIN}\r\x1b[2K`)
+    expect(count(out, SYNC_BEGIN)).toBe(count(out, SYNC_END))
+    t.io.stopSpinner!()
+  })
+
+  it('is off when the output is not the terminal', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('abc\r')
+    await read
+    t.io.startSpinner!('Working')
+    t.tick()
+    t.io.stopSpinner!()
+    expect(t.text()).not.toContain(SYNC_BEGIN)
+    expect(t.text()).not.toContain(SYNC_END)
   })
 })
