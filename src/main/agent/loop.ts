@@ -3537,7 +3537,8 @@ export async function startRun(
       }
     }
 
-    // Pinned working memory (original task, todo list, files in play), derived from
+    // Pinned working memory (original task, the user's later messages, todo list,
+    // files in play, workspace state), derived from
     // everything compaction or eviction has touched: the head before the cut or the
     // eviction watermark, whichever reaches further. Both only advance at a
     // compaction or eviction, so the block is byte-identical in between. The task is
@@ -3547,7 +3548,10 @@ export async function startRun(
       const task = originalTaskIndex(messages)
       return buildPinnedMessages(messages.slice(0, Math.max(cut, evictBefore)), {
         omitTask: task >= cut || task === anchor,
-        workspaceState
+        workspaceState,
+        // Only what the summary stands in for: from the anchor on, the request and its
+        // steers are re-sent verbatim, and everything after the cut is in the tail.
+        userMessagesBefore: anchor ?? cut
       })
     }
 

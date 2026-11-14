@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { COMPACTION_SUMMARY_PREFIX, type BackgroundShellInfo, type ChatMessage } from '@shared/agent'
+import { COMPACTION_SUMMARY_PREFIX, systemNoteMessage, type BackgroundShellInfo, type ChatMessage } from '@shared/agent'
 import {
   MAX_PINNED_SHELLS,
   PINNED_MEMORY_PREFIX,
@@ -10,10 +10,13 @@ import {
   buildPinnedMessages,
   filesInPlay,
   lastUserTurnIndex,
+  laterUserMessages,
   latestTodos,
   originalTask,
   originalTaskIndex
 } from './workingMemory'
+
+const INVOKED = { kind: 'command' as const, label: '/review' }
 
 function toolCall(name: string, args: Record<string, unknown>): ChatMessage {
   return { role: 'assistant', content: '', toolCalls: [{ id: `c-${name}`, name, arguments: args }] }
@@ -156,6 +159,43 @@ describe('buildPinnedMemory', () => {
     const block = buildPinnedMemory([{ role: 'user', content: huge }])
     expect(block.length).toBeLessThan(huge.length)
     expect(block).toContain('…')
+  })
+})
+
+describe("the user's later messages in the pinned block", () => {
+  const log: ChatMessage[] = [
+    { role: 'user', content: 'Build the importer' },
+    { role: 'assistant', content: 'on it' },
+    { role: 'user', content: 'use pnpm, not npm' },
+    systemNoteMessage('You seem to be repeating yourself.'),
+    { role: 'user', content: 'Review this', invokedAs: INVOKED },
+    { role: 'user', content: `${COMPACTION_SUMMARY_PREFIX}\n\nold summary` },
+    { role: 'user', content: 'also   keep\n\nthe CSV header' },
+    { role: 'assistant', content: 'ok' }
+  ]
+
+  it("lists every message the user wrote after the task, in order, and none of Houston's", () => {
+    expect(laterUserMessages(log)).toEqual(['use pnpm, not npm', 'also   keep\n\nthe CSV header'])
+    const block = buildPinnedMemory(log)
+    expect(block).toContain("The user's later messages, in order (clipped):\n- use pnpm, not npm\n- also keep the CSV header")
+    expect(block).not.toContain('repeating yourself')
+    expect(block).not.toContain('Review this')
+  })
+
+  it('stops at the given index, so messages still in the window are not repeated', () => {
+    expect(laterUserMessages(log, 4)).toEqual(['use pnpm, not npm'])
+    expect(buildPinnedMemory(log, { userMessagesBefore: 2 })).not.toContain('later messages')
+  })
+
+  it('clips each message and keeps the newest when there are too many', () => {
+    const many: ChatMessage[] = [{ role: 'user', content: 'task' }]
+    for (let i = 0; i < 40; i++) many.push({ role: 'user', content: `note ${i} ${'x'.repeat(600)}` })
+    const block = buildPinnedMemory(many)
+    expect(block).toContain('note 39 ')
+    expect(block).not.toContain('note 0 ')
+    expect(block).toMatch(/- \(\d+ earlier messages not shown\)/)
+    expect(block).not.toContain('x'.repeat(450))
+    expect(block.length).toBeLessThanOrEqual(9000)
   })
 })
 
