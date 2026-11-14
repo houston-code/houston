@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent, ElicitationResult, PlanDecision } from '@shared/agent'
@@ -9,9 +9,11 @@ import {
   guardTerminalExit,
   onFirstPrompt,
   resolveBackgroundEvent,
+  runScheduleDaemonEntry,
   watchTerminationSignals,
   wireTerminalSessionBackends
 } from './terminalEntry'
+import { daemonPidPath, runningDaemonPid } from './scheduleDaemon'
 import { readShellOutput, registerShell } from './agent/shells'
 import type { SignalProcess } from './signalCleanup'
 import { setUserDataDir, resetUserDataDir } from './userData'
@@ -280,4 +282,65 @@ describe('guardTerminalExit', () => {
     },
     15_000
   )
+})
+
+describe('runScheduleDaemonEntry', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-daemon-entry-'))
+    setUserDataDir(dir)
+  })
+  afterEach(() => {
+    resetSpawnBackend()
+    resetSchedulerBackend()
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  /** A signal source that records listeners and never exits the test process. */
+  function fakeSignals(): SignalProcess & { emitter: EventEmitter; exits: number[] } {
+    const emitter = new EventEmitter()
+    const exits: number[] = []
+    return {
+      emitter,
+      exits,
+      on: (s, fn) => emitter.on(s, fn),
+      removeListener: (s, fn) => emitter.removeListener(s, fn),
+      exit: (code) => void exits.push(code)
+    }
+  }
+
+  it('holds the profile pid file while it runs, wires the scheduler, and stops cleanly', async () => {
+    const stop = new AbortController()
+    const out: string[] = []
+    const proc = fakeSignals()
+    const running = runScheduleDaemonEntry({ signal: stop.signal, proc, out: (s) => out.push(s), appRunning: () => false })
+    await vi.waitFor(() => expect(runningDaemonPid(dir)).toBe(process.pid))
+    expect(isSchedulerConfigured()).toBe(true)
+    for (const s of ['SIGHUP', 'SIGTERM', 'SIGINT']) expect(proc.emitter.listenerCount(s)).toBe(1)
+    expect(out.join('')).toMatch(/^Houston schedule daemon running \(pid \d+\)/)
+    stop.abort()
+    expect(await running).toBe(0)
+    expect(existsSync(daemonPidPath(dir))).toBe(false)
+    for (const s of ['SIGHUP', 'SIGTERM', 'SIGINT']) expect(proc.emitter.listenerCount(s)).toBe(0)
+  })
+
+  it('stops on a signal, releasing the pid file before exiting 128+n', async () => {
+    const proc = fakeSignals()
+    void runScheduleDaemonEntry({ proc, out: () => {}, appRunning: () => false })
+    await vi.waitFor(() => expect(runningDaemonPid(dir)).toBe(process.pid))
+    proc.emitter.emit('SIGTERM')
+    await vi.waitFor(() => expect(proc.exits).toEqual([143]))
+    expect(existsSync(daemonPidPath(dir))).toBe(false)
+  })
+
+  it('exits at once when another daemon already runs for the profile', async () => {
+    // A live process other than this one: the parent of the test runner.
+    writeFileSync(daemonPidPath(dir), String(process.ppid))
+    const out: string[] = []
+    expect(await runScheduleDaemonEntry({ out: (s) => out.push(s), proc: fakeSignals() })).toBe(0)
+    expect(out.join('')).toBe(`The schedule daemon is already running (pid ${process.ppid}).\n`)
+    expect(isSchedulerConfigured()).toBe(false)
+  })
 })

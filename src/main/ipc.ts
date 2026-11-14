@@ -227,6 +227,14 @@ import {
 } from '@shared/rewind'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { registerScheduleIpc } from './scheduleIpc'
+import {
+  appDaemonCommand,
+  ensureScheduleDaemon,
+  markAppScheduler,
+  registerScheduleDaemonIpc,
+  type ScheduleDaemonHostDeps
+} from './scheduleDaemonHost'
+import { realLoginAgentDeps } from './loginAgent'
 import { guardIpcHandle, guardIpcOn } from './ipcSender'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 import { wireMediaProtocol } from './mediaProtocol'
@@ -693,10 +701,35 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // sidebar). start() also catches up occurrences missed while the app was closed.
   const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask') })
   setSchedulerBackend(scheduler)
+  // Scheduled runs while the app is closed: a login agent starts this app in its
+  // windowless --schedule-daemon mode (Settings > Scheduled runs).
+  const daemonDeps: ScheduleDaemonHostDeps = {
+    command: () =>
+      appDaemonCommand(
+        {
+          execPath: process.execPath,
+          isPackaged: app.isPackaged,
+          appPath: app.getAppPath(),
+          platform: process.platform,
+          ...(process.env.APPIMAGE ? { appImage: process.env.APPIMAGE } : {})
+        },
+        getUserDataDir()
+      ),
+    login: realLoginAgentDeps()
+  }
   // Its catch-up run needs the provider keys, so not before the credential store is ready.
-  afterReady(() => scheduler.start())
+  afterReady(() => {
+    scheduler.start()
+    // While the app is open it fires scheduled runs itself (they can ask for approvals
+    // in its window), so a daemon defers to it until it quits.
+    app.on('will-quit', markAppScheduler())
+    // An update can move the executable the login agent starts; keep it current. Only
+    // a packaged build: a dev run's Electron path is not one to leave installed.
+    if (app.isPackaged) void ensureScheduleDaemon(daemonDeps)
+  })
   // Settings > Scheduled runs: list, create, pause/resume, run now, delete.
   registerScheduleIpc(handle, scheduler)
+  registerScheduleDaemonIpc(handle, daemonDeps)
 
   // Use the bundled package.json version (inlined at build): `app.getVersion()`
   // reports Electron's own version in an unpackaged dev run, not Houston's.

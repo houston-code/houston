@@ -190,6 +190,8 @@ export const IPC = {
   schedulesSetPaused: 'schedules:setPaused',
   schedulesRunNow: 'schedules:runNow',
   schedulesDelete: 'schedules:delete',
+  schedulesDaemonGet: 'schedules:daemonGet',
+  schedulesDaemonSet: 'schedules:daemonSet',
   // "Open project in…" — launch an external editor / reveal in the file manager.
   // A user gesture (not the agent); see main/openInEditor.ts.
   editorsList: 'editors:list',

@@ -2715,8 +2715,36 @@ The agent manages the same list:
 - Creating or cancelling a schedule asks for approval.
 
 **When they fire.** Schedules survive restarts and fire while Houston (the desktop
-app or the terminal) is running. It's an in-app scheduler, not OS cron: an occurrence
-missed while Houston was closed fires once at the next launch.
+app or the terminal) is running. An occurrence missed while Houston was closed fires
+once at the next launch, unless the schedule daemon below is on.
+
+### When Houston is closed
+
+Turn on **Run scheduled runs when Houston is closed** under Settings > Scheduled runs
+to have them fire on time anyway.
+
+- **What it sets up.** A small background process starts when you log in (a
+  LaunchAgent on macOS, a systemd user service on Linux, a Task Scheduler task on
+  Windows), for your user only and without admin rights. It runs the Houston app with
+  no window, so it uses the keys you saved in the app.
+- **How its runs behave.** Each fires as a background chat, like one started from the
+  terminal: anything that needs your approval is declined, and ask_user gets "use your
+  best judgment". Open the chat afterwards to see what it did.
+- **While Houston is open,** the app fires scheduled runs itself and the daemon waits.
+  An occurrence is only ever fired once, whichever of them gets to it.
+- **Turning it off** stops the process and removes it from login. After an update
+  moves the app, Houston points the login item at the new copy the next time it opens.
+
+From the terminal, with keys from environment variables or `cli-credentials.json`:
+
+| Command | Does |
+| --- | --- |
+| `houston schedule-daemon` | runs it in the foreground until Ctrl-C |
+| `houston schedule-daemon install` | starts it at login, and now |
+| `houston schedule-daemon uninstall` | stops it and removes it from login |
+| `houston schedule-daemon status` | says whether it is installed and running |
+
+One daemon runs per profile; a second one exits at once.
 
 ## Review and multi-step tools
 

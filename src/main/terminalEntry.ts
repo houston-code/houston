@@ -37,7 +37,8 @@ import type { AgentEvent, ConversationMeta } from '@shared/agent'
 import { setSpawnBackend } from './agent/spawn'
 import { setSchedulerBackend } from './agent/scheduler'
 import { createSpawnBackend } from './spawnSession'
-import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
+import { createSchedulerService, fireViaSpawn, schedulesFilePath, type SchedulerService } from './schedulerService'
+import { appSchedulerRunning, daemonPidPath, holdPidFile } from './scheduleDaemon'
 import { createWorktree, removeWorktree } from './agent/worktree'
 import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
 import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
@@ -393,7 +394,11 @@ export function wireTerminalSessionBackends(opts: {
   notify?: (message: string) => void
   /** Start the scheduler's timers (TUI). The headless one-shot manages schedules without firing them. */
   startScheduler: boolean
+  /** Whether the scheduler may fire now (the daemon defers to the open desktop app). Absent: always. */
+  shouldFire?: () => boolean
 }): {
+  /** The scheduler this host wired (the daemon stops it on exit). */
+  scheduler: SchedulerService
   pendingBackgroundSessions: () => number
   waitForBackgroundSessions: () => Promise<void>
   /**
@@ -457,11 +462,16 @@ export function wireTerminalSessionBackends(opts: {
     })
   })
 
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask') })
+  const scheduler = createSchedulerService({
+    file: schedulesFilePath(),
+    fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask'),
+    ...(opts.shouldFire ? { shouldFire: opts.shouldFire } : {})
+  })
   setSchedulerBackend(scheduler)
   if (opts.startScheduler) scheduler.start()
 
   return {
+    scheduler,
     pendingBackgroundSessions: () => pending.size,
     waitForBackgroundSessions: async (): Promise<void> => {
       // Settle everything, including sessions spawned by sessions while we wait.
@@ -1006,6 +1016,85 @@ export function watchTerminationSignals(
   return () => {
     for (const [signal, handler] of handlers) proc.off(signal, handler)
   }
+}
+
+/**
+ * The schedule daemon: fire scheduled runs while no Houston window or terminal session
+ * is open, as background sessions (approvals declined, as for any terminal-hosted
+ * background session). Runs until a signal stops it. One per profile (a pid file), and
+ * it leaves firing to the desktop app while that is open (see scheduleDaemon.ts).
+ * Returns the exit code: 0 when another daemon already runs.
+ */
+export async function runScheduleDaemonEntry(
+  host: TerminalHost & {
+    /** Ends the daemon without a signal (tests). */
+    signal?: AbortSignal
+    /** Signals to stop on; the default is SIGHUP, SIGTERM and SIGINT. */
+    proc?: SignalProcess
+    out?: (s: string) => void
+    /** Whether the desktop app's scheduler is up (tests). */
+    appRunning?: () => boolean
+  } = {}
+): Promise<number> {
+  const out = host.out ?? ((s: string) => void process.stdout.write(s))
+  const held = holdPidFile(daemonPidPath())
+  if (!held.ok) {
+    out(`The schedule daemon is already running (pid ${held.pid}).\n`)
+    return 0
+  }
+  const appRunning = host.appRunning ?? (() => appSchedulerRunning())
+  let deferring = false
+  const backends = wireTerminalSessionBackends({
+    startScheduler: true,
+    notify: (m) => log.info(`schedule daemon: ${m}`),
+    shouldFire: () => {
+      const app = appRunning()
+      if (app !== deferring) {
+        deferring = app
+        log.info(app ? 'schedule daemon: the desktop app is open; leaving scheduled runs to it' : 'schedule daemon: firing scheduled runs')
+      }
+      return !app
+    }
+  })
+  log.info(`schedule daemon${host.version ? ` ${host.version}` : ''} started (pid ${process.pid})`)
+  out(`Houston schedule daemon running (pid ${process.pid}). Stop it with Ctrl-C.\n`)
+
+  let stop: () => void = () => {}
+  const stopped = new Promise<void>((resolve) => (stop = resolve))
+  host.signal?.addEventListener('abort', () => stop(), { once: true })
+  // The scheduler's timers don't hold the process open; this does, until stopped.
+  const keepAlive = setInterval(() => {}, 1 << 30)
+  const cleanup = installSignalCleanup(
+    async () => {
+      stop()
+      backends.scheduler.stop()
+      // Runs in flight record that they were stopped; then their commands and servers go.
+      await stopLiveRuns()
+      killAllShells()
+      disconnectAllMcp()
+      await lspManager.stopAll()
+      held.release()
+    },
+    {
+      signals: ['SIGHUP', 'SIGTERM', 'SIGINT'],
+      ...(host.proc ? { proc: host.proc } : {}),
+      beforeSignalExit: async () => {
+        flushRuleUsage()
+        await host.flush?.()
+      },
+      onSignal: (sig) => log.info(`schedule daemon: received ${sig}; stopping`)
+    }
+  )
+  try {
+    await stopped
+    await cleanup.run()
+  } finally {
+    clearInterval(keepAlive)
+    cleanup.dispose()
+    held.release()
+  }
+  log.info('schedule daemon stopped')
+  return 0
 }
 
 /** Run the one-shot headless client to completion. Returns the exit code. */

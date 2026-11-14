@@ -62,6 +62,7 @@ Usage:
                                        (--approval, --effort, --max-turns set its defaults)
 
   houston providers [...]              manage model providers and their API keys
+  houston schedule-daemon [...]        fire scheduled runs while Houston is closed
   houston open [dir]                   open a folder in the Houston desktop app
 
 Options:
@@ -121,6 +122,12 @@ Providers:
   houston providers remove <id>        remove a provider you added
   houston providers set-key <id> [key] store an API key (key from arg or stdin)
   houston providers remove-key <id>    forget a stored API key
+
+Scheduled runs while Houston is closed:
+  houston schedule-daemon              run the scheduler in the foreground until stopped
+  houston schedule-daemon install      start it at login, and now (per user)
+  houston schedule-daemon uninstall    stop it and remove it from login
+  houston schedule-daemon status       whether it is installed and running
 
 Credentials (checked in this order):
   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / HOUSTON_API_KEY_<ID>

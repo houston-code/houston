@@ -102,6 +102,46 @@ describe('createSchedulerService', () => {
     expect(fired).toHaveLength(2)
   })
 
+  it('leaves due occurrences to another host while shouldFire says no, without spinning, then fires', async () => {
+    let mayFire = false
+    let asked = 0
+    const fired: ScheduledRunInfo[] = []
+    const service = createSchedulerService({
+      file,
+      fire: async (s) => void fired.push({ ...s }),
+      warn: (m) => warns.push(m),
+      shouldFire: () => {
+        asked++
+        return mayFire
+      }
+    })
+    service.create(input({ spec: 'every 30m' }))
+    service.start()
+    asked = 0
+    // Due, but deferred: nothing fires and the next occurrence is untouched.
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 5)
+    expect(fired).toHaveLength(0)
+    expect(service.list()[0].lastFiredAt).toBeUndefined()
+    // An overdue occurrence is rechecked once per poll, not in a tight loop.
+    asked = 0
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3)
+    expect(asked).toBeLessThanOrEqual(4)
+    expect(asked).toBeGreaterThanOrEqual(2)
+    // Once it may fire, the overdue occurrence goes at the next poll.
+    mayFire = true
+    await vi.advanceTimersByTimeAsync(POLL_MS + 5)
+    expect(fired).toHaveLength(1)
+    service.stop()
+  })
+
+  it("leaves 'run now' to the user even while deferring", async () => {
+    const fired: ScheduledRunInfo[] = []
+    const service = createSchedulerService({ file, fire: async (s) => void fired.push({ ...s }), shouldFire: () => false })
+    const info = service.create(input())
+    await service.runNow(info.id)
+    expect(fired).toHaveLength(1)
+  })
+
   it('records a failed fire (message kept, schedule keeps recurring)', async () => {
     const { service } = makeService({
       fire: async () => {

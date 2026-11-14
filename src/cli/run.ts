@@ -2,7 +2,25 @@ import { randomUUID } from 'node:crypto'
 import { parseTuiArgs, type TuiOptions } from '../main/tui'
 import { parseHeadlessArgs, type HeadlessOptions } from '../main/headless'
 import { parseAcpArgs } from '../main/acp'
-import { readAllStdin, runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from '../main/terminalEntry'
+import {
+  readAllStdin,
+  runTuiEntry,
+  runHeadlessEntry,
+  runAcpEntry,
+  runScheduleDaemonEntry,
+  stdinIsPiped
+} from '../main/terminalEntry'
+import { realpathSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  disableScheduleDaemon,
+  installLoginAgent,
+  realLoginAgentDeps,
+  scheduleDaemonState,
+  type DaemonCommand
+} from '../main/loginAgent'
+import { runningDaemonPid } from '../main/scheduleDaemon'
+import { runScheduleDaemonCommand } from './scheduleDaemon'
 import { configureAgentHost } from '../main/agentHost'
 import {
   addPermissionRule,
@@ -102,6 +120,22 @@ export function wireCliHost(): { trustCertificatesNow: () => void } {
   return { trustCertificatesNow }
 }
 
+/**
+ * What the terminal daemon's login agent starts: this same CLI (the Node binary and
+ * the script it runs, resolved through any npm symlink) in `schedule-daemon run` mode,
+ * with the profile override when one is set.
+ */
+export function cliDaemonCommand(): DaemonCommand {
+  const script = realpathSync(process.argv[1]!)
+  const dataDir = process.env.HOUSTON_DATA_DIR?.trim()
+  return {
+    program: process.execPath,
+    args: [script, 'schedule-daemon', 'run'],
+    ...(dataDir ? { env: { HOUSTON_DATA_DIR: dataDir } } : {}),
+    logFile: join(resolveUserDataDir(), 'schedule-daemon.out.log')
+  }
+}
+
 export interface RunCliOptions {
   version: string
   /** Printed when nothing selects a mode. */
@@ -122,6 +156,18 @@ export async function runCli(argv: string[], { version, usage, argvProblem }: Ru
   const positionals = argv.slice(2).filter((a) => !a.startsWith('-'))
   if (positionals[0] === 'providers') {
     return runProvidersCommand(argv.slice(argv.indexOf('providers') + 1), providersDeps())
+  }
+  if (positionals[0] === 'schedule-daemon') {
+    const loginDeps = realLoginAgentDeps()
+    return runScheduleDaemonCommand(argv.slice(argv.indexOf('schedule-daemon') + 1), {
+      run: () => runScheduleDaemonEntry({ version }),
+      install: (cmd) => installLoginAgent(cmd, loginDeps),
+      uninstall: () => disableScheduleDaemon(loginDeps, () => runningDaemonPid()),
+      state: () => scheduleDaemonState(loginDeps, () => runningDaemonPid()),
+      command: cliDaemonCommand,
+      out: (s) => void process.stdout.write(s),
+      err: (s) => void process.stderr.write(s)
+    })
   }
   const problem = argvProblem(argv.slice(2))
   if (problem) {
