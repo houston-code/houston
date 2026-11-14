@@ -96,6 +96,7 @@ import { currentInstallMethod, upgradeHint } from './install-method'
 /** The interactive update check runs alongside the session, so it can wait longer than -p's. */
 const INTERACTIVE_UPDATE_TIMEOUT_MS = 10_000
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
+import { writeClipboardText } from './clipboard-text'
 import {
   HEADLESS_SIGNAL_EXIT,
   HEADLESS_SIGNALS,
@@ -838,6 +839,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       steerRun,
       editText: (initial) => editInEditor(initial),
       persistHistory,
+      // /copy: the platform's clipboard helper when this is a local session (never
+      // over SSH, where OSC 52 is the way to the user's own clipboard).
+      copyText: (text) => writeClipboardText(text),
       clipboardImage: () => {
         const img = readClipboardImage()
         if (!img) return { error: `no image on the clipboard (${noClipboardHint(process.platform)})` }

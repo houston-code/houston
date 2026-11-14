@@ -351,6 +351,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Reprint a tool result in full (/output [n])',
     clients: ['tui']
   },
+  {
+    name: 'copy', group: 'Terminal', args: '[n]',
+    description: 'Copy a reply, or one of its code blocks, to the clipboard',
+    clients: ['tui']
+  },
   { name: 'approval', group: 'Modes', args: '[mode]', description: 'Show or set the approval policy', clients: ['gui', 'tui'] },
   { name: 'resume', group: 'Chat', args: '[search]', description: 'Reopen (or search) a saved session', clients: ['gui', 'tui'] },
   {
@@ -482,6 +487,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   output: 'in the app, open a tool row to see its full output',
   thoughts: 'in the app, reasoning folds above each reply; Settings > Appearance > Always show reasoning keeps it open',
   transcript: 'in the app, the chat itself is the full transcript: open a tool row or the reasoning to see it in full',
+  copy: 'in the app, use the copy button on a reply or code block',
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
   proposals: 'in the app, proposed sessions appear as cards in the chat, with Start and Dismiss',
   image: 'in the app, attach an image with the + button, or paste or drop it into the message box',

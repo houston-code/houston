@@ -104,6 +104,7 @@ import {
   renderContextUsage,
   pickTips,
   STARTUP_TIPS,
+  copyPreviewLines,
   spinnerFrame,
   renderCapabilityList,
   mediaTypeForImagePath,
@@ -2939,6 +2940,100 @@ describe('runTui', () => {
     expect(rec.runs[0].messages[0].content).toMatch(/^Use the `auditor` subagent/)
     expect(rec.runs[0].messages[0].content).toContain('Audit deps')
     expect(rec.runs[0].messages[0].invokedAs).toMatchObject({ label: '/audit', typed: '/audit deps' })
+  })
+
+  describe('/copy', () => {
+    const b64 = (t: string): string => `\x1b]52;c;${Buffer.from(t, 'utf8').toString('base64')}\x07`
+    const replying = (reply: string) => (req: { messages: ChatMessage[] }) => [
+      ...req.messages,
+      { role: 'assistant' as const, content: reply }
+    ]
+    const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+    it('parses an optional count', () => {
+      const s = settings()
+      expect(parseSlashCommand('/copy', s)).toEqual({ kind: 'copy', index: 1 })
+      expect(parseSlashCommand('/copy 3', s)).toEqual({ kind: 'copy', index: 3 })
+      expect(parseSlashCommand('/copy x', s)).toEqual({ kind: 'copy', index: 1, bad: true })
+      expect(parseSlashCommand('/copy 0', s)).toEqual({ kind: 'copy', index: 1, bad: true })
+    })
+
+    it('copies the last reply over OSC 52 and the local clipboard, and says how much', async () => {
+      const { d } = deps(done, {}, replying('line one\nline two'))
+      const copied: string[] = []
+      d.copyText = (text) => {
+        copied.push(text)
+        return true
+      }
+      const t = fakeIo(['hi', '/copy', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain(b64('line one\nline two'))
+      expect(copied).toEqual(['line one\nline two'])
+      expect(t.text()).toContain('copied the last reply (17 chars, 2 lines)')
+      expect(t.text()).not.toContain('if your terminal allows')
+    })
+
+    it('hedges when only OSC 52 went out, and says when there is nothing to copy', async () => {
+      const { d } = deps(done, {}, replying('ok'))
+      const t = fakeIo(['/copy', 'hi', '/copy 2', '/copy', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain('no reply to copy yet')
+      expect(t.text()).toContain('no reply 2 back (there is 1)')
+      expect(t.text()).toContain('copied the last reply (2 chars, 1 line), if your terminal allows clipboard access')
+    })
+
+    it('offers the whole reply or a code block in the picker', async () => {
+      const reply = 'Try:\n```bash\nnpm test\n```\nor\n```js\nconsole.log(1)\n```'
+      const { d } = deps(done, {}, replying(reply))
+      const t = fakeIo(['hi', '/copy', '/copy', null])
+      let spec: PickerSpec | undefined
+      const answers: PickerOutcome[] = [{ kind: 'commit', value: '2' }, { kind: 'cancel' }]
+      t.io.select = async (s) => {
+        spec = s
+        return answers.shift() as PickerOutcome
+      }
+      d.io = t.io
+      await runTui(opts, d)
+      expect(spec?.options.map((o) => o.label)).toEqual(['Whole reply', 'npm test', 'console.log(1)'])
+      expect(spec?.options[1].description).toBe('bash, 8 chars, 1 line')
+      expect(spec?.maxRows).toBe(9)
+      // The highlighted row previews what it would copy.
+      expect(spec?.preview?.(spec.options[2], 80)).toEqual(['  console.log(1)'])
+      expect(spec?.preview?.(spec.options[0], 80)[0]).toBe('  Try:')
+      expect(t.text()).toContain(b64('console.log(1)'))
+      expect(t.text()).toContain('copied code block 2 of 2 from the last reply (14 chars, 1 line)')
+      expect(t.text()).toContain('nothing copied')
+    })
+
+    it('previews at most a few lines, control-stripped, and counts the rest', () => {
+      const text = ['\x1b]0;pwned\x07a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', ''].join('\n')
+      const lines = copyPreviewLines(text, (t) => t)
+      // The escape and bell bytes are gone, so nothing reaches the terminal as a sequence.
+      expect(lines).toEqual(['  ]0;pwneda', '  b', '  c', '  d', '  e', '  f', '  … 2 more lines'])
+      expect(copyPreviewLines('one\n', (t) => t)).toEqual(['  one'])
+    })
+
+    it('asks by number when there is no picker', async () => {
+      const reply = 'x\n```\nabc\n```'
+      const { d } = deps(done, {}, replying(reply))
+      const t = fakeIo(['hi', '/copy', '1', '/copy', '', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain(b64('abc'))
+      expect(t.text()).toContain(b64(reply))
+    })
+
+    it('strips control characters from the labels it prints', async () => {
+      const reply = '```\n\x1b]0;pwned\x07evil\n```'
+      const { d } = deps(done, {}, replying(reply))
+      const t = fakeIo(['hi', '/copy', '', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).not.toContain('\x1b]0;pwned')
+      expect(t.text()).toContain(b64(reply))
+    })
   })
 
   it('/share copies the invite over OSC 52 and prints it', async () => {

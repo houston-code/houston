@@ -115,6 +115,7 @@ import {
 } from './tui-sessions'
 import { htmlToAnsi } from './syntax'
 import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
+import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
 import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
 import { workspaceLabel } from '@shared/notify'
 import {
@@ -1668,6 +1669,8 @@ export type SlashResult =
   | { kind: 'transcript' }
   /** Reprint a past tool result in full (/output [n]). */
   | { kind: 'output'; index: number }
+  /** Copy the n-th latest reply, or one of its code blocks, to the clipboard (/copy [n]). */
+  | { kind: 'copy'; index: number; bad?: boolean }
   /** List (and open) the background sessions the agent spawned (/spawned). */
   | { kind: 'spawned' }
   /** List or act on the sessions the agent proposed (/proposals [start|here|dismiss n]). */
@@ -1829,6 +1832,13 @@ export function parseSlashCommand(
       const n = Number.parseInt(arg.trim(), 10)
       return { kind: 'output', index: Number.isInteger(n) && n >= 1 ? n : 1 }
     }
+    case 'copy': {
+      // `/copy` is the last reply; a number counts back from there.
+      const a = arg.trim()
+      if (!a) return { kind: 'copy', index: 1 }
+      const n = Number(a)
+      return Number.isInteger(n) && n >= 1 ? { kind: 'copy', index: n } : { kind: 'copy', index: 1, bad: true }
+    }
     case 'hooks':
       return { kind: 'hooks', action: parseSettingsAction(arg) }
     case 'mcp':
@@ -1956,6 +1966,7 @@ export const HELP_TEXT = [
   '  /thoughts [mode]      how reasoning shows as it streams: show | summary | hide (Alt-T)',
   '  /transcript           the whole session full screen, with reasoning and full tool output (Ctrl-O)',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
+  '  /copy [n]             copy a reply (n back; default the last) or one of its code blocks',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
   '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
@@ -2000,7 +2011,8 @@ export const STARTUP_TIPS = [
   'Shift-Enter or Ctrl-J starts a new line',
   '/resume filters saved chats as you type; Ctrl-A shows every folder',
   'Ctrl-O opens the whole session full screen, with reasoning and full tool output',
-  'Alt-T cycles how the model\'s reasoning shows: in full, one line, or hidden'
+  'Alt-T cycles how the model\'s reasoning shows: in full, one line, or hidden',
+  '/copy puts the last reply, or one of its code blocks, on your clipboard'
 ]
 
 /**
@@ -3036,6 +3048,12 @@ export interface TuiDeps {
    * were missing. Absent ⇒ the command says to use `/image <path>`.
    */
   clipboardImage?: () => { image: ImageAttachment } | { error: string }
+  /**
+   * Put text on the system clipboard through the platform's own helper, for
+   * `/copy`. True when it took the text. Absent (or false, as over SSH) leaves
+   * OSC 52, which the command always sends too.
+   */
+  copyText?: (text: string) => boolean
   /**
    * Open `initial` text in the user's `$VISUAL`/`$EDITOR` and return the edited
    * result (null if no editor is configured or the edit was aborted). Used by the
@@ -4569,6 +4587,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(`${renderRecoveredOutput(toolResultsFrom(messages), result.index, paint)}\n`)
         continue
       }
+      if (result.kind === 'copy') {
+        await runCopyCommand(result, messages, deps, paint)
+        continue
+      }
       if (result.kind === 'reasoning') {
         if (!result.effort) {
           deps.io.out(`${renderReasoningStatus(effort, activeModelReasons(deps, providerId, model), paint)}\n`)
@@ -5954,6 +5976,104 @@ function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
     paint('  Changes here apply on your next message, no restart needed.', 'dim')
   ]
   deps.io.out(`${lines.join('\n')}\n`)
+}
+
+/** How many lines of the highlighted row's text the /copy picker previews. */
+const COPY_PREVIEW_LINES = 6
+
+/** The /copy picker's preview: the first lines of the text, dimmed and control-stripped. */
+export function copyPreviewLines(text: string, paint: Painter): string[] {
+  const lines = stripControlCharsKeepLines(text).replace(/\n+$/, '').split('\n')
+  const shown = lines.slice(0, COPY_PREVIEW_LINES).map((l) => paint(`  ${l}`, 'dim'))
+  const rest = lines.length - COPY_PREVIEW_LINES
+  if (rest > 0) shown.push(paint(`  … ${rest} more line${rest === 1 ? '' : 's'}`, 'dim'))
+  return shown
+}
+
+/**
+ * /copy [n]: copy the n-th latest reply to the clipboard. A reply with fenced code
+ * blocks offers the whole reply or one block. OSC 52 goes out every time (it works
+ * over SSH, where the terminal allows it); the platform's own clipboard helper is
+ * used too when this is a local session.
+ */
+async function runCopyCommand(
+  cmd: { index: number; bad?: boolean },
+  messages: readonly ChatMessage[],
+  deps: TuiDeps,
+  paint: Painter
+): Promise<void> {
+  if (cmd.bad) {
+    deps.io.out(paint('· usage: /copy, or /copy <n> for the n-th latest reply\n', 'yellow'))
+    return
+  }
+  const total = copyableReplies(messages).length
+  const reply = nthLatestReply(messages, cmd.index)
+  if (reply === null) {
+    deps.io.out(
+      paint(
+        total === 0
+          ? '· no reply to copy yet\n'
+          : `· no reply ${cmd.index} back (there ${total === 1 ? 'is 1' : `are ${total}`})\n`,
+        'yellow'
+      )
+    )
+    return
+  }
+  const which = cmd.index === 1 ? 'the last reply' : `reply ${cmd.index} back`
+  const blocks = extractCodeBlocks(reply)
+  let text = reply
+  let what = which
+  if (blocks.length) {
+    const options = [
+      { label: 'Whole reply', value: '0', description: describeCopied(reply) },
+      ...blocks.map((b, i) => ({
+        label: stripControlChars(codeBlockLabel(b)),
+        value: String(i + 1),
+        description: `${b.lang ? `${stripControlChars(b.lang)}, ` : ''}${describeCopied(b.code)}`
+      }))
+    ]
+    let picked: string | null = null
+    if (deps.io.select) {
+      const r = await deps.io.select({
+        title: `Copy from ${which}:`,
+        options,
+        maxRows: 9,
+        // The first lines of what the highlighted row would copy.
+        preview: (o) => copyPreviewLines(o.value === '0' ? reply : (blocks[Number(o.value) - 1]?.code ?? ''), paint)
+      })
+      if (r.kind === 'cancel') return void deps.io.out(paint('· nothing copied\n', 'dim'))
+      if (r.kind === 'commit') picked = r.value
+    }
+    if (picked === null) {
+      const list = options.map((o) => `  ${paint(`${o.value})`, 'dim')} ${o.label}  ${paint(o.description, 'dim')}`)
+      deps.io.out(`Copy from ${which}:\n${list.join('\n')}\n`)
+      const ans = await deps.io.readLine(`copy which? [0-${blocks.length}, Enter for the whole reply] `, {
+        discardPending: true
+      })
+      if (ans === null) return void deps.io.out(paint('· nothing copied\n', 'dim'))
+      const a = ans.trim() || '0'
+      if (!options.some((o) => o.value === a)) return void deps.io.out(paint('· nothing copied\n', 'dim'))
+      picked = a
+    }
+    const n = Number(picked)
+    if (n >= 1) {
+      text = blocks[n - 1].code
+      what = `code block ${n}${blocks.length > 1 ? ` of ${blocks.length}` : ''} from ${which}`
+    }
+  }
+  // The reply goes on the clipboard as the model wrote it: OSC 52 carries it base64'd,
+  // so nothing in it reaches the terminal as an escape sequence.
+  deps.io.out(osc52Copy(text))
+  const native = deps.copyText?.(text) === true
+  const size = describeCopied(text)
+  deps.io.out(
+    paint(
+      native
+        ? `✓ copied ${what} (${size})\n`
+        : `✓ copied ${what} (${size}), if your terminal allows clipboard access\n`,
+      'green'
+    )
+  )
 }
 
 /** /hooks: list, add (guided), or remove a lifecycle hook. Persists via deps.updateSettings. */

@@ -710,7 +710,7 @@ safe subset in place. In the desktop app:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/add-dir`, `/vim`, `/verbose`, `/output`, `/thoughts`,
+**Terminal-only commands.** `/add-dir`, `/vim`, `/verbose`, `/output`, `/copy`, `/thoughts`,
 `/transcript`, `/spawned`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`,
 `/permissions`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
@@ -901,6 +901,14 @@ conversation, not a log. To see more:
   file, removed when the editor closes), and `q`, `Esc` or `Ctrl-C` close it, putting
   your draft back exactly as it was. It follows the terminal when you resize it. While
   a turn runs, `Ctrl-O` says it will open once the turn ends rather than opening.
+- **`/copy`** copies the last reply to the clipboard, as the model wrote it (Markdown
+  and all). `/copy 2` copies the reply before it. When the reply has fenced code
+  blocks, a list offers the whole reply or one block (each shown by its first line).
+  It says how many characters and lines it copied. The copy goes out as an OSC 52
+  request, which works over SSH where the terminal allows clipboard access; on a
+  local session Houston also hands it to the system clipboard (`pbcopy` on macOS,
+  `wl-copy` or `xclip` on Linux, `clip.exe` on Windows) when one is installed. In the
+  desktop app, use the copy button on a reply or a code block instead.
 
 Very long output is capped, with a note saying how much was left out. When a shell
 command's output is cut in the middle, Houston saves the whole output, with
