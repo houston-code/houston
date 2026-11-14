@@ -73,6 +73,14 @@ write('fix-ci.json', {
     head_repository: { full_name: repository }
   }
 })
+write('implement.json', {
+  action: 'labeled',
+  repository: repoField,
+  label: { name: 'houston' },
+  issue: { number: 7, state: 'open', title: 'Say goodbye too' },
+  sender: { login: 'maintainer', type: 'User' }
+})
+write('task.json', { schedule: '0 6 * * 1', repository: repoField })
 
 writeFileSync(
   join(dir, 'scenarios.json'),
@@ -99,6 +107,21 @@ writeFileSync(
           { tool: 'read_file', args: { path: 'greet.mjs' } },
           { tool: 'write_file', args: { path: 'greet.mjs', content: "console.log('hello')\n" } },
           { text: 'The greeting was misspelled in greet.mjs. Restored "hello", which check.mjs expects.' }
+        ]
+      },
+      {
+        match: 'labelled issue #7',
+        steps: [
+          { tool: 'gh_issue_view', args: { number: 7, comments: true } },
+          { tool: 'write_file', args: { path: 'farewell.mjs', content: "console.log('goodbye')\n" } },
+          { text: 'Added farewell.mjs, which prints "goodbye".' }
+        ]
+      },
+      {
+        match: 'scheduled GitHub Actions job',
+        steps: [
+          { tool: 'read_file', args: { path: 'greet.mjs' } },
+          { text: 'Weekly report: greet.mjs prints the greeting.' }
         ]
       },
       { match: '', steps: [{ text: 'Nothing to do.' }] }
