@@ -104,7 +104,7 @@ export async function sampleDesktop(s: SoakApp, label: string, gc: boolean): Pro
 export function strayChildren(s: SoakApp, electronPids: number[]): string[] {
   const own = new Set(electronPids)
   return descendants(s.mainPid)
-    .filter((p) => !own.has(p.pid) && !p.command.includes(s.execPath) && !/crashpad/i.test(p.command))
+    .filter((p) => !own.has(p.pid) && !p.command.includes(s.execPath) && !isOwnHelper(p.command))
     .map((p) => `${p.pid} ${p.command.slice(0, 120)}`)
 }
 
@@ -123,6 +123,14 @@ export async function settledSample(s: SoakApp, label: string, count = 4, gapMs 
   return { ...lowest, rendererHeapMB: Math.min(...all.map((x) => x.rendererHeapMB)) }
 }
 
+/**
+ * Helpers that come with a process rather than being started by Houston: Chromium's
+ * crash reporter, and the console host Windows attaches to a console process.
+ */
+export function isOwnHelper(command: string): boolean {
+  return /crashpad/i.test(command) || /\\conhost\.exe\b/i.test(command)
+}
+
 /** Send one soak turn and wait for the model's finishing line to show in the transcript. */
 export async function runTurn(s: SoakApp, turn: number, timeoutMs: number): Promise<void> {
   const composer = s.page.locator('textarea.composer__input')
@@ -130,14 +138,25 @@ export async function runTurn(s: SoakApp, turn: number, timeoutMs: number): Prom
   await composer.fill(`${TURN_PROMPT} ${turn}: keep going with the task.`)
   await composer.press('Enter')
   // Follow the transcript if it stopped following, so the last row renders.
-  await s.page.waitForFunction(
-    (marker) => {
-      ;(document.querySelector('.jump-bottom') as HTMLElement | null)?.click()
-      return document.body.innerText.includes(marker)
-    },
-    `${TURN_DONE}-${turn}`,
-    { timeout: timeoutMs, polling: 1000 }
-  )
+  try {
+    await s.page.waitForFunction(
+      (marker) => {
+        ;(document.querySelector('.jump-bottom') as HTMLElement | null)?.click()
+        return document.body.innerText.includes(marker)
+      },
+      `${TURN_DONE}-${turn}`,
+      { timeout: timeoutMs, polling: 1000 }
+    )
+  } catch (err) {
+    // Say what the window showed, so a turn that never finished on a CI runner can be
+    // diagnosed from the log and the artifact.
+    const dir = join(ROOT, 'test-results', 'soak')
+    mkdirSync(dir, { recursive: true })
+    await s.page.screenshot({ path: join(dir, `turn-${turn}-timeout-${process.platform}.png`) }).catch(() => {})
+    const tail = await s.page.evaluate(() => document.body.innerText.slice(-3000)).catch(() => '(window gone)')
+    console.log(`[soak] turn ${turn} did not finish; the window ends with:\n${tail}`)
+    throw err
+  }
 }
 
 /** Leave the open chat for a new, empty one. */

@@ -9,10 +9,11 @@ import { startSoakModel, TURN_PROMPT, type SoakModel } from './model'
 import { envNumber, report, soakWorkspace, type Check } from './fixtures'
 import { descendants, processesTagged, residentMB, waitUntil } from './processes'
 import { budget } from './budgets'
+import { isOwnHelper } from './desktop'
 
 const TURNS = envNumber('SOAK_TURNS', 12)
 const STEPS = envNumber('SOAK_STEPS', 12)
-const TURN_TIMEOUT_MS = envNumber('SOAK_TURN_TIMEOUT_MS', 600_000)
+const TURN_TIMEOUT_MS = envNumber('SOAK_TURN_TIMEOUT_MS', 180_000)
 const CLI = join(ROOT, 'out', 'cli', 'houston-cli.cjs')
 
 /** A headless CLI session reading one turn per stdin line, with its result lines counted. */
@@ -103,7 +104,9 @@ test('a long heavy CLI session keeps its memory flat and gives it back', async (
     }
     await new Promise((r) => setTimeout(r, 15_000))
     const idle = residentMB(pid)
-    const stray = descendants(pid).map((p) => `${p.pid} ${p.command.slice(0, 120)}`)
+    const stray = descendants(pid)
+      .filter((p) => !isOwnHelper(p.command))
+      .map((p) => `${p.pid} ${p.command.slice(0, 120)}`)
     samples.push({ label: 'idle 15s after the last turn', residentMB: Math.round(idle), stray })
     cli.child.stdin.end()
     expect(await cli.exited, 'the CLI exits cleanly at end of input').toBe(0)

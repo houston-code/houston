@@ -7,7 +7,7 @@ import { budget } from './budgets'
 
 const TURNS = envNumber('SOAK_TURNS', 12)
 const STEPS = envNumber('SOAK_STEPS', 12)
-const TURN_TIMEOUT_MS = envNumber('SOAK_TURN_TIMEOUT_MS', 600_000)
+const TURN_TIMEOUT_MS = envNumber('SOAK_TURN_TIMEOUT_MS', 180_000)
 
 /**
  * One long, heavy chat in the desktop app: TURNS turns of STEPS tool calls each, every
