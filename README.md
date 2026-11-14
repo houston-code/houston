@@ -838,8 +838,8 @@ what you don't recognize.
 
 `status` is `success`, `limit`, `stalled`, `approval_denied`, `error`,
 `schema_invalid` (the answer never matched `--output-schema`), `input_error` (a
-bad `--input-format stream-json` line), or `verify_failed` (the last `--verify`
-check still failed).
+bad `--input-format stream-json` line), `verify_failed` (the last `--verify`
+check still failed), or `aborted` (a signal stopped the run before it finished).
 `limitReason` (`max-steps`, `max-output`, or `stalled`) is present when the loop
 stopped short. `turns` counts the agent's model steps (the unit `--max-turns`
 caps); `costUsd` and the token totals include subagent and review rounds.
@@ -860,7 +860,7 @@ matching value) or `schemaErrors` (why it didn't match).
 | 3 | The run hit a budget before finishing: its step cap (`--max-turns`, or your saved limit) or the model's output limit. | `limit` |
 | 4 | The final answer still didn't match `--output-schema` after one corrective round. | `schema_invalid` |
 | 5 | The agent finished, but the last `--verify` check it ran still failed once its fix-up passes ran out. | `verify_failed` |
-| 129, 130, 143 | Stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, and the chat is saved. A second signal exits at once. | `error` |
+| 129, 130, 143 | Stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, and the chat is saved. A second signal exits at once. | `aborted` |
 
 When several apply, a failure wins over a budget stop, and both win over a failed
 check. Only the last `--verify` check counts: a failure the agent then fixed is a

@@ -323,6 +323,8 @@ vi.mock('./verify-gate', async (importActual) => {
 const {
   startRun,
   cancelRun,
+  cancelAllRuns,
+  waitForRunsToEnd,
   resolveApproval,
   resolveQuestion,
   resolvePlan,
@@ -4096,6 +4098,42 @@ describe('ask_user', () => {
       | { output: string }
       | undefined
     expect(result?.output).toContain('stopped the agent')
+  })
+
+  it('cancelAllRuns stops every live run, and waitForRunsToEnd sees them unwind', async () => {
+    // A terminal client stopping on a signal: whatever is mid-turn is cancelled, and
+    // the exit waits (bounded) for each run to record its stop.
+    expect(cancelAllRuns()).toBe(0)
+    expect(await waitForRunsToEnd(0)).toBe(true)
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'q1', name: 'ask_user', arguments: { question: 'Wait?' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ]
+    ])
+    let asked!: () => void
+    const blocked = new Promise<void>((r) => (asked = r))
+    const events: AgentEvent[] = []
+    const run = startRun(
+      {
+        runId: 'run-cancel-all',
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      (e) => {
+        events.push(e)
+        if (e.type === 'tool_question') asked()
+      }
+    )
+    await blocked
+    expect(await waitForRunsToEnd(20, 5)).toBe(false)
+    expect(cancelAllRuns()).toBe(1)
+    expect(await waitForRunsToEnd(5_000, 5)).toBe(true)
+    await run
+    expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
   })
 
   it('fires plugin lifecycle hooks: onUserMessage, then onToolStart/onToolResult around a tool', async () => {

@@ -1594,6 +1594,7 @@ describe('headlessExitCode', () => {
     expect(headlessExitCode('stalled')).toBe(1)
     expect(headlessExitCode('approval_denied')).toBe(1)
     expect(headlessExitCode('error')).toBe(1)
+    expect(headlessExitCode('aborted')).toBe(1)
     expect(headlessExitCode('schema_invalid')).toBe(4)
     expect(headlessExitCode('input_error')).toBe(2)
     expect(headlessExitCode('verify_failed')).toBe(5)
@@ -1832,7 +1833,7 @@ describe('runHeadless termination signals', () => {
     }
   }
 
-  it('cancels the live run, writes an error result line, and exits 128+signal', async () => {
+  it('cancels the live run, writes an aborted result line, and exits 128+signal', async () => {
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
       const b = blockedRun()
       const { d, out, err } = deps([], b.extra)
@@ -1845,7 +1846,7 @@ describe('runHeadless termination signals', () => {
       expect(code, signal).toBe(HEADLESS_SIGNAL_EXIT[signal])
       expect(b.cancelled).toEqual(['run-1'])
       expect(resultLine(out)).toMatchObject({
-        status: 'error',
+        status: 'aborted',
         stopReason: 'aborted',
         error: `interrupted by ${signal}`
       })
@@ -1894,7 +1895,7 @@ describe('runHeadless termination signals', () => {
     b.raise('SIGTERM')
     expect(await done).toBe(143)
     expect(runs).toBe(1)
-    expect(resultLine(out)).toMatchObject({ status: 'error', error: 'interrupted by SIGTERM' })
+    expect(resultLine(out)).toMatchObject({ status: 'aborted', error: 'interrupted by SIGTERM' })
   })
 
   it('stops waiting for the next stream-json turn on a signal between turns', async () => {

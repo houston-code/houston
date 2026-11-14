@@ -776,6 +776,30 @@ export function cancelRun(runId: string): void {
 }
 
 /**
+ * Cancel every live run in this process, foreground and background alike: a terminal
+ * client stopping on a signal, which would otherwise exit with runs mid-step and their
+ * stop never recorded. Returns how many runs were cancelled.
+ */
+export function cancelAllRuns(): number {
+  const ids = [...runs.keys()]
+  for (const id of ids) cancelRun(id)
+  return ids.length
+}
+
+/**
+ * Resolve once no run is live (each cancelled run has unwound and released its slot),
+ * or after `timeoutMs`, whichever is first. Resolves true when every run ended.
+ */
+export async function waitForRunsToEnd(timeoutMs: number, pollMs = 25): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (runs.size > 0) {
+    if (Date.now() >= deadline) return false
+    await new Promise((r) => setTimeout(r, pollMs))
+  }
+  return true
+}
+
+/**
  * Steer a running turn: hand the model a course correction it will see before its
  * next step, instead of after the whole turn finishes.
  *
