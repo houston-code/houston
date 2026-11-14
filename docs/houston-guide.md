@@ -370,6 +370,27 @@ list, and pick a model.
 - It warns you before you pick a model that can't call tools.
 - Keys are stored encrypted by the OS keychain and never reach the app's interface.
 
+### Local and OpenAI-compatible models
+
+- **Reasoning shows as reasoning.** Compatible servers send a model's thinking in
+  different ways: a `reasoning_content` or `reasoning` field, OpenRouter's
+  `reasoning_details`, or a `<think>…</think>` block at the start of the reply.
+  Houston shows all of them as the model's reasoning, not as its answer. On
+  OpenRouter, the reasoning is sent back with later requests so the model can carry it
+  across tool calls; other servers never receive it back.
+- **Tool calls written as text still run.** When a local model writes its tool call
+  into the reply instead of as a real call (bare or fenced JSON, `<tool_call>` blocks,
+  Qwen3-Coder's `<function=…>` format, or Mistral's `[TOOL_CALLS]`), Houston runs it,
+  as long as it names a tool the request offered and nothing else is in the reply.
+- **Ollama's context size.** Ollama runs a model with a context it picks at load time,
+  often far smaller than the model supports, and silently drops the start of a longer
+  prompt (Houston's instructions and tool definitions go first). When Ollama reports
+  that context (a loaded model, or `num_ctx` in its Modelfile) and the first request
+  of a turn won't fit, Houston says so and names the fix: start Ollama with
+  `OLLAMA_CONTEXT_LENGTH=32768` (or more), or add `PARAMETER num_ctx 32768` to the
+  model's Modelfile and run `ollama create`. Ollama's OpenAI-compatible endpoint takes
+  no context setting per request, so Houston can't raise it for you.
+
 ### Each chat keeps its own settings
 
 A chat's model, reasoning effort, and approval mode belong to that chat.
