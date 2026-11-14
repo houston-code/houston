@@ -97,6 +97,7 @@ import {
   type ScheduledRunInfo,
   type ScheduledRunInput
 } from './scheduler'
+import { ScopeCache } from './fileScope'
 
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
@@ -5307,6 +5308,163 @@ describe('ask_user', () => {
       const pollOutputs = outputs(r).filter((o) => o.startsWith('chunk#'))
       expect(pollOutputs).toEqual(['chunk#1', 'chunk#2', 'chunk#3'])
     })
+  })
+})
+
+describe('search scope memo (per run)', () => {
+  // A repository in the workspace, searched by the real search_files tool. Between
+  // searches a tracked hidden file arrives, or lib/ becomes ignored (its kept.ts is
+  // tracked, so still searched, and its loose.ts is not). A scope plan carried past
+  // either change answers for the old tree on both search backends, so each result
+  // below is only right if the loop planned afresh.
+  beforeEach(() => {
+    mkdirSync(join(ws, 'lib'))
+    for (const rel of ['app.ts', 'lib/kept.ts', 'lib/loose.ts']) writeFileSync(join(ws, rel), 'needle\n')
+    execFileSync('git', ['init', '-q'], { cwd: ws, stdio: 'ignore' })
+    execFileSync('git', ['add', 'app.ts', 'lib/kept.ts'], { cwd: ws, stdio: 'ignore' })
+  })
+
+  const step = { type: 'done', stopReason: 'tool_use' } as const
+  const end = { type: 'done', stopReason: 'end_turn' } as const
+  const search = (id: string): ProviderStreamEvent => ({
+    type: 'tool_call',
+    call: { id, name: 'search_files', arguments: { pattern: 'needle', files_with_matches: true } }
+  })
+  /** Each search_files result as a sorted, '/'-separated file list. */
+  const searches = (r: RunResult): string[][] =>
+    r.events
+      .filter((e) => e.type === 'tool_result' && e.name === 'search_files')
+      .map((e) => (e as { output: string }).output.split('\n').map((l) => l.replace(/\\/g, '/')).sort())
+  const trackHidden = (): void => {
+    mkdirSync(join(ws, '.github'), { recursive: true })
+    writeFileSync(join(ws, '.github', 'ci.yml'), 'needle\n')
+    execFileSync('git', ['add', '-f', '.github/ci.yml'], { cwd: ws, stdio: 'ignore' })
+  }
+  const noArgs = { type: 'object', properties: {}, additionalProperties: false } as const
+  // A shell command that tracks a new hidden file, as `git add -f` would.
+  const probeTrack = (): ToolDef => ({
+    kind: 'shell',
+    summarize: () => 'track a hidden file',
+    schema: { name: 'probe_track', description: 'Tracks .github/ci.yml.', parameters: noArgs },
+    execute: async () => {
+      trackHidden()
+      return 'tracked'
+    }
+  })
+  // A write that ignores lib/.
+  const probeIgnore = (): ToolDef => ({
+    kind: 'write',
+    summarize: () => 'ignore lib/',
+    schema: {
+      name: 'probe_ignore',
+      description: 'Writes .gitignore.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+        additionalProperties: false
+      }
+    },
+    execute: async () => {
+      writeFileSync(join(ws, '.gitignore'), 'lib/\n')
+      return 'wrote .gitignore'
+    }
+  })
+
+  it('hands every call in a run the same memo, and each run a new one', async () => {
+    const seen: unknown[] = []
+    h.probeTools = [
+      {
+        kind: 'read',
+        summarize: () => 'probe glob',
+        schema: {
+          name: 'glob',
+          description: 'Records the scope memo it was handed.',
+          parameters: {
+            type: 'object',
+            properties: { pattern: { type: 'string' } },
+            required: ['pattern'],
+            additionalProperties: false
+          }
+        },
+        execute: async (_args, ctx) => {
+          seen.push(ctx.scopeCache)
+          return 'ok'
+        }
+      }
+    ]
+    const globCall = (id: string, pattern: string): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'glob', arguments: { pattern } }
+    })
+    const turns = (): ProviderStreamEvent[][] => [[globCall('g1', '*.ts'), step], [globCall('g2', '*.md'), step], [end]]
+    await run({ policy: 'full-auto', turns: turns() })
+    await run({ policy: 'full-auto', turns: turns() })
+    expect(seen).toHaveLength(4)
+    expect(seen[0]).toBeInstanceOf(ScopeCache)
+    expect(seen[1]).toBe(seen[0])
+    expect(seen[2]).toBeInstanceOf(ScopeCache)
+    expect(seen[3]).toBe(seen[2])
+    expect(seen[2]).not.toBe(seen[0])
+  })
+
+  it('plans afresh after a shell call and after a write, within one run', async () => {
+    h.mcpDefs = [probeTrack(), probeIgnore()]
+    const r = await run({
+      policy: 'full-auto',
+      // An unconfined shell (Linux CI) prompts even in full-auto.
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [search('q1'), step],
+        [{ type: 'tool_call', call: { id: 's1', name: 'probe_track', arguments: {} } }, step],
+        [search('q2'), step],
+        [{ type: 'tool_call', call: { id: 'w1', name: 'probe_ignore', arguments: { path: '.gitignore' } } }, step],
+        [search('q3'), step],
+        [end]
+      ]
+    })
+    expect(searches(r)).toEqual([
+      ['app.ts', 'lib/kept.ts', 'lib/loose.ts'],
+      ['.github/ci.yml', 'app.ts', 'lib/kept.ts', 'lib/loose.ts'],
+      ['.github/ci.yml', 'app.ts', 'lib/kept.ts']
+    ])
+  })
+
+  it('plans afresh after a writable subagent', async () => {
+    const r = await run({
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [search('q1'), step],
+        [
+          {
+            type: 'tool_call',
+            call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'ignore lib', prompt: 'ignore lib/' } }
+          },
+          step
+        ],
+        // The subagent ignores lib/, then reports.
+        [{ type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: '.gitignore', content: 'lib/\n' } } }, step],
+        [{ type: 'text', text: 'ignored lib/' }, end],
+        [search('q2'), step],
+        [end]
+      ]
+    })
+    expect(readFileSync(join(ws, '.gitignore'), 'utf8')).toBe('lib/\n')
+    expect(searches(r)).toEqual([
+      ['app.ts', 'lib/kept.ts', 'lib/loose.ts'],
+      ['app.ts', 'lib/kept.ts']
+    ])
+  })
+
+  it('carries nothing into the next run', async () => {
+    const turns = (): ProviderStreamEvent[][] => [[search('q1'), step], [end]]
+    const first = await run({ policy: 'full-auto', turns: turns() })
+    // Outside any run's tool calls, as the user's own `git add` would be.
+    trackHidden()
+    const second = await run({ policy: 'full-auto', turns: turns() })
+    expect(searches(first)).toEqual([['app.ts', 'lib/kept.ts', 'lib/loose.ts']])
+    expect(searches(second)).toEqual([['.github/ci.yml', 'app.ts', 'lib/kept.ts', 'lib/loose.ts']])
   })
 })
 
