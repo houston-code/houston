@@ -35,7 +35,7 @@ import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation }
 import { parseHeadlessArgs } from './headless'
 import { drainStdio } from './stdioDrain'
 import { parseTuiArgs } from './tui'
-import { runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from './terminalEntry'
+import { runTuiEntry, runHeadlessEntry, runAcpEntry, runScheduleDaemonEntry, stdinIsPiped } from './terminalEntry'
 import { activeBackendId, isSandboxed } from './sandbox'
 import { trustSystemCertificates } from './system-ca'
 import { configureOutboundProxy } from './outbound-proxy'
@@ -250,10 +250,16 @@ function createWindow(): BrowserWindow {
 // Checked first, since the editor owns the whole session from here.
 const acp = process.argv.includes('--acp')
 
+// Schedule daemon mode: `Houston --schedule-daemon`, started by the login agent that
+// Settings > Scheduled runs installs. No window; fires scheduled runs while the app is
+// closed, reading keys from this app's credential store. Checked before the
+// single-instance lock, which belongs to the window app (the daemon keeps its own).
+const scheduleDaemon = !acp && process.argv.includes('--schedule-daemon')
+
 // Interactive terminal mode: `Houston -i [--cwd dir] [--approval policy] ...`.
 // A stay-resident REPL with no window; checked before headless so a lone `-i`
 // (no `-p`) picks the interactive path.
-const tui = acp ? null : parseTuiArgs(process.argv, process.cwd())
+const tui = acp || scheduleDaemon ? null : parseTuiArgs(process.argv, process.cwd())
 
 // One-shot headless mode: `Houston -p "<prompt>" [--cwd dir] [--full-auto] [--json]`.
 // Runs the agent without a window and exits with a status code; everything else
@@ -261,7 +267,8 @@ const tui = acp ? null : parseTuiArgs(process.argv, process.cwd())
 // edit, so it needs `--full-auto` (or `--approval auto-edit`) headless. `-p -` (or
 // a bare `-p` with input piped in) reads the prompt from stdin; with no `-p` at all
 // a launch opens the window, whatever stdin holds.
-const headless = acp || tui ? null : parseHeadlessArgs(process.argv, process.cwd(), { stdinPiped: stdinIsPiped() })
+const headless =
+  acp || scheduleDaemon || tui ? null : parseHeadlessArgs(process.argv, process.cwd(), { stdinPiped: stdinIsPiped() })
 
 // Each mode below verifies outbound TLS against the OS certificate store too, by calling
 // trustSystemCertificates(). Without it, a network that re-signs TLS with a root CA
@@ -282,6 +289,15 @@ if (acp) {
     trustSystemCertificates()
     await initSecrets()
     const code = await runAcpEntry({ version: app.getVersion() })
+    app.exit(await flushBeforeExit(code))
+  })
+} else if (scheduleDaemon) {
+  // Background-only: no Dock icon for a process with no window.
+  app.dock?.hide()
+  app.whenReady().then(async () => {
+    trustSystemCertificates()
+    await initSecrets()
+    const code = await runScheduleDaemonEntry({ version: app.getVersion(), flush: flushSecrets })
     app.exit(await flushBeforeExit(code))
   })
 } else if (tui) {

@@ -1109,6 +1109,13 @@ the interactive setup list shows them, and any endpoint added with
 server is one pick away. An unknown flag or a stray argument stops with an
 error and the usage rather than being ignored.
 
+`houston schedule-daemon` fires scheduled runs while no Houston window or terminal
+session is open: run it in the foreground, or `houston schedule-daemon install` to
+start it at login (a per-user LaunchAgent, systemd user service, or Task Scheduler
+task; `uninstall` removes it, `status` reports it). It reads keys the same way as
+every CLI command. Desktop users turn the same thing on from Settings > Scheduled
+runs, where it runs as the app and uses the app's saved keys.
+
 `houston open [dir]` hands a folder (the current one by default) to the desktop
 app as a new chat, through a `houston://open` link. The app also opens
 `houston://chat/<id>` and `houston://settings/<page>` links; it asks before opening

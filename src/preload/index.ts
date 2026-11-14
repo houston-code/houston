@@ -68,7 +68,13 @@ import type {
   WhatsNew
 } from '@shared/update'
 import type { VerifySuggestion } from '@shared/types'
-import type { ScheduleCreateRequest, SchedulePreview, ScheduleResult, ScheduleView } from '@shared/schedules'
+import type {
+  ScheduleCreateRequest,
+  ScheduleDaemonStatus,
+  SchedulePreview,
+  ScheduleResult,
+  ScheduleView
+} from '@shared/schedules'
 import type { ImportOutcome, ImportScan } from '@shared/importConfig'
 import type { CustomKind, CustomScope, CustomizeOverview, CustomizeResult } from '@shared/customize'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
@@ -280,6 +286,11 @@ const api = {
   /** Start one run of a schedule now, as a background session. */
   runScheduleNow: (id: string): Promise<ScheduleResult> => ipcRenderer.invoke(IPC.schedulesRunNow, id),
   deleteSchedule: (id: string): Promise<ScheduleResult> => ipcRenderer.invoke(IPC.schedulesDelete, id),
+  /** Whether scheduled runs fire while Houston is closed. */
+  getScheduleDaemon: (): Promise<ScheduleDaemonStatus> => ipcRenderer.invoke(IPC.schedulesDaemonGet),
+  /** Turn that on or off (installs or removes a per-user login agent). */
+  setScheduleDaemon: (enabled: boolean): Promise<ScheduleDaemonStatus> =>
+    ipcRenderer.invoke(IPC.schedulesDaemonSet, enabled),
   /**
    * OAuth sign-in for a saved remote MCP server: opens the browser flow and
    * stores the tokens. Resolves once the flow completes (or fails); the returned
