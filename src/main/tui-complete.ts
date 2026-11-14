@@ -136,33 +136,35 @@ export function renderMentionMenu(
  * The live `@` dropdown: matching files under the composer as the mention is typed,
  * as `/` shows commands. The lookup is async, so the first draw for a new query shows
  * the last rows (or none) and `redraw` repaints once the files are in. Only the newest
- * query's answer is kept; a slow lookup for an older one is dropped.
+ * query's answer is kept; a slow lookup for an older one is dropped. The rows are
+ * painted on each call, with the caller's painter when it passes one, so a theme
+ * change applies to a menu already open.
  */
 export function makeMentionMenu(
   finder: FileFinder,
   paint: (s: string, ...styles: string[]) => string
-): (line: string, redraw: () => void) => string[] | null {
-  let shown: { query: string; rows: string[] } | null = null
+): (line: string, redraw: () => void, paintNow?: (s: string, ...styles: string[]) => string) => string[] | null {
+  let shown: { query: string; files: string[] } | null = null
   let wanted: string | null = null
-  return (line, redraw) => {
+  return (line, redraw, paintNow = paint) => {
     const q = mentionQuery(line)
     if (q === null) {
       wanted = null
       return null
     }
-    if (shown?.query === q) return shown.rows
+    if (shown?.query === q) return renderMentionMenu(shown.files, paintNow)
     if (wanted !== q) {
       wanted = q
       finder(q)
         .then((files) => {
           if (wanted !== q) return
-          shown = { query: q, rows: renderMentionMenu(files, paint) }
+          shown = { query: q, files }
           redraw()
         })
         .catch(() => {
           /* no files to offer: the menu stays as it was, Tab still works */
         })
     }
-    return shown?.rows ?? []
+    return shown ? renderMentionMenu(shown.files, paintNow) : []
   }
 }

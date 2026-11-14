@@ -158,6 +158,73 @@ export function truncateVisible(s: string, max: number, ellipsis = '…'): strin
 }
 
 /**
+ * Keep the last `max` visible columns of `s`, with `ellipsis` in front when cut: for
+ * text whose end is what matters, like a draft being typed (the cursor is at its end).
+ * Plain text only; an SGR escape would be cut like any other character.
+ */
+export function truncateVisibleStart(s: string, max: number, ellipsis = '…'): string {
+  if (visibleWidth(s) <= max) return s
+  const keep = Math.max(0, max - visibleWidth(ellipsis))
+  const clusters = graphemes(s)
+  let out = ''
+  let shown = 0
+  for (let i = clusters.length - 1; i >= 0; i--) {
+    const w = clusterWidth(clusters[i])
+    if (shown + w > keep) break
+    out = clusters[i] + out
+    shown += w
+  }
+  return `${ellipsis}${out}`
+}
+
+/**
+ * The first row of `line` at `width` columns, cut at the last space that fits (or at
+ * the width, for a word longer than the row), and what follows it. Null when the line
+ * already fits. Plain text only.
+ */
+function cutRow(line: string, width: number): [string, string] | null {
+  if (visibleWidth(line) <= width) return null
+  let shown = 0
+  let at = 0
+  let space = -1
+  for (const g of graphemes(line)) {
+    const w = clusterWidth(g)
+    if (shown + w > width) break
+    if (g === ' ') space = at
+    shown += w
+    at += g.length
+  }
+  if (space > 0) return [line.slice(0, space), line.slice(space + 1)]
+  // Always take something, even a cluster wider than the row, so the caller advances.
+  if (at === 0) at = graphemes(line)[0]?.length ?? line.length
+  return [line.slice(0, at), line.slice(at)]
+}
+
+/**
+ * Split text that is still streaming into the rows ready to print and the unfinished
+ * tail to hold back: every complete line, word-wrapped to `width`, plus whatever full
+ * rows the tail already fills. Every ready row ends in a newline, so the next write
+ * (a spinner frame, the reply) starts at the left edge instead of on a half-written
+ * line. Plain text only; `width` <= 0 leaves lines unwrapped.
+ */
+export function takeStreamedRows(buf: string, width: number): { rows: string; rest: string } {
+  const lines = buf.split('\n')
+  let rest = lines.pop() ?? ''
+  const out: string[] = []
+  const wrapInto = (line: string): string => {
+    let left = line
+    for (let cut = width > 0 ? cutRow(left, width) : null; cut; cut = cutRow(left, width)) {
+      out.push(cut[0])
+      left = cut[1]
+    }
+    return left
+  }
+  for (const line of lines) out.push(wrapInto(line))
+  rest = wrapInto(rest)
+  return { rows: out.length ? `${out.join('\n')}\n` : '', rest }
+}
+
+/**
  * Word-wrap to `width` visible columns. Words longer than `width` are hard-split.
  * SGR codes pass through and don't count toward the width. Existing newlines are
  * preserved as hard breaks.

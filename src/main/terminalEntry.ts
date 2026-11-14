@@ -589,7 +589,6 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   let latestUpdate: { latest: string; url: string; hint: string } | null = null
   const hint = upgradeHint(currentInstallMethod())
 
-  const paint = makePainter(tui.color)
   // Built-ins plus this workspace's own .houston/commands. The Tab completer only
   // ever knew the built-ins, so a project's commands were undiscoverable unless you
   // already knew their names. Loaded once; the menu redraws on every keystroke and
@@ -612,14 +611,18 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     const bg = await detectTerminalBackground({ input: process.stdin, output: process.stdout }, process.env)
     if (bg === 'light') tui.detectedTheme = 'light'
   }
+  // The saved theme, else the detected background's: the theme the driver starts on
+  // (and hands the adapter again on /theme), so nothing is drawn in the wrong one.
+  const paint = makePainter(tui.color, resolveTheme(getSettings().tuiTheme ?? '') ?? tui.detectedTheme ?? 'default')
   // Typing `@` lists matching files under the composer, as `/` lists commands.
   const mentionMenu = makeMentionMenu((q) => findFiles(tui.cwd, q), paint as never)
 
   const io = createTerminalIo({
-    menuFor: (line, redraw) => {
+    // Painted with the composer's painter, so the menus follow /theme.
+    menuFor: (line, redraw, menuPaint) => {
       const matches = commandMenu(line, menuCommands)
-      if (matches) return renderCommandMenu(matches, paint as never)
-      return mentionMenu(line, redraw) ?? []
+      if (matches) return renderCommandMenu(matches, menuPaint as never)
+      return mentionMenu(line, redraw, menuPaint as never) ?? []
     },
     paint,
     // Read live: an entry submitted this session must be recallable on the next

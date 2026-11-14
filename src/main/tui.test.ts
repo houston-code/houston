@@ -525,6 +525,36 @@ describe('parseSlashCommand', () => {
     expect(t.text()).toContain('· model → claude-opus-5.5  (anthropic / claude-opus-5-5)\n')
   })
 
+  it('offers type-to-filter in the /model picker, and says so when Esc leaves it', async () => {
+    const { d } = deps([], {
+      providers: [prov({ id: 'anthropic', kind: 'anthropic', label: 'Anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }, { id: 'claude-opus-5-5' }] })]
+    })
+    const t = fakeIo(['/model', null])
+    const specs: Array<{ filterable?: boolean }> = []
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return { kind: 'cancel' }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(specs[0].filterable).toBe(true)
+    expect(t.text()).toContain('· cancelled\n')
+    expect(t.text()).not.toContain('· model →')
+  })
+
+  it('hands the terminal adapter the session theme at startup and on /theme', async () => {
+    const { d } = deps([], { tuiTheme: 'light' } as Partial<AppSettings>)
+    d.updateSettings = () => {}
+    const t = fakeIo(['/theme mono', null])
+    const painters: Array<(s: string, ...styles: Array<'cyan'>) => string> = []
+    t.io.setPaint = (p) => painters.push(p)
+    d.io = t.io
+    await runTui({ ...opts, color: true }, d)
+    expect(painters).toHaveLength(2)
+    expect(painters[0]('x', 'cyan')).toBe(makePainter(true, 'light')('x', 'cyan'))
+    expect(painters[1]('x', 'cyan')).toBe('x') // mono: no colour
+  })
+
   it('carries --default through the /model picker', async () => {
     const { d } = deps([], {
       providers: [prov({ id: 'anthropic', kind: 'anthropic', label: 'Anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }, { id: 'claude-opus-5-5' }] })]
@@ -2604,6 +2634,43 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.spinner).toEqual(['start:Working', 'label:Thinking', 'label:Read', 'stop'])
+  })
+
+  // The spinner erases its own line, so reasoning streamed in fragments lost all but
+  // the last of each line, and the reply ran on from the end of the reasoning.
+  it('prints reasoning in whole lines, and starts the reply on its own line', async () => {
+    const r = (delta: string): AgentEvent => ({ runId: 'x', type: 'reasoning', delta })
+    const { d } = deps([
+      r('I need'),
+      r(' to check how'),
+      r(' the parser handles empty input.\n'),
+      r('Then compare'),
+      { runId: 'x', type: 'text', delta: 'Here is the answer.' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // Every write of reasoning ends its line, so nothing is ever left half-written.
+    const thinking = t.out.filter((s) => /need|parser|compare/.test(s))
+    expect(thinking.join('')).toBe('I need to check how the parser handles empty input.\nThen compare\n')
+    for (const s of thinking) expect(s.endsWith('\n')).toBe(true)
+    expect(t.text()).toContain('Then compare\nHere is the answer.')
+  })
+
+  it('word-wraps a long reasoning line to the terminal width as it streams', async () => {
+    const words = 'one two three four five six seven eight nine ten eleven twelve'.split(' ')
+    const { d } = deps([
+      ...words.map((w): AgentEvent => ({ runId: 'x', type: 'reasoning', delta: `${w} ` })),
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    d.columns = () => 20
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const rows = t.out.filter((s) => words.some((w) => s.includes(`${w} `) || s.includes(`${w}\n`))).join('').split('\n').filter(Boolean)
+    expect(rows.join(' ').replace(/\s+/g, ' ').trim()).toBe(words.join(' '))
+    for (const row of rows) expect(row.length).toBeLessThanOrEqual(20)
   })
 
   it('persists composer submissions to history, not approval answers', async () => {

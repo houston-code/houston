@@ -13,6 +13,7 @@ import {
 } from './tui-editor'
 import type { EditorKey } from './tui-keys'
 import { makePainter } from './tui'
+import { visibleWidth } from './tui-wrap'
 
 const paint = makePainter(false)
 
@@ -289,6 +290,22 @@ describe('renderEditor', () => {
     expect(v.cursorCol).toBe(6) // 2 (prompt) + 2 wide chars × 2 columns
   })
 
+  it('places the cursor on wrapped rows of wide characters, which hold a column less', () => {
+    // Width 11, prompt 2: nine columns a row, but a wide character never splits, so
+    // each row holds four (eight columns): 一二三四 / 五六七八 / 九十.
+    const { state } = run([type('一二三四五六七八九十')])
+    const v = renderEditor(state, { prompt: '> ', width: 11, paint })
+    expect(v.rows).toEqual(['> 一二三四', '  五六七八', '  九十'])
+    expect(v.cursorRow).toBe(2)
+    expect(v.cursorCol).toBe(6) // after 十: 2 + 2 × 2
+    // Mid-line: just after 五 is the second row, one character in.
+    const mid = renderEditor({ ...state, col: 5 }, { prompt: '> ', width: 11, paint })
+    expect([mid.cursorRow, mid.cursorCol]).toEqual([1, 4])
+    // Right after 四, the end of the first row: the cursor sits before 五.
+    const edge = renderEditor({ ...state, col: 4 }, { prompt: '> ', width: 11, paint })
+    expect([edge.cursorRow, edge.cursorCol]).toEqual([1, 2])
+  })
+
   it('places the cursor after an emoji sequence by the columns it is drawn in', () => {
     const { state } = run([type('\u{1F468}\u200D\u{1F469}\u200D\u{1F467}x')]) // 👨‍👩‍👧x
     const v = renderEditor(state, { prompt: '> ', width: 40, paint })
@@ -308,6 +325,32 @@ describe('renderEditor', () => {
     const v = renderEditor(state, { prompt: '> ', width: 40, paint })
     expect(v.rows[0]).toContain("(reverse-i-search)`git'")
     expect(v.rows[0]).toContain('git status')
+  })
+
+  it('shows a long or multi-line search hit as one row that fits the width', () => {
+    // The redraw treats the search as one row: a hit that wrapped, or carried its
+    // newlines onto the screen, left copies behind on every keystroke.
+    const hist = ['first line of an old prompt\nsecond line\nthird line', 'x'.repeat(200)]
+    for (const [query, index] of [['line', 0], ['xxx', 1]] as const) {
+      const { state } = run([{ type: 'search' }, type(query)], initialEditorState(hist))
+      expect(state.search?.index).toBe(index)
+      const v = renderEditor(state, { prompt: '> ', width: 40, paint })
+      expect(v.rows).toHaveLength(1)
+      expect(v.rows[0]).not.toContain('\n')
+      expect(visibleWidth(v.rows[0])).toBeLessThanOrEqual(40)
+    }
+    const { state } = run([{ type: 'search' }, type('line')], initialEditorState(hist))
+    const row = renderEditor(state, { prompt: '> ', width: 60, paint }).rows[0]
+    expect(row).toContain('first line of an old prompt …') // the first line, marked as continuing
+    expect(row).not.toContain('second line')
+  })
+
+  it('keeps a search query wider than the row to its end', () => {
+    const { state } = run([{ type: 'search' }, type(`${'q'.repeat(60)}end`)], initialEditorState(['nothing']))
+    const v = renderEditor(state, { prompt: '> ', width: 40, paint })
+    expect(visibleWidth(v.rows[0])).toBeLessThanOrEqual(40)
+    expect(v.rows[0]).toContain("end': ")
+    expect(v.cursorCol).toBeLessThan(40)
   })
 
   it('shows the placeholder for a collapsed paste rather than the body', () => {

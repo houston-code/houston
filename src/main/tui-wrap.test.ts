@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stripAnsi, visibleWidth, truncateVisible, wrapAnsi } from './tui-wrap'
+import { stripAnsi, visibleWidth, truncateVisible, truncateVisibleStart, takeStreamedRows, wrapAnsi } from './tui-wrap'
 
 const RED = '\x1b[31m'
 const RESET = '\x1b[0m'
@@ -24,6 +24,41 @@ describe('truncateVisible', () => {
     expect(visibleWidth(out)).toBe(5) // 4 chars + ellipsis
     expect(out).toContain(RED)
     expect(out.endsWith(RESET)).toBe(true)
+  })
+})
+
+describe('truncateVisibleStart', () => {
+  it('leaves short strings untouched', () => {
+    expect(truncateVisibleStart('short', 10)).toBe('short')
+  })
+  it('keeps the end, with the ellipsis in front', () => {
+    expect(truncateVisibleStart('abcdefgh', 5)).toBe('…efgh')
+  })
+  it('never splits a wide character, so it can come out a column short', () => {
+    // Six columns: the ellipsis and two wide characters (five); a third would make seven.
+    expect(truncateVisibleStart('日本語のテキスト', 6)).toBe('…スト')
+  })
+})
+
+describe('takeStreamedRows', () => {
+  it('holds back a line that has not ended', () => {
+    expect(takeStreamedRows('I need', 40)).toEqual({ rows: '', rest: 'I need' })
+  })
+  it('hands over each finished line, keeping what follows the last newline', () => {
+    expect(takeStreamedRows('one\ntwo\nthr', 40)).toEqual({ rows: 'one\ntwo\n', rest: 'thr' })
+    expect(takeStreamedRows('done.\n', 40)).toEqual({ rows: 'done.\n', rest: '' })
+  })
+  it('hands over a row once an unfinished line outgrows the width, cut at a space', () => {
+    expect(takeStreamedRows('the quick brown fox', 10)).toEqual({ rows: 'the quick\n', rest: 'brown fox' })
+  })
+  it('word-wraps a finished line too', () => {
+    expect(takeStreamedRows('the quick brown fox\n', 10)).toEqual({ rows: 'the quick\nbrown fox\n', rest: '' })
+  })
+  it('hard-splits a word longer than the row', () => {
+    expect(takeStreamedRows('abcdefghijkl', 5)).toEqual({ rows: 'abcde\nfghij\n', rest: 'kl' })
+  })
+  it('wraps nothing at a non-positive width', () => {
+    expect(takeStreamedRows('a long line with no limit', 0)).toEqual({ rows: '', rest: 'a long line with no limit' })
   })
 })
 
