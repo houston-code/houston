@@ -340,8 +340,19 @@ and cost as usage.
 - **Questions** (`ask_user`) and an MCP server's input requests show as a form when
   the editor supports ACP forms. Without forms, a question is answered "use your best
   judgment" and an MCP request is declined, as in headless mode, so a run never hangs.
-- **Sessions** are Houston conversations. The editor can list and reopen them, and
-  they also show up in the desktop app and in `houston -i --resume <id>`. MCP servers
+- **Sessions** are Houston conversations. The editor can list and reopen them
+  (with the history replayed, or resumed without it), close one it no longer shows,
+  and delete one. Deleting works as in the desktop app: a running prompt and the
+  chat's background commands stop first. They also show up in the desktop app and in
+  `houston -i --resume <id>`.
+- **Extra folders** the editor adds to a session (`additionalDirectories`) can be
+  read and written by that session's runs, like the folders under Settings >
+  Workspace, but only for that session and never saved. Each must be an existing
+  folder given by its full path.
+- **A system prompt** from the editor is added after Houston's own instructions, in
+  the same place as headless `--append-system-prompt`. It can't replace them.
+- **Compaction** is shown as compaction progress in an editor that supports it, and
+  as a notice otherwise. MCP servers
   the editor passes join your own for that session (as `run-acp-<name>`) and are never
   saved to your settings.
 - **Credentials** resolve as in the CLI: environment variables, then saved keys. With

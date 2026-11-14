@@ -934,8 +934,17 @@ export interface AgentRunRequest {
    * permission rules and approval policy (see toolScope.ts).
    */
   toolScope?: ToolScope
-  /** The headless `--append-system-prompt` text, added to the system prompt in its own section. */
+  /**
+   * The headless `--append-system-prompt` text (or an ACP editor's `systemPrompt`),
+   * added to the system prompt in its own section.
+   */
   appendSystemPrompt?: string
+  /**
+   * Directories this run may read and write besides the workspace, on top of
+   * `settings.additionalRoots`: an ACP editor's `additionalDirectories`, for that
+   * session only and never saved. Each must still resolve to count.
+   */
+  additionalRoots?: string[]
   /**
    * The headless `--output-schema`: a JSON Schema the run's final answer must
    * match. The system prompt asks for a final message that is only that JSON;

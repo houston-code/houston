@@ -23,6 +23,7 @@ import {
   ACP_DECLINED_ANSWER,
   ACP_ERROR,
   ACP_COMMAND_NAMES,
+  ACP_MAX_SYSTEM_PROMPT_CHARS,
   ACP_RESIDENT_SESSIONS,
   ACP_NO_QUESTION_ANSWER,
   acpAvailableCommands,
@@ -111,6 +112,8 @@ interface Harness {
   modelWrites: Array<[string, string, string]>
   /** Every store.setSettings call, as [id, patch]. */
   settingsWrites: Array<[string, ConversationSettingsPatch]>
+  /** Every store.remove call, by id. */
+  removed: string[]
   /** Send a request and await its response frame. */
   call: (method: string, params?: unknown) => Promise<any>
   notify: (method: string, params?: unknown) => void
@@ -145,6 +148,7 @@ function harness(opts: {
   const saved = new Map<string, ChatMessage[]>()
   const modelWrites: Array<[string, string, string]> = []
   const settingsWrites: Array<[string, ConversationSettingsPatch]> = []
+  const removed: string[] = []
   let ids = 0
   let convIds = 0
   const cwd = mkdtempSync(join(tmpdir(), 'houston-acp-'))
@@ -176,7 +180,11 @@ function harness(opts: {
       setMessages: (id, m) => void saved.set(id, m),
       setModel: (id, providerId, model) => void modelWrites.push([id, providerId, model]),
       setSettings: (id, patch) => void settingsWrites.push([id, patch]),
-      title: (id) => stored.get(id)?.title
+      title: (id) => stored.get(id)?.title,
+      remove: (id) => {
+        removed.push(id)
+        return stored.delete(id)
+      }
     },
     write: (line) => {
       if (opts.writeFails?.(line)) throw Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
@@ -212,6 +220,7 @@ function harness(opts: {
     saved,
     modelWrites,
     settingsWrites,
+    removed,
     cwd,
     call: (method, params) => {
       const id = ++ids
@@ -251,7 +260,14 @@ describe('ACP server: protocol flow', () => {
         loadSession: true,
         promptCapabilities: { image: true, audio: false, embeddedContext: true },
         mcpCapabilities: { http: true, sse: true },
-        sessionCapabilities: { list: {} }
+        sessionCapabilities: {
+          list: {},
+          resume: {},
+          close: {},
+          delete: {},
+          additionalDirectories: {},
+          systemPrompt: {}
+        }
       },
       authMethods: [],
       agentInfo: { name: 'houston', title: 'Houston', version: '1.2.3' }
@@ -942,6 +958,227 @@ describe('ACP server: slash commands, config options and session info', () => {
     await h.call('session/prompt', { sessionId, prompt: text('/help') })
     expect(replies(h, sessionId).at(-1)).toContain('- /review: ')
     expect(h.loop.requests).toHaveLength(0)
+    await h.end()
+  })
+})
+
+describe('ACP server: session lifecycle, extra folders, system prompt, cancellation', () => {
+  const done: RunBody = async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+  const stored = (): AcpStoredSession[] => [
+    {
+      id: 'saved-1',
+      workspace: '/x',
+      providerId: 'anthropic',
+      model: 'claude-sonnet-4-5',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' }
+      ]
+    }
+  ]
+
+  it('resumes a saved session without replaying it, and continues its conversation', async () => {
+    const h = harness({ run: done, stored: stored() })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    const res = await h.call('session/resume', { sessionId: 'saved-1', cwd: h.cwd, mcpServers: [] })
+    expect(res.result.modes.currentModeId).toBe('ask')
+    expect(res.result.configOptions.map((o: any) => o.id)).toEqual(['model', 'reasoning_effort'])
+    const kinds = h.updates('saved-1').map((u) => u.sessionUpdate)
+    expect(kinds).not.toContain('user_message_chunk')
+    expect(kinds).not.toContain('agent_message_chunk')
+    await h.call('session/prompt', { sessionId: 'saved-1', prompt: text('go on') })
+    expect(h.loop.requests[0].messages).toEqual([
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi' },
+      { role: 'user', content: 'go on' }
+    ])
+    const missing = await h.call('session/resume', { sessionId: 'nope', cwd: h.cwd, mcpServers: [] })
+    expect(missing.error.code).toBe(ACP_ERROR.notFound)
+    await h.end()
+  })
+
+  it('closes a session: its prompt is cancelled and it is no longer served', async () => {
+    let started: () => void = () => {}
+    const running = new Promise<void>((r) => (started = r))
+    const h = harness({
+      run: async (req, send, loop) => {
+        const cancelled = loop.waitForCancel(req.runId)
+        started()
+        await cancelled
+        send({ runId: req.runId, type: 'done', stopReason: 'aborted' })
+      }
+    })
+    const sessionId = await ready(h)
+    const reply = h.call('session/prompt', { sessionId, prompt: text('work') })
+    await running
+    expect((await h.call('session/close', { sessionId })).result).toEqual({})
+    expect(h.loop.cancelled).toEqual(['run-1'])
+    expect((await reply).result).toEqual({ stopReason: 'cancelled' })
+    // Gone, even though its prompt finished after the close.
+    const after = await h.call('session/prompt', { sessionId, prompt: text('more') })
+    expect(after.error.code).toBe(ACP_ERROR.notFound)
+    expect((await h.call('session/close', { sessionId })).error.code).toBe(ACP_ERROR.notFound)
+    // The chat itself is kept: it can be loaded again.
+    expect((await h.call('session/load', { sessionId, cwd: h.cwd, mcpServers: [] })).result.modes).toBeTruthy()
+    await h.end()
+  })
+
+  it('deletes the stored chat through the store, cancelling its live prompt first', async () => {
+    let started: () => void = () => {}
+    const running = new Promise<void>((r) => (started = r))
+    const h = harness({
+      run: async (req, send, loop) => {
+        const cancelled = loop.waitForCancel(req.runId)
+        started()
+        await cancelled
+        send({ runId: req.runId, type: 'done', stopReason: 'aborted' })
+      }
+    })
+    const sessionId = await ready(h)
+    const reply = h.call('session/prompt', { sessionId, prompt: text('work') })
+    await running
+    expect((await h.call('session/delete', { sessionId })).result).toEqual({})
+    expect(h.loop.cancelled).toEqual(['run-1'])
+    expect(h.removed).toEqual([sessionId])
+    await reply
+    expect(h.stored.has(sessionId)).toBe(false)
+    expect((await h.call('session/delete', { sessionId })).error.code).toBe(ACP_ERROR.notFound)
+    expect((await h.call('session/delete', {})).error.code).toBe(ACP_ERROR.invalidParams)
+    await h.end()
+  })
+
+  it('offers no delete when the store cannot delete', async () => {
+    const noRemove = harness({
+      run: done,
+      deps: {
+        store: {
+          create: () => ({ id: 'c' }),
+          get: () => null,
+          list: () => [],
+          setMessages: () => {},
+          setModel: () => {}
+        }
+      }
+    })
+    const init = await noRemove.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    expect(init.result.agentCapabilities.sessionCapabilities.delete).toBeUndefined()
+    expect((await noRemove.call('session/delete', { sessionId: 'c' })).error.code).toBe(ACP_ERROR.methodNotFound)
+    await noRemove.end()
+  })
+
+  it("passes the editor's extra folders to this session's runs only, exactly as given", async () => {
+    const extra = mkdtempSync(join(tmpdir(), 'houston-acp-extra-'))
+    const h = harness({ run: done, stored: stored() })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    const withDirs = (
+      await h.call('session/new', { cwd: h.cwd, mcpServers: [], additionalDirectories: [extra, extra, h.cwd] })
+    ).result.sessionId
+    const plain = (await h.call('session/new', { cwd: h.cwd, mcpServers: [] })).result.sessionId
+    await h.call('session/prompt', { sessionId: withDirs, prompt: text('a') })
+    await h.call('session/prompt', { sessionId: plain, prompt: text('b') })
+    expect(h.loop.requests[0].additionalRoots).toEqual([extra])
+    expect(h.loop.requests[1].additionalRoots).toBeUndefined()
+    // Load and resume take them too, for that session from then on.
+    await h.call('session/resume', { sessionId: 'saved-1', cwd: h.cwd, mcpServers: [], additionalDirectories: [extra] })
+    await h.call('session/prompt', { sessionId: 'saved-1', prompt: text('c') })
+    expect(h.loop.requests[2].additionalRoots).toEqual([extra])
+    // Anything that is not an existing absolute folder is refused, and nothing opens.
+    for (const bad of [['relative/dir'], [join(extra, 'missing')], 'not-a-list', [42]]) {
+      const res = await h.call('session/new', { cwd: h.cwd, mcpServers: [], additionalDirectories: bad })
+      expect(res.error?.code, JSON.stringify(bad)).toBe(ACP_ERROR.invalidParams)
+    }
+    await h.end()
+  })
+
+  it("appends the editor's system prompt to the run, in append mode only", async () => {
+    const h = harness({ run: done })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    const sessionId = (
+      await h.call('session/new', {
+        cwd: h.cwd,
+        mcpServers: [],
+        systemPrompt: {
+          mode: 'append',
+          content: [
+            { type: 'text', text: 'Answer in French.' },
+            { type: 'text', text: 'Prefer small diffs.' }
+          ]
+        }
+      })
+    ).result.sessionId
+    await h.call('session/prompt', { sessionId, prompt: text('hi') })
+    expect(h.loop.requests[0].appendSystemPrompt).toBe('Answer in French.\n\nPrefer small diffs.')
+    for (const systemPrompt of [
+      { mode: 'override', content: [{ type: 'text', text: 'x' }] },
+      { mode: 'append', content: [] },
+      { mode: 'append', content: [{ type: 'image', data: 'x', mimeType: 'image/png' }] },
+      { mode: 'append', content: [{ type: 'text', text: 'x'.repeat(ACP_MAX_SYSTEM_PROMPT_CHARS + 1) }] }
+    ]) {
+      const res = await h.call('session/new', { cwd: h.cwd, mcpServers: [], systemPrompt })
+      expect(res.error?.code, systemPrompt.mode).toBe(ACP_ERROR.invalidParams)
+    }
+    await h.end()
+  })
+
+  it('cancels a prompt on $/cancel_request, and ignores an id that is not in flight', async () => {
+    let started: () => void = () => {}
+    const running = new Promise<void>((r) => (started = r))
+    const h = harness({
+      run: async (req, send, loop) => {
+        const cancelled = loop.waitForCancel(req.runId)
+        started()
+        await cancelled
+        send({ runId: req.runId, type: 'done', stopReason: 'aborted' })
+      }
+    })
+    const sessionId = await ready(h)
+    h.notify('$/cancel_request', { requestId: 999 })
+    const reply = h.call('session/prompt', { sessionId, prompt: text('work') })
+    await running
+    // The harness numbers requests from 1: initialize, session/new, then this prompt.
+    h.notify('$/cancel_request', { requestId: 3 })
+    expect((await reply).result).toEqual({ stopReason: 'cancelled' })
+    expect(h.loop.cancelled).toEqual(['run-1'])
+    await h.end()
+  })
+
+  it('sends compaction_update for a compaction only to an editor that takes them', async () => {
+    const compacting: RunBody = async (req, send) => {
+      send({ runId: req.runId, type: 'compaction', summarized: 6 })
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    const aware = harness({ run: compacting, deps: { compact: async () => ({ ok: true, summarized: 3 }) } })
+    const a = await ready(aware, { session: { compaction: {}, notices: {} } })
+    await aware.call('session/prompt', { sessionId: a, prompt: text('long task') })
+    await aware.call('session/prompt', { sessionId: a, prompt: text('/compact') })
+    const updates = aware.updates(a).filter((u) => u.sessionUpdate === 'compaction_update')
+    expect(updates.map((u) => u.status)).toEqual(['completed', 'in_progress', 'completed'])
+    for (const u of updates) expect(u.compactionId).toEqual(expect.any(String))
+    // The /compact pair shares one id; the run's own compaction has another.
+    expect(updates[1].compactionId).toBe(updates[2].compactionId)
+    expect(updates[0].compactionId).not.toBe(updates[1].compactionId)
+    expect(aware.updates(a).some((u) => u.sessionUpdate === 'notice')).toBe(false)
+    await aware.end()
+
+    const plain = harness({ run: compacting })
+    const b = await ready(plain, { session: { notices: {} } })
+    await plain.call('session/prompt', { sessionId: b, prompt: text('long task') })
+    expect(plain.updates(b).some((u) => u.sessionUpdate === 'compaction_update')).toBe(false)
+    expect(plain.updates(b)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ sessionUpdate: 'notice', title: expect.stringMatching(/Compacted 6/) })])
+    )
+    await plain.end()
+  })
+
+  it('reports a failed /compact as a failed compaction', async () => {
+    const h = harness({ run: done, deps: { compact: async () => ({ ok: false, summarized: 0, error: 'busy' }) } })
+    const sessionId = await ready(h, { session: { compaction: {} } })
+    await h.call('session/prompt', { sessionId, prompt: text('/compact') })
+    const updates = h.updates(sessionId).filter((u) => u.sessionUpdate === 'compaction_update')
+    expect(updates.map((u) => [u.status, u.error])).toEqual([
+      ['in_progress', undefined],
+      ['failed', 'busy']
+    ])
     await h.end()
   })
 })

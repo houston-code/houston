@@ -76,8 +76,15 @@ export const ACP_ERROR = {
   invalidParams: -32602,
   internal: -32603,
   authRequired: -32000,
-  notFound: -32002
+  notFound: -32002,
+  /** A request the client withdrew with `$/cancel_request`. */
+  cancelled: -32800
 } as const
+
+/** Most extra directories one session takes (`additionalDirectories`). */
+export const ACP_MAX_ADDITIONAL_DIRECTORIES = 32
+/** Longest editor-supplied system prompt accepted, in characters. */
+export const ACP_MAX_SYSTEM_PROMPT_CHARS = 64 * 1024
 
 /** The modes offered on every session: Houston's approval policies, one to one. */
 export const ACP_MODES: { id: ApprovalPolicy; name: string; description: string }[] = [
@@ -134,7 +141,7 @@ export interface AcpClientCapabilities {
   fs?: { readTextFile?: boolean; writeTextFile?: boolean }
   terminal?: boolean
   auth?: { terminal?: boolean }
-  session?: { notices?: object | null } | null
+  session?: { notices?: object | null; compaction?: object | null } | null
   elicitation?: { form?: object | null } | null
 }
 
@@ -196,6 +203,12 @@ export interface AcpDeps {
     title?: (id: string) => string | undefined
     /** Save a setting the user changed on this chat (model, reasoning effort, approval mode). */
     setSettings?: (id: string, patch: ConversationSettingsPatch) => void
+    /**
+     * Delete a chat the way the desktop app does: stop its live run and its shells,
+     * then remove it. Returns false when there was no such chat. Absent: no
+     * `session/delete`.
+     */
+    remove?: (id: string) => boolean
   }
   /** The workspace's own slash commands (`.houston/commands`), offered next to the built-ins. */
   commands?: (cwd: string) => Promise<Command[]>
@@ -214,6 +227,14 @@ export interface AcpDeps {
   newId?: () => string
   /** Read a workspace file for an edit's before/after diff; injected so tests stay off disk. */
   readFile?: (path: string) => string | null
+}
+
+/** A request from the client this server is still answering. */
+interface InboundRequest {
+  method: string
+  params: unknown
+  /** Withdrawn by `$/cancel_request`. */
+  cancelled: boolean
 }
 
 interface Session {
@@ -242,6 +263,12 @@ interface Session {
   title?: string
   /** A `/compact` in progress, which holds off prompts like a run does. */
   compacting?: boolean
+  /** Extra directories the editor gave this session (`additionalDirectories`), as given. */
+  additionalRoots: string[]
+  /** The editor's system prompt for this session, appended to Houston's own. */
+  appendSystemPrompt?: string
+  /** Closed or deleted: no longer served, even by a prompt still unwinding. */
+  closed?: boolean
 }
 
 // ---- Pure mapping helpers (exported for tests) ----
@@ -790,6 +817,67 @@ export function resolveAcpModel(
   return pick ? { providerId: pick.providerId, model: pick.model } : null
 }
 
+/**
+ * The `additionalDirectories` of a session request: absolute paths to existing
+ * directories, deduplicated, without the session's own folder. They widen this
+ * session's runs only, exactly as far as listed, and are never saved.
+ */
+export function acpAdditionalDirectories(params: unknown, cwd: string): string[] {
+  const raw = (params as { additionalDirectories?: unknown } | undefined)?.additionalDirectories
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) throw new AcpError(ACP_ERROR.invalidParams, 'additionalDirectories must be an array of paths')
+  if (raw.length > ACP_MAX_ADDITIONAL_DIRECTORIES) {
+    throw new AcpError(ACP_ERROR.invalidParams, `At most ${ACP_MAX_ADDITIONAL_DIRECTORIES} additionalDirectories`)
+  }
+  const out: string[] = []
+  for (const dir of raw) {
+    if (typeof dir !== 'string' || !isAbsolute(dir)) {
+      throw new AcpError(ACP_ERROR.invalidParams, `additionalDirectories must be absolute paths: ${String(dir)}`)
+    }
+    let ok: boolean
+    try {
+      ok = statSync(dir).isDirectory()
+    } catch {
+      ok = false
+    }
+    if (!ok) throw new AcpError(ACP_ERROR.invalidParams, `Not a directory: ${dir}`)
+    const normal = resolve(dir)
+    if (normal !== resolve(cwd) && !out.includes(normal)) out.push(normal)
+  }
+  return out
+}
+
+/**
+ * The editor's `systemPrompt` for a session: the text of its blocks, appended to
+ * Houston's prompt the way headless `--append-system-prompt` is. Only `append` is
+ * offered; replacing Houston's instructions is not.
+ */
+export function acpSystemPrompt(params: unknown): string | undefined {
+  const raw = (params as { systemPrompt?: unknown } | undefined)?.systemPrompt
+  if (raw === undefined || raw === null) return undefined
+  const sp = raw as { mode?: unknown; content?: unknown }
+  if (typeof raw !== 'object' || sp.mode !== 'append') {
+    throw new AcpError(ACP_ERROR.invalidParams, 'systemPrompt supports only the append mode')
+  }
+  if (!Array.isArray(sp.content) || sp.content.length === 0) {
+    throw new AcpError(ACP_ERROR.invalidParams, 'systemPrompt.content must be a non-empty array of text blocks')
+  }
+  const parts: string[] = []
+  for (const block of sp.content as unknown[]) {
+    const b = block as { type?: unknown; text?: unknown } | null
+    if (!b || b.type !== 'text' || typeof b.text !== 'string') {
+      throw new AcpError(ACP_ERROR.invalidParams, 'systemPrompt.content takes text blocks only')
+    }
+    parts.push(b.text)
+  }
+  const text = parts.join('\n\n').trim()
+  if (!text) return undefined
+  if (text.length > ACP_MAX_SYSTEM_PROMPT_CHARS) {
+    throw new AcpError(ACP_ERROR.invalidParams, `systemPrompt is longer than ${ACP_MAX_SYSTEM_PROMPT_CHARS} characters`)
+  }
+  return text
+}
+
 // ---- The server ----
 
 export interface AcpServer {
@@ -827,6 +915,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   // Requests this server sent to the client, awaiting a response.
   let nextRequestId = 1
   const outgoing = new Map<JsonRpcId, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+  // Requests from the client still being answered, for `$/cancel_request`.
+  const inflight = new Map<JsonRpcId, InboundRequest>()
 
   let peerGone = false
   const frame = (m: JsonRpcMessage): void => {
@@ -864,6 +954,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
    * progress, or whose latest messages did not reach the store, keeps its log.
    */
   const touch = (s: Session): void => {
+    // A closed session stays gone, even when a prompt it ran finishes later.
+    if (s.closed) return
     sessions.delete(s.id)
     sessions.set(s.id, s)
     let resident = 0
@@ -940,7 +1032,15 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         loadSession: true,
         promptCapabilities: { image: true, audio: false, embeddedContext: true },
         mcpCapabilities: { http: true, sse: true },
-        sessionCapabilities: { list: {} }
+        // Each one only once it is handled below.
+        sessionCapabilities: {
+          list: {},
+          resume: {},
+          close: {},
+          ...(deps.store.remove ? { delete: {} } : {}),
+          additionalDirectories: {},
+          systemPrompt: {}
+        }
       },
       // Credentials resolve the way the CLI does (environment, then the profile's
       // credential store). An editor that can run a terminal gets a way to set one up:
@@ -962,6 +1062,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
 
   const newSession = (params: unknown): unknown => {
     const cwd = requireCwd(params)
+    const additionalRoots = acpAdditionalDirectories(params, cwd)
+    const appendSystemPrompt = acpSystemPrompt(params)
     const mcpServers = clientServers(params)
     const { providerId, model } = resolveModel()
     const { id } = deps.store.create({ workspace: cwd, providerId, model })
@@ -978,7 +1080,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       runId: null,
       cancelled: false,
       costUsd: 0,
-      context: null
+      context: null,
+      additionalRoots,
+      ...(appendSystemPrompt ? { appendSystemPrompt } : {})
     }
     sessions.set(id, session)
     touch(session)
@@ -986,10 +1090,16 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     return { sessionId: id, modes: modeState(mode), configOptions: configOptionsOf(session) }
   }
 
-  const loadSession = (params: unknown): unknown => {
+  /**
+   * `session/load` (replays the chat to the editor) and `session/resume` (does not:
+   * the editor already shows it). Both continue the stored chat in this server.
+   */
+  const openSession = (params: unknown, replay: boolean): unknown => {
     const p = (params ?? {}) as { sessionId?: unknown }
     if (typeof p.sessionId !== 'string') throw new AcpError(ACP_ERROR.invalidParams, 'sessionId is required')
     const cwd = requireCwd(params)
+    const additionalRoots = acpAdditionalDirectories(params, cwd)
+    const appendSystemPrompt = acpSystemPrompt(params)
     const live = sessions.get(p.sessionId)
     if (live?.runId) throw new AcpError(ACP_ERROR.invalidRequest, 'That session is running a prompt')
     const stored = deps.store.get(p.sessionId)
@@ -1026,12 +1136,16 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       runId: null,
       cancelled: false,
       costUsd: live?.costUsd ?? 0,
-      context: live?.context ?? null
+      context: live?.context ?? null,
+      additionalRoots,
+      ...(appendSystemPrompt ? { appendSystemPrompt } : {})
     }
     sessions.set(stored.id, session)
     touch(session)
-    const notices = Boolean(clientCaps.session && typeof clientCaps.session === 'object' && clientCaps.session.notices)
-    for (const u of replayUpdates(stored.messages, cwd, { notices })) update(stored.id, u)
+    if (replay) {
+      const notices = Boolean(clientCaps.session && typeof clientCaps.session === 'object' && clientCaps.session.notices)
+      for (const u of replayUpdates(stored.messages, cwd, { notices })) update(stored.id, u)
+    }
     if (stored.title) sendTitle(session, stored.title, stored.updatedAt)
     announce(session)
     return { modes: modeState(mode), configOptions: configOptionsOf(session) }
@@ -1166,6 +1280,32 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     deps.cancelRun(s.runId)
   }
 
+  /** Stop serving a session: cancel its prompt, as `session/cancel` would, and forget it. */
+  const release = (s: Session): void => {
+    if (s.runId) {
+      s.cancelled = true
+      deps.cancelRun(s.runId)
+    }
+    s.closed = true
+    s.messages = null
+    sessions.delete(s.id)
+  }
+
+  const closeSession = (params: unknown): unknown => {
+    release(sessionOf(params))
+    return {}
+  }
+
+  const deleteSession = (params: unknown): unknown => {
+    const id = (params as { sessionId?: unknown } | undefined)?.sessionId
+    if (typeof id !== 'string') throw new AcpError(ACP_ERROR.invalidParams, 'sessionId is required')
+    const live = sessions.get(id)
+    if (live) release(live)
+    // The desktop app's delete: its run is cancelled and its shells stopped there too.
+    if (!deps.store.remove?.(id)) throw new AcpError(ACP_ERROR.notFound, `No saved session ${id}`)
+    return {}
+  }
+
   /** Show the editor a reply Houston wrote itself (a command's answer), not the model. */
   const reply = (s: Session, textOut: string): { stopReason: 'end_turn' } => {
     update(s.id, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: textOut } })
@@ -1272,8 +1412,18 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   }
 
   /** `/compact`: summarize the stored chat's older turns, then reload it. */
+  /** Whether the editor takes `compaction_update`s (it must say so). */
+  const compactionUpdates = (): boolean =>
+    Boolean(clientCaps.session && typeof clientCaps.session === 'object' && clientCaps.session.compaction)
+
   const compactNow = async (s: Session): Promise<string> => {
     if (!deps.compact) return 'Compacting is not available here.'
+    const compactionId = newId()
+    // The editor's view of this compaction, for an editor that takes compaction updates.
+    const status = (state: 'in_progress' | 'completed' | 'failed' | 'cancelled', error?: string): void => {
+      if (!compactionUpdates()) return
+      update(s.id, { sessionUpdate: 'compaction_update', compactionId, status: state, ...(error ? { error } : {}) })
+    }
     // The store is what gets summarized, so it must hold the latest turns first.
     if (!s.saved && s.messages) {
       try {
@@ -1284,28 +1434,39 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       }
     }
     s.compacting = true
+    status('in_progress')
     try {
       const r = await deps.compact(s.id, s.providerId, s.model)
-      if (!r.ok) return `Nothing was compacted${r.error ? `: ${r.error}` : '.'}`
-      if (r.summarized === 0) return 'Nothing to compact yet.'
+      if (!r.ok) {
+        status('failed', r.error)
+        return `Nothing was compacted${r.error ? `: ${r.error}` : '.'}`
+      }
+      if (r.summarized === 0) {
+        status('cancelled')
+        return 'Nothing to compact yet.'
+      }
       // Reloaded from the store on the next prompt.
       s.messages = null
       s.saved = true
+      status('completed')
       return `Summarized ${r.summarized} earlier message${r.summarized === 1 ? '' : 's'}.`
     } catch (e) {
+      status('failed', String(e))
       return `Compacting failed: ${String(e)}`
     } finally {
       s.compacting = false
     }
   }
 
-  const prompt = async (params: unknown): Promise<unknown> => {
+  const prompt = async (params: unknown, inbound?: InboundRequest): Promise<unknown> => {
     const s = sessionOf(params)
     if (busy(s)) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
     const { text: typed, images } = promptFromBlocks((params as { prompt?: unknown }).prompt)
     if (!typed.trim() && images.length === 0) throw new AcpError(ACP_ERROR.invalidParams, 'The prompt is empty')
     const command = typed.trimStart().startsWith('/') ? await runCommand(s, typed.trim()) : null
     if (command?.kind === 'reply') return reply(s, command.text)
+    // Withdrawn while the command lookup read the disk: nothing has run yet.
+    if (inbound?.cancelled) return { stopReason: 'cancelled' }
     // The command lookup read the disk: another prompt may have started meanwhile.
     if (busy(s)) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
     const text = command ? command.turn.text : typed
@@ -1335,7 +1496,11 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       messages,
       // Per-run servers, like the headless --mcp-config: merged as `run-<id>`, values
       // used as given, never saved to settings.
-      ...(s.mcpServers.length ? { extraMcpServers: s.mcpServers } : {})
+      ...(s.mcpServers.length ? { extraMcpServers: s.mcpServers } : {}),
+      // The editor's extra folders, for this session's runs only.
+      ...(s.additionalRoots.length ? { additionalRoots: s.additionalRoots } : {}),
+      // The editor's system prompt, in the same section headless --append-system-prompt uses.
+      ...(s.appendSystemPrompt ? { appendSystemPrompt: s.appendSystemPrompt } : {})
     }
     try {
       await deps.startRun(req, turn.send, (m) => {
@@ -1723,7 +1888,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           break
         }
         case 'compaction':
-          notice(`Compacted ${e.summarized} earlier messages to free up context.`)
+          if (compactionUpdates()) {
+            up({ sessionUpdate: 'compaction_update', compactionId: newId(), status: 'completed' })
+          } else notice(`Compacted ${e.summarized} earlier messages to free up context.`)
           break
         case 'retry':
           notice(e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `Retrying (${retryProgress(e)}): ${e.message}`, 'warning')
@@ -1772,7 +1939,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
 
   // ---- Dispatch ----
 
-  const handleRequest = async (method: string, params: unknown): Promise<unknown> => {
+  const handleRequest = async (method: string, params: unknown, req: InboundRequest): Promise<unknown> => {
     switch (method) {
       case 'initialize':
         return initialize(params)
@@ -1782,7 +1949,14 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       case 'session/new':
         return newSession(params)
       case 'session/load':
-        return loadSession(params)
+        return openSession(params, true)
+      case 'session/resume':
+        return openSession(params, false)
+      case 'session/close':
+        return closeSession(params)
+      case 'session/delete':
+        if (!deps.store.remove) throw new AcpError(ACP_ERROR.methodNotFound, `Method not found: ${method}`)
+        return deleteSession(params)
       case 'session/list':
         return listSessions(params)
       case 'session/set_mode':
@@ -1790,7 +1964,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       case 'session/set_config_option':
         return setConfigOption(params)
       case 'session/prompt':
-        return prompt(params)
+        return prompt(params, req)
       default:
         throw new AcpError(ACP_ERROR.methodNotFound, `Method not found: ${method}`)
     }
@@ -1822,12 +1996,21 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     // A notification.
     if (msg.id === undefined || msg.id === null) {
       if (msg.method === 'session/cancel') cancel(msg.params)
+      else if (msg.method === '$/cancel_request') cancelRequest(msg.params)
       return
     }
     const id = msg.id
+    const inbound: InboundRequest = { method: msg.method, params: msg.params, cancelled: false }
+    inflight.set(id, inbound)
     void track(
-      handleRequest(msg.method, msg.params).then(
-        (result) => frame({ id, result: result ?? null }),
+      handleRequest(msg.method, msg.params, inbound).then(
+        (result) => {
+          // A prompt answers a cancel with its own stopReason; anything else still
+          // running when it was withdrawn says so instead of returning a result.
+          if (inbound.cancelled && inbound.method !== 'session/prompt') {
+            frame({ id, error: { code: ACP_ERROR.cancelled, message: 'Request cancelled' } })
+          } else frame({ id, result: result ?? null })
+        },
         (err: unknown) => {
           if (err instanceof AcpError) {
             frame({ id, error: { code: err.code, message: err.message, ...(err.data ? { data: err.data } : {}) } })
@@ -1836,8 +2019,22 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
             frame({ id, error: { code: ACP_ERROR.internal, message: (err as Error)?.message ?? String(err) } })
           }
         }
-      )
+      ).finally(() => inflight.delete(id))
     )
+  }
+
+  /**
+   * `$/cancel_request`: the client withdrew a request still in flight. A prompt is
+   * stopped as `session/cancel` would stop it; another request ends with a
+   * cancelled error once it settles. An id that is not in flight is ignored.
+   */
+  const cancelRequest = (params: unknown): void => {
+    const requestId = (params as { requestId?: unknown } | undefined)?.requestId
+    if (typeof requestId !== 'string' && typeof requestId !== 'number') return
+    const inbound = inflight.get(requestId)
+    if (!inbound || inbound.cancelled) return
+    inbound.cancelled = true
+    if (inbound.method === 'session/prompt') cancel(inbound.params)
   }
 
   const stop = (opts: { peerGone?: boolean } = {}): void => {

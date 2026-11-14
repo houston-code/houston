@@ -2092,10 +2092,11 @@ export async function startRun(
       }
     }
 
-    // Allowed roots: the workspace plus any configured additional directories
-    // that still resolve (deduped). This is the file-tool + sandbox boundary.
+    // Allowed roots: the workspace plus any configured additional directories, and
+    // the ones this run's client passed for its session, that still resolve (deduped).
+    // This is the file-tool + sandbox boundary.
     const roots = [workspace]
-    for (const dir of settings.additionalRoots ?? []) {
+    for (const dir of [...(settings.additionalRoots ?? []), ...(req.additionalRoots ?? [])]) {
       try {
         const real = realpathSync(dir)
         if (!roots.includes(real)) roots.push(real)
