@@ -63,6 +63,44 @@ const STREAM_RETRY_MAX_MS = 60_000
 /** A stream that stayed open this long resets the backoff when it drops. */
 const STREAM_HEALTHY_MS = 30_000
 
+/** A resume wait when the server gave no `retry` hint. */
+const DEFAULT_RESUME_DELAY_MS = 1_000
+/** Bounds on a server's `retry` hint, so it can neither spin the client nor stall it. */
+const MIN_RESUME_DELAY_MS = 250
+const MAX_RESUME_DELAY_MS = 30_000
+/** Resumed streams in a row that carry no event before a request's stream is given up on. */
+const MAX_IDLE_STREAM_RESUMES = 20
+
+/** Where an SSE stream stopped: its last event id and `retry` hint, and how many events came. */
+interface StreamCursor {
+  events: number
+  lastEventId?: string
+  retryMs?: number
+}
+
+/** The wait before resuming a stream, from the server's `retry` hint (clamped). */
+function resumeDelayMs(retryMs: number | undefined): number {
+  if (retryMs === undefined || !Number.isFinite(retryMs)) return DEFAULT_RESUME_DELAY_MS
+  return Math.min(MAX_RESUME_DELAY_MS, Math.max(MIN_RESUME_DELAY_MS, retryMs))
+}
+
+/** Wait `ms`, or less if `signal` aborts; true when the wait ran its course. */
+function abortableDelay(ms: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve(true)
+    }, ms)
+    timer.unref?.()
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 /** Pull each SSE event's `data:` payload out of a raw event-stream body. */
 export function extractSseData(body: string): string[] {
   const out: string[] = []
@@ -129,6 +167,8 @@ export class McpHttpClient implements McpConnection {
   private streamAbort?: AbortController
   /** Reopens of the notification stream since it was last healthy, for the backoff. */
   private streamReconnects = 0
+  /** Where the notification stream last stopped, so a reopen resumes from there. */
+  private notifyCursor: { lastEventId?: string; retryMs?: number } = {}
   /** Answers `elicitation/create`; its presence declares the capability. */
   /** The version agreed at initialize; set once the handshake answers. */
   private protocolVersion?: McpProtocolVersion
@@ -319,7 +359,8 @@ export class McpHttpClient implements McpConnection {
     }
     const contentType = res.headers.get('content-type') ?? ''
     if (contentType.includes('text/event-stream') && res.body) {
-      await this.readEventStream(res.body)
+      const cursor = await this.readEventStream(res.body)
+      if (this.pending.has(id)) await this.resumeAfterClose(id, cursor, controller)
       if (this.pending.has(id)) {
         this.pending.reject(id, new Error(`MCP ${method} failed: stream ended without a response`))
       }
@@ -369,13 +410,22 @@ export class McpHttpClient implements McpConnection {
     }
   }
 
-  /** Incrementally read an SSE body, dispatching each event as it arrives. */
-  private async readEventStream(body: ReadableStream<Uint8Array>): Promise<void> {
+  /**
+   * Incrementally read an SSE body, dispatching each event as it arrives. Returns
+   * where the stream stopped: the last event id and `retry` hint the server sent (a
+   * server that closes a stream on purpose sends both, see {@link resumeAfterClose}),
+   * and how many events arrived.
+   */
+  private async readEventStream(body: ReadableStream<Uint8Array>): Promise<StreamCursor> {
     const reader = body.getReader()
     const decoder = new TextDecoder()
     const buffer = new SseEventBuffer()
+    const cursor: StreamCursor = { events: 0 }
     const emit = (events: SseEvent[]): void => {
       for (const e of events) {
+        cursor.events++
+        if (e.id !== undefined) cursor.lastEventId = e.id
+        if (e.retry !== undefined) cursor.retryMs = e.retry
         if (!e.data.trim()) continue
         try {
           const parsed = JSON.parse(e.data) as unknown
@@ -397,6 +447,58 @@ export class McpHttpClient implements McpConnection {
     } catch {
       // Aborted (request settled / client closed) or the network dropped; any
       // still-pending request is settled by its own timers.
+    }
+    return cursor
+  }
+
+  /**
+   * A request's response stream ended before its response. Since 2025-11-25 a server
+   * may close a stream at will (to have the client poll) after sending an event id;
+   * the client then resumes it with a GET carrying `Last-Event-ID`, after the
+   * server's `retry` delay, and the server replays what followed. Resuming repeats
+   * while the request is pending and the server keeps sending ids; the request's own
+   * timeouts bound it, and so does a cap on resumes that bring nothing new. Returns
+   * once the request settles or the stream can't be resumed.
+   */
+  private async resumeAfterClose(id: number, first: StreamCursor, controller: AbortController): Promise<void> {
+    let cursor = first
+    let idle = 0
+    while (cursor.lastEventId !== undefined && this.pending.has(id) && !this.closed) {
+      if (!(await abortableDelay(resumeDelayMs(cursor.retryMs), controller.signal))) return
+      if (!this.pending.has(id) || this.closed) return
+      const res = await this.fetchFn(this.url, {
+        method: 'GET',
+        headers: { ...this.streamHeaders(), 'last-event-id': cursor.lastEventId },
+        signal: controller.signal
+      })
+      if (res.status === 404 && this.sessionId) {
+        await res.text().catch(() => '')
+        this.closed = true
+        this.pending.failAll('MCP request failed: the server expired the session')
+        return
+      }
+      if (!res.ok || !res.body || !(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+        await res.text().catch(() => '')
+        return
+      }
+      const next = await this.readEventStream(res.body)
+      idle = next.events > 0 ? 0 : idle + 1
+      if (idle >= MAX_IDLE_STREAM_RESUMES) return
+      cursor = {
+        events: next.events,
+        lastEventId: next.lastEventId ?? cursor.lastEventId,
+        retryMs: next.retryMs ?? cursor.retryMs
+      }
+    }
+  }
+
+  /** Headers for a GET event stream (the notification stream, or a resume). */
+  private streamHeaders(): Record<string, string> {
+    return {
+      ...this.extraHeaders,
+      accept: 'text/event-stream',
+      ...(this.protocolVersion ? { 'mcp-protocol-version': this.protocolVersion } : {}),
+      ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {})
     }
   }
 
@@ -420,10 +522,9 @@ export class McpHttpClient implements McpConnection {
         const res = await this.fetchFn(this.url, {
           method: 'GET',
           headers: {
-            ...this.extraHeaders,
-            accept: 'text/event-stream',
-            ...(this.protocolVersion ? { 'mcp-protocol-version': this.protocolVersion } : {}),
-            ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {})
+            ...this.streamHeaders(),
+            // Resume where the last stream stopped: the server replays what it missed.
+            ...(this.notifyCursor.lastEventId !== undefined ? { 'last-event-id': this.notifyCursor.lastEventId } : {})
           },
           signal: controller.signal
         })
@@ -441,13 +542,17 @@ export class McpHttpClient implements McpConnection {
           reopen = res.status >= 500 || res.status === 429
           return
         }
-        if (this.streamReconnects > 0) {
+        // A resumed stream replays what was missed; a fresh one can't, so re-fetch.
+        if (this.streamReconnects > 0 && this.notifyCursor.lastEventId === undefined) {
           for (const kind of ['tools', 'resources', 'prompts'] as const) this.refresher.schedule(kind)
         }
         const openedAt = Date.now()
-        await this.readEventStream(res.body)
-        // A stream that stayed up a while was healthy: start the backoff over.
-        if (Date.now() - openedAt >= STREAM_HEALTHY_MS) this.streamReconnects = 0
+        const cursor = await this.readEventStream(res.body)
+        if (cursor.lastEventId !== undefined) this.notifyCursor.lastEventId = cursor.lastEventId
+        if (cursor.retryMs !== undefined) this.notifyCursor.retryMs = cursor.retryMs
+        // A stream that stayed up a while was healthy, and one the server closed after
+        // sending an id is polling on purpose: either way, start the backoff over.
+        if (Date.now() - openedAt >= STREAM_HEALTHY_MS || cursor.lastEventId !== undefined) this.streamReconnects = 0
       } catch {
         // A network failure: reopen like a dropped stream.
       } finally {
@@ -459,7 +564,11 @@ export class McpHttpClient implements McpConnection {
   /** Reopen the notification stream after a backoff, unless the client closed meanwhile. */
   private scheduleStreamReopen(controller: AbortController): void {
     if (this.closed || controller.signal.aborted) return
-    const delay = Math.min(STREAM_RETRY_MAX_MS, STREAM_RETRY_BASE_MS * 2 ** this.streamReconnects)
+    // A server's `retry` hint sets the first wait; failures after it still back off.
+    const delay =
+      this.streamReconnects === 0 && this.notifyCursor.retryMs !== undefined
+        ? resumeDelayMs(this.notifyCursor.retryMs)
+        : Math.min(STREAM_RETRY_MAX_MS, STREAM_RETRY_BASE_MS * 2 ** this.streamReconnects)
     this.streamReconnects++
     const timer = setTimeout(() => {
       if (!this.closed && !controller.signal.aborted) this.openNotificationStream()

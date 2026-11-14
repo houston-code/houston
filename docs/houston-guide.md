@@ -2549,11 +2549,15 @@ name, or a confirmation.
 
 ### Protocol versions
 
-Houston speaks MCP protocol versions 2025-06-18, 2025-03-26, and 2024-11-05, and asks
-for the newest when it connects.
+Houston speaks MCP protocol versions 2025-11-25, 2025-06-18, 2025-03-26, and 2024-11-05,
+and asks for the newest when it connects.
 
 - A server that answers with an older supported version still works, but server
-  questions need 2025-06-18: an older server's requests for input are declined.
+  questions need 2025-06-18 or later: an older server's requests for input are declined.
+- Server questions are answered as forms. A request to open a web page instead (URL
+  mode) is refused, since Houston does not offer it.
+- Over streamable HTTP, a stream the server closes early is resumed where it left off
+  (the server sends event ids), so a server that polls this way loses no replies.
 - A server that only speaks a version outside that list fails to connect, and its
   status names the version it asked for.
 

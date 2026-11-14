@@ -114,6 +114,29 @@ describe('parseElicitationFields', () => {
     ])
   })
 
+  it('reads titled single-select enums (2025-11-25 oneOf/anyOf of const options)', () => {
+    const fields = parseElicitationFields({
+      type: 'object',
+      properties: {
+        size: {
+          type: 'string',
+          oneOf: [
+            { const: 's', title: 'Small' },
+            { const: 'l', title: 'Large' }
+          ]
+        },
+        tone: { type: 'string', anyOf: [{ const: 'warm' }, { const: 3 }, null, { title: 'no const' }] },
+        empty: { type: 'string', oneOf: [{ title: 'nothing usable' }] }
+      }
+    })
+    expect(fields).toEqual([
+      { name: 'size', kind: 'enum', options: ['s', 'l'] },
+      { name: 'tone', kind: 'enum', options: ['warm'] },
+      { name: 'empty', kind: 'string' }
+    ])
+    expect(buildElicitationContent(fields.slice(0, 1), { size: 'L' })).toEqual({ content: { size: 'l' } })
+  })
+
   it('degrades exotic types to string inputs and tolerates junk schemas', () => {
     expect(parseElicitationFields({ properties: { blob: { type: 'array' } } })).toEqual([
       { name: 'blob', kind: 'string' }

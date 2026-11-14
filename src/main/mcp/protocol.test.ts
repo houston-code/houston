@@ -89,6 +89,30 @@ describe('handleServerMessage', () => {
     })
   })
 
+  it('routes a 2025-11-25 form-mode elicitation to the responder', async () => {
+    const { sent, h } = hooks()
+    h.onElicit = async () => ({ action: 'decline' })
+    handleServerMessage({ id: 11, method: 'elicitation/create', params: { mode: 'form', message: 'x' } }, h)
+    await vi.waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]).toEqual({ jsonrpc: '2.0', id: 11, result: { action: 'decline' } })
+  })
+
+  it('refuses URL-mode (or any non-form) elicitation without asking the user', () => {
+    for (const mode of ['url', 'other', 42]) {
+      const { sent, h } = hooks()
+      const responder = vi.fn(async () => ({ action: 'accept' as const }))
+      h.onElicit = responder
+      handleServerMessage(
+        { id: 'u1', method: 'elicitation/create', params: { mode, url: 'https://example.com/auth', message: 'Sign in' } },
+        h
+      )
+      expect(responder).not.toHaveBeenCalled()
+      expect(sent).toEqual([
+        { jsonrpc: '2.0', id: 'u1', error: { code: -32602, message: 'This client supports only form elicitation' } }
+      ])
+    }
+  })
+
   it('answers with a cancel when the elicitation responder fails', async () => {
     const { sent, h } = hooks()
     h.onElicit = async () => {
