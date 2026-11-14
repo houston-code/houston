@@ -1438,6 +1438,14 @@ export type AgentEvent =
        */
       sensitiveWrite?: boolean
       /**
+       * Present and `true` (always alongside `sensitiveWrite`) when the file is an
+       * in-project control file: `.houston/`, `.vscode/`, `.idea/`, `.envrc`, `.husky/`,
+       * `.mcp.json`, `.devcontainer/`, or CI workflows, which run code outside the
+       * sandbox later. "Allow for run" doesn't cover these, so the UI says so and gives
+       * this reason instead of the credential-file one.
+       */
+      protectedWrite?: boolean
+      /**
        * On a network call only: a readable name for what "Allow for run" grants (one
        * site, GitHub posts on one repository, one merge tool), so the card can say how
        * far the grant reaches before the user picks it.

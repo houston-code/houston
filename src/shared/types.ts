@@ -407,9 +407,10 @@ export const HOOK_EVENTS: Hook['event'][] = [
 
 /**
  * A per-folder decision about honoring that project's ELEVATING config — the
- * `allow` rules, hooks, and MCP servers a `.houston/settings.json` may define
- * but which are ignored until the user trusts the folder (they auto-approve
- * actions or run processes, so an untrusted clone must not get them).
+ * `allow` rules, hooks, and MCP servers a `.houston/settings.json` may define,
+ * and its `.houston/plugins/*.js` files, all ignored until the user trusts the
+ * folder (they auto-approve actions or run code, so an untrusted clone must not
+ * get them).
  *
  * `hash` fingerprints the elevating subset the decision covered: when a trusted
  * folder's project file later changes that subset, the trust no longer applies
@@ -438,7 +439,13 @@ export type FolderTrustState = 'trusted' | 'untrusted' | 'undecided' | 'changed'
 export interface FolderTrustStatus {
   state: FolderTrustState | 'none'
   /** `commands`: the project's commands that pre-approve tools (absent when none). */
-  counts?: { allowRules: number; hooks: number; mcpServers: number; commands?: number }
+  counts?: { allowRules: number; hooks: number; mcpServers: number; commands?: number; plugins?: number }
+  /**
+   * The names of the project's plugin files (`.houston/plugins/*.js`) the decision
+   * would cover, listed on the prompt so the user sees exactly which code they trust.
+   * Names are restricted to letters, digits, `_`, `.`, and `-` by the loader.
+   */
+  plugins?: string[]
 }
 
 /**
@@ -458,6 +465,11 @@ export interface PermissionPolicyView {
     allowRules: PermissionRule[]
     hooks: Hook[]
     mcpServers: Array<{ id: string; transport: 'stdio' | 'http' | 'sse'; target: string }>
+    /**
+     * The project's plugin files with their content hashes: run only while `trust` is
+     * 'trusted' and the `projectPlugins` setting is on.
+     */
+    plugins: Array<{ name: string; sha256: string }>
     trust: FolderTrustState | 'none'
   } | null
 }
@@ -853,7 +865,9 @@ export interface AppSettings {
    * Execute the opened project's `.houston/plugins/*.js` files. OFF by default and
    * deliberately opt-in: plugins are evaluated in-process and `vm` is NOT a security
    * boundary, so a plugin file shipped in an untrusted repo is arbitrary code
-   * execution in the main process. Only enable this for projects you fully trust.
+   * execution in the main process. A master switch only: even when on, a folder's
+   * plugins run only while the user trusts that folder for its current plugin files
+   * (see {@link FolderTrust}; each file's hash is in the trust fingerprint).
    */
   projectPlugins?: boolean
   /** Extra directories (beyond the project folder) the agent may read and write. */

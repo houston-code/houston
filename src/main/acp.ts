@@ -1565,6 +1565,10 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         warnings.push('Runs UNSANDBOXED: this host has no OS confinement for shell commands.')
       } else if (e.sensitiveRead) {
         warnings.push('Reads a credential or secret file (asked even in full auto).')
+      } else if (e.sensitiveWrite && e.protectedWrite) {
+        warnings.push(
+          'Changes a project control file (such as .houston, .vscode, .envrc, or a CI workflow) that can run code outside the sandbox later (asked every time; "Allow for run" does not cover it).'
+        )
       } else if (e.sensitiveWrite) {
         warnings.push('Changes a credential or secret file (asked even in full auto).')
       }

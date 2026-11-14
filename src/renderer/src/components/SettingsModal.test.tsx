@@ -601,6 +601,7 @@ describe('SettingsModal', () => {
         allowRules: [{ action: 'allow' as const, tool: 'run_shell', match: 'npm test' }],
         hooks: [{ event: 'PostToolUse' as const, matcher: 'edit_file', command: 'npm run fmt' }],
         mcpServers: [{ id: 'db', transport: 'stdio' as const, target: 'npx db-mcp' }],
+        plugins: [{ name: 'audit.js', sha256: 'abcdef0123456789' }],
         trust: 'undecided' as const
       }
     }
@@ -618,11 +619,15 @@ describe('SettingsModal', () => {
         "This project's guardrails",
         'Your rules',
         "This project's allow rules",
+        "This project's plugins",
         "Then the chat's approval mode"
       ])
+      // Each plugin the trust covers is named, with the start of its content hash.
+      expect(screen.getByText('audit.js')).toBeInTheDocument()
+      expect(screen.getByText('abcdef012345')).toBeInTheDocument()
       expect(screen.getByText('curl *')).toBeInTheDocument()
       expect(screen.getByText('git push*')).toBeInTheDocument()
-      expect(screen.getByText('Ignored until you trust this folder')).toBeInTheDocument()
+      expect(screen.getAllByText('Ignored until you trust this folder').length).toBeGreaterThan(0)
       // Your own rules are summarized here, edited in the ordered view.
       fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
       expect(screen.getByDisplayValue('git status')).toBeInTheDocument()
@@ -634,7 +639,9 @@ describe('SettingsModal', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Hooks' }))
       expect(await screen.findByRole('heading', { name: "This project's hooks" })).toBeInTheDocument()
       expect(screen.getByText('npm run fmt')).toBeInTheDocument()
-      expect(screen.getByText('In effect: you trust this folder')).toBeInTheDocument()
+      expect(screen.getAllByText('In effect: you trust this folder').length).toBeGreaterThan(0)
+      expect(screen.getByRole('heading', { name: "This project's plugins" })).toBeInTheDocument()
+      expect(screen.getByText('audit.js')).toBeInTheDocument()
       fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
       expect(screen.getByRole('heading', { name: "This project's MCP servers" })).toBeInTheDocument()
       expect(screen.getByText('npx db-mcp')).toBeInTheDocument()

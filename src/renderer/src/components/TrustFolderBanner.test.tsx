@@ -50,6 +50,33 @@ describe('TrustFolderBanner', () => {
     ).toBeInTheDocument()
   })
 
+  it('names every plugin file the trust would cover', async () => {
+    installApi({
+      state: 'changed',
+      counts: { allowRules: 0, hooks: 0, mcpServers: 0, plugins: 2 },
+      plugins: ['audit.js', 'notify.js']
+    })
+    render(<TrustFolderBanner {...props()} />)
+    expect(await screen.findByText(CHANGED_TITLE)).toBeInTheDocument()
+    expect(screen.getByText(/2 plugins \(audit\.js, notify\.js\)/)).toBeInTheDocument()
+    expect(screen.getByText(/projectPlugins setting/)).toBeInTheDocument()
+  })
+
+  it('lists commands and plugins together, with every place they live', async () => {
+    installApi({
+      state: 'undecided',
+      counts: { allowRules: 1, hooks: 0, mcpServers: 0, commands: 1, plugins: 1 },
+      plugins: ['audit.js']
+    })
+    render(<TrustFolderBanner {...props()} />)
+    expect(
+      await screen.findByText(
+        /1 allow rule, 1 command that pre-approves tools, 1 plugin \(audit\.js\) \(in \.houston\/settings\.json, \.houston\/commands, and \.houston\/plugins\)/
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByText(/projectPlugins setting/)).toBeInTheDocument()
+  })
+
   it('shows the changed variant when trust drifted', async () => {
     installApi({ state: 'changed', counts: { allowRules: 0, hooks: 2, mcpServers: 1 } })
     render(<TrustFolderBanner {...props()} />)

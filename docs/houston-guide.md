@@ -1771,6 +1771,14 @@ The sandbox can read your whole filesystem, so a few controls hold even in full 
   command that redirects into, copies over, edits in place, or removes one
   (`> .env`, `cp .env.example .env`, `sed -i … .env`, `rm .env`). Templates such as
   `.env.example` don't count.
+- **Changing a project control file** asks every time: anything under `.houston/`,
+  `.vscode/`, `.idea/`, `.husky/`, `.devcontainer/`, `.github/workflows/`, or
+  `.github/actions/`, and any `.envrc` or `.mcp.json`. These run code outside the
+  sandbox later (an editor task, a direnv script, a git hook, a Houston plugin, a CI
+  job) or change Houston's own settings for the folder. A file edit or a shell command
+  that writes one (`echo x > .envrc`, `cp t.json .vscode/tasks.json`) asks in every
+  mode, and "Allow for run" doesn't cover it. Only an `allow` rule for that path skips
+  the prompt ("Always allow" on the prompt saves one for the exact file).
 - **Git hooks and settings that run programs.** See "Git hooks and settings" below.
 
 ### Git hooks and settings
@@ -2052,22 +2060,26 @@ untrusted repo can never auto-approve anything.
 
 ### Trusted folders
 
-The same project file can also define `allow` rules, `hooks`, and `mcpServers`. Those
-*elevate* (they auto-approve matching actions or run processes as you), so Houston
-ignores them until you explicitly trust the folder. A project command in
-`.houston/commands` whose frontmatter pre-approves tools (`allowed-tools`) elevates
-the same way, and counts toward the same decision.
+The same project file can also define `allow` rules, `hooks`, and `mcpServers`, and the
+project can ship plugin files in `.houston/plugins/`. Those *elevate* (they auto-approve
+matching actions or run code as you), so Houston ignores them until you explicitly
+trust the folder. A project command in `.houston/commands` whose frontmatter
+pre-approves tools (`allowed-tools`) elevates the same way, and counts toward the
+same decision.
 
 - **How you're asked:** the desktop app shows a banner above the composer, and the
   interactive terminal asks at session start (Trust / Not now / Never).
 - **Re-asked on change.** Your decision is bound to a fingerprint of that elevating
-  config. If it changes (say a pull adds a hook), the folder drops back to untrusted
-  and Houston asks again.
+  config, including each command's `allowed-tools` and the name and contents of every
+  plugin file. If it changes (say a pull adds a hook, widens a command's
+  `allowed-tools`, or adds or edits a plugin file), the folder drops back to
+  untrusted and Houston asks again. The prompt names each plugin file it covers.
 - **Headless runs** never prompt; they note when an untrusted folder's extra config is
   being ignored.
 - **Once trusted:** project `allow` rules sit *below* your own rules (they fill gaps,
-  never override you), project hooks run after yours, and project MCP servers appear
-  namespaced as `mcp__proj-<id>__<tool>`.
+  never override you), project hooks run after yours, project MCP servers appear
+  namespaced as `mcp__proj-<id>__<tool>`, and project plugins run if you have also
+  turned on `projectPlugins` (see "Plugins").
 
 **Reviewing decisions.** Settings > *Permissions* > *Trusted folders* lists every
 folder you answered for (trusted or never), with a Forget button. In the terminal,
@@ -2739,8 +2751,13 @@ logging, metrics, or notifications:
 
 `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage', fn)`
 
-- **Opt-in.** Plugins are local trusted files (the same trust model as hooks, agents,
-  and skills) and run only when you've opted into project plugins for that project.
+- **Opt-in, twice.** A plugin runs only when both hold: `"projectPlugins": true` is
+  set in your settings.json (off by default), and you trusted this folder (see
+  "Trusted folders") while its plugin files were exactly what is on disk now. The
+  setting alone never runs anything: a folder you haven't trusted, including a fresh
+  clone, never runs its plugins. Adding or editing a plugin file turns the folder's
+  trust off until you trust it again, and the agent changing one always asks first.
+  Settings lists the open project's plugins on the Hooks page.
 - **Isolated.** Each runs in its own context with no `require`, `process`, or network.
 - **Observe only.** A plugin can't block or change a call; use a PreToolUse shell hook
   for that.

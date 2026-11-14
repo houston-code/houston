@@ -11,7 +11,7 @@ import {
 import { lintPermissionRules, moveRule, type RuleIssue } from '@shared/permissionLint'
 import { carryRuleMeta, diffRules, parseRulesText, rulesToText } from '@shared/permissionRulesText'
 import { SettingsSection } from '../fields'
-import { ReadOnlyRules, TrustBadge } from './project'
+import { ReadOnlyPlugins, ReadOnlyRules, TrustBadge } from './project'
 import { groupPermissionRules, ruleMatchesFilter, TOOL_NAMES } from '../permissionRules'
 import { ruleMetaText, testVerdictText } from '../ruleMeta'
 import type { SettingsCtx } from '../context'
@@ -424,6 +424,17 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
                 Fill gaps your rules leave; never override them. <TrustBadge trust={project.trust} />
               </p>
               <ReadOnlyRules rules={project.allowRules} empty="" />
+            </li>
+          )}
+          {project && project.plugins.length > 0 && (
+            <li className="rule-tier">
+              <h4 className="rule-tier__title">This project&apos;s plugins</h4>
+              <p className="rule-tier__desc">
+                Code from <code>.houston/plugins</code> that runs inside Houston, only while you trust
+                this folder and the <code>projectPlugins</code> setting is on.{' '}
+                <TrustBadge trust={project.trust} />
+              </p>
+              <ReadOnlyPlugins plugins={project.plugins} />
             </li>
           )}
           <li className="rule-tier">

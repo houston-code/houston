@@ -1174,8 +1174,9 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
   }
 
   // Trusted folders: a headless run never prompts, so an undecided (or drifted)
-  // folder's elevating project config (allow rules / hooks / MCP servers) is
-  // simply left off — the loop enforces that; this just says so once. Trust the
+  // folder's elevating project config (allow rules / hooks / MCP servers / command
+  // allowed-tools / plugins) is simply left off — the loop enforces that; this just
+  // says so once. Trust the
   // folder from the desktop app or an interactive `houston -i` session.
   try {
     const projectCfg = await loadProjectConfig(opts.cwd)
@@ -1189,7 +1190,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       const state = folderTrustState(settings.trustedFolders, path, projectCfg.elevatedHash)
       if (state !== 'trusted' && !opts.json) {
         deps.err(
-          "· ignoring this project's allow rules / hooks / MCP servers (folder not trusted; decide in the desktop app or houston -i)\n"
+          "· ignoring this project's allow rules / hooks / MCP servers / command allowed-tools / plugins (folder not trusted; decide in the desktop app or houston -i)\n"
         )
       }
     }

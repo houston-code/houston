@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os'
 import { resolve, relative, isAbsolute, posix, sep } from 'node:path'
 import type { AppSettings, PermissionRule } from '@shared/types'
 import { parsePatch } from './apply-patch'
-import { isSensitivePath, writesSensitivePath } from './sensitive-paths'
+import { isProtectedControlPath, isSensitivePath, writesProtectedPath, writesSensitivePath } from './sensitive-paths'
 import type { ToolKind } from './tools'
 
 /**
@@ -763,6 +763,24 @@ const COMMAND_PREFIXES = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'ti
  * it is a static tripwire: a path built from variables or substitutions isn't seen.
  */
 export function shellWritesSensitivePath(command: string): boolean {
+  return shellWritesPathMatching(command, isSensitivePath)
+}
+
+/**
+ * Whether a `run_shell` command writes to, or removes, an in-project control file
+ * (see isProtectedControlPath: `.houston/`, `.vscode/`, `.envrc`, `.husky/`, CI
+ * workflows, …) the same ways {@link shellWritesSensitivePath} reads for credential
+ * files (`echo x > .envrc`, `cp evil.json .vscode/tasks.json`, `sed -i … .husky/pre-commit`).
+ * Paths are resolved against the first root, as the command's working directory is.
+ * The same static tripwire: a command that first `cd`s into one of those folders, or
+ * builds the path from variables, isn't seen.
+ */
+export function shellWritesProtectedPath(command: string, roots: string[]): boolean {
+  return shellWritesPathMatching(command, (p) => isProtectedControlPath(p, roots))
+}
+
+/** The shared reading behind the two `shellWrites…Path` tripwires: does a write name a path `hit` flags? */
+function shellWritesPathMatching(command: string, hit: (path: string) => boolean): boolean {
   for (const segment of splitShellCommand(command)) {
     // Bash's words (`\.env` and `".e"nv` are `.env`) and the plain ones (a Windows
     // path keeps its backslashes): either reading naming a credential file flags it.
@@ -773,11 +791,11 @@ export function shellWritesSensitivePath(command: string): boolean {
         // descriptor duplication, not a file.
         if (/^\d*(?:>>|>\||&>>|&>|>)$/.test(token)) {
           const target = tokens[i + 1]
-          if (target !== undefined && isSensitivePath(stripSurroundingQuotes(target))) return true
+          if (target !== undefined && hit(stripSurroundingQuotes(target))) return true
           continue
         }
         const glued = /^\d*(?:>>|>\||&>>|&>|>)([^&].*)$/.exec(token)
-        if (glued && isSensitivePath(stripSurroundingQuotes(glued[1]!))) return true
+        if (glued && hit(stripSurroundingQuotes(glued[1]!))) return true
       }
       // The command word: past `FOO=bar` assignments and prefixes like `sudo`.
       let c = 0
@@ -796,7 +814,7 @@ export function shellWritesSensitivePath(command: string): boolean {
           if (a.startsWith('-')) return false
           // `dd of=.env`, `--target=.env`: the path may follow an `=`.
           const eq = a.indexOf('=')
-          return isSensitivePath(a) || (eq >= 0 && isSensitivePath(a.slice(eq + 1)))
+          return hit(a) || (eq >= 0 && hit(a.slice(eq + 1)))
         })
       if (FILE_WRITING_COMMANDS.has(cmd) && namesSensitive()) return true
       if (
@@ -1245,6 +1263,31 @@ export function isSensitiveWrite(kind: ToolKind, toolName: string, args: Record<
     toolName === 'run_shell' &&
     typeof args.command === 'string' &&
     shellWritesSensitivePath(args.command)
+  )
+}
+
+/**
+ * Whether a tool call creates, overwrites, or removes an in-project control file
+ * (`.houston/`, `.vscode/`, `.idea/`, `.envrc`, `.husky/`, `.mcp.json`,
+ * `.devcontainer/`, CI workflows; see isProtectedControlPath): a write tool targeting
+ * one, or a `run_shell` command writing one. Such a file runs code outside the
+ * sandbox later (an editor task, a direnv script, a git hook, a Houston plugin) or
+ * steers the agent's own guardrails, so the gate asks in every mode and "Allow for
+ * run" does not cover it; only an explicit `allow` rule does (see decideApproval).
+ * Shared by the main loop's gate, the subagent gate, and a subagent with no gate.
+ */
+export function isProtectedWrite(
+  kind: ToolKind,
+  toolName: string,
+  args: Record<string, unknown>,
+  roots: string[]
+): boolean {
+  if (kind === 'write') return writesProtectedPath(toolName, args, roots)
+  return (
+    kind === 'shell' &&
+    toolName === 'run_shell' &&
+    typeof args.command === 'string' &&
+    shellWritesProtectedPath(args.command, roots)
   )
 }
 

@@ -1016,7 +1016,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
   )
 
   // Trusted folders: whether this workspace's project config elevates anything
-  // (allow rules / hooks / MCP servers), and where the user's consent stands.
+  // (allow rules / hooks / MCP servers / command allowed-tools / plugin files), and
+  // where the user's consent stands. Plugin sources never leave main; only their
+  // names do.
   handle(IPC.folderTrustStatus, async (_event, workspace: string): Promise<FolderTrustStatus> => {
     if (typeof workspace !== 'string' || !workspace) return { state: 'none' }
     const cfg = await loadProjectConfig(workspace)
@@ -1027,8 +1029,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
         allowRules: cfg.elevated.allowRules.length,
         hooks: cfg.elevated.hooks.length,
         mcpServers: cfg.elevated.mcpServers.length,
-        ...(cfg.elevated.commands?.length ? { commands: cfg.elevated.commands.length } : {})
-      }
+        ...(cfg.elevated.commands?.length ? { commands: cfg.elevated.commands.length } : {}),
+        plugins: cfg.elevated.plugins.length
+      },
+      ...(cfg.elevated.plugins.length ? { plugins: cfg.elevated.plugins.map((p) => p.name) } : {})
     }
   })
   // Persist a trust decision. The fingerprint is recomputed here from the file on

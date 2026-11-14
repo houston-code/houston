@@ -4,7 +4,7 @@ import type { ProjectConfig } from './agent/projectConfig'
 
 const emptyProject: ProjectConfig = {
   permissionRules: [],
-  elevated: { allowRules: [], hooks: [], mcpServers: [] },
+  elevated: { allowRules: [], hooks: [], mcpServers: [], plugins: [] },
   elevatedHash: ''
 }
 
@@ -54,7 +54,8 @@ describe('describePermissionPolicy', () => {
             mcpServers: [
               { id: 'db', command: 'npx', args: ['db-mcp'], enabled: true, env: { DB_PASSWORD: 'hunter2' } },
               { id: 'api', url: 'https://mcp.example/x', command: '', enabled: true, headers: { Authorization: 'Bearer s3cret' } }
-            ]
+            ],
+            plugins: [{ name: 'log.js', sha256: 'f00d', source: 'const token = "plugin-s3cret"' }]
           },
           elevatedHash: 'abc'
         })
@@ -69,6 +70,8 @@ describe('describePermissionPolicy', () => {
         { id: 'db', transport: 'stdio', target: 'npx db-mcp' },
         { id: 'api', transport: 'http', target: 'https://mcp.example/x' }
       ],
+      // Name and hash, never the source.
+      plugins: [{ name: 'log.js', sha256: 'f00d' }],
       trust: 'trusted'
     })
     expect(JSON.stringify(view)).not.toMatch(/hunter2|s3cret/)

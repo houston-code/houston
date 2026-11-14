@@ -29,7 +29,7 @@ import { ScheduledRunsSection } from './sections/schedules'
 import { CustomizeSection, InstructionFilesSection } from './sections/customize'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
 import { ImportSection } from './sections/import'
-import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
+import { ProjectHooksSection, ProjectMcpSection, ProjectPluginsSection } from './sections/project'
 import {
   AdditionalFoldersSection,
   NewChatWorktreeSection,
@@ -240,6 +240,11 @@ export const PAGES: SettingsPage[] = [
         id: 'project-hooks',
         Component: ProjectHooksSection,
         keywords: ['project', 'repository', 'trusted', 'settings.json']
+      },
+      {
+        id: 'project-plugins',
+        Component: ProjectPluginsSection,
+        keywords: ['project', 'repository', 'trusted', 'plugins', 'projectPlugins']
       }
     ]
   },

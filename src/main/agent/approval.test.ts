@@ -513,6 +513,78 @@ describe('decideApproval', () => {
       ).toBe(false)
     })
   })
+
+  describe('in-project control-file write (protectedWrite=true)', () => {
+    it('prompts a write or shell command in every mode, full auto included', () => {
+      for (const kind of ['write', 'shell'] as const) {
+        for (const policy of ['full-auto', 'auto-edit', 'ask'] as const) {
+          expect(
+            decideApproval(base({ kind, policy, sensitiveWrite: true, protectedWrite: true })).mustApprove
+          ).toBe(true)
+        }
+      }
+    })
+
+    it('is NOT cleared by "Allow for run", unlike a credential-file write', () => {
+      for (const kind of ['write', 'shell'] as const) {
+        expect(
+          decideApproval(
+            base({ kind, policy: 'full-auto', override: true, sensitiveWrite: true, protectedWrite: true })
+          ).mustApprove
+        ).toBe(true)
+      }
+    })
+
+    it('an explicit allow rule clears it', () => {
+      for (const kind of ['write', 'shell'] as const) {
+        expect(
+          decideApproval(base({ kind, ruleAction: 'allow', sensitiveWrite: true, protectedWrite: true }))
+            .mustApprove
+        ).toBe(false)
+      }
+    })
+
+    it('on a host without a sandbox, the unconfined-shell consent does not clear it', () => {
+      expect(
+        decideApproval(
+          base({
+            kind: 'shell',
+            policy: 'full-auto',
+            shellSandboxed: false,
+            shellUnsandboxedOverride: true,
+            override: true,
+            protectedWrite: true
+          })
+        )
+      ).toEqual({ mustApprove: true, unsandboxedShell: true, hard: true })
+      // With an allow rule for it, the unconfined consent applies as for any command.
+      expect(
+        decideApproval(
+          base({
+            kind: 'shell',
+            ruleAction: 'allow',
+            shellSandboxed: false,
+            shellUnsandboxedOverride: true,
+            protectedWrite: true
+          })
+        ).mustApprove
+      ).toBe(false)
+    })
+
+    it('does not affect reads or network calls', () => {
+      expect(decideApproval(base({ kind: 'read', policy: 'full-auto', protectedWrite: true })).mustApprove).toBe(
+        false
+      )
+    })
+
+    it("is not cleared by a hook's approve", () => {
+      for (const kind of ['write', 'shell'] as const) {
+        expect(
+          decideApproval(base({ kind, policy: 'full-auto', sensitiveWrite: true, protectedWrite: true, hookApproved: true }))
+        ).toMatchObject({ mustApprove: true, hard: true })
+      }
+    })
+  })
 })
 
 describe('grantKey', () => {

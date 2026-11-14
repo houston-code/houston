@@ -4052,6 +4052,30 @@ describe('promptFolderTrust', () => {
     }
   })
 
+  it('asks for a folder whose only elevation is plugin files, naming each, and re-asks when one changes', async () => {
+    const ws = makeWorkspace()
+    mkdirSync(join(ws, '.houston/plugins'), { recursive: true })
+    writeFileSync(join(ws, '.houston/plugins/audit.js'), '// v1')
+    try {
+      const first = trustDeps(['y'])
+      await promptFolderTrust(ws, first.d, makePainter(false))
+      expect(first.text()).toContain('asks for extra permissions')
+      expect(first.text()).toContain('1 plugin (audit.js)')
+      expect(first.patches).toHaveLength(1)
+
+      // Unchanged: no prompt. Edited after the trust: asked again, as a change.
+      const same = trustDeps(['y'], first.patches[0])
+      await promptFolderTrust(ws, same.d, makePainter(false))
+      expect(same.text()).not.toContain('Trust this folder?')
+      writeFileSync(join(ws, '.houston/plugins/audit.js'), '// v2')
+      const edited = trustDeps([''], first.patches[0])
+      await promptFolderTrust(ws, edited.d, makePainter(false))
+      expect(edited.text()).toContain('trusted configuration changed')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
   it('persists never, leaves undecided on anything else, and skips when already decided', async () => {
     const ws = makeWorkspace(elevatingProject)
     try {
@@ -4132,7 +4156,7 @@ describe('promptFolderTrust', () => {
         await promptFolderTrust(ws, consent.d, makePainter(false))
         const trusted = trustDeps([], consent.patches[0])
         await runTrustCommand('status', ws, trusted.d, makePainter(false))
-        expect(trusted.text()).toContain('trusted: its allow rules, hooks, and MCP servers apply')
+        expect(trusted.text()).toContain('trusted: its allow rules, hooks, MCP servers, and plugins apply')
       } finally {
         rmSync(ws, { recursive: true, force: true })
       }
@@ -4194,6 +4218,22 @@ describe('summarizeElevated', () => {
     expect(elevatedSource(onlyCommands)).toBe('.houston/commands')
     expect(elevatedSource({ ...onlyCommands, hooks: [1] })).toBe('.houston/settings.json and .houston/commands')
     expect(elevatedSource({ allowRules: [1], hooks: [], mcpServers: [] })).toBe('.houston/settings.json')
+  })
+
+  it('names each plugin file the trust would cover', () => {
+    expect(
+      summarizeElevated({ allowRules: [], hooks: [1], mcpServers: [], plugins: [{ name: 'a.js' }, { name: 'b.js' }] })
+    ).toBe('1 hook, 2 plugins (a.js, b.js)')
+  })
+
+  it('lists commands and plugins together, with every place they live', () => {
+    const both = { allowRules: [], hooks: [], mcpServers: [], commands: [1], plugins: [{ name: 'a.js' }] }
+    expect(summarizeElevated(both)).toBe('1 command that pre-approves tools, 1 plugin (a.js)')
+    expect(elevatedSource(both)).toBe('.houston/commands and .houston/plugins')
+    expect(elevatedSource({ ...both, commands: [] })).toBe('.houston/plugins')
+    expect(elevatedSource({ ...both, allowRules: [1] })).toBe(
+      '.houston/settings.json, .houston/commands, and .houston/plugins'
+    )
   })
 })
 
