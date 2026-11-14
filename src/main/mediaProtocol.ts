@@ -3,7 +3,7 @@ import { MEDIA_SCHEME } from '@shared/images'
 import { readStoredImage } from './conversations'
 
 /**
- * Serves a saved chat's stored images to the app window at
+ * Serves a chat's stored images (saved, or just produced by a live run) to the app window at
  * `houston-media://<conversation id>/<sha256>.<ext>`, so the window shows them from
  * their files instead of holding every one as base64 (see viewMedia).
  *

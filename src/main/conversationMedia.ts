@@ -60,6 +60,36 @@ function refFor(att: Inline): string {
 }
 
 /**
+ * Write one attachment's bytes under its content address in `mediaDir` (skipped when
+ * that file is already there) and return the file name. `dirReady` skips creating
+ * the folder when the caller already did.
+ */
+function writeMediaFile(mediaDir: string, att: Inline, dirReady = false): string {
+  const ref = refFor(att)
+  const path = join(mediaDir, ref)
+  if (!existsSync(path)) {
+    if (!dirReady) mkdirSync(mediaDir, { recursive: true, mode: 0o700 })
+    // Content-addressed, so an existing file is trusted to hold these bytes. Write
+    // to a temp name and rename so a crash mid-write can never leave a truncated
+    // file under the digest name, where no later save would replace it.
+    const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+    writeFileSync(tmp, Buffer.from(att.data, 'base64'), { mode: 0o600 })
+    renameSync(tmp, path)
+  }
+  return ref
+}
+
+/**
+ * Store one image as a file in `mediaDir` ahead of the conversation's next save, and
+ * return its name, or null when it is not a supported image with bytes. Used for
+ * images a live run produces, so the window can show them by URL (see viewMedia).
+ */
+export function storeImageFile(mediaDir: string, att: { mediaType: string; data: string }): string | null {
+  if (!isSupportedImageType(att.mediaType) || typeof att.data !== 'string' || att.data.length === 0) return null
+  return writeMediaFile(mediaDir, att)
+}
+
+/**
  * Copy `value`, replacing every inline attachment with a stored reference and writing
  * its bytes into `mediaDir` (owner-only, like the transcript itself). Objects and
  * arrays are copied only along paths that change, so the caller's in-memory
@@ -85,21 +115,9 @@ export function externalizeMedia<T>(value: T, mediaDir: string): { value: T; ref
       return v
     }
     if (isInline(v)) {
-      const ref = refFor(v)
+      const ref = writeMediaFile(mediaDir, v, dirReady)
+      dirReady = true
       refs.add(ref)
-      const path = join(mediaDir, ref)
-      if (!existsSync(path)) {
-        if (!dirReady) {
-          mkdirSync(mediaDir, { recursive: true, mode: 0o700 })
-          dirReady = true
-        }
-        // Content-addressed, so an existing file is trusted to hold these bytes. Write
-        // to a temp name and rename so a crash mid-write can never leave a truncated
-        // file under the digest name, where no later save would replace it.
-        const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
-        writeFileSync(tmp, Buffer.from(v.data, 'base64'), { mode: 0o600 })
-        renameSync(tmp, path)
-      }
       const { data: _data, ...rest } = v
       return { ...rest, mediaRef: ref }
     }

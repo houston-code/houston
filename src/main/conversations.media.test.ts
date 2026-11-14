@@ -275,4 +275,76 @@ describe('conversation media store', () => {
     expect(resolveStoredImages([img])).toEqual([img])
     expect(resolveStoredImages('nope')).toBe('nope')
   })
+
+  describe('images a live run shows', () => {
+    it('stores them now and hands the window a URL that serves the file', async () => {
+      const { createConversation, liveImagesForView, readStoredImage } = await import('./conversations')
+      const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      const shown = liveImagesForView(conv.id, [{ mediaType: 'image/png', data: PNG }])
+      expect(shown).toHaveLength(1)
+      expect(shown[0].data).toBe('')
+      expect(shown[0].src).toMatch(new RegExp(`^houston-media://${conv.id}/[0-9a-f]{64}\\.png$`))
+      expect(JSON.stringify(shown)).not.toContain(PNG)
+      const served = readStoredImage(shown[0].src)
+      expect(served?.mediaType).toBe('image/png')
+      expect(served?.bytes.toString('base64')).toBe(PNG)
+      const file = join(convDir(), `${conv.id}.media`, mediaFiles(conv.id)[0])
+      if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
+    })
+
+    it('keeps a live image through saves whose log does not name it yet', async () => {
+      const { createConversation, setMessages, liveImagesForView, readStoredImage } = await import('./conversations')
+      const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      const [shown] = liveImagesForView(conv.id, [{ mediaType: 'image/png', data: PNG2 }])
+      setMessages(conv.id, [{ role: 'user', content: 'no images here' }])
+      expect(readStoredImage(shown.src)?.bytes.toString('base64')).toBe(PNG2)
+      // Once the tool result lands, the same content-addressed file is the one the log names.
+      setMessages(conv.id, messagesWithImages())
+      expect(mediaFiles(conv.id)).toHaveLength(3)
+      expect(readStoredImage(shown.src)?.bytes.toString('base64')).toBe(PNG2)
+    })
+
+    it('still prunes files no log or live image names', async () => {
+      const { createConversation, setMessages, liveImagesForView } = await import('./conversations')
+      const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      setMessages(conv.id, messagesWithImages())
+      liveImagesForView(conv.id, [{ mediaType: 'image/png', data: PNG2 }])
+      setMessages(conv.id, [{ role: 'user', content: 'dropped the first image' }])
+      // PNG (user message) and the PDF are gone; PNG2 stays because the window was shown it.
+      const left = mediaFiles(conv.id).map((f) => readFileSync(join(convDir(), `${conv.id}.media`, f)).toString('base64'))
+      expect(left).toEqual([PNG2])
+    })
+
+    it('passes through what it cannot store', async () => {
+      const { createConversation, liveImagesForView } = await import('./conversations')
+      const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      const odd = [
+        { mediaType: 'image/svg+xml', data: 'PHN2Zz4=' },
+        { mediaType: 'image/png', data: '' }
+      ]
+      expect(liveImagesForView(conv.id, odd)).toBe(odd)
+      const bytes = [{ mediaType: 'image/png', data: PNG }]
+      expect(liveImagesForView('../../etc', bytes)).toBe(bytes)
+      expect(liveImagesForView('not-a-uuid', bytes)).toBe(bytes)
+      expect(mediaFiles(conv.id)).toEqual([])
+      expect(readdirSync(convDir()).some((f) => f.endsWith('.media') && !f.startsWith(conv.id))).toBe(false)
+    })
+
+    it('falls back to the bytes when the file cannot be written', async () => {
+      const { createConversation, liveImagesForView } = await import('./conversations')
+      const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      // A plain file where the media folder should be makes every write fail.
+      writeFileSync(join(convDir(), `${conv.id}.media`), 'in the way')
+      const bytes = [{ mediaType: 'image/png', data: PNG }]
+      expect(liveImagesForView(conv.id, bytes)).toBe(bytes)
+    })
+
+    it('removes live images with the chat', async () => {
+      const { createConversation, deleteConversation, liveImagesForView } = await import('./conversations')
+      const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      liveImagesForView(conv.id, [{ mediaType: 'image/png', data: PNG }])
+      deleteConversation(conv.id)
+      expect(existsSync(join(convDir(), `${conv.id}.media`))).toBe(false)
+    })
+  })
 })
