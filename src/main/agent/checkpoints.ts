@@ -475,6 +475,14 @@ function checkpointsDirOrNull(): string | null {
  */
 let flushChain: Promise<void> = Promise.resolve()
 const dirtyRuns = new Set<string>()
+/** Runs whose checkpoint file write is underway (no longer dirty, not yet on disk). */
+const persistingRuns = new Set<string>()
+/**
+ * Runs with a record call in flight (see {@link pinWhile}). Such a call holds the
+ * checkpoint object across an await, so evicting it then would leave the call
+ * updating a copy nothing persists or reads.
+ */
+const busyRuns = new Map<string, number>()
 let indexDirty = false
 
 function queueDiskTask(task: () => Promise<void>): Promise<void> {
@@ -526,7 +534,12 @@ function schedulePersistRun(runId: string): Promise<void> {
   dirtyRuns.add(runId)
   return queueDiskTask(async () => {
     if (!dirtyRuns.delete(runId)) return // an earlier task already wrote the latest state
-    await writeRunFile(runId)
+    persistingRuns.add(runId)
+    try {
+      await writeRunFile(runId)
+    } finally {
+      persistingRuns.delete(runId)
+    }
   })
 }
 
@@ -779,14 +792,15 @@ function checkpointChars(cp: Checkpoint): number {
  * Bound memory before admitting one more checkpoint: evict the oldest past the count
  * cap or the memory budget (checked here, as each run starts, not as a run grows). A run whose latest state has not reached disk yet is
  * never evicted, since nothing could read it back: dropping it would lose its
- * snapshots, and a revert would then leave those files changed.
+ * snapshots, and a revert would then leave those files changed. Nor is one being
+ * written to disk, or one a record call is still working on ({@link pinWhile}).
  */
 function evictForNewCheckpoint(): void {
   let chars = 0
   for (const cp of checkpoints.values()) chars += checkpointChars(cp)
   for (const [runId, cp] of [...checkpoints]) {
     if (checkpoints.size < MAX_CHECKPOINTS && chars <= memoryBudgetChars) break
-    if (dirtyRuns.has(runId)) continue
+    if (dirtyRuns.has(runId) || persistingRuns.has(runId) || busyRuns.has(runId)) continue
     checkpoints.delete(runId)
     chars -= checkpointChars(cp)
   }
@@ -837,6 +851,18 @@ async function openCheckpoint(runId: string, roots: string[]): Promise<{ cp: Che
   }
 }
 
+/** Keep `runId`'s checkpoint in memory while `fn` runs. */
+async function pinWhile<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+  busyRuns.set(runId, (busyRuns.get(runId) ?? 0) + 1)
+  try {
+    return await fn()
+  } finally {
+    const n = (busyRuns.get(runId) ?? 1) - 1
+    if (n > 0) busyRuns.set(runId, n)
+    else busyRuns.delete(runId)
+  }
+}
+
 /**
  * Record a file's current content before the turn modifies it. No-op if already
  * recorded for this run, if the path escapes the allowed roots, or if too large.
@@ -844,7 +870,10 @@ async function openCheckpoint(runId: string, roots: string[]): Promise<{ cp: Che
 export async function recordOriginal(runId: string, roots: string[], relPath: string): Promise<void> {
   const abs = resolveOrNull(roots, relPath)
   if (!abs) return
+  await pinWhile(runId, () => recordOriginalPinned(runId, roots, abs))
+}
 
+async function recordOriginalPinned(runId: string, roots: string[], abs: string): Promise<void> {
   const { cp, isNew: isNewCheckpoint } = await openCheckpoint(runId, roots)
   if (cp.files.has(abs)) return
 
@@ -877,7 +906,15 @@ export async function recordResult(
 ): Promise<void> {
   const abs = resolveOrNull(roots, relPath)
   if (!abs) return
-  const snap = checkpoints.get(runId)?.files.get(abs)
+  await pinWhile(runId, () => recordResultPinned(runId, abs, opts))
+}
+
+async function recordResultPinned(runId: string, abs: string, opts?: { expectAbsent?: boolean }): Promise<void> {
+  // A run evicted from memory between its snapshot and this call is read back from
+  // disk; a memory-only lookup would silently record nothing, and a later rewind
+  // would see the file as changed by someone else and leave it.
+  const cp = checkpoints.get(runId) ?? (await loadRunIntoMemory(runId))
+  const snap = cp?.files.get(abs)
   if (!snap) return
 
   const { content, binary, capped } = await readCapped(abs)
@@ -1015,6 +1052,30 @@ async function currentState(roots: string[], abs: string): Promise<FileState | n
   }
   const { content, binary, capped } = await readCapped(abs)
   return capped ? null : { content, binary }
+}
+
+/**
+ * The text files a run changed whose display path passes `want`, each with its content
+ * before the run first touched it and as it stands now (null: absent). Files that are
+ * binary, too large, or that the guard can't vouch for now (see {@link currentState})
+ * are left out. Only a write tool's targets are here: a file a shell command changed
+ * without one is not.
+ */
+export async function runFileChanges(
+  runId: string,
+  want: (display: string) => boolean
+): Promise<{ path: string; before: string | null; after: string | null }[]> {
+  const cp = checkpoints.get(runId) ?? (await loadRunIntoMemory(runId))
+  if (!cp) return []
+  const out: { path: string; before: string | null; after: string | null }[] = []
+  for (const [abs, snap] of cp.files) {
+    const display = displayPath(cp.roots, abs)
+    if (snap.beforeBinary || !want(display)) continue
+    const now = await currentState(cp.roots, abs)
+    if (!now || now.binary) continue
+    out.push({ path: display, before: snap.before, after: now.content })
+  }
+  return out
 }
 
 /** The files one run's rewind put back, so undoing the rewind re-applies exactly those. */

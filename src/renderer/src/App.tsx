@@ -42,6 +42,7 @@ import {
   branchNameError,
   canCreateWorktree,
   defaultBaseBranch,
+  newChatFolder,
   initialWorktreeMode,
   planNewChatWorkspace,
   suggestBranch
@@ -983,8 +984,8 @@ export default function App(): JSX.Element {
   // new-chat screen, where the setup checklist and the composer's folder button ask
   // for one.
   const onNewChat = useCallback(() => {
-    enterNewChat(workspace)
-  }, [workspace, enterNewChat])
+    enterNewChat(currentConv ? newChatFolder(currentConv) : workspace)
+  }, [currentConv, workspace, enterNewChat])
 
   // The recents live in settings, which main updates when a folder opens; re-read just
   // them so the welcome screen and the folder menu list the folder just opened.
@@ -1147,7 +1148,7 @@ export default function App(): JSX.Element {
       void window.api.setChatUnread(id, unread, fromReply)
       if (unread && id === currentId) {
         const meta = conversations.find((c) => c.id === id)
-        const ws = meta?.workspace ?? workspace
+        const ws = meta ? newChatFolder(meta) : workspace
         if (ws) enterNewChat(ws)
         else setCurrentId(null)
         setUndoToast({
@@ -2167,27 +2168,58 @@ export default function App(): JSX.Element {
     [onInvoke]
   )
 
+  // The chat being compacted (at most one at a time here), with the latest retry
+  // notice, so the bar under the transcript can show progress and offer Cancel.
+  const [compacting, setCompacting] = useState<{ id: string; retry?: string } | null>(null)
+  useEffect(() => {
+    return window.api.onCompactProgress?.(({ id, attempt, max }) => {
+      setCompacting((cur) =>
+        cur && cur.id === id
+          ? { id, retry: `The model didn't answer; retrying (attempt ${attempt}${max ? ` of ${max}` : ''}).` }
+          : cur
+      )
+    })
+  }, [])
+
   const onCompact = useCallback(async () => {
     if (!currentId || !settings?.selected) return
-    chat.notify('Compacting conversation…')
-    const res = await window.api.compactConversation(
-      currentId,
-      settings.selected.providerId,
-      settings.selected.model
-    )
+    if (compacting) {
+      chat.notify('A compaction is already in progress.')
+      return
+    }
+    const id = currentId
+    setCompacting({ id })
+    let res: Awaited<ReturnType<typeof window.api.compactConversation>>
+    try {
+      res = await window.api.compactConversation(id, settings.selected.providerId, settings.selected.model)
+    } catch (e) {
+      res = { ok: false, summarized: 0, error: (e as Error).message }
+    } finally {
+      setCompacting(null)
+    }
+    // Moved to another chat meanwhile: its log is saved; don't paint it over this one.
+    const here = currentIdRef.current === id
     if (res.ok && res.messages) {
-      chat.reset(itemsFromMessages(res.messages))
-      chat.notify(`Compacted ${res.summarized} earlier messages.`)
+      if (here) chat.reset(itemsFromMessages(res.messages))
+      if (here) chat.notify(`Compacted ${res.summarized} earlier messages.`)
+    } else if (!here) {
+      return
     } else if (res.ok) {
       chat.notify(
         res.reason === 'single-turn'
           ? "This conversation is a single turn, so there are no earlier turns to summarize. Start a new chat to free up context."
           : 'Nothing to compact yet.'
       )
+    } else if (res.reason === 'cancelled') {
+      chat.notify('Compaction cancelled. Nothing was changed.')
     } else {
       chat.notify(`Couldn't compact: ${res.error ?? 'unknown error'}`)
     }
-  }, [currentId, settings, chat])
+  }, [currentId, settings, chat, compacting])
+
+  const onCancelCompact = useCallback(() => {
+    if (compacting) void window.api.cancelCompaction(compacting.id)
+  }, [compacting])
 
   // Read-only listing for /skills and /agents: fetch the workspace's capabilities
   // and surface their names in a notice (mirrors how /help lists command names).
@@ -3214,6 +3246,17 @@ export default function App(): JSX.Element {
 
         {chat.errored && !chat.running && currentId && (
           <TurnErrorBar failure={chat.failure} onAction={onTurnErrorAction} />
+        )}
+
+        {compacting && compacting.id === currentId && (
+          <div className="checkpoint-bar" role="status">
+            <span className="checkpoint-bar__label">
+              Compacting conversation…{compacting.retry ? ` ${compacting.retry}` : ''}
+            </span>
+            <button className="btn btn--sm" onClick={onCancelCompact}>
+              Cancel
+            </button>
+          </div>
         )}
 
         {chat.checkpoint && !chat.running && (

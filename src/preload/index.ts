@@ -341,9 +341,22 @@ const api = {
     ok: boolean
     summarized: number
     messages?: ChatMessage[]
-    reason?: 'empty' | 'single-turn'
+    reason?: 'empty' | 'single-turn' | 'cancelled' | 'timeout' | 'running' | 'changed' | 'busy'
     error?: string
   }> => ipcRenderer.invoke(IPC.conversationCompact, id, providerId, model),
+  /** Cancel the chat's in-flight /compact. Resolves false when none was running. */
+  cancelCompaction: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.conversationCompactCancel, id),
+  /** Subscribe to /compact retry notices (a summary request failed and is being retried). */
+  onCompactProgress: (
+    cb: (payload: { id: string; attempt: number; max?: number; error: string }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      payload: { id: string; attempt: number; max?: number; error: string }
+    ): void => cb(payload)
+    ipcRenderer.on(IPC.conversationCompactProgress, listener)
+    return () => ipcRenderer.removeListener(IPC.conversationCompactProgress, listener)
+  },
   /**
    * Delete a conversation. Shows a native confirmation dialog (a three-way choice
    * when the chat owns a Houston-created worktree, which can outlive the chat).

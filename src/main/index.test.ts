@@ -136,6 +136,22 @@ describe('main entry app identity', () => {
     expect(quit).not.toHaveBeenCalled()
   })
 
+  it('guards quitting with live work only in the desktop app, not in a terminal mode', async () => {
+    await import('./index')
+    expect(on.mock.calls.map((c) => c[0])).toContain('before-quit')
+
+    vi.resetModules()
+    on.mockClear()
+    const argv = process.argv
+    process.argv = [...argv, '--acp']
+    try {
+      await import('./index')
+    } finally {
+      process.argv = argv
+    }
+    expect(on.mock.calls.map((c) => c[0])).not.toContain('before-quit')
+  })
+
   it('quits without opening a window when another process holds the lock', async () => {
     requestSingleInstanceLock.mockReturnValueOnce(false)
     await import('./index')

@@ -11,6 +11,16 @@ import {
   type PluginEvent
 } from './plugins'
 
+// The default warn sink is the file logger; capture it instead of touching disk.
+const logged = vi.hoisted(() => ({ warns: [] as string[] }))
+vi.mock('../logger', () => ({
+  log: {
+    info: () => {},
+    warn: (m: string) => logged.warns.push(m),
+    error: () => {}
+  }
+}))
+
 /** Make a workspace with the given `.houston/plugins/<name>` files. */
 function workspaceWith(files: Record<string, string>): string {
   const ws = mkdtempSync(join(tmpdir(), 'houston-plugins-'))
@@ -108,6 +118,86 @@ describe('PluginHost.emit', () => {
     )
     await host.emit('onUserMessage', { text: 'hi' })
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('timed out'))
+  })
+
+  it('terminates a synchronous busy loop at the budget instead of freezing the process', async () => {
+    const warn = vi.fn()
+    const host = new PluginHost(
+      [
+        {
+          plugin: 'spin.js',
+          event: 'onToolStart',
+          fn: () => {
+            for (;;) {
+              // runaway synchronous code
+            }
+          }
+        }
+      ],
+      warn
+    )
+    const started = Date.now()
+    await host.emit('onToolStart', { tool: 't', input: {} })
+    const elapsed = Date.now() - started
+    expect(elapsed).toBeLessThan(2_500)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[plugin:spin.js]'))
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('timed out'))
+  }, 10_000)
+
+  it('terminates a busy loop defined in plugin source and keeps running later listeners', async () => {
+    const warn = vi.fn()
+    const regs = [
+      ...evaluatePlugin('spin.js', `houston.on('onToolResult', () => { while (true) {} })`, warn),
+      ...evaluatePlugin('ok.js', `houston.on('onToolResult', (e) => { globalThis.seen = e.tool })`, warn)
+    ]
+    let ran = false
+    regs.push({ plugin: 'probe.js', event: 'onToolResult', fn: () => { ran = true } })
+    const host = new PluginHost(regs, warn)
+    const started = Date.now()
+    await host.emit('onToolResult', { tool: 't', input: {}, output: 'o', ok: true })
+    expect(Date.now() - started).toBeLessThan(2_500)
+    expect(ran).toBe(true)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[plugin:spin.js]'))
+  }, 10_000)
+
+  it('still awaits an async listener to completion', async () => {
+    const seen: string[] = []
+    const warn = vi.fn()
+    const host = new PluginHost(
+      [
+        {
+          plugin: 'async.js',
+          event: 'onUserMessage',
+          fn: async (e) => {
+            await new Promise((r) => setTimeout(r, 20))
+            seen.push((e as { text: string }).text)
+          }
+        }
+      ],
+      warn
+    )
+    await host.emit('onUserMessage', { text: 'hi' })
+    expect(seen).toEqual(['hi'])
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('reports failures to the log by default and never writes to stderr', async () => {
+    logged.warns.length = 0
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const host = new PluginHost([
+        { plugin: 'boom.js', event: 'onToolStart', fn: () => { throw new Error('kaboom') } }
+      ])
+      await host.emit('onToolStart', { tool: 't', input: {} })
+      expect(stderr).not.toHaveBeenCalled()
+      expect(consoleWarn).not.toHaveBeenCalled()
+      expect(logged.warns).toEqual([expect.stringContaining('[plugin:boom.js] onToolStart failed: kaboom')])
+    } finally {
+      stderr.mockRestore()
+      consoleWarn.mockRestore()
+    }
   })
 
   it('is a no-op when no listener is registered for the event', async () => {

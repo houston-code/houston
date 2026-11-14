@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
+import type { SubagentStatus, SubagentStep } from '@shared/subagents'
 import { createSecretRedactor } from './redact'
 import { runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
 import Anthropic from '@anthropic-ai/sdk'
@@ -1028,6 +1029,42 @@ describe('local permission gate (gateLocal)', () => {
     expect(checkpointFileCount('gate-run-1')).toBe(0)
   })
 
+  it('stops the rest of its batch once the run is stopped during a call', async () => {
+    // Stop lands while the first write's prompt is up: the gate answers it as a
+    // refusal. The second write must neither run nor reach the gate (a new prompt
+    // nobody answers), and the agent ends as aborted.
+    const provider = scriptedProvider([
+      [
+        { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'one.txt', content: '1' } } },
+        { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'two.txt', content: '2' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'Done.' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const controller = new AbortController()
+    const gated: string[] = []
+    const ends: string[] = []
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'write both',
+      signal: controller.signal,
+      writable: true,
+      roots: [ws],
+      gateLocal: async (_name, _kind, args) => {
+        gated.push(String(args.path))
+        controller.abort()
+        return 'Denied by the user.'
+      },
+      onEnd: (e) => ends.push(e.status)
+    })
+    expect(gated).toEqual(['one.txt'])
+    expect(existsSync(join(ws, 'one.txt'))).toBe(false)
+    expect(existsSync(join(ws, 'two.txt'))).toBe(false)
+    expect(ends).toEqual(['aborted'])
+  })
+
   it('without a gate, refuses a credential-file read and still runs ordinary reads', async () => {
     writeFileSync(join(ws, '.env'), 'APP_MODE=ungated-dotenv-marker')
     writeFileSync(join(ws, 'note.txt'), 'ordinary note')
@@ -1262,5 +1299,257 @@ describe('a stream that fails partway through a turn', () => {
     })
     expect(report).toBe('[subagent error: invalid request body]')
     expect(transcribed).toBe(false)
+  })
+})
+
+describe('a request that outgrows the context window', () => {
+  // What Anthropic says when a request no longer fits: a 400 no plain retry can fix.
+  const tooLong: ProviderStreamEvent = {
+    type: 'error',
+    message: 'prompt is too long: 210000 tokens > 200000 maximum',
+    status: 400
+  }
+
+  /**
+   * Serves the scripted turns in order, but turns down any request whose messages run
+   * past `limit` characters as too long for the window, without using up a turn. Records
+   * every request's messages in `sink`.
+   */
+  function windowedProvider(
+    turns: ProviderStreamEvent[][],
+    limit: number,
+    sink: ChatMessage[][]
+  ): Provider {
+    let i = 0
+    return {
+      async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
+        const messages = (req.messages ?? []) as ChatMessage[]
+        sink.push(messages)
+        if (JSON.stringify(messages).length > limit) {
+          yield tooLong
+          return
+        }
+        const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]
+        for (const ev of turn) yield ev
+      }
+    }
+  }
+
+  const callTurn = (
+    text: string,
+    id: string,
+    name: string,
+    args: Record<string, unknown>
+  ): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'tool_call', call: { id, name, arguments: args } },
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const argsOf = (msgs: ChatMessage[], id: string): Record<string, unknown> | undefined =>
+    msgs.flatMap((m) => m.toolCalls ?? []).find((c) => c.id === id)?.arguments
+  const resultOf = (msgs: ChatMessage[], id: string): string | undefined =>
+    msgs.find((m) => m.role === 'tool' && m.toolCallId === id)?.content
+
+  it('trims older tool output and arguments, retries the step once, and keeps the trim for later steps', async () => {
+    const sink: ChatMessage[][] = []
+    const provider = windowedProvider(
+      [
+        callTurn('Finding 1: wrote a.txt.', 'w1', 'write_file', { path: 'a.txt', content: 'A'.repeat(1500) }),
+        callTurn('Finding 2: read it back.', 'r1', 'read_file', { path: 'a.txt' }),
+        callTurn('Finding 3: wrote b.txt.', 'w2', 'write_file', { path: 'b.txt', content: 'B'.repeat(1500) }),
+        callTurn('Finding 4: listed the folder.', 'l1', 'list_dir', { path: '.' }),
+        [{ type: 'text', text: 'Final report.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      4000,
+      sink
+    )
+    const steps: SubagentStep[] = []
+    const progress: string[] = []
+    let end: { status: SubagentStatus } | undefined
+    let transcript: ChatMessage[] = []
+    const report = await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'write two files',
+      signal: new AbortController().signal,
+      writable: true,
+      roots: [ws],
+      shellSandboxed: true,
+      onStep: (s) => steps.push(s),
+      onProgress: (m) => progress.push(m),
+      onEnd: (e) => (end = e),
+      onTranscript: (m) => {
+        transcript = m
+      }
+    })
+    expect(report).toBe('Final report.')
+    expect(end?.status).toBe('done')
+    // The fourth request overflowed; the fifth is its one retry, and it fit.
+    expect(sink).toHaveLength(6)
+    expect(JSON.stringify(sink[3]).length).toBeGreaterThan(4000)
+    const retry = sink[4]
+    // Everything before the last iteration is stubbed, the small read result included...
+    expect(argsOf(retry, 'w1')?.content).toBe('[earlier write_file content, 1500 bytes elided]')
+    expect(resultOf(retry, 'r1')).toMatch(/^\[earlier read_file result on a\.txt, \d+ bytes elided/)
+    // ...while the last iteration stays whole, as does everything the agent said.
+    expect(argsOf(retry, 'w2')?.content).toBe('B'.repeat(1500))
+    expect(argsOf(retry, 'w1')?.path).toBe('a.txt')
+    expect(retry.filter((m) => m.role === 'assistant').map((m) => m.content)).toEqual([
+      'Finding 1: wrote a.txt.',
+      'Finding 2: read it back.',
+      'Finding 3: wrote b.txt.'
+    ])
+    // The trim sticks: a later step doesn't send the old output again.
+    expect(argsOf(sink[5], 'w1')?.content).toBe('[earlier write_file content, 1500 bytes elided]')
+    expect(resultOf(sink[5], 'r1')).toMatch(/^\[earlier read_file result/)
+    // The saved transcript keeps everything, so a resume has the full detail.
+    expect(argsOf(transcript, 'w1')?.content).toBe('A'.repeat(1500))
+    expect(resultOf(transcript, 'r1')).toContain('A'.repeat(1500))
+    // The record and the live progress both say what happened.
+    expect(steps.some((s) => s.kind === 'notice' && /context window/.test(s.summary))).toBe(true)
+    expect(progress.some((p) => /context window/.test(p))).toBe(true)
+  })
+
+  it('returns what it had, flagged as cut off, and saves the transcript when the trimmed request still does not fit', async () => {
+    const sink: ChatMessage[][] = []
+    // The last iteration alone is too big for the window, so trimming the rest can't save it.
+    const provider = windowedProvider(
+      [
+        callTurn('Finding 1: the parser lives in src/parse.ts.', 'n1', 'write_file', {
+          path: 'notes.txt',
+          content: 'N'.repeat(1500)
+        }),
+        callTurn('Finding 2: it has no tests.', 'l2', 'list_dir', { path: '.' }),
+        callTurn('Finding 3: the bug is in tokenize().', 'w1', 'write_file', {
+          path: 'big.txt',
+          content: 'B'.repeat(5000)
+        }),
+        [{ type: 'text', text: 'never requested' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      4000,
+      sink
+    )
+    let end: { status: SubagentStatus } | undefined
+    let transcript: ChatMessage[] | null = null
+    const report = await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'find the parser bug',
+      signal: new AbortController().signal,
+      writable: true,
+      roots: [ws],
+      shellSandboxed: true,
+      onEnd: (e) => (end = e),
+      onTranscript: (m) => {
+        transcript = m
+      }
+    })
+    // Three good steps, the overflow, and exactly one retry.
+    expect(sink).toHaveLength(5)
+    expect(report).toBe(
+      "Finding 3: the bug is in tokenize().\n\n[subagent stopped at the model's context limit; this is what it had]"
+    )
+    // Not a clean finish.
+    expect(end?.status).toBe('error')
+    // The transcript is saved for a resume, every tool call answered, nothing trimmed.
+    expect(transcript).not.toBeNull()
+    expect(transcript!.map((m: ChatMessage) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'tool',
+      'assistant',
+      'tool',
+      'assistant',
+      'tool'
+    ])
+    expect(argsOf(transcript!, 'w1')?.content).toBe('B'.repeat(5000))
+  })
+
+  it('does not retry when there is nothing older to trim', async () => {
+    const sink: ChatMessage[][] = []
+    const provider = windowedProvider([], 10, sink)
+    let end: { status: SubagentStatus } | undefined
+    let transcribed = false
+    const report = await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'a prompt too big for the window',
+      signal: new AbortController().signal,
+      onEnd: (e) => (end = e),
+      onTranscript: () => {
+        transcribed = true
+      }
+    })
+    expect(sink).toHaveLength(1)
+    expect(report).toBe("[subagent reached the model's context limit without a final answer]")
+    expect(end?.status).toBe('error')
+    // It never took a step, so there is nothing worth resuming.
+    expect(transcribed).toBe(false)
+  })
+
+  it('keeps its findings and transcript when another model error ends it after a step', async () => {
+    const provider = scriptedProvider([
+      callTurn('Finding 1: the config is in app.json.', 'l1', 'list_dir', { path: '.' }),
+      [{ type: 'error', message: 'invalid request body', status: 400 }],
+      [{ type: 'text', text: 'never requested' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    let end: { status: SubagentStatus } | undefined
+    let transcript: ChatMessage[] | null = null
+    const report = await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'where is the config?',
+      signal: new AbortController().signal,
+      onEnd: (e) => (end = e),
+      onTranscript: (m) => {
+        transcript = m
+      }
+    })
+    expect(report).toBe(
+      'Finding 1: the config is in app.json.\n\n[subagent stopped by a model error (invalid request body); this is what it had]'
+    )
+    expect(end?.status).toBe('error')
+    expect(transcript!.map((m: ChatMessage) => m.role)).toEqual(['user', 'assistant', 'tool'])
+  })
+
+  it('makes a writable subagent read a file again before editing it once its read was trimmed', async () => {
+    writeFileSync(join(ws, 'a.txt'), `start\n${'A'.repeat(1500)}\n`)
+    writeFileSync(join(ws, 'b.txt'), `${'B'.repeat(2500)}\n`)
+    const sink: ChatMessage[][] = []
+    const provider = windowedProvider(
+      [
+        callTurn('Reading a.', 'r1', 'read_file', { path: 'a.txt' }),
+        callTurn('Reading b.', 'r2', 'read_file', { path: 'b.txt' }),
+        callTurn('Editing a.', 'e1', 'edit_file', { path: 'a.txt', old_string: 'start', new_string: 'blind' }),
+        [{ type: 'text', text: 'Done.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      4000,
+      sink
+    )
+    let transcript: ChatMessage[] = []
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'edit a.txt',
+      signal: new AbortController().signal,
+      writable: true,
+      roots: [ws],
+      shellSandboxed: true,
+      onTranscript: (m) => {
+        transcript = m
+      }
+    })
+    // The third request overflowed and was retried with a.txt's read stubbed.
+    expect(sink).toHaveLength(5)
+    expect(JSON.stringify(sink[2]).length).toBeGreaterThan(4000)
+    expect(resultOf(sink[3], 'r1')).toMatch(/^\[earlier read_file result on a\.txt/)
+    // The agent no longer sees a.txt, so an edit to it needs a fresh read first.
+    expect(resultOf(transcript, 'e1')).toMatch(/You have not read a\.txt yet/)
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe(`start\n${'A'.repeat(1500)}\n`)
   })
 })

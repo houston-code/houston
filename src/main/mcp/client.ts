@@ -4,6 +4,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { MAX_MCP_MESSAGE_CHARS } from './sse-client'
 import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
 import { sanitizeChildEnv } from '../childEnv'
+import { planStdioLaunch, type StdioLaunchDeps } from './stdio-launch'
 import {
   initializeParams,
   negotiatedProtocolVersion,
@@ -77,6 +78,8 @@ export interface McpPromptInfo {
  */
 export interface McpConnection {
   readonly tools: McpToolInfo[]
+  /** Why entries of the last `tools/list` were dropped (see {@link parseMcpToolList}). */
+  readonly droppedTools?: readonly string[]
   /** Resources the server exposes; empty when the server doesn't support them. */
   readonly resources: McpResourceInfo[]
   /** Prompt templates the server exposes; empty when it doesn't support them. */
@@ -130,6 +133,45 @@ export function parseMcpPromptList(result: unknown): McpPromptInfo[] {
   return out
 }
 
+/**
+ * Parse a `tools/list` result into tool descriptors. The list crosses a trust
+ * boundary and one bad entry must not take the rest down with it: an entry that is
+ * not an object, or has no non-empty string `name`, is dropped (and described in
+ * `dropped`, when given, for the manager to report); a description that is a number
+ * or boolean becomes its string, any other non-string one is left out; an
+ * `inputSchema` that is not a plain object is left out (the manager normalizes the
+ * rest, see tool-exposure.ts).
+ */
+export function parseMcpToolList(result: unknown, dropped?: string[]): McpToolInfo[] {
+  if (!result || typeof result !== 'object') return []
+  const list = (result as { tools?: unknown }).tools
+  if (!Array.isArray(list)) return []
+  const out: McpToolInfo[] = []
+  list.forEach((t, i) => {
+    if (!t || typeof t !== 'object' || Array.isArray(t)) {
+      dropped?.push(`entry ${i + 1} is not a tool object (${t === null ? 'null' : Array.isArray(t) ? 'array' : typeof t})`)
+      return
+    }
+    const item = t as Record<string, unknown>
+    if (typeof item.name !== 'string' || !item.name) {
+      dropped?.push(`entry ${i + 1} has no tool name`)
+      return
+    }
+    const d = item.description
+    const description =
+      typeof d === 'string' ? d : typeof d === 'number' || typeof d === 'boolean' ? String(d) : undefined
+    const schema = item.inputSchema
+    out.push({
+      name: item.name,
+      ...(description !== undefined ? { description } : {}),
+      ...(schema && typeof schema === 'object' && !Array.isArray(schema)
+        ? { inputSchema: schema as Record<string, unknown> }
+        : {})
+    })
+  })
+  return out
+}
+
 /** Parse a `resources/list` result into resource descriptors (drops malformed entries). */
 export function parseMcpResourceList(result: unknown): McpResourceInfo[] {
   if (!result || typeof result !== 'object') return []
@@ -162,7 +204,7 @@ const MAX_EXIT_DETAIL_CHARS = 300
 export type SpawnFn = (
   command: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; cwd?: string }
+  options: { env?: NodeJS.ProcessEnv; cwd?: string; windowsVerbatimArguments?: boolean }
 ) => ChildProcessWithoutNullStreams
 
 export class McpClient {
@@ -185,10 +227,15 @@ export class McpClient {
     fetch: (kind) => this.refreshList(kind)
   })
   tools: McpToolInfo[] = []
+  droppedTools: string[] = []
   resources: McpResourceInfo[] = []
   prompts: McpPromptInfo[] = []
 
-  constructor(private readonly spawnFn: SpawnFn = nodeSpawn as unknown as SpawnFn) {}
+  constructor(
+    private readonly spawnFn: SpawnFn = nodeSpawn as unknown as SpawnFn,
+    /** Platform/fs overrides for resolving the command (tests). */
+    private readonly launchDeps: StdioLaunchDeps = {}
+  ) {}
 
   /** True once the process exited, errored, or the client was closed. */
   get isClosed(): boolean {
@@ -209,13 +256,20 @@ export class McpClient {
     onElicit?: (params: unknown) => Promise<ElicitationWireResult>
   }): Promise<void> {
     this.onElicit = opts.onElicit
-    const child = this.spawnFn(opts.command, opts.args ?? [], {
-      // Strip the launching shell's credential-bearing vars so a malicious or
-      // compromised MCP server can't harvest ambient secrets (AWS keys, GH_TOKEN,
-      // *_API_KEY, …) on startup. A server that legitimately needs a token still
-      // gets it: `opts.env` (from McpServerConfig.env) is applied AFTER the strip.
-      env: { ...sanitizeChildEnv(), ...opts.env },
-      cwd: opts.cwd
+    // Strip the launching shell's credential-bearing vars so a malicious or
+    // compromised MCP server can't harvest ambient secrets (AWS keys, GH_TOKEN,
+    // *_API_KEY, …) on startup. A server that legitimately needs a token still
+    // gets it: `opts.env` (from McpServerConfig.env) is applied AFTER the strip.
+    const env = { ...sanitizeChildEnv(), ...opts.env }
+    // On Windows an `npx`-style command is a .cmd shim that spawn can't run directly.
+    const launch = planStdioLaunch(opts.command, opts.args ?? [], env, {
+      cwd: opts.cwd,
+      ...this.launchDeps
+    })
+    const child = this.spawnFn(launch.command, launch.args, {
+      env,
+      cwd: opts.cwd,
+      ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {})
     })
     this.child = child
     child.stdout.on('data', (c: Buffer) => this.onData(c))
@@ -258,10 +312,8 @@ export class McpClient {
     if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
     this.notify('notifications/initialized', {})
 
-    const listed = (await this.request('tools/list', {}, INIT_TIMEOUT_MS)) as {
-      tools?: McpToolInfo[]
-    }
-    this.tools = Array.isArray(listed?.tools) ? listed.tools : []
+    const listed = (await this.request('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: unknown }
+    this.setTools(listed)
 
     // Only ask for resources/prompts when the server declared the capability —
     // avoids an unsupported-method error (or a hang) against servers without them.
@@ -307,6 +359,13 @@ export class McpClient {
   async getPrompt(name: string, args: Record<string, string>): Promise<string> {
     const res = await this.request('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS)
     return flattenMcpPromptMessages(res) || '[no content]'
+  }
+
+  /** Take a `tools/list` result, keeping only well-formed tools (see parseMcpToolList). */
+  private setTools(listed: unknown): void {
+    const dropped: string[] = []
+    this.tools = parseMcpToolList(listed, dropped)
+    this.droppedTools = dropped
   }
 
   close(): void {
@@ -381,8 +440,8 @@ export class McpClient {
   /** Re-fetch one changed list in place (driven by the ListRefresher). */
   private async refreshList(kind: McpListKind): Promise<void> {
     if (kind === 'tools') {
-      const listed = (await this.request('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: McpToolInfo[] }
-      this.tools = Array.isArray(listed?.tools) ? listed.tools : this.tools
+      const listed = (await this.request('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: unknown }
+      if (Array.isArray(listed?.tools)) this.setTools(listed)
     } else if (kind === 'resources') {
       this.resources = parseMcpResourceList(await this.request('resources/list', {}, INIT_TIMEOUT_MS))
     } else {
