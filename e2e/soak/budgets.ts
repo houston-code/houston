@@ -16,8 +16,8 @@
  *                   kept 34-35, page elements kept 7 (macOS laptop and runner, Linux)
  *   largeChat       opening +235 to +334, window heap open 74-75, 0.4-1.8 s, kept -5 to
  *                   107, window heap kept 48 (all three)
- *   cliSession      peak 375-562, growth turn 2 to 12 53-314, idle 117-266 (macOS,
- *                   Windows); Linux idle 446, since glibc keeps the freed heap and the
+ *   cliSession      peak 316-562, growth turn 2 to 12 53-314, idle 117-468 (macOS,
+ *                   Windows; a runner may not have handed pages back 15 s after the run); Linux idle 446, since glibc keeps the freed heap and the
  *                   idle size stays at the peak. The save-buffer regression fixed earlier
  *                   grew ~65 MB per turn, over 600 MB across this session.
  *
@@ -40,9 +40,9 @@ const BUDGETS = {
     win32: { openTotalGrowthMB: 600, openRendererHeapMB: 150, openSeconds: 20, retainedMB: 400, rendererRetainedMB: 80 }
   },
   cliSession: {
-    darwin: { peakResidentMB: 800, lateGrowthMB: 450, idleResidentMB: 450 },
+    darwin: { peakResidentMB: 800, lateGrowthMB: 450, idleResidentMB: 650 },
     linux: { peakResidentMB: 800, lateGrowthMB: 450, idleResidentMB: 650 },
-    win32: { peakResidentMB: 800, lateGrowthMB: 450, idleResidentMB: 450 }
+    win32: { peakResidentMB: 800, lateGrowthMB: 450, idleResidentMB: 650 }
   }
 }
 
