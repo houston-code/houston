@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { dragHasFiles, droppedPaths } from '../lib/recentFolders'
 
-/** The composer's own drop zone, which takes image files as attachments. */
+/** The composer's own drop zone, which attaches what is dropped on it. */
 const COMPOSER = '.composer__card'
 
 function onComposer(target: EventTarget | null): boolean {
@@ -11,8 +11,9 @@ function onComposer(target: EventTarget | null): boolean {
 /**
  * Open a folder dragged onto the window. Files dragged anywhere outside the composer
  * show the drop hint (the returned flag); on drop, the dropped paths go to `open`,
- * which asks main whether one is a folder. Images dropped on the composer stay the
- * composer's: it attaches them, and this hook leaves that drop alone.
+ * which asks main whether one is a folder. Anything dropped on the composer is the
+ * composer's: it attaches files and says a folder can't be attached, and this hook
+ * leaves that drop alone (the hint isn't shown over it either).
  *
  * The window-level preventDefault in main.tsx still stops a drop from navigating the
  * frame; this only reads the drop, it never lets the browser act on it.
@@ -49,8 +50,8 @@ export function useFolderDrop(
       setOver(false)
       const dt = e.dataTransfer
       if (!dt || !dragHasFiles(dt.types)) return
+      if (onComposer(e.target)) return
       const files = Array.from(dt.files)
-      if (onComposer(e.target) && files.some((f) => f.type.startsWith('image/'))) return
       const paths = droppedPaths(files, pathForRef.current)
       if (paths.length > 0) openRef.current(paths)
     }

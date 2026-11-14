@@ -101,6 +101,57 @@ describe('Popover', () => {
   })
 })
 
+describe('Popover placement', () => {
+  /** A rect for jsdom, which lays nothing out. */
+  const rect = (left: number, top: number, width: number, height: number): DOMRect =>
+    ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top }) as DOMRect
+
+  it('keeps a left-pinned menu inside the window when its trigger is near the right edge', () => {
+    const anchor = document.createElement('button')
+    document.body.appendChild(anchor)
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this === anchor ? rect(window.innerWidth - 120, 100, 100, 24) : rect(0, 0, 360, 200)
+    })
+    try {
+      const ref: RefObject<HTMLButtonElement> = { current: anchor }
+      render(
+        <Popover anchorRef={ref} onClose={() => {}} align="left" className="menu choice-menu">
+          <button className="menu__item">One</button>
+        </Popover>
+      )
+      const menu = document.querySelector('.choice-menu') as HTMLElement
+      expect(menu.style.left).toBe(`${window.innerWidth - 360 - 8}px`)
+    } finally {
+      spy.mockRestore()
+      anchor.remove()
+    }
+  })
+
+  it('leaves a left-pinned menu at its trigger when it fits', () => {
+    const anchor = document.createElement('button')
+    document.body.appendChild(anchor)
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this === anchor ? rect(40, 100, 100, 24) : rect(0, 0, 360, 200)
+    })
+    try {
+      const ref: RefObject<HTMLButtonElement> = { current: anchor }
+      render(
+        <Popover anchorRef={ref} onClose={() => {}} align="left" className="menu choice-menu">
+          <button className="menu__item">One</button>
+        </Popover>
+      )
+      expect((document.querySelector('.choice-menu') as HTMLElement).style.left).toBe('40px')
+    } finally {
+      spy.mockRestore()
+      anchor.remove()
+    }
+  })
+})
+
 describe('Popover roving focus', () => {
   function renderWith(roving: boolean) {
     const anchor = document.createElement('button')

@@ -102,6 +102,20 @@ describe('matchCommands ranking', () => {
     expect(names('think')[0]).toBe('reasoning')
   })
 
+  it('puts the command named exactly first, ahead of longer names that start with it', () => {
+    expect(names('agent').slice(0, 2)).toEqual(['agent', 'agents'])
+    expect(names('agents')[0]).toBe('agents')
+    expect(names('AGENT')[0]).toBe('agent')
+  })
+
+  it('puts an exact name ahead of a command that has it as an alias', () => {
+    const custom: Command = { name: 'diff', description: 'A workspace diff command', template: 'Diff' }
+    const both = mergeCommands(builtinCommands('gui'), [custom])
+    // resolveCommand reads `/diff` as the custom command too, so Enter runs the one shown first.
+    expect(matchCommands(both, 'diff')[0]).toBe(custom)
+    expect(resolveCommand(both, 'diff')).toBe(custom)
+  })
+
   it('finds a command by a word in its description', () => {
     expect(names('sandbox')).toContain('doctor')
     expect(names('invite')).toEqual(['share'])

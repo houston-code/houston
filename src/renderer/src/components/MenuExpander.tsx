@@ -34,6 +34,7 @@ export function MenuExpander({
   const [style, setStyle] = useState<CSSProperties | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -85,9 +86,21 @@ export function MenuExpander({
       top: Math.max(8, Math.min(t.top - 4, window.innerHeight - 8)),
       left: flipLeft ? 'auto' : Math.round(c.right + gap),
       right: flipLeft ? Math.round(window.innerWidth - c.left + gap) : 'auto',
-      maxHeight: Math.max(160, window.innerHeight - t.top - 8)
+      // The card may shift up (below), so the whole window height is its to use.
+      maxHeight: Math.max(0, window.innerHeight - 16)
     })
   }, [open])
+
+  // Level with the row unless that runs past the window's bottom (a row low in the
+  // sidebar): then shift the card up until it fits. Only ever moves it up, so it
+  // settles in one pass.
+  useLayoutEffect(() => {
+    const el = cardRef.current
+    if (!el || !style || typeof style.top !== 'number') return
+    const height = el.getBoundingClientRect().height
+    const top = Math.max(8, Math.min(style.top, window.innerHeight - height - 8))
+    if (top < style.top) setStyle({ ...style, top })
+  }, [style])
 
   // While open, hovering any *other* row in the same menu closes the card at once,
   // so it doesn't linger when the pointer moves off to a different item.
@@ -160,6 +173,7 @@ export function MenuExpander({
       </button>
       {open && style && (
         <div
+          ref={cardRef}
           className="menu menu--flyout"
           style={style}
           role="group"
