@@ -109,6 +109,29 @@ describe('classifyCommand', () => {
     expect(classifyCommand('npm test', true).kind).toBe('test')
   })
 
+  it.each([
+    ['sh build.sh', 'build'],
+    ['bash -e scripts/build_all.sh', 'build'],
+    ['./build.sh --release', 'build'],
+    ['zsh ./compile.zsh', 'build'],
+    ['sh test.sh', 'test'],
+    ['./scripts/lint.sh', 'lint'],
+    ['node build.mjs', 'build'],
+    ['python3 scripts/typecheck.py', 'typecheck'],
+    ['bash scripts/dev.sh', 'server']
+  ])('names the script %s by its file name', (command, kind) => {
+    expect(classifyCommand(command).kind).toBe(kind)
+    // Backgrounded, a build script is still a build, not a server.
+    expect(classifyCommand(command, true).kind).toBe(kind)
+  })
+
+  it.each(['sh deploy.sh', './scripts/check-all.sh', "bash -c 'echo build.sh'", 'bash build', 'build.sh', 'node server.js'])(
+    '%s says nothing from its name',
+    (command) => {
+      expect(classifyCommand(command).kind).toBeNull()
+    }
+  )
+
   it('knows when a zero exit speaks for the test part', () => {
     expect(classifyCommand('pytest').exitAttributable).toBe(true)
     expect(classifyCommand('cd api && source .venv/bin/activate && pytest -q').exitAttributable).toBe(true)
@@ -596,6 +619,17 @@ describe('EvidenceLedger browser checks', () => {
 describe('EvidenceLedger background shells', () => {
   const started = (command: string): ShellEvidence =>
     shell(command, { background: true, shellId: 'sh1', exitCode: null })
+
+  it('reports a background build script as a build, running or finished', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(started('sh build.sh'))
+    expect(receiptSummary(l.receipt(() => ({ running: true, exitCode: null, output: '' }))!)).toMatch(
+      /build still running/i
+    )
+    const done = l.receipt(() => ({ running: false, exitCode: 0, output: 'BUILD OK' }))!
+    expect(done.checks[0]).toMatchObject({ kind: 'build', ok: true, exitCode: 0 })
+    expect(receiptSummary(done)).not.toMatch(/server/i)
+  })
 
   it('reports a server still up when the turn ends', () => {
     const l = new EvidenceLedger()
