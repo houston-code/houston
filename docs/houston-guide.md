@@ -318,7 +318,17 @@ and cost as usage.
 
 - **Modes** are the approval policies: Plan, Ask, Auto-edit, Full auto. A new session
   starts in your default policy, and the editor's mode picker switches it for the
-  rest of the session, a running prompt included.
+  rest of the session, a running prompt included. The mode you pick is saved on the
+  chat, so reopening it later starts in that mode, as in the terminal.
+- **Model and reasoning effort** are session options the editor can show as pickers.
+  A change applies from the next prompt and is saved on the chat.
+- **Slash commands** the editor can offer: `/review`, `/init`, `/compact`,
+  `/agent <name> <task>`, `/plan`, `/ask`, `/auto`, `/full`, `/approval [mode]`,
+  `/model [name]`, `/reasoning [level]`, `/skills`, `/agents` and `/help`, plus the
+  workspace's own `.houston/commands`. A prompt that starts with another `/word` is
+  sent as written.
+- **Titles**: the chat's title is shown to the editor when a session opens and once
+  a turn gives it one.
 - **Approvals** appear as the editor's permission prompt: Allow (this call), Always
   allow (saves a permission rule, as in the app), Deny, or Always deny. Dismissing the
   prompt denies the call. The sandbox and your permission rules apply exactly as in
@@ -1224,7 +1234,11 @@ snapshots are cleared over time (the view says when). The view remembers the sco
 picked.
 
 - **Reading diffs.** Syntax colouring by file type, real line numbers, changed words
-  marked, and a **Side by side** toggle that puts the old lines beside the new.
+  marked, and a **Side by side** toggle that puts the old lines beside the new. A long
+  change shows its first 300 lines; **Show more** reveals the rest 300 at a time.
+  **Show more lines above** and **below** a change read the file as it is now and add
+  the unchanged lines around it, 20 at a time (not for a deleted file, or one that
+  changed since the view loaded: refresh first).
 - **Open** a file in its default app with the arrow button on its row.
 - **Revert** a whole file with the button on its row, or one change inside an edited
   file with **Revert** on that change. Each asks first. In **Working tree**, a file goes
@@ -1931,6 +1945,12 @@ project's agent wins if both use the same name.
 - **Writable** (`write: true`) subagents are dispatched with `dispatch_writable_agent`,
   which asks for approval because it grants write access. One approval covers the
   whole delegated task's local actions, confined to the project.
+- **Its report comes with evidence.** A writable subagent works under the same rules
+  as the main agent about tests: it never deletes, skips, or weakens one to pass, and
+  never calls unchecked work tested. Its report reaches the main agent followed by
+  what its tools actually ran and changed (each command with its exit code, and the
+  files it edited), so a claim like "all tests pass" can be checked against the
+  commands behind it.
 
 ### Permissions still apply
 
@@ -1995,6 +2015,8 @@ A subagent works under the same step budget as the main agent:
   things out or making edits, up to the same hard limit, with the same loop detection
 - near the end it's told to wrap up, and its last step can't run tools, so it always
   ends with a report of what it has
+- loop detection sees what the main agent's does: the same file read again with
+  nothing changed, and a file edited back and forth between the same versions
 - a custom agent's `max_turns` replaces all of this with a fixed limit
 - a review's agents keep the base budget without extending, since a review runs many
   at once
@@ -2010,7 +2032,7 @@ A subagent works under the same step budget as the main agent:
 - **Cheaper legwork.** A dispatch can pass `model` to run one-off work on a cheaper
   sibling model.
 - **One level of nesting.** A dispatched agent may dispatch its own nested read-only
-  researchers (never writable, and no deeper).
+  researchers (never writable, and no deeper). They run one at a time.
 
 ### Running one yourself
 
@@ -2319,8 +2341,10 @@ console output.
 ## Hooks
 
 Hooks (Settings, *Hooks*) run your own shell commands at set points in the agent loop.
-Each hook names an event and, for tool events, a matcher glob on the tool name. The
-other events match only an empty or `*` matcher.
+Each hook names an event and, for tool events, a matcher glob on the tool name. A
+Notification hook's matcher globs the kind of wait instead (`tool_approval`,
+`tool_question`, `plan_ready`, `elicitation`). The other events match only an empty or
+`*` matcher.
 
 ### Events
 
@@ -2332,6 +2356,11 @@ other events match only an empty or `*` matcher.
 | **SessionStart** | once when a run begins | add context to the system prompt |
 | **Stop** | when the agent would end its turn | force another turn with the reason fed back ("run the tests before you stop"), bounded so a hook can't keep the agent going forever |
 | **PreCompact** | before the conversation is compacted | fold context into the material being summarized, so it survives compaction |
+| **Notification** | when the agent stops to wait for you: an approval, a question, a plan to review, or an MCP server asking for input | observe only, e.g. play a sound or send yourself a desktop alert. It runs alongside the wait and can't answer it |
+| **SessionEnd** | once when a run ends, however it ended | observe only, e.g. log the session or clean up. Its `reason` is `completed`, `aborted`, `error`, or `limit` |
+
+Notification and SessionEnd hooks only observe. Their exit code and any JSON they print
+change nothing: they can't block, approve, rewrite, or add context.
 
 ### The exit-code contract
 
@@ -2362,8 +2391,10 @@ project deny.
 ### How hooks run
 
 - **Several matches** run in order. Any block wins, and the last rewrite wins.
-- **Each hook gets 60 seconds.** One still running then is stopped and its output
-  ignored. A PreToolUse or UserPromptSubmit hook that times out still blocks, with a
+- **Each hook gets 60 seconds** unless it sets its own `timeout` in seconds (1 to 600),
+  for example `{ "event": "Stop", "matcher": "*", "command": "npm test", "timeout": 300 }`.
+  The Hooks page and `/hooks add` ask for it too. One still running then is stopped and
+  its output ignored. A PreToolUse or UserPromptSubmit hook that times out still blocks, with a
   message saying it timed out; a Stop hook that times out lets the turn end.
 - **Sandboxed:** hooks run in the same project sandbox as `run_shell`, with no
   network.
@@ -2386,6 +2417,27 @@ temp file instead. The variable is left unset, and `$HOUSTON_TOOL_INPUT_FILE`,
 `$HOUSTON_TOOL_RESULT_FILE`, or `$HOUSTON_USER_PROMPT_FILE` holds the file's path. A
 hook that may see large payloads should read whichever of the two is set. The file is
 removed once the hooks finish.
+
+### JSON on stdin
+
+Every hook also gets the same context as one JSON object on stdin, with payloads inline
+whatever their size, so a script can read it with `jq` or any JSON parser instead of the
+variables:
+
+| Field | Holds |
+| --- | --- |
+| `hook_event_name` | the event name |
+| `session_id` | the conversation's id |
+| `transcript_path` | the conversation's saved transcript file, when it has one |
+| `cwd` | the project folder |
+| `tool_name`, `tool_input` | the tool call (PreToolUse, PostToolUse, and a Notification about an approval) |
+| `tool_response` | the tool result (PostToolUse) |
+| `prompt` | your message (UserPromptSubmit) |
+| `notification_type`, `message` | the kind of wait and a one-line description (Notification) |
+| `reason` | how the run ended (SessionEnd) |
+
+Fields that don't apply to the event are left out. A hook that doesn't read stdin can
+ignore it.
 
 ## Plugins
 
@@ -2505,11 +2557,15 @@ name, or a confirmation.
 
 ### Protocol versions
 
-Houston speaks MCP protocol versions 2025-06-18, 2025-03-26, and 2024-11-05, and asks
-for the newest when it connects.
+Houston speaks MCP protocol versions 2025-11-25, 2025-06-18, 2025-03-26, and 2024-11-05,
+and asks for the newest when it connects.
 
 - A server that answers with an older supported version still works, but server
-  questions need 2025-06-18: an older server's requests for input are declined.
+  questions need 2025-06-18 or later: an older server's requests for input are declined.
+- Server questions are answered as forms. A request to open a web page instead (URL
+  mode) is refused, since Houston does not offer it.
+- Over streamable HTTP, a stream the server closes early is resumed where it left off
+  (the server sends event ids), so a server that polls this way loses no replies.
 - A server that only speaks a version outside that list fails to connect, and its
   status names the version it asked for.
 
@@ -2909,7 +2965,8 @@ When a conversation grows too large, Houston keeps it inside the model's context
 window:
 
 1. it first trims large tool output the agent has moved past (the agent can re-read
-   anything it still needs)
+   anything it still needs). On a large-window model this starts well before the
+   window is nearly full, at about 160k tokens.
 2. then it summarizes the older part of the conversation, including the earlier steps
    of one long request
 
@@ -2919,6 +2976,9 @@ window:
   shell's folder, and the background shells still running.
 - **Sized to the model.** The threshold is set automatically from the selected model's
   context window: a large-window model compacts later, a small local model sooner.
+  When a model bills long prompts at a higher rate past some size, compaction keeps
+  the conversation under that size, and `/context` says where the conversation stands
+  against it. A fixed threshold in Settings governs both trimming and summarizing.
 - **Built up, not redone.** The summary is saved with the conversation, so later turns
   extend it instead of re-summarizing from scratch.
 - **Nothing disappears on screen.** The full transcript stays visible; only what's sent

@@ -174,7 +174,15 @@ function parseHooks(v: unknown): Hook[] | null {
   for (const h of v) {
     if (!isObject(h) || typeof h.command !== 'string' || typeof h.matcher !== 'string') return null
     if (!(HOOK_EVENTS as string[]).includes(h.event as string)) return null
-    out.push({ event: h.event as Hook['event'], matcher: h.matcher, command: h.command })
+    if (h.timeout !== undefined && (typeof h.timeout !== 'number' || !Number.isFinite(h.timeout) || h.timeout <= 0)) {
+      return null
+    }
+    out.push({
+      event: h.event as Hook['event'],
+      matcher: h.matcher,
+      command: h.command,
+      ...(typeof h.timeout === 'number' ? { timeout: h.timeout } : {})
+    })
   }
   return out
 }

@@ -261,6 +261,134 @@ describe('McpHttpClient', () => {
     client.close()
   })
 
+  describe('a stream the server closes early (SSE polling)', () => {
+    const sse = (body: string): Response =>
+      new Response(body, { status: 200, headers: new Headers({ 'content-type': 'text/event-stream' }) })
+    const json = (id: number | undefined, result: unknown): Response =>
+      new Response(JSON.stringify({ jsonrpc: '2.0', id, result }), {
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json', 'mcp-session-id': 'sess-1' })
+      })
+
+    it('resumes a tool call stream with Last-Event-ID and settles from the replay', async () => {
+      const gets: Array<Record<string, string>> = []
+      let callId = 0
+      const fetch: FetchFn = async (_u, init) => {
+        const headers = init.headers as Record<string, string>
+        if (init.method === 'GET') {
+          gets.push(headers)
+          if (!headers['last-event-id']) return new Response('', { status: 405 }) // no standing stream
+          if (headers['last-event-id'] === 'call-1') return sse('id: call-2\nretry: 250\n\n') // still working
+          const response = { jsonrpc: '2.0', id: callId, result: { content: [{ type: 'text', text: 'done' }] } }
+          return sse(`id: call-3\ndata: ${JSON.stringify(response)}\n\n`)
+        }
+        const req = JSON.parse(init.body as string) as { id?: number; method: string }
+        if (req.id === undefined) return new Response('', { status: 202 })
+        if (req.method === 'tools/call') {
+          callId = req.id
+          // Prime the stream with an id and an empty event, then close it.
+          return sse('id: call-1\nretry: 250\ndata:\n\n')
+        }
+        return json(req.id, req.method === 'initialize' ? { protocolVersion: '2025-11-25' } : req.method === 'tools/list' ? { tools: [{ name: 'slow' }] } : {})
+      }
+      const client = new McpHttpClient(fetch)
+      await client.connect({ url: 'https://x/mcp' })
+      expect(await client.callTool('slow', {})).toBe('done')
+      const resumes = gets.filter((h) => h['last-event-id'])
+      expect(resumes.map((h) => h['last-event-id'])).toEqual(['call-1', 'call-2'])
+      expect(resumes[0]['mcp-session-id']).toBe('sess-1')
+      expect(resumes[0]['mcp-protocol-version']).toBe('2025-11-25')
+      expect(resumes[0].accept).toBe('text/event-stream')
+      client.close()
+    })
+
+    it('fails the call when the server cannot resume the stream', async () => {
+      const fetch: FetchFn = async (_u, init) => {
+        if (init.method === 'GET') return new Response('', { status: 405 })
+        const req = JSON.parse(init.body as string) as { id?: number; method: string }
+        if (req.id === undefined) return new Response('', { status: 202 })
+        if (req.method === 'tools/call') return sse('id: only\nretry: 250\ndata:\n\n')
+        return json(req.id, req.method === 'tools/list' ? { tools: [{ name: 'slow' }] } : {})
+      }
+      const client = new McpHttpClient(fetch)
+      await client.connect({ url: 'https://x/mcp' })
+      await expect(client.callTool('slow', {})).rejects.toThrow('stream ended without a response')
+      client.close()
+    })
+
+    it('still fails at once when a stream without event ids ends early', async () => {
+      let gets = 0
+      const fetch: FetchFn = async (_u, init) => {
+        if (init.method === 'GET') {
+          gets++
+          return new Response('', { status: 405 })
+        }
+        const req = JSON.parse(init.body as string) as { id?: number; method: string }
+        if (req.id === undefined) return new Response('', { status: 202 })
+        if (req.method === 'tools/call') return sse('data: {"jsonrpc":"2.0","method":"notifications/message"}\n\n')
+        return json(req.id, req.method === 'tools/list' ? { tools: [{ name: 'slow' }] } : {})
+      }
+      const client = new McpHttpClient(fetch)
+      await client.connect({ url: 'https://x/mcp' })
+      await new Promise((r) => setTimeout(r, 0))
+      const before = gets
+      await expect(client.callTool('slow', {})).rejects.toThrow('stream ended without a response')
+      expect(gets).toBe(before) // nothing to resume from: no GET was tried
+      client.close()
+    })
+
+    it('stops resuming when the call is cancelled', async () => {
+      let resumes = 0
+      const fetch: FetchFn = async (_u, init) => {
+        const headers = init.headers as Record<string, string>
+        if (init.method === 'GET') {
+          if (headers['last-event-id']) resumes++
+          return headers['last-event-id'] ? sse('id: again\nretry: 250\n\n') : new Response('', { status: 405 })
+        }
+        const req = JSON.parse(init.body as string) as { id?: number; method: string }
+        if (req.id === undefined) return new Response('', { status: 202 })
+        if (req.method === 'tools/call') return sse('id: first\nretry: 250\ndata:\n\n')
+        return json(req.id, req.method === 'tools/list' ? { tools: [{ name: 'slow' }] } : {})
+      }
+      const client = new McpHttpClient(fetch)
+      await client.connect({ url: 'https://x/mcp' })
+      const stop = new AbortController()
+      const call = client.callTool('slow', {}, stop.signal)
+      await new Promise((r) => setTimeout(r, 300))
+      stop.abort()
+      await expect(call).rejects.toThrow('cancelled')
+      const after = resumes
+      await new Promise((r) => setTimeout(r, 600))
+      expect(resumes).toBe(after)
+      client.close()
+    })
+
+    it('reopens the notification stream with Last-Event-ID, after the retry hint, without re-fetching lists', async () => {
+      const gets: Array<Record<string, string>> = []
+      let lists = 0
+      const fetch: FetchFn = async (_u, init) => {
+        const headers = init.headers as Record<string, string>
+        if (init.method === 'GET') {
+          gets.push(headers)
+          // Each stream sends one id and closes: a server polling its clients.
+          return sse(`id: n${gets.length}\nretry: 250\ndata:\n\n`)
+        }
+        const req = JSON.parse(init.body as string) as { id?: number; method: string }
+        if (req.id === undefined) return new Response('', { status: 202 })
+        if (req.method === 'tools/list') lists++
+        return json(req.id, req.method === 'tools/list' ? { tools: [{ name: 'a' }] } : {})
+      }
+      const client = new McpHttpClient(fetch)
+      await client.connect({ url: 'https://x/mcp' })
+      await vi.waitFor(() => expect(gets.length).toBeGreaterThanOrEqual(3), { timeout: 3_000 })
+      client.close()
+      expect(gets[0]['last-event-id']).toBeUndefined()
+      expect(gets[1]['last-event-id']).toBe('n1')
+      expect(gets[2]['last-event-id']).toBe('n2')
+      expect(lists).toBe(1) // only the connect-time listing
+    })
+  })
+
   describe('a dropped notification stream', () => {
     /** A server whose GET streams can be ended from the test; counts the GETs. */
     function droppingServer(getStatus: () => number = () => 200) {

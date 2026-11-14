@@ -37,7 +37,8 @@ import { task as utf8SplitChunks } from './utf8-split-chunks/task'
 import { task as vendoredLibraryUpgrade } from './vendored-library-upgrade/task'
 import { task as windowsFileUri } from './windows-file-uri/task'
 
-export const TASKS: EvalTask[] = [
+/** The first tasks: one tool path each, which every capable model solves. */
+const CORE_TASKS: EvalTask[] = [
   fixNullDeref,
   runTestsThenFix,
   multiEditRename,
@@ -46,8 +47,15 @@ export const TASKS: EvalTask[] = [
   applyPatchMultiFile,
   replaceAllConstant,
   todoDrivenRefactor,
-  unverifiableDependency,
-  // Harder tasks: investigation across files, misleading first failures, long refactors.
+  unverifiableDependency
+]
+
+/**
+ * Harder tasks: investigation across files, misleading first failures, long refactors.
+ * The cheap live model doesn't solve all of these, so they leave room to see a change
+ * help or hurt; `HOUSTON_EVAL_TASKS=hard` runs just these (the PR A/B workflow does).
+ */
+export const HARD_TASKS: EvalTask[] = [
   crlfSalesReport,
   utf8SplitChunks,
   extractionJobStuck,
@@ -69,3 +77,5 @@ export const TASKS: EvalTask[] = [
   terminalWrapWidth,
   cacheStaleAfterOutage
 ]
+
+export const TASKS: EvalTask[] = [...CORE_TASKS, ...HARD_TASKS]

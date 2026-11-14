@@ -33,7 +33,8 @@ vi.mock('../conversations', () => ({
   takeChildReports: h.takeChildReports,
   // The queue's disk copy (covered in queue.test.ts); nothing stored here.
   getQueuedInput: () => null,
-  setQueuedInput: () => {}
+  setQueuedInput: () => {},
+  resolveStoredImages: (v: unknown) => v
 }))
 
 /** Make startRun end every run with the given stop reason (or an error event). */

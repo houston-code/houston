@@ -45,11 +45,29 @@ export const CONTEXT_APPROX_NOTE =
   'Parts are estimated at about four characters per token, so they are approximate. The total is what the provider measured, when it reports one.'
 
 /**
+ * Where the context stands against the model's long-context price tier, or null when
+ * it has none. Past the boundary every token of a request bills at the higher rate,
+ * which is why automatic compaction keeps the window under it.
+ */
+export function priceTierNote(total: number, tierAbove: number | null | undefined): string | null {
+  if (!tierAbove || tierAbove <= 0) return null
+  const at = formatTokens(tierAbove)
+  return total > tierAbove
+    ? `Past this model's long-context price tier: requests over ${at} tokens bill at a higher rate.`
+    : `This model bills requests over ${at} tokens at a higher long-context rate.`
+}
+
+/**
  * The terminal's `/context` report: one line per part with its share, then the total
  * against the model's window. `measured` is the provider's count for the request
  * (0 when it reported none) and `window` the model's context window, when known.
  */
-export function renderContextReport(parts: ContextParts | null, measured: number, window: number | null): string {
+export function renderContextReport(
+  parts: ContextParts | null,
+  measured: number,
+  window: number | null,
+  tierAbove: number | null = null
+): string {
   if (!parts) return 'No context yet: send a message, and /context shows what fills the window.'
   const rows = contextRows(parts)
   const estimate = contextEstimate(parts)
@@ -58,11 +76,13 @@ export function renderContextReport(parts: ContextParts | null, measured: number
     (r) => `  ${r.label.padEnd(width)}  ~${formatTokens(r.tokens).padStart(6)}  ${String(contextShare(r.tokens, estimate)).padStart(3)}%`
   )
   const total = measured > 0 ? measured : estimate
+  const tier = priceTierNote(total, tierAbove)
   const of = window ? ` of ${formatTokens(window)} (${Math.min(100, Math.round((total / window) * 100))}%)` : ''
   return [
     'What fills the context window (approximate):',
     ...lines,
     `  ${'Total'.padEnd(width)}  ${measured > 0 ? ' ' : '~'}${formatTokens(total).padStart(6)}${of}`,
+    ...(tier ? [tier] : []),
     CONTEXT_APPROX_NOTE
   ].join('\n')
 }

@@ -1,5 +1,5 @@
 import type { ContextParts } from '@shared/agent'
-import { CONTEXT_APPROX_NOTE, contextEstimate, contextRows, contextShare } from '@shared/contextBreakdown'
+import { CONTEXT_APPROX_NOTE, contextEstimate, contextRows, contextShare, priceTierNote } from '@shared/contextBreakdown'
 import { formatTokens } from '@shared/usage'
 
 /**
@@ -10,20 +10,27 @@ import { formatTokens } from '@shared/usage'
 export function ContextBreakdown({
   parts,
   measured,
-  contextWindow
+  contextWindow,
+  priceTierAbove = null
 }: {
   /** The estimated parts of the most recent request; null before one was recorded. */
   parts: ContextParts | null | undefined
   /** The provider's measured context size (the chip's figure). */
   measured: number
   contextWindow: number | null
+  /** Prompt size past which the model bills at its long-context rate, when it has one. */
+  priceTierAbove?: number | null
 }): JSX.Element {
   const pct = contextWindow && measured > 0 ? Math.min(100, Math.round((measured / contextWindow) * 100)) : null
+  const tier = priceTierNote(measured, priceTierAbove)
   const head = (
-    <p className="usage-panel__context">
-      Context: {measured.toLocaleString()}
-      {contextWindow ? ` of ${contextWindow.toLocaleString()} tokens (${pct}%)` : ' tokens'}
-    </p>
+    <>
+      <p className="usage-panel__context">
+        Context: {measured.toLocaleString()}
+        {contextWindow ? ` of ${contextWindow.toLocaleString()} tokens (${pct}%)` : ' tokens'}
+      </p>
+      {tier && <p className="usage-panel__note">{tier}</p>}
+    </>
   )
   if (!parts) {
     return (

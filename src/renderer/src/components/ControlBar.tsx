@@ -13,6 +13,7 @@ import { REASONING_EFFORTS, type ConversationWorktree, type ReasoningEffort, typ
 import {
   contextPercent,
   resolveCapabilities,
+  longContextTierAbove,
   resolveContextWindow,
   type SessionUsage
 } from '@shared/usage'
@@ -147,6 +148,7 @@ export function ControlBar({
   // heuristics — so the usage meter and the "Think:" control agree with the picker.
   const selectedModelOpt = provider?.models.find((m) => m.id === selected?.model)
   const ctxWindow = selected ? resolveContextWindow(selected.model, selectedModelOpt?.caps) : null
+  const priceTier = selected ? longContextTierAbove(selected.model, selectedModelOpt?.caps) : null
   const hasReasoning = selected
     ? resolveCapabilities(selected.model, selectedModelOpt?.caps).reasoning
     : true
@@ -346,6 +348,7 @@ export function ControlBar({
         <CostBreakdown
           usage={usage}
           contextWindow={ctxWindow}
+          priceTierAbove={priceTier}
           meterPct={pct}
           meterClass={meterClass}
           agents={subagentSpend}

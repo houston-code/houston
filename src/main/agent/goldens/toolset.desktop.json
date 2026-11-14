@@ -155,7 +155,7 @@
   },
   {
     "name": "glob",
-    "description": "Find files whose path matches a glob pattern (e.g. \"**/*.ts\", \"src/**/*.test.tsx\"). Returns matching paths relative to the project root, most-recently-modified first. Skips dotfiles and .gitignored files.",
+    "description": "Find files whose path matches a glob pattern (e.g. \"**/*.ts\", \"src/**/*.test.tsx\"). Returns matching paths relative to the project root, most-recently-modified first. Skips untracked dotfiles and .gitignored files.",
     "parameters": {
       "type": "object",
       "properties": {

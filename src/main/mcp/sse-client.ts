@@ -59,7 +59,14 @@ export interface SseEvent {
   event: string
   /** The concatenated `data:` payload. */
   data: string
+  /** The event's `id:`, when it had one: a streamable-HTTP client resumes after it. */
+  id?: string
+  /** The `retry:` reconnect delay in milliseconds, when the event set one. */
+  retry?: number
 }
+
+/** The longest SSE event id kept for resuming a stream. */
+const MAX_SSE_EVENT_ID_CHARS = 1_024
 
 /**
  * A connected SSE stream the client reads. Modeled on the parts of the DOM
@@ -148,14 +155,28 @@ export function parseSseEvents(buffer: string): { events: SseEvent[]; rest: stri
   const rest = segments.pop() ?? ''
   for (const segment of segments) {
     let event = 'message'
+    let id: string | undefined
+    let retry: number | undefined
     const dataLines: string[] = []
     for (const line of segment.split(/\r?\n/)) {
       if (line.startsWith('event:')) event = line.slice(6).trim()
       else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''))
-      // `id:` / `retry:` / comments (`:`) are accepted and ignored.
+      else if (line.startsWith('id:')) {
+        // Per the SSE spec an id holding NUL is ignored; an overlong one is not worth resuming from.
+        const value = line.slice(3).replace(/^ /, '')
+        if (!value.includes('\u0000') && value.length <= MAX_SSE_EVENT_ID_CHARS) id = value
+      } else if (/^retry: ?\d+$/.test(line)) retry = Number(line.slice(6).trim())
+      // Comments (`:`) and unknown fields are ignored.
     }
-    if (dataLines.length > 0 || event !== 'message') {
-      events.push({ event, data: dataLines.join('\n') })
+    // An event with only an id (a server priming a stream it may close and have the
+    // client resume) still counts: its id is where a resume starts.
+    if (dataLines.length > 0 || event !== 'message' || id !== undefined || retry !== undefined) {
+      events.push({
+        event,
+        data: dataLines.join('\n'),
+        ...(id !== undefined ? { id } : {}),
+        ...(retry !== undefined ? { retry } : {})
+      })
     }
   }
   return { events, rest }

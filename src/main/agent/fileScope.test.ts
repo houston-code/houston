@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { rgPath as vscodeRg } from '@vscode/ripgrep'
 import { minimatch } from 'minimatch'
-import { gitListFiles, globTester, hasHiddenSegment, inGitScope, planRuns, runPathArgs } from './fileScope'
+import { gitListFiles, gitTrackedHidden, globTester, hasHiddenSegment, inGitScope, planRuns, runPathArgs } from './fileScope'
 import { resolveRipgrep, searchContents } from './search'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { clearMentionCache, findFiles } from './mentions'
@@ -164,6 +164,53 @@ describe('search_files scope', () => {
   it('non-git folder: falls back to the fixed skip set, including generated dirs', async () => {
     expect(await searchedFiles(plain, null)).toEqual(['src/app.ts'])
     if (rg) expect(await searchedFiles(plain, rg)).toEqual(['src/app.ts'])
+  }, SLOW)
+})
+
+describe('tracked hidden paths', () => {
+  // Tracked: a workflow, a hook, and two credential files that must stay out.
+  // Untracked: a hidden file the ignore rules allow, which stays skipped.
+  beforeEach(() => {
+    write(repo, '.github/workflows/ci.yml', 'run: needle\n')
+    write(repo, '.husky/pre-commit', 'needle\n')
+    write(repo, '.env', 'TOKEN=needle\n')
+    write(repo, 'config/.npmrc', '//registry/:_authToken=needle\n')
+    git(['add', '-f', '.github/workflows/ci.yml', '.husky/pre-commit', '.env', 'config/.npmrc'], repo)
+    write(repo, '.scratch/notes.ts') // untracked, not ignored, hidden
+  })
+
+  const HIDDEN_EXPECTED = ['.github/workflows/ci.yml', '.husky/pre-commit', ...REPO_EXPECTED].sort()
+
+  it('gitTrackedHidden lists tracked hidden files, minus credential files', async () => {
+    expect((await gitTrackedHidden(repo)).sort()).toEqual(['.github/workflows/ci.yml', '.husky/pre-commit'])
+    expect(await gitTrackedHidden(join(repo, '.github'))).toEqual([])
+    expect(await gitTrackedHidden(plain)).toEqual([])
+  })
+
+  it('search_files finds them with the JS fallback, and skips .env, .npmrc and untracked dotfiles', async () => {
+    expect(await searchedFiles(repo, null)).toEqual(HIDDEN_EXPECTED)
+    expect(await searchedFiles(repo, null, '.', '*.yml')).toEqual(['.github/workflows/ci.yml'])
+  }, SLOW)
+
+  it.skipIf(!rg)('search_files finds the same set with ripgrep', async () => {
+    expect(await searchedFiles(repo, rg)).toEqual(HIDDEN_EXPECTED)
+    expect(await searchedFiles(repo, rg, '.', '*.yml')).toEqual(['.github/workflows/ci.yml'])
+    expect(await searchedFiles(repo, rg, '.', '.github/**')).toEqual(['.github/workflows/ci.yml'])
+  }, SLOW)
+
+  it('search_files searches a hidden directory named explicitly', async () => {
+    expect(await searchedFiles(repo, null, '.github')).toEqual(['.github/workflows/ci.yml'])
+    if (rg) expect(await searchedFiles(repo, rg, '.github')).toEqual(['.github/workflows/ci.yml'])
+  }, SLOW)
+
+  it('glob matches tracked workflows with ** and leaves credential and untracked dotfiles out', async () => {
+    const out = await getTool('glob')!.execute({ pattern: '**/*' }, { workspace: repo, allowNetwork: false })
+    const files = out.split('\n').map((l) => l.replace(/\\/g, '/'))
+    expect(files).toContain('.github/workflows/ci.yml')
+    expect(files).toContain('.husky/pre-commit')
+    expect(files.some((f) => f.endsWith('.env') || f.endsWith('.npmrc') || f.startsWith('.scratch/'))).toBe(false)
+    const yml = await getTool('glob')!.execute({ pattern: '.github/workflows/*.yml' }, { workspace: repo, allowNetwork: false })
+    expect(yml.replace(/\\/g, '/')).toBe('.github/workflows/ci.yml')
   }, SLOW)
 })
 

@@ -15,8 +15,23 @@ import { version as APP_VERSION } from '../../../package.json'
  * `mcp-protocol-version` header carries whatever was agreed.
  */
 
-/** Versions Houston can speak, newest first. Dates compare lexically. */
-export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'] as const
+/**
+ * Versions Houston can speak, newest first. Dates compare lexically.
+ *
+ * What 2025-11-25 changed for a client like this one, and how it is met:
+ * - Streams the server closes at will (SSE polling): resumed with `Last-Event-ID`
+ *   (http-client.ts).
+ * - URL-mode elicitation: not declared (an empty `elicitation` capability means form
+ *   only), and refused if a server asks anyway (protocol.ts).
+ * - Titled single-select enums in elicitation schemas: read (shared/mcp.ts).
+ * - `icons` on tools, resources and prompts: accepted and not used. Houston never
+ *   fetches a server-named URL to show one.
+ * - Tool name guidance (up to 128 of `[A-Za-z0-9_.-]`): such names were already
+ *   mapped to provider-safe names (tool-exposure.ts).
+ * - Tasks, sampling with tools: capabilities Houston does not declare, so a server
+ *   must not use them.
+ */
+export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'] as const
 
 export type McpProtocolVersion = (typeof SUPPORTED_PROTOCOL_VERSIONS)[number]
 

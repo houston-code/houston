@@ -613,6 +613,17 @@ describe('settings editing helpers', () => {
     expect(buildHook('Stop', '', 'echo done')).toEqual({ event: 'Stop', matcher: '*', command: 'echo done' })
     expect(buildHook('Nope', '*', 'x')).toEqual({ error: expect.stringContaining('unknown event') })
     expect(buildHook('PostToolUse', '*', '   ')).toEqual({ error: expect.stringContaining('command') })
+    // A timeout in seconds, 1-600; blank keeps the default.
+    expect(buildHook('Notification', 'tool_approval', 'say hi', ' 30 ')).toEqual({
+      event: 'Notification',
+      matcher: 'tool_approval',
+      command: 'say hi',
+      timeout: 30
+    })
+    expect(buildHook('Stop', '', 'x', '')).toEqual({ event: 'Stop', matcher: '*', command: 'x' })
+    for (const bad of ['0', '601', '1.5', 'ten', '-3']) {
+      expect(buildHook('Stop', '', 'x', bad)).toEqual({ error: expect.stringContaining('whole number of seconds') })
+    }
   })
 
   it('buildStdioMcpServer builds a header-free stdio config and validates input', () => {
@@ -2851,8 +2862,8 @@ describe('runTui', () => {
     const saved: Array<Partial<AppSettings>> = []
     d.updateSettings = (p) => saved.push(p)
     d.settingsPath = () => '/p/s.json'
-    // command line, then: event (by number), matcher, command, confirm, EOF
-    const t = fakeIo(['/hooks add', '2', 'edit_file', 'npm run typecheck', 'y', null])
+    // command line, then: event (by number), matcher, command, timeout (blank), confirm, EOF
+    const t = fakeIo(['/hooks add', '2', 'edit_file', 'npm run typecheck', '', 'y', null])
     d.io = t.io
     await runTui(opts, d)
     expect(saved).toEqual([
@@ -2868,11 +2879,24 @@ describe('runTui', () => {
     const saved: Array<Partial<AppSettings>> = []
     d.updateSettings = (p) => saved.push(p)
     d.settingsPath = () => '/p/s.json'
-    const t = fakeIo(['/hooks add', 'Bogus', '*', 'echo hi', null])
+    const t = fakeIo(['/hooks add', 'Bogus', '*', 'echo hi', '', null])
     d.io = t.io
     await runTui(opts, d)
     expect(saved).toEqual([])
     expect(t.text()).toContain('unknown event')
+  })
+
+  it('/hooks add keeps a per-hook timeout, and refuses one out of range', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.settingsPath = () => '/p/s.json'
+    const t = fakeIo(['/hooks add', 'SessionEnd', '', 'echo bye', '5', 'y', '/hooks add', 'Stop', '', 'x', '0', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([{ hooks: [{ event: 'SessionEnd', matcher: '*', command: 'echo bye', timeout: 5 }] }])
+    expect(t.text()).toContain('(timeout 5s)')
+    expect(t.text()).toContain('whole number of seconds from 1 to 600')
   })
 
   it('/hooks remove deletes the numbered hook', async () => {

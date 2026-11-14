@@ -12,14 +12,16 @@ function installApi(data: WorkingTreeChanges, chat: ChatChanges = { files: [], a
   const initGitRepo = vi.fn().mockResolvedValue({ ok: true })
   const revertChange = vi.fn().mockResolvedValue({ ok: true })
   const openWorkspacePath = vi.fn().mockResolvedValue({ ok: true })
+  const readWorkspaceFile = vi.fn().mockResolvedValue({ kind: 'error', message: 'no file' })
   window.api = {
+    readWorkspaceFile,
     getWorkingTreeChanges,
     getChatChanges,
     initGitRepo,
     revertChange,
     openWorkspacePath
   } as unknown as typeof window.api
-  return { getWorkingTreeChanges, getChatChanges, initGitRepo, revertChange, openWorkspacePath }
+  return { getWorkingTreeChanges, getChatChanges, initGitRepo, revertChange, openWorkspacePath, readWorkspaceFile }
 }
 
 const sampleChanges: WorkingTreeChanges = {
@@ -459,5 +461,80 @@ describe('DiffPanel', () => {
     fireEvent.change(screen.getByLabelText('Comment on src/foo.ts line 1'), { target: { value: 'later' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
     expect(screen.getByRole('button', { name: 'Send 1 comment to the agent' })).toBeDisabled()
+  })
+
+  describe('showing more of a file around a change', () => {
+    // A 60-line file whose line 30 changed: the hunk shows lines 29 to 31.
+    const text = Array.from({ length: 60 }, (_, i) => (i === 29 ? 'THIRTY' : `line${i + 1}`)).join('\n') + '\n'
+    const tree: WorkingTreeChanges = {
+      isRepo: true,
+      branch: 'main',
+      added: 1,
+      removed: 1,
+      files: [
+        {
+          path: 'src/long.ts',
+          status: 'modified',
+          added: 1,
+          removed: 1,
+          binary: false,
+          hunks: [
+            {
+              header: '@@ -29,3 +29,3 @@',
+              lines: [
+                { type: 'ctx', text: 'line29' },
+                { type: 'del', text: 'line30' },
+                { type: 'add', text: 'THIRTY' },
+                { type: 'ctx', text: 'line31' }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    it('reads the file through the workspace preview read and reveals lines above and below', async () => {
+      const api = installApi(tree)
+      api.readWorkspaceFile.mockResolvedValue({ kind: 'text', text, truncated: false, bytes: text.length })
+      render(<DiffPanel workspace="/repo" />)
+      const up = await screen.findByRole('button', { name: 'Show 20 more lines above change 1 in src/long.ts' })
+      fireEvent.click(up)
+      expect(await screen.findByText('line9')).toBeInTheDocument()
+      expect(api.readWorkspaceFile).toHaveBeenCalledWith('/repo', 'src/long.ts')
+      expect(screen.queryByText('line8')).toBeNull()
+      // Eight lines are left above; the button says so, and the file is read only once.
+      fireEvent.click(screen.getByRole('button', { name: 'Show 8 more lines above change 1 in src/long.ts' }))
+      expect(await screen.findByText('line1')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /above change 1/ })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Show 20 more lines below change 1 in src/long.ts' }))
+      expect(await screen.findByText('line51')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Show 9 more lines below change 1 in src/long.ts' }))
+      expect(await screen.findByText('line60')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /below change 1/ })).toBeNull()
+      expect(api.readWorkspaceFile).toHaveBeenCalledTimes(1)
+      // The revealed lines are numbered where they sit in the file.
+      expect(screen.getByText('line1').closest('.diff__line')?.querySelector('.diff__no')?.textContent).toBe('1')
+    })
+
+    it('reveals nothing from a file that changed since the view loaded, and says so', async () => {
+      const api = installApi(tree)
+      const edited = text.replace('THIRTY', 'other')
+      api.readWorkspaceFile.mockResolvedValue({ kind: 'text', text: edited, truncated: false, bytes: edited.length })
+      render(<DiffPanel workspace="/repo" />)
+      fireEvent.click(await screen.findByRole('button', { name: /above change 1 in src\/long.ts/ }))
+      expect(await screen.findByText(/changed since this view loaded/)).toBeInTheDocument()
+      expect(screen.queryByText('line20')).toBeNull()
+      expect(screen.queryByRole('button', { name: /above change 1/ })).toBeNull()
+    })
+
+    it('offers no context for a deleted file', async () => {
+      installApi({
+        ...tree,
+        files: [{ ...tree.files[0], status: 'deleted' }]
+      })
+      render(<DiffPanel workspace="/repo" />)
+      expect(await screen.findByText('src/long.ts')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /more lines? (above|below)/ })).toBeNull()
+    })
   })
 })

@@ -117,6 +117,7 @@ import {
   createConversation,
   setMessages,
   updateConversationMeta,
+  setConversationSettings,
   listConversations,
   getConversation,
   conversationRunOutcome,
@@ -1078,7 +1079,8 @@ export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
                   updatedAt: conv.updatedAt,
                   providerId: conv.providerId,
                   model: conv.model,
-                  ...(conv.reasoningEffort ? { reasoningEffort: conv.reasoningEffort } : {})
+                  ...(conv.reasoningEffort ? { reasoningEffort: conv.reasoningEffort } : {}),
+                  ...(conv.approvalPolicy ? { approvalPolicy: conv.approvalPolicy } : {})
                 }
               : null
           },
@@ -1090,8 +1092,17 @@ export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
               updatedAt: c.updatedAt
             })),
           setMessages,
-          setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model })
-        }
+          setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model }),
+          // A setting the user changed on the chat (model, effort, approval mode), saved
+          // as they change it, the way the desktop app and the terminal keep it.
+          setSettings: (id, patch) => void setConversationSettings(id, patch),
+          title: (id) => peekConversation(id)?.title
+        },
+        // The workspace's own slash commands, skills and agents, read fresh each time.
+        commands: (cwd) => loadCommands(cwd),
+        skills: async (cwd) => (await loadSkills(cwd)).map((k) => ({ name: k.name, description: k.description })),
+        agents: async (cwd) => (await loadAgents(cwd)).map((a) => ({ name: a.name, description: a.description })),
+        compact: (id, providerId, model) => compactConversationNow(id, providerId, model)
       },
       { shutdown: shutdown.signal, outputClosed: outputClosed.signal }
     )

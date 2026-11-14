@@ -1,9 +1,18 @@
-import { useMemo, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { numberDiff, replacementPairs, tokenize, wordDiff, type DiffLine, type NumberedLine } from '@shared/diff'
 import { diffLanguage, highlightLine, markRuns } from '../lib/diffHighlight'
 
-/** Cap how many diff lines render at once so a huge change can't lock the UI. */
+/**
+ * Cap how many diff lines render at once so a huge change can't lock the UI. Past
+ * it, "Show more" reveals the rest one chunk of this size at a time.
+ */
 export const MAX_DIFF_LINES = 300
+
+/** How many lines to render: whole chunks, enough to reach `need` lines. */
+export function shownCount(total: number, chunks: number, need = 0): number {
+  const want = Math.max(chunks, Math.ceil(need / MAX_DIFF_LINES)) * MAX_DIFF_LINES
+  return Math.min(total, want)
+}
 
 /**
  * Render a line diff as a red/green `<pre>`. Shared by the tool-call cards
@@ -129,7 +138,8 @@ export function DiffView({
   start,
   layout = 'unified',
   onLineClick,
-  renderBelow
+  renderBelow,
+  reveal
 }: {
   diff: DiffLine[]
   /** The file's path, to pick a syntax-highlighting language from its extension. */
@@ -141,7 +151,13 @@ export function DiffView({
   onLineClick?: (target: DiffLineTarget) => void
   /** What to show under a line (its comments, an open editor), by {@link lineKey}. */
   renderBelow?: (key: string) => ReactNode
+  /**
+   * Lines (by {@link lineKey}) that must be rendered even past the cap, such as the
+   * ones holding comments, so nothing attached to a line is out of sight.
+   */
+  reveal?: ReadonlySet<string>
 }): JSX.Element {
+  const [chunks, setChunks] = useState(1)
   const lines = useMemo(() => {
     const numbered = numberDiff(diff)
     if (!start) return numbered
@@ -169,10 +185,30 @@ export function DiffView({
 
   // Gutter width from the largest number in the whole diff, so it doesn't jitter.
   const width = Math.max(2, ...lines.map((l) => String(Math.max(l.oldNo ?? 0, l.newNo ?? 0)).length))
-  const shown = lines.slice(0, MAX_DIFF_LINES)
+  // The last line something attached to must stay visible: reveal through it.
+  let need = 0
+  if (reveal && reveal.size > 0) {
+    lines.forEach((l, i) => {
+      if (l.type === 'skip') return
+      const t = targetOf(l)
+      if (t && reveal.has(lineKey(t))) need = i + 1
+    })
+  }
+  const count = shownCount(lines.length, chunks, need)
+  const shown = lines.slice(0, count)
+  const hidden = lines.length - count
   const more =
-    lines.length > MAX_DIFF_LINES ? (
-      <div className="diff__more">… {lines.length - MAX_DIFF_LINES} more lines</div>
+    hidden > 0 ? (
+      <div className="diff__more">
+        <button
+          type="button"
+          className="diff__more-btn"
+          onClick={() => setChunks(Math.ceil(count / MAX_DIFF_LINES) + 1)}
+        >
+          Show {Math.min(hidden, MAX_DIFF_LINES)} more line{Math.min(hidden, MAX_DIFF_LINES) === 1 ? '' : 's'}
+        </button>
+        <span className="diff__more-count">{hidden} hidden</span>
+      </div>
     ) : null
 
   // The line number, or with comments on, a button that opens a comment on the line.
