@@ -94,7 +94,11 @@ export function charWidth(cp: number): number {
   return 1
 }
 
-const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+// Made on first use: building one loads the break data (about 9 ms), and common text
+// is measured without it (see SINGLE_WIDTH).
+let graphemeSegmenter: Intl.Segmenter | undefined
+const segmenter = (): Intl.Segmenter =>
+  (graphemeSegmenter ??= new Intl.Segmenter(undefined, { granularity: 'grapheme' }))
 
 /**
  * The user-perceived characters of `s` (grapheme clusters): a family emoji joined with
@@ -103,7 +107,7 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
  */
 export function graphemes(s: string): string[] {
   const out: string[] = []
-  for (const { segment } of segmenter.segment(s)) out.push(segment)
+  for (const { segment } of segmenter().segment(s)) out.push(segment)
   return out
 }
 
