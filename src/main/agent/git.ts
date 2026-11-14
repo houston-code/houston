@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { isSafeGitRef } from '@shared/git'
+import { gitExecutable } from './gitBinary'
 import { GIT_ENV, hardenedGitArgs, uncommittedDiffBase } from './gitRead'
 
 export { isSafeGitRef }
@@ -32,7 +33,7 @@ async function runGit(args: string[], cwd: string, shared?: Promise<string[]>): 
   const hardening = await (shared ?? hardenedGitArgs(cwd))
   return new Promise((resolve, reject) => {
     execFile(
-      'git',
+      gitExecutable(GIT_ENV),
       [...hardening, '--no-pager', ...args],
       { cwd, env: GIT_ENV, timeout: 5000, maxBuffer: 1_000_000, windowsHide: true },
       (err, stdout) => (err ? reject(err) : resolve(stdout))

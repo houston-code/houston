@@ -12,7 +12,8 @@ vi.mock('node:child_process', async (importOriginal) => {
   return {
     ...real,
     execFile: ((file: string, args: string[], ...rest: unknown[]) => {
-      if (file === 'git') h.calls.push(args)
+      // 'git', or the developer tools' git on macOS (see gitBinary.ts).
+      if (/(^|\/)git$/.test(file)) h.calls.push(args)
       return (real.execFile as (...a: unknown[]) => unknown)(file, args, ...rest)
     }) as typeof real.execFile
   }

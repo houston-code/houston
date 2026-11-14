@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { gitExecutable } from './gitBinary'
 
 /**
  * Hardened, read-only git execution shared by the agent's git tools and the
@@ -71,7 +72,7 @@ export function localFilterOverrides(output: string): string[] | null {
 export function hardenedGitArgs(cwd: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
     execFile(
-      'git',
+      gitExecutable(GIT_ENV),
       [...GIT_HARDENING, 'config', '--show-scope', '-z', '--get-regexp', '^filter\\.'],
       { cwd, env: GIT_ENV, timeout: 5_000, maxBuffer: 1_000_000, windowsHide: true },
       (_err, stdout) => {
@@ -106,7 +107,7 @@ export async function runReadGit(args: string[], cwd: string): Promise<string> {
   }
   return new Promise((resolve) => {
     execFile(
-      'git',
+      gitExecutable(GIT_ENV),
       [...hardening, '--no-pager', ...args],
       { cwd, env: GIT_ENV, timeout: 10_000, maxBuffer: 4_000_000, windowsHide: true },
       (err, stdout, stderr) => {
@@ -152,7 +153,7 @@ export async function runGitCapture(
   }
   return new Promise((resolve) => {
     execFile(
-      'git',
+      gitExecutable(GIT_ENV),
       [...hardeningArgs, '--no-pager', ...args],
       { cwd, env: GIT_ENV, timeout: 15_000, maxBuffer: 16_000_000, windowsHide: true },
       (err, stdout, stderr) => {
