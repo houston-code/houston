@@ -21,6 +21,7 @@
  * carries the stamps (model, prompt hash, commit, host) that say what produced it.
  */
 import { execFileSync } from 'node:child_process'
+import { gitExecutable } from '../gitBinary'
 import type { TaskReport } from './report'
 import { pct, signTest, suiteStats, type SuiteStats } from './stats'
 
@@ -135,7 +136,7 @@ export function currentCommit(git: (args: string[]) => string): string | undefin
 
 /** The real `git`, run in `cwd`, for {@link currentCommit}. */
 export function gitIn(cwd: string): (args: string[]) => string {
-  return (args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+  return (args) => execFileSync(gitExecutable(), args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
 }
 
 // ---- comparison ----

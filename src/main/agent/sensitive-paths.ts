@@ -1,3 +1,5 @@
+import { realpathSync } from 'node:fs'
+import { basename as pathBasename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { parsePatch } from './apply-patch'
 import type { ToolKind } from './tools'
 
@@ -170,4 +172,146 @@ export function writesSensitivePath(toolName: string, args: Record<string, unkno
     }
   }
   return typeof args.path === 'string' && sensitive(args.path)
+}
+
+/**
+ * In-project control files: files inside the workspace that make a program run code
+ * outside the sandbox later, or that steer the agent's own guardrails.
+ *
+ * The sandbox keeps the agent's commands inside the project, but these files are
+ * read and acted on by something else after the call, unconfined:
+ *
+ *  - `.houston/`: Houston's own project config (hooks, MCP servers, allow rules),
+ *    plugins (JavaScript the main process evaluates), agents, skills, and commands.
+ *    An agent that could edit these could widen its own permissions for the next run.
+ *  - `.vscode/`, `.idea/`: editor tasks, launch configs, and settings that run
+ *    commands when the user opens the folder or builds.
+ *  - `.envrc`: direnv runs it as a shell script on `cd`, in any directory.
+ *  - `.husky/`: git hook scripts, installed through `core.hooksPath`.
+ *  - `.mcp.json`: MCP servers an editor or agent tool launches for the folder.
+ *  - `.devcontainer/`: container build and lifecycle commands an editor runs.
+ *  - `.github/workflows/`, `.github/actions/`: CI code that runs with the
+ *    repository's secrets once pushed.
+ *
+ * A write to one asks in every approval mode, full auto included; only an explicit
+ * `allow` permission rule for that path skips it (see decideApproval's
+ * `protectedWrite`). Unlike a credential file, "Allow for run" does not cover it: a
+ * run-wide write grant was consent to edit the project, not to plant code that runs
+ * outside it.
+ */
+const PROTECTED_DIRS: readonly (readonly string[])[] = [
+  ['.houston'],
+  ['.vscode'],
+  ['.idea'],
+  ['.husky'],
+  ['.devcontainer'],
+  ['.github', 'workflows'],
+  ['.github', 'actions']
+]
+const PROTECTED_FILES = new Set(['.envrc', '.mcp.json'])
+
+/**
+ * Whether a path RELATIVE to a workspace root names (or lies inside) an in-project
+ * control file (see {@link PROTECTED_DIRS}). Matched per path segment at any depth,
+ * case-insensitively (the default macOS and Windows file systems are), so a nested
+ * package's `.vscode/tasks.json` counts too, and so does the directory itself
+ * (`cp -r x .husky`). Pure.
+ */
+export function isProtectedControlRelPath(rel: string): boolean {
+  if (!rel) return false
+  const segments = rel
+    .replace(/\\/g, '/')
+    .toLowerCase()
+    .split('/')
+    .filter((s) => s && s !== '.')
+  for (let i = 0; i < segments.length; i++) {
+    if (PROTECTED_FILES.has(segments[i]!)) return true
+    for (const dir of PROTECTED_DIRS) {
+      if (dir.every((part, k) => segments[i + k] === part)) return true
+    }
+  }
+  return false
+}
+
+/** `abs` relative to the innermost root that contains it, or null when none does. */
+function relativeToInnermostRoot(abs: string, roots: string[]): string | null {
+  let best: string | null = null
+  for (const root of roots) {
+    const rel = relative(root, abs)
+    const inside = rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+    if (inside && (best === null || rel.length < best.length)) best = rel
+  }
+  return best
+}
+
+/**
+ * The real location of `abs`: its deepest existing ancestor realpath'd with the
+ * not-yet-existing rest re-attached (a write may create the file). Null when it
+ * can't be resolved for another reason (a symlink loop).
+ */
+function realLocation(abs: string): string | null {
+  let dir = abs
+  const tail: string[] = []
+  for (;;) {
+    try {
+      return join(realpathSync(dir), ...tail.reverse())
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null
+      const parent = dirname(dir)
+      if (parent === dir) return null
+      tail.push(pathBasename(dir))
+      dir = parent
+    }
+  }
+}
+
+/**
+ * Whether `path` (as a tool or shell command names it: relative to the first root,
+ * or absolute) is an in-project control file. Read against the INNERMOST root that
+ * holds it, so a chat whose workspace is a worktree under `<repo>/.houston/worktrees/`
+ * isn't flagged for every file just because an ancestor is named `.houston`, while
+ * the worktree's own `.houston/settings.json` still is. Also judged at the path's
+ * real location (symlinks resolved), so a link named `editor` pointing at `.vscode`
+ * doesn't hide `editor/tasks.json`. A path outside every root is judged as written:
+ * the file tools refuse it, and a shell command naming it already asks.
+ */
+export function isProtectedControlPath(path: string, roots: string[]): boolean {
+  if (!path) return false
+  if (roots.length === 0) return isProtectedControlRelPath(path)
+  const lexicalRoots = roots.map((r) => resolve(r))
+  const abs = isAbsolute(path) ? resolve(path) : resolve(lexicalRoots[0]!, path)
+  const lexical = relativeToInnermostRoot(abs, lexicalRoots)
+  if (lexical === null) return isProtectedControlRelPath(path)
+  if (isProtectedControlRelPath(lexical)) return true
+  const real = realLocation(abs)
+  if (real === null) return false
+  const realRoots = lexicalRoots.map((r) => realLocation(r) ?? r)
+  const realRel = relativeToInnermostRoot(real, realRoots)
+  return realRel !== null && isProtectedControlRelPath(realRel)
+}
+
+/**
+ * Whether a file-writing tool call targets an in-project control file (see
+ * {@link isProtectedControlPath}): `path` for the single-file tools, every added,
+ * updated, deleted, or moved-to path for `apply_patch`. A patch that doesn't parse
+ * names no targets; the tool itself rejects it.
+ */
+export function writesProtectedPath(
+  toolName: string,
+  args: Record<string, unknown>,
+  roots: string[]
+): boolean {
+  const hit = (p: string): boolean => isProtectedControlPath(p, roots)
+  if (toolName === 'apply_patch') {
+    if (typeof args.patch !== 'string') return false
+    try {
+      return parsePatch(args.patch).some(
+        (op) => hit(op.path) || (op.type === 'update' && !!op.moveTo && hit(op.moveTo))
+      )
+    } catch {
+      return false
+    }
+  }
+  return typeof args.path === 'string' && hit(args.path)
 }

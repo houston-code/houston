@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, sep } from 'node:path'
 import type { ConversationWorktree, RepoInfo, WorktreeRemoval } from '@shared/agent'
 import { isSafeGitRef } from '@shared/git'
 import { parseWorktreePorcelain } from './git'
+import { gitExecutable } from './gitBinary'
 import { GIT_ENV, hardenedGitArgs } from './gitRead'
 import { findGitEntry } from './gitEntry'
 import { lspManager } from './lsp/manager'
@@ -41,7 +42,7 @@ async function runGit(args: string[], cwd: string): Promise<string> {
   const hardening = await hardenedGitArgs(cwd)
   return new Promise((resolve, reject) => {
     execFile(
-      'git',
+      gitExecutable(GIT_ENV),
       [...hardening, '--no-pager', ...args],
       { cwd, env: GIT_ENV, timeout: 15_000, maxBuffer: 4_000_000, windowsHide: true },
       (err, stdout, stderr) => {

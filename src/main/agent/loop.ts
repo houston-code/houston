@@ -15,6 +15,7 @@ import type {
   Provider,
   QuestionOption,
   TokenUsage,
+  ProviderWebSearchUsage,
   AgentQuestion,
   ReasoningBlock,
   ReasoningEffort,
@@ -61,8 +62,8 @@ import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
 import { hostPlatform, installHost } from './installHost'
-import { longContextTierAbove, resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
-import { providerAcceptsPdf, providerSendsXhigh } from '@shared/model-facts'
+import { isPriced, longContextTierAbove, resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
+import { nativeWebSearchFeeUsd, providerAcceptsPdf, providerSendsXhigh } from '@shared/model-facts'
 import {
   addPermissionRule,
   noteRuleUsed,
@@ -129,6 +130,7 @@ import {
   writePaths,
   writeTouchesUnknownPaths
 } from './readCache'
+import { ScopeCache } from './fileScope'
 import { createShellSession, shellCwdLabel, type ShellSession } from './shell-session'
 import { getMcpToolDefs, releaseMcpRun } from '../mcp/manager'
 import {
@@ -172,6 +174,7 @@ import {
   isSensitiveWrite,
   shellAllowCoversTripwires,
   shellCwdOutsideRoots,
+  isProtectedWrite,
   shellReferencesExternalPath,
   shellDiscardsWork
 } from './permissions'
@@ -265,7 +268,7 @@ import {
   skillRestrictionRefusal,
   type SkillRestriction
 } from './skillSpec'
-import { loadPluginsIfEnabled } from './plugins'
+import { loadTrustedPlugins } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
 import { inferVerifyCommand } from '../verifyInfer'
@@ -357,7 +360,11 @@ import {
   landingReminder,
   isFinalStep,
   FINAL_STEP_NOTE,
-  FINAL_STEP_FALLBACK
+  FINAL_STEP_FALLBACK,
+  COST_CAP_NOTE,
+  COST_CAP_FALLBACK,
+  overCostCap,
+  costCapUnenforceableNotice
 } from './budget'
 import {
   shouldVerify,
@@ -404,18 +411,22 @@ interface Route extends SelectedModel {
 export function nativeWebSearchFor(
   route: Pick<Route, 'provider' | 'model' | 'providerId'>,
   signal: AbortSignal,
-  onUsage?: (usage: TokenUsage, model: string) => void
+  onUsage?: (usage: TokenUsage, model: string, feeUsd: number) => void
 ): Pick<ToolContext, 'nativeWebSearch'> {
   const { provider, model } = route
   if (!provider.webSearch) return {}
+  // The provider's own fee per search, billed on top of the tokens.
+  const perSearch = nativeWebSearchFeeUsd(getProvider(route.providerId)?.kind)
   return {
     nativeWebSearch: {
       label: getProvider(route.providerId)?.label ?? 'the model provider',
       search: async (query, maxResults) => {
         // The search is a full model request on `model`; report what each attempt billed
         // (a failed search can still be a billed reply) so the run's cost and its cost
-        // ceiling count it.
-        const report = onUsage ? (u: TokenUsage) => onUsage(u, model) : undefined
+        // ceiling count it, with the per-search fee for the searches it says it ran.
+        const report = onUsage
+          ? (u: ProviderWebSearchUsage) => onUsage(u, model, (u.searches ?? 0) * perSearch)
+          : undefined
         return withProviderRetry(
           () => provider.webSearch!({ model, query, maxResults, signal, ...(report ? { onUsage: report } : {}) }),
           { signal }
@@ -521,6 +532,7 @@ interface RunState {
       shellOffline?: boolean
       sensitiveRead?: boolean
       sensitiveWrite?: boolean
+      protectedWrite?: boolean
       networkScope?: string
     }
   >
@@ -1021,6 +1033,7 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       ...(a.shellOffline ? { shellOffline: true } : {}),
       ...(a.sensitiveRead ? { sensitiveRead: true } : {}),
       ...(a.sensitiveWrite ? { sensitiveWrite: true } : {}),
+      ...(a.protectedWrite ? { protectedWrite: true } : {}),
       ...(a.networkScope ? { networkScope: a.networkScope } : {})
     })
   }
@@ -1832,19 +1845,25 @@ export async function startRun(
     const notedSkills = notedSkillNames(messages.filter((m) => m.role === 'user').map((m) => m.content))
     // Local plugins (.houston/plugins/*.js) register observational lifecycle
     // hooks. They are executable JS run in-process and `vm` is not a security
-    // boundary, so they are NEVER auto-run for an opened repo — only when the user
-    // has explicitly opted into project plugins for a trusted project. See
-    // plugins.ts for the trust boundary.
+    // boundary, so they are NEVER auto-run for an opened repo: only when the user
+    // has turned on the projectPlugins master switch AND trusted this folder for
+    // its current plugin files (each file's hash is in the elevated fingerprint,
+    // so `projectTrusted` is false once one is added or edited). The sources run
+    // are the ones that fingerprint was computed over. See plugins.ts.
     // A plugin failure goes to houston.log and shows once per distinct failure as a
     // run notice; never to stderr, which would draw over the terminal UI.
     const pluginWarningsShown = new Set<string>()
-    const plugins = await loadPluginsIfEnabled(workspace, settings.projectPlugins, (msg) => {
-      const safe = scrubError(msg)
-      log.warn(safe)
-      if (pluginWarningsShown.has(safe)) return
-      pluginWarningsShown.add(safe)
-      emit({ type: 'notice', message: safe })
-    })
+    const plugins = await loadTrustedPlugins(
+      projectConfig.elevated.plugins,
+      { enabled: settings.projectPlugins, trusted: projectTrusted },
+      (msg) => {
+        const safe = scrubError(msg)
+        log.warn(safe)
+        if (pluginWarningsShown.has(safe)) return
+        pluginWarningsShown.add(safe)
+        emit({ type: 'notice', message: safe })
+      }
+    )
     const agentsByName = new Map(agents.map((a) => [a.name, a]))
     const capabilities = buildCapabilities(
       agents,
@@ -2100,23 +2119,21 @@ export async function startRun(
     // A side request on a model (a provider-run web search, the isolated reader for
     // flagged content): price it on that model and fold it into the conversation's usage
     // like a subagent's. inputTokens: 0 keeps the context-size meter on the main turn
-    // (the request has its own, throwaway context). No per-search fee is added for a
-    // search: the pricing tables carry token rates only.
+    // (the request has its own, throwaway context). `feeUsd` is what the request billed
+    // beyond its tokens (a provider-run search's per-search fee).
     const recordSideRequestUsage = (
       u: TokenUsage,
       sideModel: string,
-      caps: ModelCaps | undefined = providerConfig.models.find((m) => m.id === sideModel)?.caps
+      caps: ModelCaps | undefined = providerConfig.models.find((m) => m.id === sideModel)?.caps,
+      feeUsd = 0
     ): void => {
       const input = u.inputTokens ?? 0
       const output = u.outputTokens ?? 0
-      if (!input && !output) return
-      const cost = turnCostUsd(
-        sideModel,
-        input,
-        output,
-        { readTokens: u.cacheReadTokens, writeTokens: u.cacheWriteTokens },
-        caps
-      )
+      if (!input && !output && !feeUsd) return
+      const cost =
+        turnCostUsd(sideModel, input, output, { readTokens: u.cacheReadTokens, writeTokens: u.cacheWriteTokens }, caps) +
+        feeUsd
+      if (input || output) warnUnpriced(sideModel, caps)
       delegatedCostUsd += cost
       emit({
         type: 'usage',
@@ -2174,11 +2191,11 @@ export async function startRun(
     }
 
     // Allowed roots: the workspace plus any configured additional directories
-    // that still resolve (deduped), and the session's own (`--add-dir`, `/add-dir`),
-    // which are the same thing scoped to the session. This is the file-tool + sandbox
-    // boundary.
+    // that still resolve (deduped), and the session's own (`--add-dir`, `/add-dir`, or
+    // the folders an ACP client passed for its session), which are the same thing scoped
+    // to the session. This is the file-tool + sandbox boundary.
     const roots = [workspace]
-    for (const dir of [...(settings.additionalRoots ?? []), ...(req.addDirs ?? [])]) {
+    for (const dir of [...(settings.additionalRoots ?? []), ...(req.addDirs ?? []), ...(req.additionalRoots ?? [])]) {
       try {
         const real = realpathSync(dir)
         if (!roots.includes(real)) roots.push(real)
@@ -2505,6 +2522,8 @@ export async function startRun(
       sensitiveRead?: boolean
       /** A change to a credential file: likewise. */
       sensitiveWrite?: boolean
+      /** A change to an in-project control file (see isProtectedWrite): likewise. */
+      protectedWrite?: boolean
       /** A write's per-file diffs, for the approval card and the live row. */
       preview?: FileDiffPreview[] | null
       /** A network call's destination (see networkDestination): what "Allow for run" grants. */
@@ -2521,6 +2540,7 @@ export async function startRun(
         unsandboxedShell,
         sensitiveRead,
         sensitiveWrite,
+        protectedWrite,
         preview,
         networkDest,
         denyNote,
@@ -2540,6 +2560,7 @@ export async function startRun(
           ...(unsandboxedShell ? { sandboxed: false } : {}),
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+          ...(protectedWrite ? { protectedWrite: true } : {}),
           ...(networkScope ? { networkScope } : {})
         })
         // Register the resolver before emitting: a host that answers inside its
@@ -2557,6 +2578,7 @@ export async function startRun(
           ...(unsandboxedShell ? { sandboxed: false } : {}),
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+          ...(protectedWrite ? { protectedWrite: true } : {}),
           ...(networkScope ? { networkScope } : {})
         })
         const { decision, note } = await approval
@@ -2630,7 +2652,8 @@ export async function startRun(
         const shellEscapesWorkspace = trip?.escapes === true
         const discardsWork = trip?.discards === true
         const ruleAction = trip ? trip.ruleAction : matched
-        const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs)
+        const protectedWrite = isProtectedWrite(kind, name, gateArgs, roots)
+        const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs) || protectedWrite
         const mustApprove =
           kind === 'read'
             ? decideApproval({
@@ -2644,7 +2667,8 @@ export async function startRun(
               }).mustApprove
             : ruleAction === 'ask' ||
               ((shellEscapesWorkspace || discardsWork) && ruleAction !== 'allow') ||
-              (sensitiveWrite && ruleAction !== 'allow' && !run.override.has(grantKey(name, kind)))
+              // A control file isn't covered by this run's grant, only by an allow rule.
+              (sensitiveWrite && ruleAction !== 'allow' && (protectedWrite || !run.override.has(grantKey(name, kind))))
         if (!mustApprove) return runCall()
         return promptGatedCall({
           subCallId: mintSubCallId(callId, kind),
@@ -2655,6 +2679,7 @@ export async function startRun(
           unsandboxedShell: false,
           sensitiveRead,
           sensitiveWrite,
+          protectedWrite,
           preview: kind === 'write' ? await previewWrite(name, gateArgs, roots) : null,
           denyNote: `${APPROVAL_DENIED} Do not retry this call; work around it or note it in your report.`,
           runCall
@@ -2849,7 +2874,7 @@ export async function startRun(
           ...nativeWebSearchFor(
             { provider: primaryRoute.provider, providerId: req.providerId, model },
             abort.signal,
-            recordSideRequestUsage
+            (u, m, fee) => recordSideRequestUsage(u, m, undefined, fee)
           ),
           collectSecrets: () => knownSecrets
         },
@@ -2867,7 +2892,8 @@ export async function startRun(
           ceiling: settings.maxIterationsCeiling,
           ...(hardCap ? { hardCap } : {}),
           // The run's cost ceiling reaches the agent too (see spentUsd below).
-          costCeilingUsd: settings.costCeilingUsd
+          costCeilingUsd: settings.costCeilingUsd,
+          maxCostUsd: settings.maxCostUsd
         },
         stall:
           settings.stallDetection === false
@@ -2952,6 +2978,7 @@ export async function startRun(
           subCost += turnCost
           // Counted as it bills, so the cost ceiling sees a long dispatch while it runs.
           delegatedCostUsd += turnCost
+          warnUnpriced(model, modelCaps)
           handle?.usage(u)
         }
       }).finally(() => {
@@ -3133,6 +3160,7 @@ export async function startRun(
       recordEvidence: (e) => recordEvidence(e),
       checkTodos,
       fileTracker,
+      scopeCache,
       ghExec,
       getSecret: getKey,
       collectSecrets: () => knownSecrets,
@@ -3141,7 +3169,7 @@ export async function startRun(
       // the fallback route like quarantineExtract: it runs on whichever model is
       // serving the run now, billed to that provider's key.
       // Priced with the route's own caps: after a hop the backup's provider may differ.
-      ...nativeWebSearchFor(route, abort.signal, (u, m) => recordSideRequestUsage(u, m, route.caps)),
+      ...nativeWebSearchFor(route, abort.signal, (u, m, fee) => recordSideRequestUsage(u, m, route.caps, fee)),
       // Reads flagged web content on the run's own model, but with no tools and no
       // history — so the page has nothing to act through and nothing to override.
       // Follows the fallback route (provider and model move together here, like the
@@ -3618,6 +3646,10 @@ export async function startRun(
     // user editing in their editor, a git checkout — are caught instead by the stat
     // revalidation every hit performs. See readCache.ts.
     const readCache = new ReadCache({ stat: statPath })
+    // Which files each search root covers (tracked, ignored, hidden), so search_files,
+    // ast_grep, and glob don't re-run git to plan every call. Per run like the read
+    // cache, and cleared with it on every mutating call below. See ScopeCache.
+    const scopeCache = new ScopeCache()
     // Map a tool's `path` argument to a canonical absolute path the way the file
     // tools do, so cache dependencies and write-invalidation keys line up exactly.
     const resolvePath = (rel: string): string => resolveInRoots(roots, rel)
@@ -3649,6 +3681,8 @@ export async function startRun(
     const invalidateForMutation = (name: string, kind: ToolKind, args: Record<string, unknown>): void => {
       // Any mutation may have switched branches (a shell `git switch`, a write to .git).
       branchStale = true
+      // ...or changed what is tracked, ignored, or present: search scope is planned afresh.
+      scopeCache.invalidate()
       if (kind === 'write') {
         const touched = writePaths(name, args, resolvePath, patchPaths)
         if (writeTouchesUnknownPaths(touched)) readCache.invalidateAll()
@@ -3666,12 +3700,24 @@ export async function startRun(
     // the 'usage' emit reports).
     const budget = resolveBudgetLimits({
       maxIterations: settings.maxIterations,
-      costCeilingUsd: settings.costCeilingUsd
+      costCeilingUsd: settings.costCeilingUsd,
+      maxCostUsd: settings.maxCostUsd
     })
     let cumulativeCostUsd = 0
     // Whether this run has checked the context an Ollama server runs its model with.
     let ollamaContextChecked = false
     let landed = false
+    // Set when the hard cost cap made this iteration the last; the run then ends with a
+    // `max-cost` limit whatever the model replies.
+    let costCapStop = false
+    // Models whose turns couldn't be priced while a cost cap is set: warned once each,
+    // since their spend counts as nothing toward the cap.
+    const unpricedWarned = new Set<string>()
+    const warnUnpriced = (model: string, caps: ModelCaps | undefined): void => {
+      if (budget.maxCostUsd <= 0 || unpricedWarned.has(model) || isPriced(model, caps)) return
+      unpricedWarned.add(model)
+      emit({ type: 'notice', message: costCapUnenforceableNotice(model) })
+    }
     // A run that is still landing file writes, or still finding things out, gets more
     // room instead of a wrap-up (see shouldExtend): `budget.maxIterations` grows in
     // place, up to a hard ceiling.
@@ -4157,8 +4203,16 @@ export async function startRun(
       // on a summary. Enforced below by dropping any tool call it makes anyway. Tools
       // stay in the request (a history with tool_use blocks must still declare them).
       // A stalled run's extra step is a final step too, announced by its own note.
-      const finalStep = stallStop !== null || isFinalStep(iter, budget)
-      if (finalStep && stallStop === null) {
+      // A hard cost cap reached since the last step makes this one the last too, with
+      // its own note; a stall stop, already announced, takes precedence. The cap is
+      // checked between steps, so the step that crossed it always finishes.
+      if (!costCapStop && stallStop === null && overCostCap(cumulativeCostUsd + delegatedCostUsd, budget)) {
+        costCapStop = true
+        messages.push(systemNoteMessage(COST_CAP_NOTE))
+        persist(messages)
+      }
+      const finalStep = stallStop !== null || costCapStop || isFinalStep(iter, budget)
+      if (finalStep && stallStop === null && !costCapStop) {
         messages.push(systemNoteMessage(FINAL_STEP_NOTE))
         persist(messages)
       }
@@ -4521,12 +4575,16 @@ export async function startRun(
         )
         // Accumulate for the adaptive-budget cost ceiling (the landing trigger).
         cumulativeCostUsd += turnCost
+        const unpriced = !isPriced(route.model, route.caps)
+        if (unpriced) warnUnpriced(route.model, route.caps)
         roundUsage = { inputTokens: turnInput, outputTokens: turnOutput, cost: turnCost }
         emit({
           type: 'usage',
           inputTokens: turnInput,
           outputTokens: turnOutput,
           cost: turnCost,
+          // No known price: the 0 above means "unknown", not "free".
+          ...(unpriced ? { costUnknown: true } : {}),
           // The model that billed the round. After a fallback hop that is the backup,
           // and filing its tokens under the primary hid the hop from the cost breakdown.
           model: route.model,
@@ -4564,7 +4622,8 @@ export async function startRun(
         cutAtCap = true
         toolCalls = []
         if (!assistantText.trim()) {
-          assistantText = stallStop !== null ? STALL_STOP_FALLBACK : FINAL_STEP_FALLBACK
+          assistantText =
+            stallStop !== null ? STALL_STOP_FALLBACK : costCapStop ? COST_CAP_FALLBACK : FINAL_STEP_FALLBACK
           emit({ type: 'text', delta: assistantText })
         }
       }
@@ -4594,8 +4653,10 @@ export async function startRun(
         persist(messages)
       }
 
-      if (cutAtCap) {
-        emit({ type: 'limit', reason: stallStop !== null ? 'stalled' : 'max-steps' })
+      // The cost cap ends the run after its summary step whether or not the model tried
+      // to keep working: unlike the step limit, a text-only reply here is not a finish.
+      if (cutAtCap || costCapStop) {
+        emit({ type: 'limit', reason: stallStop !== null ? 'stalled' : costCapStop ? 'max-cost' : 'max-steps' })
         emit({ type: 'done', stopReason: 'end_turn' })
         return
       }
@@ -5332,7 +5393,12 @@ export async function startRun(
             // Writing one (a file tool targeting it, or a shell command redirecting into,
             // copying over, or removing it) prompts the same way: only the user can
             // restore a `.env` an agent overwrote.
-            const sensitiveWrite = isSensitiveWrite(tool.kind, call.name, execArgs)
+            // Writing an in-project control file (.houston/, .vscode/, .envrc, .husky/, CI
+            // workflows) asks in every mode, and "Allow for run" doesn't cover it: it runs
+            // code outside the sandbox later. Its card carries the sensitive-write warning
+            // with its own reason.
+            const protectedWrite = isProtectedWrite(tool.kind, call.name, execArgs, roots)
+            const sensitiveWrite = isSensitiveWrite(tool.kind, call.name, execArgs) || protectedWrite
             // Network consent is per-DESTINATION: "Allow for run" grants only this host,
             // so approving a fetch to one host never opens egress to every host. The
             // granted-host set stands in for the generic kind override on network calls.
@@ -5381,6 +5447,7 @@ export async function startRun(
               shellDiscardsWork: discardsWork,
               sensitiveRead,
               sensitiveWrite,
+              protectedWrite,
               networkRead: tool.kind === 'network' && fullAutoNetworkRead(call.name, execArgs, settings.webReads),
               memoryTainted: tainted && MEMORY_WRITE_TOOL_NAMES.includes(call.name),
               taintedLaunch: tainted && launchesSession(call.name),
@@ -5428,6 +5495,7 @@ export async function startRun(
                 ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+                ...(protectedWrite ? { protectedWrite: true } : {}),
                 ...(networkScope ? { networkScope } : {})
               })
               // Registered before the emit so a synchronous answer (headless resolves
@@ -5445,6 +5513,7 @@ export async function startRun(
                 ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+                ...(protectedWrite ? { protectedWrite: true } : {}),
                 ...(networkScope ? { networkScope } : {})
               })
               const { decision, note: denyGuidance } = await approval

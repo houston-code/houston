@@ -70,7 +70,7 @@ import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { quotaIsLow, quotaStatusText, throttleNotice, type ProviderQuota } from '@shared/rateLimit'
 import { providerQuota } from './providers/quota'
-import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import type { ContextParts, ModelUsage, RunLimitReason } from '@shared/agent'
@@ -131,6 +131,7 @@ import {
   type UndoRewindResult
 } from '@shared/rewind'
 import { ComposerBuffer } from './tui-composer'
+import { renderTranscript, sanitizeLines, transcriptPlain, type PagerSource } from './tui-pager'
 import { parseMemoryAction, runMemoryCommand, type MemoryAction, type MemoryCommandState } from './tui-memory'
 import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
@@ -513,7 +514,9 @@ export function renderApprovalPrompt(
       ? `\n${paint('⚠ runs UNSANDBOXED (no OS confinement on this host)', 'yellow', 'bold')}`
       : ev.sensitiveRead
         ? `\n${paint('⚠ reads a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
-        : ev.sensitiveWrite
+        : ev.sensitiveWrite && ev.protectedWrite
+          ? `\n${paint('⚠ changes a project control file that can run code outside the sandbox (asks every time; "Allow for run" does not cover it)', 'yellow', 'bold')}`
+          : ev.sensitiveWrite
           ? `\n${paint('⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)', 'yellow', 'bold')}`
           : ''
   // Until the chat has a shell-network grant, every answer runs the command offline;
@@ -829,6 +832,8 @@ export interface SessionCost {
   inputTokens: number
   outputTokens: number
   cost: number
+  /** Part of the spend came from a model with no known price (see formatCost). */
+  costUnknown?: boolean
 }
 
 /**
@@ -866,11 +871,11 @@ export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
       : ''
     const written = t.cacheWriteTokens ? paint(`  (${n(t.cacheWriteTokens)} cache write)`, 'dim') : ''
     lines.push(
-      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  ${formatUsd(t.cost)}`
+      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  ${formatCost(t.cost, t.costUnknown)}`
     )
   }
   if (tallies.length > 1) {
-    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  ${formatUsd(total.cost)}`, 'dim'))
+    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  ${formatCost(total.cost, tallies.some((t) => t.costUnknown))}`, 'dim'))
   }
   return lines.join('\n')
 }
@@ -878,7 +883,7 @@ export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
 /** Format a cost total, e.g. "1,234+567 tok · $0.012" (amounts as the desktop shows them). */
 export function formatSessionCost(c: SessionCost): string {
   const n = (v: number): string => v.toLocaleString('en-US')
-  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · ${formatUsd(c.cost)}`
+  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · ${formatCost(c.cost, c.costUnknown)}`
 }
 
 /** Status marker for a subagent row, printed as a discrete line in line mode. */
@@ -994,7 +999,7 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
     paint(shortCwd(s.cwd), 'dim')
   ]
   if (s.branch) parts.push(paint(s.branch, 'magenta'))
-  parts.push(formatUsd(s.cost.cost))
+  parts.push(formatCost(s.cost.cost, s.cost.costUnknown))
   const ctx = renderContextUsage(s.contextTokens, s.model, paint)
   if (ctx) parts.push(ctx)
   const quota = quotaStatusText(s.quota)
@@ -1657,6 +1662,10 @@ export type SlashResult =
   | { kind: 'changes'; last?: number }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
+  /** How the model's reasoning shows as it streams (/thoughts); bare steps to the next. */
+  | { kind: 'thoughts'; mode?: ReasoningDisplay; bad?: string }
+  /** Open the transcript viewer (/transcript, Ctrl-O). */
+  | { kind: 'transcript' }
   /** Reprint a past tool result in full (/output [n]). */
   | { kind: 'output'; index: number }
   /** List (and open) the background sessions the agent spawned (/spawned). */
@@ -1808,6 +1817,13 @@ export function parseSlashCommand(
       if (a === 'off') return { kind: 'verbose', on: false }
       return { kind: 'verbose' } // bare /verbose toggles
     }
+    case 'thoughts': {
+      const a = arg.trim().toLowerCase()
+      if (!a) return { kind: 'thoughts' }
+      return isReasoningDisplay(a) ? { kind: 'thoughts', mode: a } : { kind: 'thoughts', bad: a }
+    }
+    case 'transcript':
+      return { kind: 'transcript' }
     case 'output': {
       // `/output` means "what just happened"; a number counts back from there.
       const n = Number.parseInt(arg.trim(), 10)
@@ -1937,6 +1953,8 @@ export const HELP_TEXT = [
   '  /changes              what is different in the working tree (also /diff)',
   "  /diff last [n]        show the diff of this session's last edit (n edits back)",
   '  /verbose [on|off]     show each tool\'s full output as it runs',
+  '  /thoughts [mode]      how reasoning shows as it streams: show | summary | hide (Alt-T)',
+  '  /transcript           the whole session full screen, with reasoning and full tool output (Ctrl-O)',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
@@ -1961,6 +1979,8 @@ export const HELP_TEXT = [
   '  Ctrl-R                search earlier messages',
   '  Ctrl-X Ctrl-E         edit the message in $VISUAL or $EDITOR',
   '  Ctrl-L                clear the screen',
+  '  Ctrl-O                the whole session full screen: j/k, / search, { } your messages, v editor, q',
+  '  Alt-T                 cycle how reasoning shows (show, summary, hide), also while a turn runs',
   '  Ctrl-C                clear the message (twice to exit); Ctrl-D exits',
   '  ultrathink            a word in the message: think harder for that turn',
   '',
@@ -1978,7 +1998,9 @@ export const STARTUP_TIPS = [
   'Ctrl-X Ctrl-E edits your message in $VISUAL or $EDITOR',
   'type while the agent works and press Enter to steer it',
   'Shift-Enter or Ctrl-J starts a new line',
-  '/resume filters saved chats as you type; Ctrl-A shows every folder'
+  '/resume filters saved chats as you type; Ctrl-A shows every folder',
+  'Ctrl-O opens the whole session full screen, with reasoning and full tool output',
+  'Alt-T cycles how the model\'s reasoning shows: in full, one line, or hidden'
 ]
 
 /**
@@ -1990,6 +2012,63 @@ export function pickTips(seed: number, count = 2, tips: readonly string[] = STAR
   const start = ((Math.floor(seed) % tips.length) + tips.length) % tips.length
   const n = Math.min(count, tips.length)
   return Array.from({ length: n }, (_, i) => tips[(start + i) % tips.length])
+}
+
+/** How the model's reasoning shows as it streams (the `reasoningDisplay` setting). */
+export type ReasoningDisplay = 'show' | 'summary' | 'hide'
+export const REASONING_DISPLAYS: readonly ReasoningDisplay[] = ['show', 'summary', 'hide']
+export const DEFAULT_REASONING_DISPLAY: ReasoningDisplay = 'summary'
+
+export function isReasoningDisplay(v: unknown): v is ReasoningDisplay {
+  return typeof v === 'string' && (REASONING_DISPLAYS as readonly string[]).includes(v)
+}
+
+/** Alt-T and a bare /thoughts: show, then summary, then hide, then show again. */
+export function nextReasoningDisplay(d: ReasoningDisplay): ReasoningDisplay {
+  return REASONING_DISPLAYS[(REASONING_DISPLAYS.indexOf(d) + 1) % REASONING_DISPLAYS.length]
+}
+
+/** The line saying what a reasoning display now does. */
+export function reasoningDisplayNote(d: ReasoningDisplay): string {
+  switch (d) {
+    case 'show':
+      return '· thoughts: shown in full as they stream (Alt-T or /thoughts to change)'
+    case 'summary':
+      return '· thoughts: one line each, with how long it took (Ctrl-O shows them in full)'
+    case 'hide':
+      return '· thoughts: hidden while they stream (Ctrl-O shows them in full)'
+  }
+}
+
+/** `12s`, `1m 05s`: how long a thought took, never under a second. */
+export function formatThoughtDuration(ms: number): string {
+  const sec = Math.max(1, Math.round(ms / 1000))
+  if (sec < 60) return `${sec}s`
+  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, '0')}s`
+}
+
+/**
+ * The opening of a thought, on one line: a bold heading on its own line (how some
+ * models title a reasoning summary) or else the first sentence. '' for none.
+ */
+export function firstSentence(text: string): string {
+  const lines = sanitizeLines(text)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  if (!lines.length) return ''
+  const heading = /^(?:#+\s*)?\*\*(.+?)\*\*:?$/.exec(lines[0])
+  if (heading) return heading[1].trim()
+  const flat = lines.join(' ').replace(/\*\*|__|`/g, '').replace(/^#+\s*/, '').replace(/\s+/g, ' ').trim()
+  const m = /^(.+?[.!?])(?=\s|$)/.exec(flat)
+  return (m ? m[1] : flat).trim()
+}
+
+/** The `reasoningDisplay: 'summary'` line for a finished thought, fitted to `width`. */
+export function renderThoughtSummary(text: string, ms: number, width: number, paint: Painter): string {
+  const head = `· thought for ${formatThoughtDuration(ms)}`
+  const gist = firstSentence(text)
+  const line = gist ? `${head}: ${gist}` : head
+  return paint(truncateVisible(line, Math.max(head.length, width - 1)), 'dim')
 }
 
 /** Where /help's descriptions start: two spaces, then the command padded to 22. */
@@ -2835,6 +2914,20 @@ export interface TuiIo {
    * Optional — when absent (off-TTY / tests) the driver uses the typed prompt.
    */
   select?: (spec: PickerSpec) => Promise<PickerOutcome>
+  /**
+   * The transcript viewer: `source` full screen on the alternate screen until the
+   * user closes it. Resolves false when it could not open (no terminal). Output
+   * written meanwhile is held and printed, in order, when it closes. Absent off-TTY
+   * and in tests.
+   */
+  pager?: (source: PagerSource) => Promise<boolean>
+  /**
+   * Register the handler for Ctrl-O: at the composer (which is restored as it was
+   * once the handler settles) or mid-run, as `during` says.
+   */
+  onTranscript?: (handler: (during: 'composer' | 'run') => Promise<void>) => void
+  /** Register the handler for Alt-T (cycle the reasoning display), at the composer or mid-run. */
+  onCycleThoughts?: (handler: () => void) => void
 }
 
 export interface TuiDeps {
@@ -3034,8 +3127,12 @@ export interface TuiDeps {
    * not answer. Absent ⇒ hosts are listed without a probe.
    */
   listModels?: (provider: ProviderConfig) => Promise<ModelOption[]>
-  /** The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch shown. */
-  gitBranch?: () => Promise<string | null>
+  /**
+   * The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch
+   * shown. Read before every status line and never waited for: a value shows at once, a
+   * promise shows on the status line after it settles.
+   */
+  gitBranch?: () => string | null | Promise<string | null>
   /**
    * Write an export (`/export`) to `path`, relative to the working folder, without
    * replacing an existing file. Returns the full path written; throws on failure.
@@ -3166,23 +3263,41 @@ export function summarizeElevated(c: {
   hooks: unknown[]
   mcpServers: unknown[]
   commands?: unknown[]
+  plugins?: Array<{ name: string }>
 }): string {
   const commands = c.commands?.length ?? 0
+  const plugins = c.plugins ?? []
   return [
     c.allowRules.length ? `${c.allowRules.length} allow rule${c.allowRules.length === 1 ? '' : 's'}` : '',
     c.hooks.length ? `${c.hooks.length} hook${c.hooks.length === 1 ? '' : 's'}` : '',
     c.mcpServers.length ? `${c.mcpServers.length} MCP server${c.mcpServers.length === 1 ? '' : 's'}` : '',
-    commands ? `${commands} command${commands === 1 ? '' : 's'} that pre-approve${commands === 1 ? 's' : ''} tools` : ''
+    commands ? `${commands} command${commands === 1 ? '' : 's'} that pre-approve${commands === 1 ? 's' : ''} tools` : '',
+    // Each plugin file by name: trusting the folder consents to running exactly these.
+    plugins.length
+      ? `${plugins.length} plugin${plugins.length === 1 ? '' : 's'} (${plugins.map((p) => p.name).join(', ')})`
+      : ''
   ]
     .filter(Boolean)
     .join(', ')
 }
 
 /** Which of the project's files define its elevating config, for the trust prompt. */
-export function elevatedSource(c: { allowRules: unknown[]; hooks: unknown[]; mcpServers: unknown[]; commands?: unknown[] }): string {
+export function elevatedSource(c: {
+  allowRules: unknown[]
+  hooks: unknown[]
+  mcpServers: unknown[]
+  commands?: unknown[]
+  plugins?: unknown[]
+}): string {
   const settings = c.allowRules.length > 0 || c.hooks.length > 0 || c.mcpServers.length > 0
-  if (!c.commands?.length) return '.houston/settings.json'
-  return settings ? '.houston/settings.json and .houston/commands' : '.houston/commands'
+  const commands = (c.commands?.length ?? 0) > 0
+  const plugins = (c.plugins?.length ?? 0) > 0
+  const sources = [
+    settings || (!commands && !plugins) ? '.houston/settings.json' : '',
+    commands ? '.houston/commands' : '',
+    plugins ? '.houston/plugins' : ''
+  ].filter(Boolean)
+  return sources.length < 3 ? sources.join(' and ') : `${sources.slice(0, -1).join(', ')}, and ${sources[sources.length - 1]}`
 }
 
 /**
@@ -3212,8 +3327,11 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
     `\n${paint(state === 'changed' ? 'This project’s trusted configuration changed.' : 'This project asks for extra permissions.', 'cyan')}\n` +
       `  It defines ${summarizeElevated(cfg.elevated)} (in ${elevatedSource(cfg.elevated)}).\n` +
       paint(
-        '  Hooks and MCP servers run as you, and allow rules and pre-approving commands auto-approve matching actions.\n' +
-          '  Only trust folders whose authors you trust; until then Houston ignores them.\n',
+        '  Hooks, MCP servers, and plugins run as you, and allow rules and pre-approving commands auto-approve matching actions.\n' +
+          '  Only trust folders whose authors you trust; until then Houston ignores them.\n' +
+          (cfg.elevated.plugins.length
+            ? '  Plugins also need the projectPlugins setting on; a plugin added or edited later asks again.\n'
+            : ''),
         'dim'
       )
   )
@@ -3234,7 +3352,7 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
   deps.io.out(
     paint(
       decision === 'trusted'
-        ? '· folder trusted: its allow rules, hooks, and MCP servers now apply\n'
+        ? '· folder trusted: its allow rules, hooks, MCP servers, and plugins now apply\n'
         : '· never trusting this folder: its extra permissions stay off\n',
       'dim'
     )
@@ -3259,7 +3377,7 @@ export async function runTrustCommand(
   const cfg = await loadProjectConfig(cwd)
   if (!cfg.elevatedHash) {
     deps.io.out(
-      paint('· this project defines no extra permissions (nothing in .houston/settings.json elevates)\n', 'dim')
+      paint('· this project defines no extra permissions (nothing in its .houston folder elevates)\n', 'dim')
     )
     return
   }
@@ -3275,7 +3393,7 @@ export async function runTrustCommand(
   if (op === 'status') {
     const label =
       state === 'trusted'
-        ? 'trusted: its allow rules, hooks, and MCP servers apply'
+        ? 'trusted: its allow rules, hooks, MCP servers, and plugins apply'
         : state === 'untrusted'
           ? 'never trusted: its extra permissions are ignored'
           : state === 'changed'
@@ -3464,6 +3582,25 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // transcript is a conversation, and most results are noise until they aren't.
   // Remembered across sessions once chosen.
   let verbose = settings.tuiVerbose === true
+  // How the model's reasoning shows as it streams (/thoughts, Alt-T): one line per
+  // thought by default, since a long chain of thought buries the reply. Remembered
+  // like /verbose; the transcript viewer always has it in full.
+  let reasoningDisplay: ReasoningDisplay = isReasoningDisplay(settings.reasoningDisplay)
+    ? settings.reasoningDisplay
+    : DEFAULT_REASONING_DISPLAY
+  // Whether streamed reasoning left the cursor mid-line, so a note printed while a
+  // turn runs starts on a line of its own.
+  let thoughtLineOpen = false
+  const freshLine = (): string => {
+    const nl = thoughtLineOpen ? '\n' : ''
+    thoughtLineOpen = false
+    return nl
+  }
+  const setReasoningDisplay = (d: ReasoningDisplay): void => {
+    reasoningDisplay = d
+    deps.updateSettings?.({ reasoningDisplay: d })
+    deps.io.out(`${freshLine()}${paint(reasoningDisplayNote(d), 'dim')}\n`)
+  }
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
   // A line half-typed while a turn ran (never sent with Enter): the next composer opens with it.
@@ -3489,12 +3626,27 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // This session's landed edits (newest last), for `/diff last [n]`.
   let recentEdits: FileDiffPreview[][] = []
   // The checked-out branch, re-read before each status line (a turn or `!git`
-  // may switch it).
+  // may switch it). Never waited for: the prompt, and a queued turn's request behind
+  // it, must not sit behind a git process. A slow answer shows on the next status line.
   let branch: string | null = null
-  const refreshBranch = async (): Promise<void> => {
+  let branchReads = 0
+  const refreshBranch = (): void => {
     if (!deps.gitBranch) return
+    const read = ++branchReads
     try {
-      branch = await deps.gitBranch()
+      const got = deps.gitBranch()
+      if (got === null || typeof got === 'string') {
+        branch = got
+        return
+      }
+      got.then(
+        (b) => {
+          if (read === branchReads) branch = b
+        },
+        () => {
+          if (read === branchReads) branch = null
+        }
+      )
     } catch {
       branch = null
     }
@@ -3668,6 +3820,35 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.io.out(paint('· no saved session in this folder yet; starting fresh\n', 'dim'))
     }
   }
+
+  // Alt-T, at the composer or mid-run: the live turn's next thought already follows it.
+  deps.io.onCycleThoughts?.(() => setReasoningDisplay(nextReasoningDisplay(reasoningDisplay)))
+  // Ctrl-O and /transcript: the whole session full screen. Not while a turn runs:
+  // the viewer would have to hold back the run's output and its approval prompts,
+  // so it says when it can open instead.
+  const openTranscript = async (): Promise<void> => {
+    if (!deps.io.pager) {
+      deps.io.out(paint('· the transcript viewer needs an interactive terminal; /export writes the chat to a file\n', 'dim'))
+      return
+    }
+    const title = currentTitle() ?? 'Houston chat'
+    const shown = [...messages]
+    const opened = await deps.io.pager({
+      title,
+      render: (width) => renderTranscript(shown, paint, { width }),
+      plain: () => transcriptPlain(shown, title)
+    })
+    if (!opened) {
+      deps.io.out(paint('· the transcript viewer could not open here; /export writes the chat to a file\n', 'dim'))
+    }
+  }
+  deps.io.onTranscript?.(async (during) => {
+    if (during === 'run') {
+      deps.io.out(`${freshLine()}${paint('· the transcript opens at the prompt once this turn ends (Ctrl-O or /transcript)', 'dim')}\n`)
+      return
+    }
+    await openTranscript()
+  })
 
   // Shift-Tab, at the composer or mid-run. Mid-run it also retargets the live run,
   // so you can loosen the mode to get past an approval without killing the turn.
@@ -3876,7 +4057,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // A persistent status line above the composer: model, policy, cwd, cost, and
     // context-window fill — so live session state is always visible. Before a
     // provider is set up it shows a "no model" prompt pointing at /login instead.
-    await refreshBranch()
+    refreshBranch()
     deps.io.out(
       `${
         providerId && model
@@ -4308,6 +4489,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             'dim'
           )
         )
+        continue
+      }
+      if (result.kind === 'thoughts') {
+        if (result.bad) {
+          deps.io.out(
+            paint(`· no thoughts mode "${stripControlChars(result.bad)}": use /thoughts show, summary or hide\n`, 'yellow')
+          )
+          continue
+        }
+        setReasoningDisplay(result.mode ?? nextReasoningDisplay(reasoningDisplay))
+        continue
+      }
+      if (result.kind === 'transcript') {
+        await openTranscript()
         continue
       }
       if (result.kind === 'verbose') {
@@ -5025,6 +5220,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     let turnInputTokens = 0
     let turnOutputTokens = 0
     let turnCost = 0
+    let turnCostUnknown = false
     // Assistant text streams through a markdown renderer that emits whole blocks
     // as they finalize. Any non-text event flushes the pending block first, so
     // text always renders before the tool line / prompt that follows it.
@@ -5047,9 +5243,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
     }
     flushStreamedText = flushMd
+    // The streaming round's reasoning: when it began and what it said, for the
+    // one-line summary ('summary') printed when the next thing arrives.
+    let thought: { start: number; text: string } | null = null
+    const endThought = (discard: boolean): void => {
+      if (!thought) return
+      const t = thought
+      thought = null
+      // A dropped round's thought is dropped with it: its redo thinks again.
+      if (discard || reasoningDisplay !== 'summary') return
+      deps.io.out(`${freshLine()}${renderThoughtSummary(t.text, nowFn() - t.start, columns(), paint)}\n`)
+      roundShown = true
+    }
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
+    // Set once a text delta has relabelled the spinner, so the rest of the reply
+    // doesn't relabel it on every delta; any other event clears it.
+    let saysResponding = false
 
     const send = (e: AgentEvent): void => {
       // Attention signals ride the event stream itself, so anything that blocks the
@@ -5060,13 +5271,25 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // The title is ambient (it just describes the tab) so it is always set; the
       // bell + notification honor the user's existing "notify me" setting.
       if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
+      // Anything but more reasoning ends the thought in progress.
+      if (e.type !== 'reasoning') {
+        endThought(e.type === 'turn_discarded')
+        thoughtLineOpen = false
+      }
       if (e.type === 'text') {
         retryStreak = 0 // the request got through
+        // The reply is streaming: whatever the spinner said before (a tool that has
+        // finished, Thinking) is over. Same word the desktop app's status bar uses.
+        if (!saysResponding) {
+          deps.io.setSpinnerLabel?.('Responding')
+          saysResponding = true
+        }
         const s = md.push(e.delta)
         if (s) roundShown = true
         deps.io.out(s)
         return
       }
+      saysResponding = false
       // A discarded round's unfinished block is dropped unrendered, never flushed:
       // its redo will print the whole reply again.
       if (e.type === 'turn_discarded') md.discard()
@@ -5079,11 +5302,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         retryStreak = 0
       }
       switch (e.type) {
-        case 'reasoning':
+        case 'reasoning': {
           deps.io.setSpinnerLabel?.('Thinking')
-          deps.io.out(paint(stripControlCharsKeepLines(e.delta), 'dim'))
+          thought ??= { start: nowFn(), text: '' }
+          thought.text += e.delta
+          if (reasoningDisplay !== 'show') break
+          // Model text, so it can't carry a terminal control of its own.
+          const safe = stripControlCharsKeepLines(e.delta)
+          if (!safe) break
+          deps.io.out(paint(safe, 'dim'))
+          thoughtLineOpen = !safe.endsWith('\n')
           roundShown = true
           break
+        }
         case 'turn_discarded':
           // What already reached the terminal can't be erased in line mode, so strike
           // it out in words; the retry or fallback line that follows says why.
@@ -5385,6 +5616,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           turnInputTokens += e.inputTokens
           turnOutputTokens += e.outputTokens
           turnCost += e.cost
+          if (e.costUnknown) {
+            sessionCost.costUnknown = true
+            turnCostUnknown = true
+          }
           // Current context size ≈ the last MAIN round's input tokens; feeds the
           // status line. Subagent usage events carry inputTokens: 0, so guard
           // against them resetting the meter to zero mid-turn.
@@ -5427,7 +5662,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             const turnTally: SessionCost = {
               inputTokens: turnInputTokens,
               outputTokens: turnOutputTokens,
-              cost: turnCost
+              cost: turnCost,
+              ...(turnCostUnknown ? { costUnknown: true } : {})
             }
             deps.io.out(
               paint(
@@ -5521,6 +5757,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // can't crash the run (a throw here has no catch on the startRun side).
       persistMessages(m)
     })
+    // A run that ended mid-thought (no event after it) still gets its line.
+    endThought(false)
     flushStreamedText = () => {}
     deps.io.stopSpinner?.()
     // Drain any approval/question prompts still in flight before the next composer read.

@@ -46,6 +46,8 @@ export async function describePermissionPolicy(
       allowRules,
       hooks,
       mcpServers: mcpServers.map(describeServer),
+      // Name and hash only: the source stays in main.
+      plugins: cfg.elevated.plugins.map((p) => ({ name: p.name, sha256: p.sha256 })),
       trust: cfg.elevatedHash ? deps.trustFor(workspace, cfg.elevatedHash) : 'none'
     }
   }

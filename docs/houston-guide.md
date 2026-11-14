@@ -141,7 +141,9 @@ the terminal. Only three kinds do anything:
 
 - A link never runs a command, sends a message, or changes a setting.
 - Opening a folder Houston hasn't opened before (not a recent folder, and no chat in
-  it) asks first. Network paths are refused.
+  it) asks first. Network and device paths (a Windows share such as `\\host\share`
+  in any spelling, including `/\host\share` and `\\?\UNC\...`) are refused before
+  Houston looks at them.
 - From a terminal, `houston open [dir]` (the standalone CLI) opens a folder, the current
   one by default, in the desktop app.
 - Only one copy of the desktop app runs per profile. Launching it again brings the open
@@ -203,7 +205,7 @@ with code 2 before anything runs.
 | --- | --- |
 | `--effort <off\|low\|medium\|high\|xhigh>` | reasoning effort |
 | `--max-turns <n>` | caps the model steps (a hard cap that never auto-extends) |
-| `--max-cost <usd>` | the agent wraps up once the run's estimated cost reaches this (a soft ceiling: the step in flight still finishes) |
+| `--max-cost <usd>` | a hard cost limit: once the run's estimated cost reaches this, the agent gets one last step without tools to summarize, then the run stops (`limitReason` `max-cost`, exit 3). It is told to wrap up at 80% of the limit. The step that crosses the limit still finishes, so a run can end slightly above it |
 | `--verify <command>` | runs this command when the agent stops after editing files, and sends a failure back for a bounded fix-up pass (needs a policy that can edit, such as `--full-auto`) |
 | `--no-memory` | runs without the memories saved in earlier sessions (a headless run reads memories but never saves them) |
 
@@ -273,7 +275,7 @@ repository.
 | 0 | the agent finished on its own |
 | 1 | an error or aborted run, a stalled agent, or a call refused under `--on-approval fail` |
 | 2 | a usage error (a bad flag value, an unreadable flag file, or an empty prompt on stdin; nothing ran), or a bad stream-json input line |
-| 3 | the run hit a budget before finishing (its step cap or the model's output limit) |
+| 3 | the run hit a budget before finishing (its step cap, its `--max-cost` limit, or the model's output limit) |
 | 4 | the final answer still didn't match `--output-schema` after the corrective round |
 | 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
 | 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `aborted`); a second signal exits at once |
@@ -358,8 +360,19 @@ and cost as usage.
 - **Questions** (`ask_user`) and an MCP server's input requests show as a form when
   the editor supports ACP forms. Without forms, a question is answered "use your best
   judgment" and an MCP request is declined, as in headless mode, so a run never hangs.
-- **Sessions** are Houston conversations. The editor can list and reopen them, and
-  they also show up in the desktop app and in `houston -i --resume <id>`. MCP servers
+- **Sessions** are Houston conversations. The editor can list and reopen them
+  (with the history replayed, or resumed without it), close one it no longer shows,
+  and delete one. Deleting works as in the desktop app: a running prompt and the
+  chat's background commands stop first. They also show up in the desktop app and in
+  `houston -i --resume <id>`.
+- **Extra folders** the editor adds to a session (`additionalDirectories`) can be
+  read and written by that session's runs, like the folders under Settings >
+  Workspace, but only for that session and never saved. Each must be an existing
+  folder given by its full path.
+- **A system prompt** from the editor is added after Houston's own instructions, in
+  the same place as headless `--append-system-prompt`. It can't replace them.
+- **Compaction** is shown as compaction progress in an editor that supports it, and
+  as a notice otherwise. MCP servers
   the editor passes join your own for that session (as `run-acp-<name>`) and are never
   saved to your settings.
 - **Credentials** resolve as in the CLI: environment variables, then saved keys. With
@@ -643,8 +656,8 @@ back to the model provider's own web search where the provider offers one:
 The search runs as a short extra request on the chat's current model, so it is billed
 to the model key you already set: the provider's per-search fee plus the tokens of the
 results. Each call runs one search. Its tokens count toward the chat's usage and cost
-display and toward a cost ceiling (`--max-cost`); the per-search fee isn't included in
-Houston's estimate, so check the provider's billing for it. Other providers (Gemini, Bedrock, Vertex, Azure,
+display and toward a cost limit (`--max-cost`), along with the per-search fee (about
+$0.01 a search on both, an estimate like the token prices). Other providers (Gemini, Bedrock, Vertex, Azure,
 Foundry, Ollama and other compatible servers) still need a search key. A search key,
 once set, is always used first. Approvals and the untrusted-content fence work the same
 either way.
@@ -697,8 +710,9 @@ safe subset in place. In the desktop app:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/add-dir`, `/vim`, `/verbose`, `/output`, `/spawned`, `/proposals`,
-`/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`. Typed in the
+**Terminal-only commands.** `/add-dir`, `/vim`, `/verbose`, `/output`, `/thoughts`,
+`/transcript`, `/spawned`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`,
+`/permissions`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
 
@@ -833,6 +847,8 @@ long as it needs to be.
 | `Ctrl-Y` | paste back what was just deleted |
 | `Ctrl-X Ctrl-E` | open the draft in `$VISUAL`/`$EDITOR` and come back with it |
 | `Ctrl-L` | repaint the screen |
+| `Ctrl-O` | open the transcript viewer: the whole session full screen (also `/transcript`) |
+| `Alt-T` | cycle how the model's reasoning shows (show, summary, hide), also while a turn runs |
 | `/image` | attach the image on your clipboard (also `/paste`) |
 | `Ctrl-C` | discard the draft (twice in a row to leave) |
 | `Esc` | *while the agent works:* clear what you typed, or stop the run if nothing is typed |
@@ -874,6 +890,17 @@ conversation, not a log. To see more:
 - **`/output`** reprints the last tool result in full, after the fact. `/output 3`
   goes three results back. Nothing extra is stored for this: the whole output was
   always kept in the conversation.
+- **`Ctrl-O`** (or `/transcript`) opens the transcript viewer: the whole session full
+  screen, on the terminal's alternate screen so your scrollback is left as it was. It
+  shows your messages, the replies, the model's reasoning, every tool call with its
+  full arguments and full output, compaction summaries, and when each message was
+  written. It opens at the latest message. Keys: `j`/`k` or the arrows scroll a line,
+  `Space`/`b` or `PgDn`/`PgUp` a page, `g`/`G` jump to the start or end, `/` searches
+  (then `n`/`N` for the next or previous hit), `{`/`}` jump to your previous or next
+  message, `v` opens the transcript in `$VISUAL`/`$EDITOR` (as an owner-only temporary
+  file, removed when the editor closes), and `q`, `Esc` or `Ctrl-C` close it, putting
+  your draft back exactly as it was. It follows the terminal when you resize it. While
+  a turn runs, `Ctrl-O` says it will open once the turn ends rather than opening.
 
 Very long output is capped, with a note saying how much was left out. When a shell
 command's output is cut in the middle, Houston saves the whole output, with
@@ -910,6 +937,20 @@ a program (an app, a script such as `.command`, `.sh`, `.bat` or `.exe`, a `.des
 launcher, or a file marked executable) is shown in its folder instead of opened, and a
 link to a different kind of file (`notes.md` pointing at `run.command`) or to a folder
 isn't opened at all. This applies to every **Open** in the app.
+
+### Reasoning in the terminal
+
+While the model thinks, the terminal shows its reasoning one of three ways:
+
+- **summary** (the default): nothing streams; when the thought ends, one dim line
+  says how long it took and how it began, like `· thought for 12s: Reading the config`.
+- **show**: the reasoning streams in full, dimmed, as it arrives.
+- **hide**: nothing is printed; the spinner still says Thinking.
+
+`/thoughts show`, `/thoughts summary` or `/thoughts hide` picks one, and plain
+`/thoughts` or `Alt-T` steps to the next (`Alt-T` works while a turn runs too). The
+choice is remembered for later sessions. Whatever you pick, `Ctrl-O` shows every
+thought in full.
 
 ## What actually ran (the receipt)
 
@@ -1615,6 +1656,29 @@ bottom shows the git branch the chat's folder has checked out and the approval m
 bill far below the base input rate, so a big number there is why a long conversation
 costs less than its token count suggests.
 
+**A model with no known price** (most local models, and hosts that list none) shows
+"cost unknown" in the terminal and headless output rather than $0.00, and "$1.23 +
+unknown" when only part of the session was priced. Headless `--json` sets
+`costUnknown: true` on the result line.
+
+### Limiting what a turn costs
+
+Two settings under Settings → *Agent Behavior* → *Loop control* cap spending per turn
+(one run of the agent, subagents and provider-run searches included):
+
+- **Cost reminder** (`costCeilingUsd`): once the estimate crosses it, the model is told
+  once to wrap up. It can ignore that.
+- **Cost limit** (`maxCostUsd`, or `--max-cost` for one headless run): once the estimate
+  reaches it, the next step is the last. Tools are off for it, the model summarizes
+  what it finished and what is left, and the turn stops with "Reached the cost limit".
+  Send a message to continue. With no lower reminder set, the reminder fires at 80% of
+  the limit. Cost is checked between steps, so the step that crosses the limit still
+  finishes and a turn can end slightly above it.
+
+Both use Houston's estimate, not the provider's bill. A model with no known price
+counts as nothing toward either, so the limit can't hold it: Houston says so once per
+turn when that happens.
+
 ### What fills the context (/context)
 
 `/context` shows what the most recent request sent to the model was made of:
@@ -1771,6 +1835,14 @@ The sandbox can read your whole filesystem, so a few controls hold even in full 
   command that redirects into, copies over, edits in place, or removes one
   (`> .env`, `cp .env.example .env`, `sed -i … .env`, `rm .env`). Templates such as
   `.env.example` don't count.
+- **Changing a project control file** asks every time: anything under `.houston/`,
+  `.vscode/`, `.idea/`, `.husky/`, `.devcontainer/`, `.github/workflows/`, or
+  `.github/actions/`, and any `.envrc` or `.mcp.json`. These run code outside the
+  sandbox later (an editor task, a direnv script, a git hook, a Houston plugin, a CI
+  job) or change Houston's own settings for the folder. A file edit or a shell command
+  that writes one (`echo x > .envrc`, `cp t.json .vscode/tasks.json`) asks in every
+  mode, and "Allow for run" doesn't cover it. Only an `allow` rule for that path skips
+  the prompt ("Always allow" on the prompt saves one for the exact file).
 - **Git hooks and settings that run programs.** See "Git hooks and settings" below.
 
 ### Git hooks and settings
@@ -2052,22 +2124,26 @@ untrusted repo can never auto-approve anything.
 
 ### Trusted folders
 
-The same project file can also define `allow` rules, `hooks`, and `mcpServers`. Those
-*elevate* (they auto-approve matching actions or run processes as you), so Houston
-ignores them until you explicitly trust the folder. A project command in
-`.houston/commands` whose frontmatter pre-approves tools (`allowed-tools`) elevates
-the same way, and counts toward the same decision.
+The same project file can also define `allow` rules, `hooks`, and `mcpServers`, and the
+project can ship plugin files in `.houston/plugins/`. Those *elevate* (they auto-approve
+matching actions or run code as you), so Houston ignores them until you explicitly
+trust the folder. A project command in `.houston/commands` whose frontmatter
+pre-approves tools (`allowed-tools`) elevates the same way, and counts toward the
+same decision.
 
 - **How you're asked:** the desktop app shows a banner above the composer, and the
   interactive terminal asks at session start (Trust / Not now / Never).
 - **Re-asked on change.** Your decision is bound to a fingerprint of that elevating
-  config. If it changes (say a pull adds a hook), the folder drops back to untrusted
-  and Houston asks again.
+  config, including each command's `allowed-tools` and the name and contents of every
+  plugin file. If it changes (say a pull adds a hook, widens a command's
+  `allowed-tools`, or adds or edits a plugin file), the folder drops back to
+  untrusted and Houston asks again. The prompt names each plugin file it covers.
 - **Headless runs** never prompt; they note when an untrusted folder's extra config is
   being ignored.
 - **Once trusted:** project `allow` rules sit *below* your own rules (they fill gaps,
-  never override you), project hooks run after yours, and project MCP servers appear
-  namespaced as `mcp__proj-<id>__<tool>`.
+  never override you), project hooks run after yours, project MCP servers appear
+  namespaced as `mcp__proj-<id>__<tool>`, and project plugins run if you have also
+  turned on `projectPlugins` (see "Plugins").
 
 **Reviewing decisions.** Settings > *Permissions* > *Trusted folders* lists every
 folder you answered for (trusted or never), with a Forget button. In the terminal,
@@ -2213,8 +2289,9 @@ own approval too.
 
 **Cost.** Tokens a subagent spends roll into the conversation's usage meter, priced
 at the model it actually ran on, one request at a time like the main agent's. They
-count toward the run's cost ceiling (`--max-cost`) as they're spent, so a subagent
-working when the run reaches it is told to wrap up too.
+count toward the run's cost reminder and cost limit (`--max-cost`) as they're spent, so
+a subagent working when the run reaches one is told to wrap up too, and at the limit its
+next step is its last.
 
 ### Seeing what a subagent did
 
@@ -2744,8 +2821,13 @@ logging, metrics, or notifications:
 
 `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage', fn)`
 
-- **Opt-in.** Plugins are local trusted files (the same trust model as hooks, agents,
-  and skills) and run only when you've opted into project plugins for that project.
+- **Opt-in, twice.** A plugin runs only when both hold: `"projectPlugins": true` is
+  set in your settings.json (off by default), and you trusted this folder (see
+  "Trusted folders") while its plugin files were exactly what is on disk now. The
+  setting alone never runs anything: a folder you haven't trusted, including a fresh
+  clone, never runs its plugins. Adding or editing a plugin file turns the folder's
+  trust off until you trust it again, and the agent changing one always asks first.
+  Settings lists the open project's plugins on the Hooks page.
 - **Isolated.** Each runs in its own context with no `require`, `process`, or network.
 - **Observe only.** A plugin can't block or change a call; use a PreToolUse shell hook
   for that.
@@ -2782,7 +2864,10 @@ Under the server list in Settings > MCP Servers:
   server, and Playwright. **Review** opens one with its command and arguments (one per
   line) filled in, the open project's folder where it needs one, for you to check and
   edit. **Add server** saves it switched off unless you tick **Switch it on now**. This
-  list ships with Houston; nothing is downloaded to show it.
+  list ships with Houston; nothing is downloaded to show it. Each entry names an
+  exact package version (`@modelcontextprotocol/server-memory@2.1.1`), so `npx` or
+  `uvx` runs that release rather than whatever was published last; edit the version
+  to upgrade.
 - **Browse registry** searches the official MCP Registry
   (registry.modelcontextprotocol.io) by name, or lists everything with an empty search.
   Each result shows its description, version, how it is delivered (npm, PyPI or Docker
@@ -2844,6 +2929,16 @@ or **OAuth** for servers that need a sign-in:
 When a server exposes MCP resources or prompt templates, the agent gets meta-tools to
 discover and fetch them: `mcp_list_resources` / `mcp_read_resource` and
 `mcp_list_prompts` / `mcp_get_prompt`.
+
+- They see only the chat's own servers. Another chat's servers may be connected at
+  the same time (a trusted project's `proj-*` server, say), but they aren't listed,
+  and reading from one is refused.
+- A permission rule over a server covers its resources and prompts too: their
+  subject is `mcp__<server>__<uri or prompt name>`, so a deny on `mcp__proj-db__*`
+  blocks `mcp_read_resource` and `mcp_get_prompt` for that server. The approval
+  prompt names the server.
+- Listings are fenced as untrusted text, since each server writes its own names
+  and descriptions.
 
 Houston also:
 
@@ -2907,6 +3002,13 @@ The structured file tools stay confined to the project on every platform.
 tools' allowed roots and to the shell sandbox. In the terminal, `--add-dir <dir>`
 (repeatable, for both `houston` and `houston -p`) and `/add-dir <dir>` do the same
 for the current session only, without saving anything; `/add-dir` alone lists them.
+
+**Environment.** Shell commands and local MCP servers inherit your environment minus
+credential-shaped variables (names like `*_TOKEN`, `*_API_KEY`, `*_PASSWORD`, `*_PAT`,
+`*_DSN`, `AWS_*`). A `*_URL` or `*_URI` variable is kept without its `user:password@`
+part, so `DATABASE_URL=postgres://me:pw@db/app` arrives as `postgres://db/app`. A
+command that needs a credential has to get it another way, such as a config file it
+reads; an MCP server gets it from the server's own environment settings.
 
 ### Network for shell commands
 
@@ -2999,6 +3101,8 @@ proxy is the only road out.
   commands only, and the answer holds until Houston quits. A deny-list entry or a
   private address is never offered. Headless runs keep the host blocked and tell the
   agent so.
+- A plain-HTTP request whose `Host` header names a different host than its URL is
+  refused (400), so a request can't reach another site behind an allowed one's server.
 - Only HTTP(S) flows through the proxy, so other protocols (SSH, for example) are
   blocked under the allowlist. Use HTTPS remotes inside the sandbox, or switch the
   egress mode to "All domains" (Settings) to restore unrestricted granted network.

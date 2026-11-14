@@ -78,6 +78,18 @@ function inlineScanFloor(len: number): number {
 }
 let inlineScanBudget = 0
 
+/**
+ * Deepest blockquote / list nesting the parser builds. Each level recurses
+ * (parseBlocks -> parseList / blockquote -> parseBlocks) and re-walks its lines, so
+ * unbounded nesting is both a stack overflow (`'- '.repeat(2000)` or `'>'.repeat(6000)`
+ * threw RangeError, taking the transcript row or a TUI turn with it) and quadratic
+ * work (2000 nested quote lines took seconds, redone on every streamed delta). Past
+ * this depth `>` and list markers are ordinary paragraph text, which keeps parsing
+ * linear in the input and the rendered tree (React and the TUI's ANSI renderer
+ * both recurse over it) shallow. Real replies never come close.
+ */
+export const MAX_BLOCK_NESTING = 32
+
 /** Parse a markdown document into a list of blocks. */
 export function parseMarkdown(src: string): Block[] {
   let text = src
@@ -88,11 +100,13 @@ export function parseMarkdown(src: string): Block[] {
   // to each block's length), so a pathological block is bounded to O(len) without
   // starving later blocks. The cap above just bounds total memory.
   const lines = text.replace(/\r\n?/g, '\n').split('\n')
-  return parseBlocks(lines)
+  return parseBlocks(lines, 0)
 }
 
-function parseBlocks(lines: string[]): Block[] {
+function parseBlocks(lines: string[], depth: number): Block[] {
   const blocks: Block[] = []
+  // At the nesting cap, quotes and lists stop opening new levels (see MAX_BLOCK_NESTING).
+  const nest = depth < MAX_BLOCK_NESTING
   let i = 0
 
   while (i < lines.length) {
@@ -148,7 +162,7 @@ function parseBlocks(lines: string[]): Block[] {
     }
 
     // Blockquote.
-    if (BLOCKQUOTE_RE.test(line)) {
+    if (nest && BLOCKQUOTE_RE.test(line)) {
       const inner: string[] = []
       while (i < lines.length && lines[i].trim() !== '') {
         const m = lines[i].match(BLOCKQUOTE_RE)
@@ -156,13 +170,13 @@ function parseBlocks(lines: string[]): Block[] {
         inner.push(m[1])
         i++
       }
-      blocks.push({ type: 'blockquote', children: parseBlocks(inner) })
+      blocks.push({ type: 'blockquote', children: parseBlocks(inner, depth + 1) })
       continue
     }
 
     // List (ordered or unordered).
-    if (UL_RE.test(line) || OL_RE.test(line)) {
-      const list = parseList(lines, i)
+    if (nest && (UL_RE.test(line) || OL_RE.test(line))) {
+      const list = parseList(lines, i, depth)
       blocks.push(list.block)
       i = list.next
       continue
@@ -170,7 +184,10 @@ function parseBlocks(lines: string[]): Block[] {
 
     // Paragraph — gather until a blank line or the start of another block.
     const para: string[] = []
-    while (i < lines.length && lines[i].trim() !== '' && !startsBlock(lines, i)) {
+    // The first line always joins: it reached here because nothing else claimed it
+    // (at the nesting cap that includes a `>` or list line, which startsBlock would
+    // otherwise report and leave this loop spinning without consuming it).
+    while (i < lines.length && lines[i].trim() !== '' && (para.length === 0 || !startsBlock(lines, i, nest))) {
       para.push(lines[i])
       i++
     }
@@ -180,16 +197,18 @@ function parseBlocks(lines: string[]): Block[] {
   return blocks
 }
 
-/** Does the line at `i` begin a non-paragraph block? Used to terminate paragraphs. */
-function startsBlock(lines: string[], i: number): boolean {
+/**
+ * Does the line at `i` begin a non-paragraph block? Used to terminate paragraphs.
+ * With `nest` false (at the nesting cap) quote and list lines don't, since they
+ * are read as paragraph text there.
+ */
+function startsBlock(lines: string[], i: number, nest = true): boolean {
   const line = lines[i]
   return (
     FENCE_RE.test(line) ||
     HEADING_RE.test(line) ||
     HR_RE.test(line) ||
-    BLOCKQUOTE_RE.test(line) ||
-    UL_RE.test(line) ||
-    OL_RE.test(line) ||
+    (nest && (BLOCKQUOTE_RE.test(line) || UL_RE.test(line) || OL_RE.test(line))) ||
     (line.includes('|') && i + 1 < lines.length && isTableDelimiter(lines[i + 1]))
   )
 }
@@ -198,8 +217,11 @@ function startsBlock(lines: string[], i: number): boolean {
 function joinParagraph(lines: string[]): string {
   return lines
     .map((l, idx) => {
-      const trimmed = l.replace(/\s+$/, '')
-      const hardBreak = /\s{2,}$/.test(l) || /\\$/.test(trimmed)
+      // trimEnd, not /\s+$/: that regex retries from every whitespace run, so a line
+      // of thousands of spaces then text (deep indentation read as paragraph text at
+      // the nesting cap) cost O(n^2) per line.
+      const trimmed = l.trimEnd()
+      const hardBreak = l.length - trimmed.length >= 2 || trimmed.endsWith('\\')
       const text = trimmed.replace(/\\$/, '')
       return idx < lines.length - 1 ? text + (hardBreak ? '\n' : ' ') : trimmed
     })
@@ -211,7 +233,7 @@ interface ListParse {
   next: number
 }
 
-function parseList(lines: string[], start: number): ListParse {
+function parseList(lines: string[], start: number, depth: number): ListParse {
   const ordered = OL_RE.test(lines[start])
   const firstMatch = (lines[start].match(OL_RE) ?? lines[start].match(UL_RE)) as RegExpMatchArray
   const baseIndent = firstMatch[1].length
@@ -262,7 +284,8 @@ function parseList(lines: string[], start: number): ListParse {
         }
         break
       }
-      items.push(task ? { blocks: parseBlocks(content), checked: task[1] !== ' ' } : { blocks: parseBlocks(content) })
+      const blocks = parseBlocks(content, depth + 1)
+      items.push(task ? { blocks, checked: task[1] !== ' ' } : { blocks })
       continue
     }
     break

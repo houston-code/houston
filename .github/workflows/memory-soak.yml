@@ -1,0 +1,119 @@
+name: Memory soak
+
+# Long, heavy sessions in the desktop app and the CLI against a local scripted model
+# (e2e/soak/, no network or API key), on Linux, macOS and Windows. Each scenario checks
+# its numbers against e2e/soak/budgets.ts and fails on a regression: memory that grows
+# turn after turn, is not given back after a chat closes or a session goes idle, a very
+# large chat that costs too much to reopen, or a shell, terminal or subagent process
+# left running.
+#
+# Not a merge-queue check: a full soak takes far longer than a queue candidate should
+# wait. It runs nightly (12 turns of 12 tool calls), weekly as a long session (60 turns
+# of 15), on any PR that changes the soak itself, and by hand. A scheduled failure files
+# an issue through alert-on-failure.yml.
+#
+# Every scenario writes its samples and checks to test-results/soak/*.json, kept as an
+# artifact, and a table to the job summary.
+
+on:
+  schedule:
+    - cron: '41 8 * * *'
+    # The long session: Sunday, after that night's standard run.
+    - cron: '11 10 * * 0'
+  workflow_dispatch:
+    inputs:
+      turns:
+        description: Turns per session
+        default: '12'
+      steps:
+        description: Tool calls per turn
+        default: '12'
+  pull_request:
+    paths:
+      - 'e2e/soak/**'
+      - 'e2e/launch.ts'
+      - 'e2e/mock-provider.ts'
+      - 'playwright.soak.config.ts'
+      - '.github/workflows/memory-soak.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: memory-soak-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Playwright drives Electron through `_electron`, never a bundled browser.
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  soak:
+    name: soak (${{ matrix.target }})
+    timeout-minutes: 240
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04, like ci.yml's Linux package leg: it lets bubblewrap make user
+          # namespaces without an AppArmor change, so run_shell uses the real sandbox.
+          - { target: linux-x64, os: ubuntu-22.04 }
+          - { target: mac-arm64, os: macos-15 }
+          - { target: win-x64, os: windows-2025 }
+    env:
+      LONG: ${{ github.event.schedule == '11 10 * * 0' }}
+      INPUT_TURNS: ${{ inputs.turns }}
+      INPUT_STEPS: ${{ inputs.steps }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node
+        with:
+          install: full
+          electron-cache: headers
+      - name: Set up a display and bubblewrap
+        if: runner.os == 'Linux'
+        run: bash scripts/apt-install.sh xvfb bubblewrap
+      - name: Build the app and the CLI
+        run: |
+          npm run build
+          npm run build:cli
+      - name: Soak
+        run: |
+          if [ "$LONG" = true ]; then
+            export SOAK_TURNS=60 SOAK_STEPS=15
+          else
+            export SOAK_TURNS="${INPUT_TURNS:-12}" SOAK_STEPS="${INPUT_STEPS:-12}"
+          fi
+          if [ "$RUNNER_OS" = Windows ]; then export TEMP="$RUNNER_TEMP" TMP="$RUNNER_TEMP"; fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a npx playwright test -c playwright.soak.config.ts
+          else
+            npx playwright test -c playwright.soak.config.ts
+          fi
+      - name: Keep the measurements
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: memory-soak-${{ matrix.target }}
+          retention-days: 30
+          path: test-results/
+          if-no-files-found: ignore
+
+  alert:
+    needs: [soak]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && !cancelled() && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/alert-on-failure.yml
+    permissions:
+      issues: write
+    with:
+      workflow: Memory soak
+      failed: ${{ contains(needs.*.result, 'failure') }}

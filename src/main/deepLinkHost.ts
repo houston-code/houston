@@ -1,11 +1,12 @@
 import { app, dialog, ipcMain, type WebContents } from 'electron'
 import { realpathSync, statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, win32 } from 'node:path'
 import { DEEP_LINK_SCHEME, deepLinkFromArgv } from '@shared/deepLink'
 import { IPC } from '@shared/constants'
 import type { MenuCommand } from '@shared/types'
 import { createDeepLinkRouter, type DeepLinkRouter } from './deepLinks'
 import { appWindows } from './helperWindows'
+import { guardIpcOn } from './ipcSender'
 // Links act on the window app-level actions land on: the focused one, else the last used.
 import { targetWindow, windowShowing } from './windows'
 import { getSettings, rememberWorkspace } from './store'
@@ -23,8 +24,29 @@ function send(channel: string, ...args: unknown[]): void {
   if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, ...args)
 }
 
-/** A canonical path for an existing directory, else null. */
+/**
+ * Whether `path`, resolved the way Windows resolves it (against this process's current
+ * directory), names a share or a device (`\\host\share`, `\\?\UNC\…`, `\\.\pipe\…`).
+ * The link parser already refuses every spelling that starts with two separators; this
+ * also catches a `/x` path resolved against a current directory that is itself a share.
+ */
+export function resolvesToNetworkPath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+  cwd: string = process.cwd()
+): boolean {
+  if (platform !== 'win32') return false
+  return win32.parse(win32.resolve(cwd, path)).root.startsWith('\\')
+}
+
+/**
+ * A canonical path for an existing directory, else null. A share or device path is
+ * refused before anything touches it: on Windows the realpath and stat alone would
+ * connect to the host and offer it the user's NTLM credentials, before the dialog
+ * that asks whether to open the folder.
+ */
 export function resolveDirectory(path: string): string | null {
+  if (resolvesToNetworkPath(path)) return null
   try {
     const real = realpathSync(resolve(path))
     return statSync(real).isDirectory() ? real : null
@@ -109,8 +131,10 @@ export function wireDeepLinks(opts: {
   // A reload holds them too: the page that attached the listeners is going away, and
   // the new one says ready again once its own are attached. Each renderer is watched
   // once, however many times its page loads.
+  // The sender check (ipcSender.ts: a chat window's main frame showing the app) runs
+  // first; the app-window check below stays as its own guard.
   const watched = new WeakSet<WebContents>()
-  ipcMain.on(IPC.deepLinkReady, (event) => {
+  guardIpcOn((channel, listener) => ipcMain.on(channel, listener))(IPC.deepLinkReady, (event) => {
     const sender = event.sender
     if (!appWindows().some((w) => !w.isDestroyed() && w.webContents === sender)) return
     if (!watched.has(sender)) {

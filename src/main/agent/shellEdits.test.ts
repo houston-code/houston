@@ -1,8 +1,25 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+
+// The git subcommand of every git process the code under test starts, in order (the
+// filter-driver probe is `config`).
+const h = vi.hoisted(() => ({ spawned: [] as string[] }))
+vi.mock('node:child_process', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:child_process')>()
+  return {
+    ...real,
+    execFile: ((file: string, args: string[], ...rest: unknown[]) => {
+      if (/(^|\/)git$/.test(file)) {
+        h.spawned.push(args.find((a, i) => !a.startsWith('-') && args[i - 1] !== '-c') ?? '')
+      }
+      return (real.execFile as (...a: unknown[]) => unknown)(file, args, ...rest)
+    }) as typeof real.execFile
+  }
+})
+
 import { changedSince, shellMayEdit, snapshotWorkingTree } from './shellEdits'
 
 let dir: string
@@ -111,6 +128,63 @@ describe('snapshotWorkingTree / changedSince', () => {
     writeFileSync(join(dir, 'a.txt'), 'a2 changed\n')
     await changedSince(before!, dir)
     expect(existsSync(marker)).toBe(false)
+  })
+
+  it('does not run a filter the command planted between the two snapshots', async () => {
+    repo()
+    const before = await snapshotWorkingTree(dir)
+    // What a sandboxed command could leave behind for the read after it.
+    const marker = join(dir, 'ran')
+    writeFileSync(join(dir, '.gitattributes'), '*.txt filter=evil\n')
+    git('config', 'filter.evil.clean', `touch ${marker}; cat`)
+    // Same size, so git reads the content (through the filter) to tell whether it changed.
+    writeFileSync(join(dir, 'a.txt'), 'a9\n')
+    expect(await changedSince(before!, dir)).toEqual(['.gitattributes', 'a.txt'])
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  it('asks for the top level once: the read after the command reuses it', async () => {
+    repo()
+    h.spawned.length = 0
+    const before = await snapshotWorkingTree(dir)
+    expect(h.spawned.sort()).toEqual(['config', 'rev-parse', 'status'])
+    h.spawned.length = 0
+    writeFileSync(join(dir, 'a.txt'), 'a2 changed\n')
+    expect(await changedSince(before!, dir)).toEqual(['a.txt'])
+    // The filter-driver probe runs again; rev-parse does not.
+    expect(h.spawned).toEqual(['config', 'status'])
+  })
+
+  it('reports nothing once the repository is gone or another one is found', async () => {
+    // A repository nested in another: with its .git removed, git finds the outer one.
+    repo()
+    const inner = join(dir, 'inner')
+    mkdirSync(inner)
+    execFileSync('git', ['init', '-q'], { cwd: inner, stdio: 'ignore' })
+    writeFileSync(join(inner, 'x.txt'), 'x\n')
+    const before = await snapshotWorkingTree(inner)
+    expect(before?.entries.has('x.txt')).toBe(true)
+    rmSync(join(inner, '.git'), { recursive: true, force: true })
+    writeFileSync(join(inner, 'x.txt'), 'x changed\n')
+    expect(await changedSince(before!, inner)).toEqual([])
+
+    // `git init` in a workspace below the top level makes the workspace its own top.
+    const ws = join(dir, 'src')
+    const fromSrc = await snapshotWorkingTree(ws)
+    execFileSync('git', ['init', '-q'], { cwd: ws, stdio: 'ignore' })
+    writeFileSync(join(ws, 'b.ts'), 'b2 changed\n')
+    expect(await changedSince(fromSrc!, ws)).toEqual([])
+
+    // The workspace removed outright, tracked files and all.
+    const gone = join(dir, 'gone')
+    mkdirSync(gone)
+    writeFileSync(join(gone, 'c.txt'), 'c\n')
+    git('add', 'gone')
+    git('commit', '-q', '-m', 'gone')
+    const fromGone = await snapshotWorkingTree(gone)
+    expect(fromGone).not.toBeNull()
+    rmSync(gone, { recursive: true, force: true })
+    expect(await changedSince(fromGone!, gone)).toEqual([])
   })
 })
 

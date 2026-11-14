@@ -15,12 +15,17 @@ import type {
   PlanDecision
 } from '@shared/agent'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import type { PagerSource } from './tui-pager'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
 import type { RegistryServer } from '@shared/mcpRegistry'
 import { limitNoticeText } from '@shared/runEnd'
 import { APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
 import {
+  firstSentence,
+  formatThoughtDuration,
+  nextReasoningDisplay,
+  renderThoughtSummary,
   parseTuiArgs,
   makePainter,
   isThemeName,
@@ -1053,6 +1058,13 @@ describe('formatSessionCost', () => {
     expect(at(0)).toBe('1+1 tok · $0.00')
     expect(at(0.0042)).toBe('1+1 tok · $0.0042')
     expect(at(12.3456)).toBe('1+1 tok · $12.35')
+  })
+
+  it('says the cost is unknown for a model with no known price', () => {
+    expect(formatSessionCost({ inputTokens: 1, outputTokens: 1, cost: 0, costUnknown: true })).toBe('1+1 tok · cost unknown')
+    expect(formatSessionCost({ inputTokens: 1, outputTokens: 1, cost: 2, costUnknown: true })).toBe(
+      '1+1 tok · $2.00 + unknown'
+    )
   })
 })
 
@@ -2619,6 +2631,25 @@ describe('runTui', () => {
     })
 
     it('strikes out reasoning that was shown before the drop', async () => {
+      const { d } = deps(
+        [
+          { runId: 'x', type: 'reasoning', delta: 'weighing the options' },
+          discarded(0, 'weighing the options'.length),
+          retry,
+          text('Answer.'),
+          done
+        ],
+        { reasoningDisplay: 'show' }
+      )
+      const t = fakeIo(['go', null])
+      d.io = t.io
+      await runTui(opts, d)
+      const out = t.text()
+      expect(out.indexOf(STRUCK)).toBeGreaterThan(out.indexOf('weighing the options'))
+      expect(out).toContain('Answer.')
+    })
+
+    it('drops a summarized thought with its round, so nothing needs striking out', async () => {
       const { d } = deps([
         { runId: 'x', type: 'reasoning', delta: 'weighing the options' },
         discarded(0, 'weighing the options'.length),
@@ -2630,7 +2661,9 @@ describe('runTui', () => {
       d.io = t.io
       await runTui(opts, d)
       const out = t.text()
-      expect(out.indexOf(STRUCK)).toBeGreaterThan(out.indexOf('weighing the options'))
+      expect(out).not.toContain('weighing the options')
+      expect(out).not.toContain('thought for')
+      expect(out).not.toContain(STRUCK)
       expect(out).toContain('Answer.')
     })
 
@@ -2722,6 +2755,38 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.spinner).toEqual(['start:Working', 'label:Thinking', 'label:Read', 'stop'])
+  })
+
+  // The tool's verb stayed up while the next reply streamed, so a finished command
+  // looked like it was still running.
+  it('drops a finished tool from the spinner, and says Responding once the reply streams', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'run_shell', args: { command: 'ls' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_result', callId: 'c1', name: 'run_shell', ok: true, output: 'a' },
+      { runId: 'x', type: 'reasoning', delta: 'so' },
+      { runId: 'x', type: 'text', delta: 'Done' },
+      { runId: 'x', type: 'text', delta: ' here.' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.spinner).toEqual(['start:Working', 'label:Run', 'label:Working', 'label:Thinking', 'label:Responding', 'stop'])
+  })
+
+  it('keeps a parallel batch on the spinner until its last call is done', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'read_file', args: { path: 'a' } },
+      { runId: 'x', type: 'tool_start', callId: 'c2', name: 'run_shell', args: { command: 'ls' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_result', callId: 'c1', name: 'read_file', ok: true, output: 'a' },
+      { runId: 'x', type: 'tool_result', callId: 'c2', name: 'run_shell', ok: true, output: 'b' },
+      { runId: 'x', type: 'text', delta: 'Both done.' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.spinner).toEqual(['start:Working', 'label:Read', 'label:Run', 'label:Working', 'label:Responding', 'stop'])
   })
 
   it('persists composer submissions to history, not approval answers', async () => {
@@ -4052,6 +4117,30 @@ describe('promptFolderTrust', () => {
     }
   })
 
+  it('asks for a folder whose only elevation is plugin files, naming each, and re-asks when one changes', async () => {
+    const ws = makeWorkspace()
+    mkdirSync(join(ws, '.houston/plugins'), { recursive: true })
+    writeFileSync(join(ws, '.houston/plugins/audit.js'), '// v1')
+    try {
+      const first = trustDeps(['y'])
+      await promptFolderTrust(ws, first.d, makePainter(false))
+      expect(first.text()).toContain('asks for extra permissions')
+      expect(first.text()).toContain('1 plugin (audit.js)')
+      expect(first.patches).toHaveLength(1)
+
+      // Unchanged: no prompt. Edited after the trust: asked again, as a change.
+      const same = trustDeps(['y'], first.patches[0])
+      await promptFolderTrust(ws, same.d, makePainter(false))
+      expect(same.text()).not.toContain('Trust this folder?')
+      writeFileSync(join(ws, '.houston/plugins/audit.js'), '// v2')
+      const edited = trustDeps([''], first.patches[0])
+      await promptFolderTrust(ws, edited.d, makePainter(false))
+      expect(edited.text()).toContain('trusted configuration changed')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
   it('persists never, leaves undecided on anything else, and skips when already decided', async () => {
     const ws = makeWorkspace(elevatingProject)
     try {
@@ -4132,7 +4221,7 @@ describe('promptFolderTrust', () => {
         await promptFolderTrust(ws, consent.d, makePainter(false))
         const trusted = trustDeps([], consent.patches[0])
         await runTrustCommand('status', ws, trusted.d, makePainter(false))
-        expect(trusted.text()).toContain('trusted: its allow rules, hooks, and MCP servers apply')
+        expect(trusted.text()).toContain('trusted: its allow rules, hooks, MCP servers, and plugins apply')
       } finally {
         rmSync(ws, { recursive: true, force: true })
       }
@@ -4194,6 +4283,22 @@ describe('summarizeElevated', () => {
     expect(elevatedSource(onlyCommands)).toBe('.houston/commands')
     expect(elevatedSource({ ...onlyCommands, hooks: [1] })).toBe('.houston/settings.json and .houston/commands')
     expect(elevatedSource({ allowRules: [1], hooks: [], mcpServers: [] })).toBe('.houston/settings.json')
+  })
+
+  it('names each plugin file the trust would cover', () => {
+    expect(
+      summarizeElevated({ allowRules: [], hooks: [1], mcpServers: [], plugins: [{ name: 'a.js' }, { name: 'b.js' }] })
+    ).toBe('1 hook, 2 plugins (a.js, b.js)')
+  })
+
+  it('lists commands and plugins together, with every place they live', () => {
+    const both = { allowRules: [], hooks: [], mcpServers: [], commands: [1], plugins: [{ name: 'a.js' }] }
+    expect(summarizeElevated(both)).toBe('1 command that pre-approves tools, 1 plugin (a.js)')
+    expect(elevatedSource(both)).toBe('.houston/commands and .houston/plugins')
+    expect(elevatedSource({ ...both, commands: [] })).toBe('.houston/plugins')
+    expect(elevatedSource({ ...both, allowRules: [1] })).toBe(
+      '.houston/settings.json, .houston/commands, and .houston/plugins'
+    )
   })
 })
 
@@ -4568,7 +4673,8 @@ describe('status line: branch and the running turn', () => {
   it('shows the branch above the composer, re-read before each prompt', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const branches = ['main', 'feature/y']
-    d.gitBranch = async () => branches.shift() ?? null
+    // The host reads HEAD synchronously (headBranch.ts).
+    d.gitBranch = () => branches.shift() ?? null
     const t = fakeIo(['go', null])
     d.io = t.io
     await runTui(opts, d)
@@ -4584,6 +4690,39 @@ describe('status line: branch and the running turn', () => {
     const t = fakeIo([null])
     d.io = t.io
     await expect(runTui(opts, d)).resolves.toBe(0)
+  })
+
+  it('a lookup that throws outright just leaves the branch out too', async () => {
+    const { d } = deps([])
+    d.gitBranch = () => {
+      throw new Error('unreadable')
+    }
+    const t = fakeIo([null])
+    d.io = t.io
+    await expect(runTui(opts, d)).resolves.toBe(0)
+    expect(t.reads).toHaveLength(1)
+  })
+
+  // A lookup that has to ask git is never waited for: the prompt (and the request of a
+  // turn queued behind it) must not sit behind a git process.
+  it('never waits for a branch lookup that is still running', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.gitBranch = () => new Promise<string | null>(() => {})
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await expect(runTui(opts, d)).resolves.toBe(0)
+    expect(t.reads).toHaveLength(2)
+    expect(t.text()).not.toContain(' · main · ')
+  })
+
+  it('shows the branch from a slow lookup on the status line after it settles', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.gitBranch = async () => 'main'
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // Two status lines: the first is drawn before the lookup settles, the second shows it.
+    expect(t.text().split(' · main · ')).toHaveLength(2)
   })
 
   it('hands the status to the spinner line while a turn runs, and updates its context', async () => {
@@ -7495,5 +7634,251 @@ describe('/resume arrow-key picker', () => {
     await runTui(opts, d)
     expect(t.text()).toContain('Enter a number to resume')
     expect(t.text()).toContain('resumed: 1 message')
+  })
+})
+
+describe('reasoning display (/thoughts, Alt-T)', () => {
+  const plain = makePainter(false)
+  const thinking = (delta: string): AgentEvent => ({ runId: 'x', type: 'reasoning', delta })
+  const reply: AgentEvent = { runId: 'x', type: 'text', delta: 'The answer.\n\n' }
+  const done: AgentEvent = { runId: 'x', type: 'done', stopReason: 'end_turn' }
+
+  /** deps whose run thinks for `ms` (by the injected clock) and then replies. */
+  function thinkingRun(over: Partial<AppSettings> = {}, ms = 12_000) {
+    const r = deps([], over)
+    let clock = 1_000_000
+    r.d.now = () => clock
+    r.d.startRun = async (req, send, onMessages) => {
+      send({ ...thinking('**Reading the config**\n\nThe loader reads it twice. '), runId: req.runId } as AgentEvent)
+      clock += ms
+      send({ ...thinking('So the fix is in one place.'), runId: req.runId } as AgentEvent)
+      send({ ...reply, runId: req.runId } as AgentEvent)
+      send({ ...done, runId: req.runId } as AgentEvent)
+      onMessages?.(req.messages)
+    }
+    return r
+  }
+
+  it('summarizes each thought in one line by default, and streams none of it', async () => {
+    const { d } = thinkingRun()
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('· thought for 12s: Reading the config')
+    expect(out).not.toContain('The loader reads it twice')
+    // The summary sits above the reply it led to.
+    expect(out.indexOf('thought for')).toBeLessThan(out.indexOf('The answer.'))
+    expect(t.spinner).toContain('label:Thinking')
+  })
+
+  it('show streams the reasoning as it arrives, as before', async () => {
+    const { d } = thinkingRun({ reasoningDisplay: 'show' })
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('The loader reads it twice. So the fix is in one place.')
+    expect(t.text()).not.toContain('thought for')
+  })
+
+  it('hide prints nothing for a thought, while the spinner still says Thinking', async () => {
+    const { d } = thinkingRun({ reasoningDisplay: 'hide' })
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).not.toContain('loader')
+    expect(t.text()).not.toContain('thought for')
+    expect(t.text()).toContain('The answer.')
+    expect(t.spinner).toContain('label:Thinking')
+  })
+
+  it('strips terminal controls out of streamed reasoning', async () => {
+    const { d } = deps([thinking('safe\x1b]52;c;aGk=\x07 text\n'), done], { reasoningDisplay: 'show' })
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('safe]52;c;aGk= text')
+    expect(t.text()).not.toContain('\x1b]52')
+  })
+
+  it('still prints the summary of a run that ended mid-thought', async () => {
+    const { d } = deps([thinking('Checking the tests first.')])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('· thought for 1s: Checking the tests first.')
+  })
+
+  it('/thoughts sets the mode and remembers it, and bare /thoughts steps to the next', async () => {
+    const { d } = thinkingRun()
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (patch) => saved.push(patch)
+    const t = fakeIo(['/thoughts show', '/thoughts', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([{ reasoningDisplay: 'show' }, { reasoningDisplay: 'summary' }])
+    expect(t.text()).toContain('· thoughts: shown in full as they stream')
+    expect(t.text()).toContain('· thought for 12s')
+  })
+
+  it('/thoughts with an unknown mode says what it takes and changes nothing', async () => {
+    const { d } = deps([])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (patch) => saved.push(patch)
+    const t = fakeIo(['/thoughts loud', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('no thoughts mode "loud": use /thoughts show, summary or hide')
+    expect(saved).toEqual([])
+  })
+
+  it('Alt-T cycles the mode, mid-run too, and the turn follows it from the next thought', async () => {
+    const r = deps([])
+    let cycle: (() => void) | null = null
+    const t = fakeIo(['go', null])
+    const io: TuiIo = { ...t.io, onCycleThoughts: (h) => (cycle = h) }
+    r.d.io = io
+    const saved: Array<Partial<AppSettings>> = []
+    r.d.updateSettings = (patch) => saved.push(patch)
+    r.d.startRun = async (req, send, onMessages) => {
+      // summary, then hide, then show: the thought after it streams.
+      cycle!()
+      cycle!()
+      send({ ...thinking('now visible'), runId: req.runId } as AgentEvent)
+      send({ ...done, runId: req.runId } as AgentEvent)
+      onMessages?.(req.messages)
+    }
+    await runTui(opts, r.d)
+    expect(saved).toEqual([{ reasoningDisplay: 'hide' }, { reasoningDisplay: 'show' }])
+    expect(t.text()).toContain('· thoughts: hidden while they stream')
+    expect(t.text()).toContain('now visible')
+  })
+
+  it('starts from the saved mode', async () => {
+    const { d } = thinkingRun({ reasoningDisplay: 'hide' })
+    const t = fakeIo(['/thoughts', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // hide steps to show.
+    expect(t.text()).toContain('· thoughts: shown in full')
+  })
+
+  it('cycles show, summary, hide and back', () => {
+    expect(nextReasoningDisplay('show')).toBe('summary')
+    expect(nextReasoningDisplay('summary')).toBe('hide')
+    expect(nextReasoningDisplay('hide')).toBe('show')
+  })
+
+  it('parses /thoughts and /transcript', () => {
+    const s = settings()
+    expect(parseSlashCommand('/thoughts', s)).toEqual({ kind: 'thoughts' })
+    expect(parseSlashCommand('/thoughts HIDE', s)).toEqual({ kind: 'thoughts', mode: 'hide' })
+    expect(parseSlashCommand('/thoughts nope', s)).toEqual({ kind: 'thoughts', bad: 'nope' })
+    expect(parseSlashCommand('/transcript', s)).toEqual({ kind: 'transcript' })
+  })
+
+  it('words a thought as a heading or its first sentence, on one line', () => {
+    expect(firstSentence('**Planning the fix**\n\nFirst I will read.')).toBe('Planning the fix')
+    expect(firstSentence('I should check the tests. Then the code.')).toBe('I should check the tests.')
+    expect(firstSentence('no full stop\nacross lines')).toBe('no full stop across lines')
+    expect(firstSentence('  \n ')).toBe('')
+    expect(firstSentence('bad\x1b[2J escape. more')).toBe('bad[2J escape.')
+  })
+
+  it('formats how long a thought took', () => {
+    expect(formatThoughtDuration(200)).toBe('1s')
+    expect(formatThoughtDuration(12_400)).toBe('12s')
+    expect(formatThoughtDuration(65_000)).toBe('1m 05s')
+  })
+
+  it('fits the summary line to the terminal', () => {
+    const line = renderThoughtSummary(`${'word '.repeat(40)}.`, 3000, 40, plain)
+    expect(line.startsWith('· thought for 3s: word')).toBe(true)
+    expect(line.length).toBeLessThanOrEqual(39)
+    expect(renderThoughtSummary('', 3000, 40, plain)).toBe('· thought for 3s')
+  })
+})
+
+describe('the transcript viewer (Ctrl-O, /transcript)', () => {
+  const done: AgentEvent = { runId: 'x', type: 'done', stopReason: 'end_turn' }
+  const history = (req: { messages: ChatMessage[] }): ChatMessage[] => [
+    ...req.messages,
+    {
+      role: 'assistant',
+      content: 'Looking.',
+      reasoning: [{ text: 'The whole chain of thought.' }],
+      toolCalls: [{ id: 'c1', name: 'run_shell', arguments: { command: 'ls -la' } }]
+    },
+    {
+      role: 'tool',
+      content: Array.from({ length: 60 }, (_, i) => `row ${i}`).join('\n'),
+      toolName: 'run_shell',
+      toolCallId: 'c1'
+    },
+    { role: 'assistant', content: 'Done.' }
+  ]
+
+  it('/transcript opens the whole session: prompts, reasoning, full args and output', async () => {
+    const { d } = deps([done], {}, history)
+    const t = fakeIo(['go', '/transcript', null])
+    const shown: PagerSource[] = []
+    d.io = {
+      ...t.io,
+      pager: async (src) => {
+        shown.push(src)
+        return true
+      }
+    }
+    await runTui(opts, d)
+    expect(shown).toHaveLength(1)
+    const doc = shown[0].render(80)
+    const text = doc.lines.join('\n')
+    expect(text).toContain('go')
+    expect(text).toContain('The whole chain of thought.')
+    expect(text).toContain('"command": "ls -la"')
+    expect(text).toContain('row 59')
+    expect(doc.prompts).toHaveLength(1)
+    expect(shown[0].plain()).toContain('row 59')
+  })
+
+  it('Ctrl-O at the composer opens it; mid-run it says when it can open instead', async () => {
+    const r = deps([], {}, history)
+    let ctrlO: ((during: 'composer' | 'run') => Promise<void>) | null = null
+    const t = fakeIo(['go', null])
+    let opened = 0
+    r.d.io = {
+      ...t.io,
+      pager: async () => {
+        opened++
+        return true
+      },
+      onTranscript: (h) => (ctrlO = h)
+    }
+    r.d.startRun = async (req, send, onMessages) => {
+      await ctrlO!('run')
+      send({ ...done, runId: req.runId } as AgentEvent)
+      onMessages?.(history(req))
+    }
+    await runTui(opts, r.d)
+    expect(opened).toBe(0)
+    expect(t.text()).toContain('the transcript opens at the prompt once this turn ends')
+    await ctrlO!('composer')
+    expect(opened).toBe(1)
+  })
+
+  it('says where to look when there is no terminal to open it on', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/transcript', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('the transcript viewer needs an interactive terminal')
+  })
+
+  it('is in /help and the startup tips', () => {
+    expect(HELP_TEXT).toContain('/transcript')
+    expect(HELP_TEXT).toContain('/thoughts')
+    expect(HELP_TEXT).toContain('Ctrl-O')
+    expect(HELP_TEXT).toContain('Alt-T')
+    expect(STARTUP_TIPS.some((tip) => tip.startsWith('Ctrl-O'))).toBe(true)
   })
 })

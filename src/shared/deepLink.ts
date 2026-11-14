@@ -49,13 +49,26 @@ const CONVERSATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 
 /**
  * Whether `p` is an absolute local path: POSIX `/…` or a Windows drive path
- * (`C:\…`). UNC and other network paths (`\\host\share`, `//host/share`) are
- * refused: on Windows, merely touching one can send the user's credentials to
- * that host.
+ * (`C:\…`). UNC and other network paths are refused: on Windows, merely touching
+ * one (the realpath and stat a link's folder gets before the confirm dialog) can
+ * send the user's NTLM credentials to that host.
+ *
+ * Windows reads `/` and `\` alike, so any path whose first two characters are
+ * both separators, in any mix, is a UNC or device path once resolved: not only
+ * `\\host\share` and `//host/share` but `/\host\share`, `\/host`, the
+ * long-path and device forms `\\?\UNC\host\share`, `/\?\UNC\h\s`,
+ * `\\.\pipe\x` and `/\.\pipe\x`. All are refused. (The one case that depends on
+ * the process, a `/x` path resolved against a current directory that is itself a
+ * share, is refused in the main process, see deepLinkHost.ts.)
  */
 export function isAbsoluteLocalPath(p: string): boolean {
-  if (p.startsWith('//') || p.startsWith('\\\\')) return false
+  if (typeof p !== 'string' || p.length === 0) return false
+  if (isSeparator(p[0]) && isSeparator(p[1])) return false
   return p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p)
+}
+
+function isSeparator(c: string | undefined): boolean {
+  return c === '/' || c === '\\'
 }
 
 /** Control characters (including NUL) never belong in a path from a link. */

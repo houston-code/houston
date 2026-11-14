@@ -759,7 +759,15 @@ function ApprovalPrompt({
           about credential reads for the rest of this conversation.
         </p>
       )}
-      {item.sensitiveWrite && (
+      {item.sensitiveWrite && item.protectedWrite && (
+        <p className="tool-row__approval-note">
+          This changes a project control file (such as .houston, .vscode, .envrc, a git hook
+          folder, or a CI workflow) that can run code outside the sandbox later or change
+          Houston&apos;s own settings. Houston asks every time, even in full auto, and
+          &quot;Allow for run&quot; does not cover it; only an allow rule for this path does.
+        </p>
+      )}
+      {item.sensitiveWrite && !item.protectedWrite && (
         <p className="tool-row__approval-note">
           This changes a sensitive file: a credential or secret such as .env, or a git hook
           or setting that git can run outside the sandbox later. Houston checks first even

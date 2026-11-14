@@ -152,6 +152,13 @@ export interface ApprovalInputs {
    */
   sensitiveWrite?: boolean
   /**
+   * Whether this write or shell command creates, overwrites, or removes an in-project
+   * control file (`.houston/`, `.vscode/`, `.envrc`, `.husky/`, CI workflows; see
+   * isProtectedWrite). Unlike `sensitiveWrite`, "Allow for run" does not clear it.
+   * Defaults to false.
+   */
+  protectedWrite?: boolean
+  /**
    * Whether this shell command can throw away work in the project (see
    * shellDiscardsWork: `git reset --hard`, `git clean -f`, `rm -r` of source, a forced
    * push). Defaults to false.
@@ -241,6 +248,14 @@ export interface ApprovalDecision {
  * overwrote, so even full-auto asks first; an `allow` rule or "allow for run" on the
  * prompt opts out.
  *
+ * Writing an in-project control file (`protectedWrite`: `.houston/`, `.vscode/`,
+ * `.idea/`, `.envrc`, `.husky/`, `.mcp.json`, `.devcontainer/`, CI workflows) asks in
+ * every mode too. Those files run code outside the sandbox later (an editor task, a
+ * direnv script, a git hook, a Houston plugin) or steer the agent's own guardrails, so
+ * a run-wide write grant, which was consent to edit the project, doesn't cover them:
+ * only an explicit `allow` rule for the path does. On a host without a sandbox the
+ * unconfined-shell consent doesn't either.
+ *
  * A shell command that can throw away work in the project (`shellDiscardsWork`) asks in
  * every mode too. The sandbox keeps a command inside the project, but the project is what
  * `git reset --hard` or `rm -r src` destroys, and shell side effects aren't checkpointed.
@@ -293,10 +308,13 @@ function baseDecision(inputs: ApprovalInputs): ApprovalDecision {
     // An `ask` rule (any tier) wins over the per-run unconfined-shell consent;
     // `unsandboxedShell` stays true so the prompt still carries the unconfined banner.
     // So does a command that discards work: consent to run unconfined isn't consent to
-    // reset the project. Running unconfined at all without that consent is hard: a
-    // hook's approve is automation, not the conscious consent the banner asks for.
-    const hard = !!inputs.shellDiscardsWork || !shellUnsandboxedOverride
-    if (ruleAction === 'ask' || inputs.shellDiscardsWork) return ask(hard, true)
+    // reset the project, nor to plant a control file that runs outside the sandbox
+    // later (unless an allow rule names it). Running unconfined at all without that
+    // consent is hard: a hook's approve is automation, not the conscious consent the
+    // banner asks for.
+    const protectedAsk = !!inputs.protectedWrite && ruleAction !== 'allow'
+    const hard = !!inputs.shellDiscardsWork || protectedAsk || !shellUnsandboxedOverride
+    if (ruleAction === 'ask' || inputs.shellDiscardsWork || protectedAsk) return ask(hard, true)
     return shellUnsandboxedOverride ? { ...pass, unsandboxedShell: true } : ask(true, true)
   }
   if (inputs.memoryTainted || inputs.taintedLaunch) return ask(true)
@@ -305,11 +323,14 @@ function baseDecision(inputs: ApprovalInputs): ApprovalDecision {
   // A workspace-escaping shell command always prompts (a generic override or
   // full-auto doesn't cover it); so does one that can throw away work in the project.
   // A read of a credential file always prompts too, unless the user already granted
-  // a read override for this run ("allow for run"); likewise a change to one.
+  // a read override for this run ("allow for run"); likewise a change to one. A write
+  // to an in-project control file prompts even then: neither "Allow for run" nor full
+  // auto covers it, only an explicit allow rule (handled above).
   const hardCheck =
     (kind === 'shell' && (!!inputs.shellEscapesWorkspace || !!inputs.shellDiscardsWork)) ||
     (kind === 'read' && !!inputs.sensitiveRead && !override) ||
-    ((kind === 'write' || kind === 'shell') && !!inputs.sensitiveWrite && !override)
+    ((kind === 'write' || kind === 'shell') && !!inputs.sensitiveWrite && !override) ||
+    ((kind === 'write' || kind === 'shell') && !!inputs.protectedWrite)
   if (ruleAction === 'ask') return ask(hardCheck)
   if (hardCheck) return ask(true)
   if (kind === 'network' && inputs.networkRead && policy === 'full-auto') return pass

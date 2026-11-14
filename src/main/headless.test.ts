@@ -218,7 +218,8 @@ describe('parseHeadlessArgs', () => {
     expect(headlessOverrides(o)).toEqual({
       reasoningEffort: 'high',
       maxIterations: 12,
-      costCeilingUsd: 1.5,
+      // A hard cap for the run, not the one-time reminder.
+      maxCostUsd: 1.5,
       verifyCommand: 'npm test'
     })
     expect(headlessOverrides(parseHeadlessArgs(['-p', 'x', '--effort', 'off'], '/d')!)).toEqual({
@@ -1232,7 +1233,7 @@ describe('runHeadless run request', () => {
     expect(req.overrides).toEqual({
       reasoningEffort: 'xhigh',
       maxIterations: 25,
-      costCeilingUsd: 3,
+      maxCostUsd: 3,
       verifyCommand: 'npm test'
     })
   })
@@ -1365,6 +1366,22 @@ describe('runHeadless --json result line', () => {
       finalText: 'Fixed the bug.'
     })
     expect(r).not.toHaveProperty('limitReason')
+    expect(r).not.toHaveProperty('costUnknown')
+  })
+
+  it('says the cost is unknown, not $0.00, for a model with no known price', async () => {
+    const events: AgentEvent[] = [
+      { runId: 'run-1', type: 'text', delta: 'ok' },
+      { runId: 'run-1', type: 'usage', inputTokens: 1000, outputTokens: 50, cost: 0, costUnknown: true },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ]
+    const json = deps(events)
+    await runHeadless({ ...baseOpts, json: true }, json.d)
+    expect(resultLine(json.out)).toMatchObject({ costUsd: 0, costUnknown: true })
+    const text = deps(events)
+    await runHeadless({ ...baseOpts, json: false }, text.d)
+    expect(text.err.join('')).toContain('1000+50 tok · cost unknown')
+    expect(text.err.join('')).not.toContain('$0.00')
   })
 
   it('keeps a reply continued past the output limit whole, and drops text answered by a failed verification', async () => {
@@ -1538,6 +1555,17 @@ describe('runHeadless --json result line', () => {
         code: 3,
         stopReason: 'end_turn',
         limitReason: 'max-steps'
+      },
+      {
+        name: 'the cost limit (--max-cost)',
+        events: [
+          { runId: 'run-1', type: 'limit', reason: 'max-cost' },
+          { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+        ],
+        status: 'limit',
+        code: 3,
+        stopReason: 'end_turn',
+        limitReason: 'max-cost'
       }
     ]
     for (const c of cases) {

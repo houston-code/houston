@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stripAnsi, visibleWidth, truncateVisible, wrapAnsi, stripControlChars, stripControlCharsKeepLines } from './tui-wrap'
+import { clusterWidth, stripAnsi, visibleWidth, truncateVisible, wrapAnsi, stripControlChars, stripControlCharsKeepLines } from './tui-wrap'
 
 const RED = '\x1b[31m'
 const RESET = '\x1b[0m'
@@ -110,4 +110,151 @@ describe('emoji sequences and combining marks (grapheme clusters)', () => {
     const rows = wrapAnsi(`${family}${flag}${keycap}${accented}`, 2).split('\n')
     expect(rows).toEqual([family, flag, keycap, accented])
   })
+})
+
+// Measuring and wrapping as they were before their fast paths: every string through the
+// grapheme segmenter, every candidate row measured whole. The fast paths (single-width
+// text measured by its length, rows measured as a sum of their words) must give the
+// same bytes on any input.
+const reference = (() => {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+  const SGR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
+  const graphemes = (s: string): string[] => Array.from(segmenter.segment(s), (g) => g.segment)
+  const width = (s: string): number => graphemes(stripAnsi(s)).reduce((w, g) => w + clusterWidth(g), 0)
+  const units = (s: string): Array<{ text: string; width: number }> => {
+    const out: Array<{ text: string; width: number }> = []
+    let last = 0
+    for (const m of s.matchAll(SGR)) {
+      for (const g of graphemes(s.slice(last, m.index))) out.push({ text: g, width: clusterWidth(g) })
+      out.push({ text: m[0], width: 0 })
+      last = m.index + m[0].length
+    }
+    for (const g of graphemes(s.slice(last))) out.push({ text: g, width: clusterWidth(g) })
+    return out
+  }
+  const hardSplit = (word: string, max: number): string[] => {
+    const chunks: string[] = []
+    let cur = ''
+    let shown = 0
+    for (const u of units(word)) {
+      if (cur && u.width > 0 && shown + u.width > max) {
+        chunks.push(cur)
+        cur = ''
+        shown = 0
+      }
+      cur += u.text
+      shown += u.width
+    }
+    if (cur) chunks.push(cur)
+    return chunks
+  }
+  const wrapLine = (line: string, max: number): string => {
+    if (width(line) <= max) return line
+    const out: string[] = []
+    let cur = ''
+    for (const word of line.split(' ')) {
+      if (width(word) > max) {
+        if (cur) out.push(cur)
+        cur = ''
+        out.push(...hardSplit(word, max))
+        continue
+      }
+      const candidate = cur ? `${cur} ${word}` : word
+      if (width(candidate) > max) {
+        if (cur) out.push(cur)
+        cur = word
+      } else {
+        cur = candidate
+      }
+    }
+    if (cur) out.push(cur)
+    return out.join('\n')
+  }
+  const wrap = (s: string, max: number): string =>
+    max <= 0 ? s : s.split('\n').map((l) => wrapLine(l, max)).join('\n')
+  const truncate = (s: string, max: number, ellipsis = '…'): string => {
+    if (width(s) <= max) return s
+    const keep = Math.max(0, max - width(ellipsis))
+    let out = ''
+    let shown = 0
+    for (const u of units(s)) {
+      if (shown + u.width > keep) break
+      out += u.text
+      shown += u.width
+    }
+    return `${out}${ellipsis}${out.includes('\x1b[') ? '\x1b[0m' : ''}`
+  }
+  return { width, wrap, truncate }
+})()
+
+describe('fast paths match measuring every cluster', () => {
+  // Pieces that stress cluster boundaries: single-width non-ASCII (the fast path), wide
+  // CJK, emoji sequences, combining and spacing marks, joiners and variation selectors on
+  // their own, prepended marks, Hangul jamo, controls, colour codes, and the code points
+  // either side of every edge of the fast path's ranges.
+  const PIECES = [
+    'a', 'word', 'x1', 'Zq', ' ', '  ', '\t',
+    // Single width, measured by length.
+    '\u{2014}', '\u{201c}', '\u{201d}', '\u{2019}', '\u{2026}', '\u{b7}', '\u{2192}', '\u{2502}', '\u{280b}',
+    '\u{e9}', '\u{df}', '\u{3a9}', '\u{436}', '\u{20ac}', '\u{2122}', '\u{2713}', '\u{26a0}', '\u{2588}', '\u{2500}',
+    // Wide, and halfwidth katakana with its voiced sound mark (which joins).
+    '\u{4e2d}', '\u{6587}', '\u{65e5}\u{672c}', '\u{d55c}', '\u{ff71}', '\u{ff9e}',
+    // Emoji: plain, skin tone, VS16, VS15, a ZWJ family, a flag, half a flag, a keycap, and
+    // a lone ZWJ, VS16 and VS15.
+    '\u{2705}', '\u{1f44d}', '\u{1f44d}\u{1f3fd}', '\u{2764}\u{fe0f}', '\u{2764}\u{fe0e}',
+    '\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}', '\u{1f1fa}\u{1f1f8}', '\u{1f1fa}', '1\u{fe0f}\u{20e3}',
+    '\u{200d}', '\u{fe0f}', '\u{fe0e}',
+    // Combining marks (one on its own, one on a letter, a Cyrillic and an enclosing one), Thai
+    // and Devanagari spacing marks, a Devanagari conjunct, and prepended marks (the Arabic
+    // number sign, the Malayalam dot reph).
+    '\u{301}', 'e\u{301}', '\u{483}', '\u{20dd}', '\u{e33}', '\u{e01}', '\u{903}', '\u{915}\u{94d}\u{937}',
+    '\u{600}', '\u{d4e}',
+    // Hangul jamo (L, V, T), controls, a no-break space, a soft hyphen.
+    '\u{1100}', '\u{1161}', '\u{11a8}', '\u{7f}', '\u{9f}', '\u{a0}', '\u{ad}',
+    // Either side of each edge of the fast path's ranges.
+    '\u{2ff}', '\u{300}', '\u{36f}', '\u{370}', '\u{482}', '\u{489}', '\u{48a}', '\u{52f}', '\u{530}',
+    '\u{200f}', '\u{2010}', '\u{2027}', '\u{2028}', '\u{202f}', '\u{2030}', '\u{205e}', '\u{205f}', '\u{2060}',
+    '\u{206f}', '\u{2070}', '\u{20cf}', '\u{20d0}', '\u{20ff}', '\u{2100}', '\u{2bff}', '\u{2c00}', '\u{2e80}',
+    '\x1b[31m', '\x1b[0m', '\x1b[1;4m'
+  ]
+  // A fixed-seed generator, so a failure names an input that reproduces.
+  let seed = 0x5eed
+  const random = (n: number): number => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff
+    return seed % n
+  }
+
+  it('on random mixed strings: same widths, same truncation, same wrapping', () => {
+    for (let i = 0; i < 3000; i++) {
+      const s = Array.from({ length: 1 + random(40) }, () => PIECES[random(PIECES.length)]).join('')
+      const max = 1 + random(30)
+      const input = JSON.stringify(s)
+      expect(visibleWidth(s), input).toBe(reference.width(s))
+      expect(wrapAnsi(s, max), `${input} at ${max}`).toBe(reference.wrap(s, max))
+      expect(truncateVisible(s, max), `${input} at ${max}`).toBe(reference.truncate(s, max))
+    }
+  }, 60_000)
+
+  it('for every BMP code point alone and doubled, and at either side of a joining space', () => {
+    // Wrapping is the slow comparison, so it covers the blocks where clusters form
+    // across a space (combining marks, Indic and Thai spacing and prepended marks, Hangul
+    // jamo, joiners, variation selectors, halfwidth sound marks) and every block the
+    // single-width fast path reads, with their neighbours.
+    const wrapChecked = (cp: number): boolean => cp < 0x3000 || cp >= 0xfb00
+    const mismatches: string[] = []
+    for (let cp = 0x20; cp <= 0xffff; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue
+      const c = String.fromCharCode(cp)
+      const doubled = `a${c}${c}b`
+      const joined = `ab ${c}c d${c} e`
+      if (
+        visibleWidth(c) !== reference.width(c) ||
+        visibleWidth(doubled) !== reference.width(doubled) ||
+        (wrapChecked(cp) && wrapAnsi(joined, 4) !== reference.wrap(joined, 4))
+      ) {
+        mismatches.push(`U+${cp.toString(16).padStart(4, '0')}`)
+      }
+    }
+    expect(mismatches).toEqual([])
+  }, 60_000)
 })
