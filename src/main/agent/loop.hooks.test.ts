@@ -620,6 +620,39 @@ describe('unconfined-shell override cannot skip an ask rule', () => {
   })
 })
 
+// Reads that follow an edit run together as one batch, but a batch never runs hooks:
+// a read a hook covers must still run on its own, in its place, with its hook.
+describe('hooked reads among batched ones', () => {
+  it('runs a hooked read alone with its hook, while an unhooked read between them is batched', async () => {
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'read_file', command: 'pre' }]
+    const ran: string[] = []
+    h.effects = { pre: () => ran.push('pre') }
+    const { events, messages } = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'a.txt', content: 'A' } } },
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'a.txt' } } },
+          { type: 'tool_call', call: { id: 'g1', name: 'glob', arguments: { pattern: '*.txt' } } },
+          { type: 'tool_call', call: { id: 'r2', name: 'read_file', arguments: { path: 'a.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const at = (type: AgentEvent['type'], callId: string): number =>
+      events.findIndex((e) => e.type === type && 'callId' in e && e.callId === callId)
+    // The hook ran for both reads (a batched call would have skipped it), each read
+    // after the call before it had finished.
+    expect(ran).toEqual(['pre', 'pre'])
+    expect(at('tool_start', 'r1')).toBeGreaterThan(at('tool_result', 'w1'))
+    expect(at('tool_start', 'g1')).toBeGreaterThan(at('tool_result', 'r1'))
+    expect(at('tool_start', 'r2')).toBeGreaterThan(at('tool_result', 'g1'))
+    expect(messages.filter((m) => m.role === 'tool').map((m) => m.toolCallId)).toEqual(['w1', 'r1', 'g1', 'r2'])
+    expect(String(messages.find((m) => m.toolCallId === 'r2')?.content)).toContain('A')
+  })
+})
+
 describe('hooks scoped to lsp_rename', () => {
   // lsp_rename is gated and run as the apply_patch holding the server's edits; hooks
   // whose matcher names lsp_rename must still run, and a hook matching both names once.
