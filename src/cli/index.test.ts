@@ -124,6 +124,7 @@ describe('cliArgvError', () => {
     expect(cliArgvError(['--prompt=hi', '--cwd=/x', '--approval=plan'])).toBeNull()
     expect(cliArgvError(['--max-cost', '-1'])).toBeNull() // a value may start with a dash
     expect(cliArgvError(['--acp'])).toBeNull()
+    expect(cliArgvError(['--acp', '--unattended', '--full-auto', '--max-turns', '400'])).toBeNull()
   })
 
   it('rejects an unknown flag by name', () => {
@@ -144,13 +145,13 @@ describe('cliArgvError', () => {
   })
 
   it('knows every flag the run-mode parsers read', () => {
-    for (const flag of [...HEADLESS_FLAGS, '-i', '--interactive', '--tui', '--acp']) {
+    for (const flag of [...HEADLESS_FLAGS, '-i', '--interactive', '--tui', '--acp', '--unattended']) {
       expect(cliArgvError([flag, 'v']) ?? '').not.toContain('unknown option')
     }
   })
 
   it('documents every flag it accepts in --help', () => {
-    for (const flag of [...HEADLESS_FLAGS, '-i', '--interactive', '--tui', '--acp', '-h', '--help', '-v', '--version']) {
+    for (const flag of [...HEADLESS_FLAGS, '-i', '--interactive', '--tui', '--acp', '--unattended', '-h', '--help', '-v', '--version']) {
       expect(USAGE).toMatch(new RegExp(`(^|[\\s,(])${flag.replace(/[-]/g, '\\-')}([\\s,=)]|$)`, 'm'))
     }
     expect(USAGE).toContain('houston providers remove <id>')

@@ -84,6 +84,8 @@ Options:
   --effort <level>      starting reasoning effort (also -p and --acp): off | low | medium | high | xhigh
                         (interactive: change it later with /reasoning)
   --max-turns <n>       (-p, --acp) hard cap on model steps for each turn
+  --unattended          (--acp) nobody answers while a prompt runs: the agent asks
+                        no questions and keeps going until the work is done
   --max-cost <usd>      (-p) stop the run once its estimated cost reaches this (exit 3)
   --verify <command>    (-p) after the agent edits, run this check and send failures back
   --no-memory           (-p) run without the memories saved in earlier sessions
@@ -183,6 +185,7 @@ const SWITCH_FLAGS = new Set([
   '--interactive',
   '--tui',
   '--acp',
+  '--unattended',
   '--full-auto',
   '--continue',
   '--screen-reader',

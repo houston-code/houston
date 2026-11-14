@@ -1389,6 +1389,7 @@ describe('ACP server: launch flags and turn usage', () => {
       maxIterations: 500
     })
     expect(parseAcpArgs(['--approval=auto-edit', '--acp'])).toEqual({ defaultPolicy: 'auto-edit' })
+    expect(parseAcpArgs(['--acp', '--unattended', '--full-auto'])).toEqual({ unattended: true, defaultPolicy: 'full-auto' })
     // The last word wins, as in the other clients.
     expect(parseAcpArgs(['--full-auto', '--approval', 'plan'])).toEqual({ defaultPolicy: 'plan' })
     // Flags meant for other modes are left alone.
@@ -1420,11 +1421,24 @@ describe('ACP server: launch flags and turn usage', () => {
     await h.end()
   })
 
-  it('leaves the step cap to settings without --max-turns', async () => {
+  it('leaves the step cap to settings without --max-turns, and runs attended without --unattended', async () => {
     const h = harness({ run: async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' }) })
     const sessionId = await ready(h)
     await h.call('session/prompt', { sessionId, prompt: text('go') })
     expect(h.loop.requests[0].overrides).toBeUndefined()
+    expect(h.loop.requests[0].unattended).toBeUndefined()
+    await h.end()
+  })
+
+  it('runs every prompt unattended under --unattended', async () => {
+    const h = harness({
+      deps: { unattended: true },
+      run: async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('one') })
+    await h.call('session/prompt', { sessionId, prompt: text('two') })
+    expect(h.loop.requests.map((r) => r.unattended)).toEqual([true, true])
     await h.end()
   })
 

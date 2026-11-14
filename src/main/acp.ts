@@ -107,6 +107,12 @@ export interface AcpLaunchOptions {
   defaultEffort?: ReasoningEffort
   /** `--max-turns <n>`: a hard step cap on every prompt turn. */
   maxIterations?: number
+  /**
+   * `--unattended`: nobody reads or answers this session while a prompt runs (a
+   * benchmark runner, a CI job). Runs are told so, are not offered ask_user, and are
+   * kept going when they stop to announce work they have not done.
+   */
+  unattended?: boolean
 }
 
 /**
@@ -123,6 +129,10 @@ export function parseAcpArgs(argv: string[]): AcpLaunchOptions | { error: string
     const name = eq > 0 ? arg.slice(0, eq) : arg
     if (name === '--full-auto') {
       out.defaultPolicy = 'full-auto'
+      continue
+    }
+    if (name === '--unattended') {
+      out.unattended = true
       continue
     }
     if (name !== '--approval' && name !== '--effort' && name !== '--max-turns') continue
@@ -280,6 +290,8 @@ export interface AcpDeps {
   defaultEffort?: ReasoningEffort
   /** Hard step cap for every prompt turn (`--max-turns`), over settings.maxIterations. */
   maxIterations?: number
+  /** Every prompt turn runs unattended (`--unattended`): no ask_user, the no-user prompt. */
+  unattended?: boolean
   version: string
   newId?: () => string
   /** Read a workspace file for an edit's before/after diff; injected so tests stay off disk. */
@@ -1616,6 +1628,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       ...(run?.effort ? { reasoningEffort: run.effort } : s.effort ? { reasoningEffort: s.effort } : {}),
       ...(run?.turnAllowRules?.length ? { turnAllowRules: run.turnAllowRules } : {}),
       ...(deps.maxIterations !== undefined ? { overrides: { maxIterations: deps.maxIterations } } : {}),
+      ...(deps.unattended ? { unattended: true } : {}),
       messages,
       // Per-run servers, like the headless --mcp-config: merged as `run-<id>`, values
       // used as given, never saved to settings.
