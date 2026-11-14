@@ -140,7 +140,7 @@ describe('renderPreviewView', () => {
 
   // A line about to be written could carry a carriage return or cursor moves that paint
   // the reviewed change over with something harmless, before the user approves it.
-  it('shows lines and paths without their control characters, keeping tabs', () => {
+  it('shows lines and paths with their control characters as codes, keeping tabs', () => {
     const highlight = (_lang: string, code: string): string => code
     const out = renderPreviewView(
       [
@@ -155,8 +155,8 @@ describe('renderPreviewView', () => {
     ) as string
     // eslint-disable-next-line no-control-regex -- asserting no control characters survive
     expect(out).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/)
-    expect(out).toContain('src/a[2J.ts')
-    expect(out).toContain('renamed from b.ts')
-    expect(out).toContain('\tx = 2[1A[2K// harmless')
+    expect(out).toContain('src/a<U+001B>[2J.ts')
+    expect(out).toContain('renamed from b<U+0007>.ts')
+    expect(out).toContain('\tx = 2<U+001B>[1A<U+001B>[2K<U+000D>// harmless')
   })
 })

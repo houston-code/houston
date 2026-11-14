@@ -744,6 +744,28 @@ describe('runHeadless', () => {
     expect(approvals).toEqual([['run-1', 'f1', 'deny']])
   })
 
+  it('keeps control characters in tool names, server text, labels and the plan off the terminal', async () => {
+    const osc52 = '\x1b]52;c;eA==\x07'
+    const { d, out, err } = deps([
+      { runId: 'run-1', type: 'tool_start', callId: 't1', name: `mcp__srv__x${osc52}`, args: {}, kind: 'mcp' },
+      { runId: 'run-1', type: 'tool_result', callId: 't1', name: `mcp__srv__x${osc52}`, ok: false, output: 'no' },
+      { runId: 'run-1', type: 'tool_progress', callId: 't1', message: `half\r\x1b[2K` },
+      { runId: 'run-1', type: 'subagent', parentCallId: 't1', id: 's1', label: `dim\x1b[1A`, status: 'running' },
+      { runId: 'run-1', type: 'notice', message: `note ${osc52}` },
+      { runId: 'run-1', type: 'retry', attempt: 1, max: 3, message: `slow ${osc52}` },
+      { runId: 'run-1', type: 'plan_ready', callId: 'p1', plan: { title: `Plan ${osc52}`, body: `Body \x1b]0;t\x07` } },
+      { runId: 'run-1', type: 'error', message: `boom ${osc52}` },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ] as AgentEvent[])
+    await runHeadless(baseOpts, d)
+    const all = out.join('') + err.join('')
+    expect(all).not.toContain('\x1b')
+    expect(all).not.toContain('\r')
+    expect(all).not.toContain('\x07')
+    expect(all).toContain('Plan <U+001B>]52;c;eA==<U+0007>')
+    expect(all).toContain('boom <U+001B>]52')
+  })
+
   it('resolves a plan_ready (reject) and prints the plan so present_plan cannot hang', async () => {
     const { d, out, plans } = deps([
       { runId: 'run-1', type: 'plan_ready', callId: 'p1', plan: { title: 'My Plan', body: 'Do it.' } },

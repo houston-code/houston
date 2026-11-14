@@ -46,6 +46,7 @@ import { formatReadinessLines } from '@shared/planReadiness'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { assertNever } from '@shared/assert'
 import { SubagentTermLines } from '@shared/subagents'
+import { approvalSubject, visibleText, type ApprovalSubjectPart } from '@shared/visibleText'
 import { resolveHeadlessModel } from './headless'
 
 /**
@@ -379,6 +380,18 @@ function argHint(args: Record<string, unknown>): string {
     }
   }
   return ''
+}
+
+/**
+ * One part of what an approval is about, as permission-request text: its label, then the
+ * text in a code fence (longer than any backtick run inside it, so the text can't close
+ * it early), with invisible characters shown as <U+XXXX>.
+ */
+export function acpSubjectText(part: ApprovalSubjectPart): string {
+  const body = visibleText(part.text)
+  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((r) => r.length))
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+  return `${part.label}:\n${fence}\n${body}\n${fence}`
 }
 
 export function acpToolTitle(name: string, args: Record<string, unknown>): string {
@@ -1739,8 +1752,13 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         warnings.push('Changes a credential or secret file (asked even in full auto).')
       }
       if (e.shellOffline) warnings.push('The command runs without network access.')
+      // What is being approved, whole: the command exactly as it will run, or the memory
+      // about to be saved (its summary only names it). Invisible and display-altering
+      // characters are shown as <U+XXXX>, so the editor can't render it as something else.
+      const subject = e.egressHost || e.shellNetwork ? [] : approvalSubject(e.name, args).map(acpSubjectText)
       const content: AcpToolCallContent[] = [
         ...warnings.map((t) => ({ type: 'content' as const, content: { type: 'text' as const, text: t } })),
+        ...subject.map((t) => ({ type: 'content' as const, content: { type: 'text' as const, text: t } })),
         ...(e.preview ? previewToDiffContent(s.cwd, e.preview) : [])
       ]
       if (!announced.has(e.callId)) announce(e.callId, e.name, args, e.kind, 'pending', content, e.preview)
@@ -1766,7 +1784,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       try {
         const res = (await request('session/request_permission', {
           sessionId: s.id,
-          toolCall: { toolCallId: e.callId, title: e.summary, kind: acpToolKind(e.name, e.kind), status: 'pending', content },
+          toolCall: { toolCallId: e.callId, title: visibleText(e.summary), kind: acpToolKind(e.name, e.kind), status: 'pending', content },
           options
         })) as { outcome?: { outcome?: string; optionId?: string } } | null
         const picked = res?.outcome?.outcome === 'selected' ? res.outcome.optionId : undefined

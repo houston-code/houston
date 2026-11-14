@@ -1,6 +1,6 @@
 import { numberDiff, tokenize, wordDiff, type DiffLine, type FileDiffPreview } from '@shared/diff'
 import type { Painter } from './tui'
-import { stripControlChars, stripControlCharsKeepLines } from './tui-wrap'
+import { terminalText } from './tui-wrap'
 
 // Re-exported so this module stays the terminal's diff surface, while the pure
 // parts (numbering, word marks) live in shared and are rendered by the GUI too —
@@ -44,9 +44,9 @@ export const MAX_DIFF_LINES = 60
 /** Render one file's hunked diff with a numbered gutter and word marks. */
 export function renderDiffLines(diff: DiffLine[], paint: Painter, opts: DiffViewOptions = {}): string[] {
   // The lines are what the model is about to write: a carriage return or an escape in
-  // one could paint over the change being approved, so their control characters go
-  // before anything (the highlighter included) sees them. Tabs stay, as indentation.
-  const lines = numberDiff(diff.map((l) => ({ ...l, text: stripControlCharsKeepLines(l.text) })))
+  // one could paint over the change being approved, so their control characters are
+  // made visible before anything (the highlighter included) sees them.
+  const lines = numberDiff(diff.map((l) => ({ ...l, text: terminalText(l.text) })))
   const max = opts.maxLines ?? MAX_DIFF_LINES
   // Gutter width from the largest number actually shown.
   const width = Math.max(2, ...lines.map((l) => String(Math.max(l.oldNo ?? 0, l.newNo ?? 0)).length))
@@ -108,13 +108,13 @@ export function renderPreviewView(
   return preview
     .map((f) => {
       // A file name can hold control characters too.
-      const path = stripControlChars(f.path)
+      const path = terminalText(f.path, { lines: false })
       const tag = f.created
         ? paint(' (new file)', 'dim')
         : f.deleted
           ? paint(' (deleted)', 'dim')
           : f.renamedFrom
-            ? paint(` (renamed from ${stripControlChars(f.renamedFrom)})`, 'dim')
+            ? paint(` (renamed from ${terminalText(f.renamedFrom, { lines: false })})`, 'dim')
             : ''
       const lang = path.slice(path.lastIndexOf('.') + 1)
       const hl = highlight && lang ? (code: string) => highlight(lang, code) : undefined

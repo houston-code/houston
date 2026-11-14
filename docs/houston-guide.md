@@ -2072,6 +2072,16 @@ command prefixes, a web fetch as the site), with **Undo** to remove it again and
 rules; the run already under way keeps using it until it ends. If an existing rule
 already covered the call, the note says so and nothing new is saved.
 
+**What you approve is what runs.** A shell command is shown in full under the prompt,
+never cut to fit, and a memory about to be saved shows its description and body.
+Characters that don't display on their own (a carriage return, a terminal escape, a
+right-to-left override, a zero-width space) are shown as their code, like `<U+202E>`,
+so a command can't pass for something else. In the terminal, a multi-line command has
+numbered lines, a run of blank lines folds to one "(N blank lines)" row, and a command
+too tall for the screen repeats its first line next to the choices. The rest of what
+the terminal prints (replies, tool output, server messages, titles) can't drive it
+either: its control characters are shown the same way.
+
 **Reading the diff.** A file edit shows a real diff before you approve it: the changed
 part with a few lines of context (long untouched stretches are folded away with a
 note saying how many), line numbers in the gutter, the changed words picked out inside

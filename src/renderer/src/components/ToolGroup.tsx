@@ -10,6 +10,7 @@ import { droppedSummary, findingTally, isDropped, sortFindings } from '@shared/r
 import { deniedPromptText, stoppedPromptText } from '@shared/promptOutcome'
 import { endedShort, isSubagentTool, statusLabel } from '@shared/subagents'
 import { formatElapsed } from '@shared/elapsed'
+import { hasHiddenCharacters, visibleText } from '@shared/visibleText'
 import { useTick } from '../hooks/useTick'
 import type { ToolItem } from '../lib/items'
 import { approvalRequestText, describeTool, foldReadRuns } from '../lib/toolDisplay'
@@ -710,7 +711,7 @@ function ApprovalPrompt({
   // Plain text in a scrolling block: the exact command, post or arguments being approved.
   const requestBlock = request ? (
     <pre className="tool-row__approval-request" tabIndex={0} aria-label="What this asks to do">
-      {request}
+      {visibleText(request)}
     </pre>
   ) : null
   if (item.egressHost) {
@@ -749,9 +750,18 @@ function ApprovalPrompt({
       </div>
     )
   }
+  // Characters that don't display (controls, bidi overrides, zero-width) are shown in
+  // the request block as <U+XXXX> so the text can't pass for something else; say so.
+  const hidden = request !== null && hasHiddenCharacters(request)
   return (
     <div {...shared}>
       {requestBlock}
+      {hidden && (
+        <p className="tool-row__approval-note tool-row__approval-note--warn">
+          This contains characters that don&apos;t display on their own. Each is shown as its code, like
+          &lt;U+202E&gt;.
+        </p>
+      )}
       {item.sensitiveRead && (
         <p className="tool-row__approval-note">
           This reads a credential or secret file. Reads normally run without asking, so

@@ -253,13 +253,16 @@ export function renderPermissionRules(rules: PermissionRule[], paint: Painter, n
   }
   const tone = { allow: 'green', deny: 'red', ask: 'yellow' } as const
   const lines = [paint('Saved permission rules (checked before the approval mode):', 'bold')]
-  const width = Math.max(...rules.map((r) => (r.tool || '*').length))
+  // A rule's tool and pattern can come from a project's settings file, so neither
+  // reaches the terminal with its control characters.
+  const toolOf = (r: PermissionRule): string => stripControlChars(r.tool || '*')
+  const width = Math.max(...rules.map((r) => toolOf(r).length))
   rules.forEach((r, i) => {
     const subject = r.match ? stripControlChars(r.match) : paint('(nothing)', 'dim')
     const source = r.source === 'prompt' ? 'from a prompt' : r.source === 'settings' ? 'from settings' : ''
     const how = [r.exact ? 'exact' : '', source, r.addedAt ? ago(now - r.addedAt) : ''].filter(Boolean).join(', ')
     lines.push(
-      `  ${paint(String(i + 1).padStart(2), 'cyan')}. ${paint(r.action.padEnd(5), tone[r.action])} ${(r.tool || '*').padEnd(width)}  ${subject}${how ? paint(`  (${how})`, 'dim') : ''}`
+      `  ${paint(String(i + 1).padStart(2), 'cyan')}. ${paint(r.action.padEnd(5), tone[r.action])} ${toolOf(r).padEnd(width)}  ${subject}${how ? paint(`  (${how})`, 'dim') : ''}`
     )
   })
   lines.push(paint('/permissions remove <n> deletes one. Project rules in .houston/settings.json are edited in that file.', 'dim'))
