@@ -57,4 +57,24 @@ describe('usePrStatus', () => {
     await flush()
     expect(result.current).toBeNull()
   })
+
+  it('looks up a newly opened folder even while the previous folder lookup is still running', async () => {
+    let resolveA: (v: unknown) => void = () => {}
+    gitPrStatus.mockImplementation((ws: string) =>
+      ws === '/a'
+        ? new Promise((r) => (resolveA = r))
+        : Promise.resolve({ kind: 'pr', pr: { ...pr, number: 9 } })
+    )
+    const { result, rerender } = renderHook((p: { ws: string }) => usePrStatus(p.ws, true, false), {
+      initialProps: { ws: '/a' }
+    })
+    await flush()
+    rerender({ ws: '/b' })
+    await flush()
+    expect(gitPrStatus.mock.calls.map((c) => c[0])).toEqual(['/a', '/b'])
+    expect(result.current?.number).toBe(9)
+    resolveA({ kind: 'pr', pr })
+    await flush()
+    expect(result.current?.number).toBe(9)
+  })
 })

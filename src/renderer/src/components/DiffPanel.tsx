@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DiffHunk, FileDiff, WorkingTreeChanges } from '@shared/workingTree'
 import {
   canRevertHunks,
@@ -11,15 +11,17 @@ import { chooseShipAction, type ShipAction } from '@shared/shipAction'
 import type { ReviewComment } from '@shared/promptInvocation'
 import { useInitGitRepo } from '../hooks/useInitGitRepo'
 import {
+  anchorComments,
   commentPlace,
   draftKey,
   getDrafts,
   newCommentId,
   setDrafts,
+  shownLines,
   sortComments,
   type DraftComment
 } from '../lib/diffComments'
-import { DiffView, lineKey, type DiffLayout, type DiffLineTarget } from './DiffView'
+import { DiffView, MAX_DIFF_LINES, lineKey, type DiffLayout, type DiffLineTarget } from './DiffView'
 import { Icon } from './Icon'
 import { CommitForm } from './CommitForm'
 
@@ -425,13 +427,23 @@ export function DiffPanel({
     },
     [commentsKey]
   )
+  const tree = data?.scope === 'tree' ? data.tree : null
+  const chat = data && data.scope !== 'tree' ? data.chat : null
+  const files = useMemo(
+    () => (data?.scope === scope ? (data.scope === 'tree' ? data.tree.files : data.chat.files) : []),
+    [data, scope]
+  )
+  // A comment shows under its line only while that line still holds the code it was
+  // left on; after a refresh moves or changes the line, it is listed as outdated.
+  const lines = useMemo(() => shownLines(files, MAX_DIFF_LINES), [files])
+  const { anchored, outdated } = anchorComments(comments, lines)
   const commentsApi: CommentsApi | undefined = onSendComments
     ? {
-        list: comments,
+        list: anchored,
         editing,
         open: (path, t) => {
           // A line that already has a comment opens it for editing instead of a second one.
-          const existing = comments.find((c) => commentPlace(c) === commentPlace({ path, ...t }))
+          const existing = anchored.find((c) => commentPlace(c) === commentPlace({ path, ...t }))
           setEditing(existing ? existing.id : commentPlace({ path, ...t }))
         },
         save: (path, t, body, id) => {
@@ -454,20 +466,30 @@ export function DiffPanel({
     setEditing(null)
   }
 
+  // Only the newest load may write state: a slow reply for a scope (or folder, or chat)
+  // the user already left must not replace what the current one shows.
+  const loadSeq = useRef(0)
   const load = useCallback(async (): Promise<void> => {
+    const seq = ++loadSeq.current
     if (!workspace) {
       setData({ scope: 'tree', tree: { isRepo: false, branch: null, files: [], added: 0, removed: 0 } })
+      setLoading(false)
       return
     }
     setLoading(true)
     setError(null)
     try {
-      if (scope === 'tree') setData({ scope, tree: await window.api.getWorkingTreeChanges(workspace) })
-      else if (conversationId) setData({ scope, chat: await window.api.getChatChanges(conversationId, scope) })
+      if (scope === 'tree') {
+        const tree = await window.api.getWorkingTreeChanges(workspace)
+        if (seq === loadSeq.current) setData({ scope, tree })
+      } else if (conversationId) {
+        const chat = await window.api.getChatChanges(conversationId, scope)
+        if (seq === loadSeq.current) setData({ scope, chat })
+      }
     } catch (e) {
-      setError((e as Error).message)
+      if (seq === loadSeq.current) setError((e as Error).message)
     } finally {
-      setLoading(false)
+      if (seq === loadSeq.current) setLoading(false)
     }
   }, [workspace, scope, conversationId])
 
@@ -520,9 +542,6 @@ export function DiffPanel({
     [workspace]
   )
 
-  const tree = data?.scope === 'tree' ? data.tree : null
-  const chat = data && data.scope !== 'tree' ? data.chat : null
-  const files = (data?.scope === scope ? (tree?.files ?? chat?.files) : null) ?? []
   const totals = tree ?? chat
   const shipAction = tree?.isRepo ? chooseShipAction(tree.ship) : null
   const defaultOpen = files.length <= AUTO_EXPAND_LIMIT
@@ -651,6 +670,35 @@ export function DiffPanel({
           </p>
         )}
       </div>
+
+      {onSendComments && data?.scope === scope && outdated.length > 0 && (
+        <section className="changes-view__outdated" aria-label="Comments not on a line shown here">
+          <p className="changes-panel__foot-hint">
+            Not on a line shown here (the code changed or is in another view):
+          </p>
+          {outdated.map((c) => {
+            const label = `Comment on ${c.path} line ${c.line}`
+            return (
+              <div key={c.id} className="diff-comments">
+                <p className="changes-view__outdated-where">
+                  {c.path} {c.side === 'old' ? 'removed line' : 'line'} {c.line}
+                  {c.code.trim() ? <code>{c.code.trim()}</code> : null}
+                </p>
+                {editing === c.id ? (
+                  <CommentEditor
+                    initial={c.body}
+                    label={label}
+                    onSave={(body) => commentsApi?.save(c.path, null, body, c.id)}
+                    onCancel={() => setEditing(null)}
+                  />
+                ) : (
+                  <CommentCard comment={c} onEdit={() => setEditing(c.id)} onDelete={() => commentsApi?.remove(c.id)} />
+                )}
+              </div>
+            )
+          })}
+        </section>
+      )}
 
       {onSendComments && comments.length > 0 && (
         <footer className="changes-panel__foot changes-view__comments">

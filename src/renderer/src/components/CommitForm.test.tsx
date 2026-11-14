@@ -37,6 +37,19 @@ describe('CommitForm', () => {
     expect(await screen.findByText('Author identity unknown')).toBeInTheDocument()
   })
 
+  it('says so when a commit, push, or suggestion call itself fails', async () => {
+    api.gitCommit.mockRejectedValue(new Error("Error invoking remote method 'git:commit': Error: index.lock exists"))
+    api.gitSuggestMessage.mockRejectedValue(new Error('model unavailable'))
+    render(<CommitForm workspace="/ws" hasChanges onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Suggest message' }))
+    expect(await screen.findByText('Suggesting a message failed: model unavailable')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'Fix' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Commit' }))
+    expect(await screen.findByText('Commit failed: index.lock exists')).toBeInTheDocument()
+    // The form is usable again.
+    expect(screen.getByRole('button', { name: 'Commit' })).toBeEnabled()
+  })
+
   it('offers Push for commits not yet on the upstream, and Publish branch for a first push', async () => {
     api.gitBranchSync.mockResolvedValue({ branch: 'feat', upstream: 'origin/feat', ahead: 2, remote: 'origin' })
     const { unmount } = render(<CommitForm workspace="/ws" hasChanges={false} onChanged={vi.fn()} />)
