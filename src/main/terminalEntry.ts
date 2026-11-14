@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { clearChildReportFlag, setWakeHost, takeBackgroundEvents, wakeNote } from './agent/backgroundEvents'
 import { fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -123,6 +124,7 @@ import {
   deleteConversation,
   setGeneratedTitle,
   reportChildToParent,
+  takeChildReports,
   saveSideChat
 } from './conversations'
 
@@ -700,6 +702,15 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       },
       sideChat: terminalSideChat(),
       takeLegacyRulesNotice: () => takeLegacyRulesTerminalNotice(() => legacyRulesNoticeApplies()),
+      // Wake the session when background work it started finishes at an idle composer.
+      wake: {
+        register: (tryWake) =>
+          setWakeHost({ enabled: () => getSettings().backgroundWake !== false, start: tryWake }),
+        take: (id) => {
+          clearChildReportFlag(id)
+          return wakeNote(takeBackgroundEvents(id), takeChildReports(id))?.content ?? null
+        }
+      },
       checkUpdate: async () => {
         // The session never waits on this, so it can afford a slow network.
         const found = await checkForUpdate(version, { timeoutMs: INTERACTIVE_UPDATE_TIMEOUT_MS })

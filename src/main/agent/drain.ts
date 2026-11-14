@@ -5,7 +5,10 @@ import { startRun } from './loop'
 import { maybeGenerateTitle } from './title'
 import { maybeSuggestNext } from './suggest'
 import { listQueue, removeFromQueue, settleSteers, takeQueue } from './queue'
-import { getConversation, setMessages } from '../conversations'
+import { getConversation, setMessages, takeChildReports } from '../conversations'
+import { getSettings } from '../agentHost'
+import { activeRunForConversation } from './loop'
+import { clearChildReportFlag, takeBackgroundEvents, wakeNote } from './backgroundEvents'
 
 /** How the run orchestrator talks back to the renderer (provided by the IPC layer). */
 export interface DrainIO {
@@ -163,4 +166,38 @@ export function drainQueue(io: DrainIO, conversationId: string, owner?: number):
     },
     owner
   )
+}
+
+/**
+ * Start a turn on an idle chat because background work it started finished (see
+ * backgroundEvents.ts, whose wake policy decides when this is called). The turn's only
+ * input is an automated note carrying the news; the chat runs under its own model and
+ * approval policy, so anything needing an approval still asks. Returns whether a turn
+ * started: not when the chat is running, gone, or the news was already taken.
+ */
+export function startWakeTurn(io: DrainIO, conversationId: string): boolean {
+  if (activeRunForConversation(conversationId)) return false
+  const conv = getConversation(conversationId)
+  if (!conv) return false
+  clearChildReportFlag(conversationId)
+  const note = wakeNote(takeBackgroundEvents(conversationId), takeChildReports(conversationId))
+  if (!note) return false
+  const defaults = getSettings()
+  const approvalPolicy = conv.approvalPolicy ?? defaults.approvalPolicy ?? 'ask'
+  const reasoningEffort = conv.reasoningEffort ?? defaults.reasoningEffort
+  const runId = randomUUID()
+  const messages = [...conv.messages, note]
+  setMessages(conv.id, messages)
+  io.emit(conversationId, { runId, type: 'turn_start', conversationId, userText: note.content })
+  void runAndDrain(io, conversationId, {
+    runId,
+    workspace: conv.workspace,
+    providerId: conv.providerId,
+    model: conv.model,
+    approvalPolicy,
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    messages,
+    wake: true
+  })
+  return true
 }

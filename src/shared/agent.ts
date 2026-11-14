@@ -847,6 +847,8 @@ export interface ChildReport {
 /** Internal input to the agent loop. */
 export interface AgentRunRequest {
   runId: string
+  /** A turn Houston started on its own because background work finished while the chat was idle. */
+  wake?: boolean
   /**
    * The conversation this run belongs to, when started from the UI. Used to keep
    * at most one live run per conversation (two would interleave their persisted

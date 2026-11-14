@@ -8,6 +8,7 @@ import { writeShellLedger, type LedgerEntry } from './shellLedger'
 import { redactSecrets } from './redact'
 import { collectSecrets } from '../agentHost'
 import type { PreviewServer } from '@shared/preview'
+import { discardShellEvents, pushBackgroundEvent, MAX_MATCH_LINES } from './backgroundEvents'
 
 /**
  * Registry of background shells started by `run_shell` with `background: true`.
@@ -69,6 +70,53 @@ interface Shell {
   reportedUrls: Set<string>
   /** Pending SIGKILL escalation after a graceful stop's SIGTERM (see {@link stopGracefully}). */
   stopTimer?: ReturnType<typeof setTimeout>
+  /**
+   * What ended the shell when the command didn't end on its own: the agent's
+   * kill_shell, the user's Stop, the cancelled turn that started it, or the app
+   * shutting down. Decides whether (and how) its exit is reported to the agent.
+   */
+  stoppedBy?: 'agent' | 'user' | 'cancel' | 'app'
+  /** Lowercased phrases whose lines are reported to the agent as they print (run_shell notify_on). */
+  notifyOn: string[]
+  /** The phrases as the agent gave them, for the report. */
+  notifyOnRaw: string[]
+  /** Matching lines reported so far; watching stops at {@link MAX_WATCH_MATCHES}. */
+  matchCount: number
+  /** Each stream's unfinished last line, held until its newline arrives. */
+  carryOut: string
+  carryErr: string
+}
+
+/** Most phrases one shell can watch for. */
+export const MAX_NOTIFY_PATTERNS = 5
+/** Longest watch phrase accepted. */
+export const MAX_NOTIFY_PATTERN_LENGTH = 200
+/** Most matching lines reported per shell before watching stops (a chatty log can't flood the chat). */
+export const MAX_WATCH_MATCHES = 50
+/** Longest line checked for a watch phrase, and longest kept in a report. */
+const MAX_WATCH_LINE = 4_000
+const MAX_REPORTED_LINE = 500
+/** How much of the end of a shell's output its exit report carries. */
+const EXIT_TAIL_LINES = 20
+const EXIT_TAIL_CHARS = 2_000
+
+/**
+ * Normalize run_shell's notify_on: trimmed, non-empty, de-duplicated phrases, at most
+ * {@link MAX_NOTIFY_PATTERNS} of at most {@link MAX_NOTIFY_PATTERN_LENGTH} characters.
+ * Plain substrings (matched case-insensitively), never regular expressions: a pattern
+ * the model writes runs against every line a server prints, in the main process, so a
+ * backtracking regex there could stall the app.
+ */
+export function normalizeNotifyOn(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : []
+  const out: string[] = []
+  for (const v of list) {
+    if (typeof v !== 'string') continue
+    const t = v.trim().slice(0, MAX_NOTIFY_PATTERN_LENGTH)
+    if (t && !out.some((o) => o.toLowerCase() === t.toLowerCase())) out.push(t)
+    if (out.length >= MAX_NOTIFY_PATTERNS) break
+  }
+  return out
 }
 
 /** Most URLs kept per shell: a dev script starts a few servers, not dozens. */
@@ -198,8 +246,15 @@ export function registerShell(
   command: string,
   child: ChildProcess,
   conversationId?: string,
-  workspace?: string
+  workspace?: string,
+  opts: {
+    /** The run's abort signal: a shell that ends because the turn was cancelled says so. */
+    signal?: AbortSignal
+    /** Phrases whose lines are reported to the agent as they print (see normalizeNotifyOn). */
+    notifyOn?: string[]
+  } = {}
 ): string {
+  const notifyOnRaw = normalizeNotifyOn(opts.notifyOn)
   const id = randomUUID().slice(0, 8)
   const shell: Shell = {
     id,
@@ -219,6 +274,11 @@ export function registerShell(
     announcedCount: 0,
     reportedUrls: new Set(),
     recent: '',
+    notifyOn: notifyOnRaw.map((p) => p.toLowerCase()),
+    notifyOnRaw,
+    matchCount: 0,
+    carryOut: '',
+    carryErr: '',
     ...(conversationId ? { conversationId } : {}),
     ...(workspace ? { workspace } : {})
   }
@@ -240,6 +300,7 @@ export function registerShell(
     shell.stdout = appendCapped(shell.stdout, s)
     shell.recent = appendRecent(shell.recent, s)
     sniff(s)
+    shell.carryOut = watchLines(shell, shell.carryOut + s)
   }
   const onErr = (s: string): void => {
     if (!s) return
@@ -247,6 +308,7 @@ export function registerShell(
     shell.stderr = appendCapped(shell.stderr, s)
     shell.recent = appendRecent(shell.recent, s)
     sniff(s)
+    shell.carryErr = watchLines(shell, shell.carryErr + s)
   }
   child.stdout?.on('data', (c: Buffer) => onOut(outDecoder.write(c)))
   child.stderr?.on('data', (c: Buffer) => onErr(errDecoder.write(c)))
@@ -259,19 +321,31 @@ export function registerShell(
     shell.stdout = windowOf(shell.stdout)
     shell.stderr = windowOf(shell.stderr)
   }
-  child.on('close', (code) => {
+  // Both 'error' (a failed spawn) and 'close' can fire for one child; report once.
+  let ended = false
+  const end = (): void => {
+    if (ended) return
+    ended = true
     settle()
+    // A last line printed without a trailing newline is still a line.
+    shell.carryOut = watchLines(shell, `${shell.carryOut}\n`)
+    shell.carryErr = watchLines(shell, `${shell.carryErr}\n`)
+    if (!shell.stoppedBy && opts.signal?.aborted) shell.stoppedBy = 'cancel'
+    reportExit(shell)
+  }
+  child.on('close', (code) => {
     shell.running = false
     shell.exitCode = code
     shell.exitedAt = Date.now()
+    end()
     persistLedger()
     notifyShellsChanged()
     watchLeftovers()
   })
   child.on('error', () => {
-    settle()
     shell.running = false
     shell.exitedAt = Date.now()
+    end()
     persistLedger()
     notifyShellsChanged()
     watchLeftovers()
@@ -309,6 +383,9 @@ export function readShellOutput(id: string, opts: { full?: boolean } = {}): Shel
   // A full re-read restates every URL; an incremental one only those not yet reported.
   const newUrls = opts.full ? [...s.previewUrls] : s.previewUrls.filter((u) => !s.reportedUrls.has(u))
   for (const u of newUrls) s.reportedUrls.add(u)
+  // The agent now has this output (and, once exited, the exit) first-hand: news about
+  // it still waiting would only repeat it.
+  if (s.conversationId) discardShellEvents(s.conversationId, s.id, { exited: !s.running })
   return { found: true, running: s.running, exitCode: s.exitCode, stdout, stderr, newUrls }
 }
 
@@ -446,11 +523,21 @@ function stopGracefully(s: Shell, graceMs: number): void {
  * keeps running (and holding its port) until the group is signalled. Returns as soon
  * as the stop is under way; {@link stopShell} waits for it to finish.
  */
-export function killShell(id: string, opts: { graceMs?: number } = {}): KillShellResult {
+export function killShell(
+  id: string,
+  opts: {
+    graceMs?: number
+    /** Who asked: decides how the shell's exit is reported to the agent (see reportExit). */
+    by?: 'agent' | 'user'
+  } = {}
+): KillShellResult {
   const s = shells.get(id)
   if (!s) return 'not-found'
   const graceMs = opts.graceMs ?? KILL_GRACE_MS
   if (s.running) {
+    // Whoever stopped it already knows: the agent from kill_shell's result, the user
+    // from their own click (the agent hears of that one, without being woken).
+    s.stoppedBy ??= opts.by ?? 'agent'
     stopGracefully(s, graceMs)
     return 'killed'
   }
@@ -474,6 +561,8 @@ export function killShellsFor(conversationId: string): number {
   let signalled = 0
   for (const [id, s] of shells) {
     if (s.conversationId !== conversationId) continue
+    // The chat is being deleted: nobody is left to tell.
+    s.stoppedBy ??= 'app'
     if (s.running || hasLeftover(s)) {
       killProcessTree(s.child)
       signalled++
@@ -530,6 +619,79 @@ export function listShells(): BackgroundShellInfo[] {
     ...(s.conversationId ? { conversationId: s.conversationId } : {}),
     ...(s.workspace ? { workspace: s.workspace } : {})
   }))
+}
+
+/**
+ * Check each complete line of `text` against the shell's watch phrases, reporting the
+ * matches to the agent's chat. Returns the unfinished remainder to carry to the next
+ * chunk (bounded, so a stream with no newlines can't grow it).
+ */
+function watchLines(shell: Shell, text: string): string {
+  if (!shell.notifyOn.length || !shell.conversationId || shell.matchCount >= MAX_WATCH_MATCHES) return ''
+  const parts = text.split('\n')
+  const rest = parts.pop() ?? ''
+  const matched: { pattern: string; line: string }[] = []
+  for (const raw of parts) {
+    // A progress bar redraws with \r; only its last redraw is the line.
+    const line = stripAnsi(raw.slice(raw.lastIndexOf('\r') + 1)).slice(0, MAX_WATCH_LINE)
+    const lower = line.toLowerCase()
+    const at = shell.notifyOn.findIndex((p) => lower.includes(p))
+    if (at < 0) continue
+    matched.push({ pattern: shell.notifyOnRaw[at]!, line: line.trim().slice(0, MAX_REPORTED_LINE) })
+    if (++shell.matchCount >= MAX_WATCH_MATCHES) break
+  }
+  const byPattern = new Map<string, string[]>()
+  for (const m of matched) byPattern.set(m.pattern, [...(byPattern.get(m.pattern) ?? []), m.line])
+  for (const [pattern, lines] of byPattern) {
+    const last = lines.slice(-MAX_MATCH_LINES)
+    if (shell.matchCount >= MAX_WATCH_MATCHES) last.push(`[stopped watching after ${MAX_WATCH_MATCHES} matching lines]`)
+    pushBackgroundEvent(
+      shell.conversationId,
+      {
+        kind: 'shell_match',
+        shellId: shell.id,
+        command: maskForUi(shell.command),
+        pattern,
+        lines: last.map(maskForUi),
+        dropped: lines.length - Math.min(lines.length, MAX_MATCH_LINES),
+        at: Date.now()
+      },
+      { wake: true }
+    )
+  }
+  return rest.length > MAX_WATCH_LINE ? rest.slice(-MAX_WATCH_LINE) : rest
+}
+
+/**
+ * Tell the agent's chat that the shell ended. Not when the agent stopped it (kill_shell
+ * already said so) or the app is shutting down. A stop by the user or a cancelled turn
+ * is reported but never wakes the chat: someone just chose to stop work there.
+ */
+function reportExit(shell: Shell): void {
+  if (!shell.conversationId || shell.stoppedBy === 'agent' || shell.stoppedBy === 'app') return
+  const tail = (shellTail(shell.id, EXIT_TAIL_LINES) ?? tailOf(shell)).join('\n')
+  pushBackgroundEvent(
+    shell.conversationId,
+    {
+      kind: 'shell_exit',
+      shellId: shell.id,
+      command: maskForUi(shell.command),
+      exitCode: shell.exitCode,
+      ...(shell.stoppedBy ? { stoppedBy: shell.stoppedBy } : {}),
+      tail: tail.length > EXIT_TAIL_CHARS ? `…${tail.slice(-EXIT_TAIL_CHARS)}` : tail,
+      at: Date.now()
+    },
+    { wake: !shell.stoppedBy }
+  )
+}
+
+/** {@link shellTail} for a shell not (or no longer) in the registry. */
+function tailOf(shell: Shell): string[] {
+  return maskForUi(stripAnsi(shell.recent))
+    .split('\n')
+    .map((l) => l.slice(l.lastIndexOf('\r') + 1).trimEnd())
+    .filter((l) => l.length > 0)
+    .slice(-EXIT_TAIL_LINES)
 }
 
 /** Most lines {@link shellTail} returns. */
@@ -634,6 +796,7 @@ export function killAllShells(opts: { graceMs?: number } = {}): void {
   const graceMs = opts.graceMs ?? QUIT_GRACE_MS
   const live = [...shells.values()].filter((s) => s.running || hasLeftover(s))
   for (const s of shells.values()) {
+    s.stoppedBy ??= 'app'
     if (s.stopTimer) clearTimeout(s.stopTimer)
     s.stopTimer = undefined
   }

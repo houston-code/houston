@@ -169,6 +169,19 @@ export function NotificationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
           default.
         </span>
       </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.backgroundWake ?? true}
+          onChange={(e) => setSettings((s) => ({ ...s, backgroundWake: e.target.checked }))}
+        />
+        <span>
+          Continue a chat on its own when background work the agent started finishes
+          while the chat is idle (a background command exits, or a session it started
+          finishes), so the agent can check the result. Off: the agent hears about it
+          with your next message. On by default.
+        </span>
+      </label>
     </SettingsSection>
   )
 }
@@ -312,6 +325,7 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   formatOnSave: 'format on save',
   diagnosticsOnSave: 'diagnostics on save',
   desktopNotifications: 'notifications',
+  backgroundWake: 'continue after background work',
   appBadge: 'app icon badge',
   attentionSounds: 'sounds',
   theme: 'theme',

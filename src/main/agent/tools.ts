@@ -69,7 +69,7 @@ import {
   spawnSandboxed,
   type EgressProxyEndpoints
 } from '../sandbox'
-import { backgroundShellGroups, readShellOutput, registerShell, stopShell } from './shells'
+import { backgroundShellGroups, normalizeNotifyOn, readShellOutput, registerShell, stopShell } from './shells'
 import { reviewGitChanges, type GitGuard } from './gitGuard'
 import { foreignListenerNote, urlPort, type PortListener } from './portOwner'
 import { cwdFromRoot, runInSession, shellCwdLabel, shellCwdLine, type ShellSession } from './shell-session'
@@ -1960,13 +1960,19 @@ const runShell: ToolDef = {
   schema: {
     name: 'run_shell',
     description:
-      'Run a shell command in the project directory and return its combined stdout/stderr and exit code. Foreground commands share a session within a turn, so `cd` and exported variables carry over to later calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command stops after 300s by default (raise `timeout_seconds` for a slow one-shot such as a cold `npm install`); GNU `timeout` is not available, so don\'t wrap commands in it. Use background:true for anything open-ended (a dev server, a watcher, a build of unknown length): it returns a shell id at once for read_shell_output and kill_shell. Never background with `&`: a trailing `&` on a foreground command loses its exit status, and a background:true command containing `&` is refused because the process would be orphaned. In a background command, make the server the last command and keep its output on stdout rather than in a file, so read_shell_output and the Preview pane can see it.',
+      'Run a shell command in the project directory and return its combined stdout/stderr and exit code. Foreground commands share a session within a turn, so `cd` and exported variables carry over to later calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command stops after 300s by default (raise `timeout_seconds` for a slow one-shot such as a cold `npm install`); GNU `timeout` is not available, so don\'t wrap commands in it. Use background:true for anything open-ended (a dev server, a watcher, a build of unknown length): it returns a shell id at once for read_shell_output and kill_shell. You are told when it exits (and of lines containing a notify_on phrase), even after your turn ends, so to wait on something slow (a long build, a command that blocks until CI finishes) start it in the background instead of polling. Never background with `&`: a trailing `&` on a foreground command loses its exit status, and a background:true command containing `&` is refused because the process would be orphaned. In a background command, make the server the last command and keep its output on stdout rather than in a file, so read_shell_output and the Preview pane can see it.',
     parameters: objectSchema(
       {
         command: { type: 'string', description: 'The shell command to run (with bash -c, or cmd.exe on a Windows host without Git Bash).' },
         background: {
           type: 'boolean',
           description: 'Run without waiting and return a shell id (default false). Use for long-running processes.'
+        },
+        notify_on: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'With background:true: up to 5 plain phrases (case-insensitive, not regex); output lines containing one are reported to you, e.g. ["error", "ready"].'
         },
         timeout_seconds: {
           type: 'number',
@@ -1993,7 +1999,11 @@ const runShell: ToolDef = {
         egressProxy: ctx.egressProxy,
         signal: ctx.signal
       })
-      const id = registerShell(command, child, ctx.conversationId, ctx.workspace)
+      const notifyOn = normalizeNotifyOn(args.notify_on)
+      const id = registerShell(command, child, ctx.conversationId, ctx.workspace, {
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+        ...(notifyOn.length ? { notifyOn } : {})
+      })
       ctx.recordEvidence?.({
         kind: 'shell',
         command,
@@ -2003,7 +2013,9 @@ const runShell: ToolDef = {
         timedOut: false,
         output: ''
       })
-      const started = `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).`
+      const watching = notifyOn.length ? ` Lines containing ${notifyOn.map((p) => JSON.stringify(p)).join(', ')} will be reported as they print.` : ''
+      const reported = ctx.conversationId ? ` You will be told when it exits.${watching}` : ''
+      const started = `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).${reported}`
       return sandboxAvailable() ? started : `${started}\n${UNSANDBOXED_SHELL_NOTE}`
     }
 

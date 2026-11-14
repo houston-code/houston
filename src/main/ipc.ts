@@ -103,7 +103,8 @@ import {
 } from './agent/loop'
 import { killShell, killShellsFor, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
-import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
+import { runAndDrain, drainQueue, startWakeTurn, type DrainIO } from './agent/drain'
+import { setWakeHost } from './agent/backgroundEvents'
 import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
@@ -503,6 +504,13 @@ function wireSpawnSession(): void {
       reportToParent: reportChildToParent
     })
   )
+  // Wake an idle chat when background work it started finishes (backgroundEvents.ts
+  // decides when; the setting can turn it off). Its events broadcast like a spawned
+  // session's, so whichever window shows the chat adopts the turn.
+  setWakeHost({
+    enabled: () => getSettings().backgroundWake !== false,
+    start: (conversationId) => startWakeTurn(makeBroadcastIo(), conversationId)
+  })
 }
 
 /**
@@ -1952,7 +1960,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // ever signals a process group Houston itself spawned for a background shell.
   const validShellId = (id: unknown): id is string =>
     typeof id === 'string' && /^[0-9a-f]{8}$/.test(id)
-  handle(IPC.shellStop, (_e, id: unknown) => (validShellId(id) ? killShell(id) : 'not-found'))
+  handle(IPC.shellStop, (_e, id: unknown) => (validShellId(id) ? killShell(id, { by: 'user' }) : 'not-found'))
   handle(IPC.shellTail, (_e, id: unknown) => (validShellId(id) ? (shellTail(id) ?? null) : null))
 
   // Push the shell registry to every renderer whenever one starts, exits, or first

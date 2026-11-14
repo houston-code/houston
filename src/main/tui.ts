@@ -2597,6 +2597,12 @@ export interface TuiIo {
    */
   cancelRead?: () => void
   /**
+   * Close the open composer read (it resolves null) when nothing is typed in it, so a
+   * turn Houston starts on its own can run. Returns whether it closed one; false when
+   * no raw-mode composer is open or the user has started typing (their draft wins).
+   */
+  yieldComposer?: () => boolean
+  /**
    * Show a single-line activity spinner with an elapsed timer while a turn runs,
    * so a slow first token or a silent tool doesn't look like a hang. The adapter
    * redraws only that one line and erases it before any real output. All three are
@@ -2870,6 +2876,16 @@ export interface TuiDeps {
    * its Import it button) still shows until it is answered there.
    */
   takeLegacyRulesNotice?: () => boolean
+  /**
+   * Optional waking of this session when background work it started finishes while
+   * the composer sits idle (see agent/backgroundEvents.ts). `register` installs the
+   * driver's handler (`tryWake` says whether it took the wake); `take` takes the
+   * chat's waiting news as the automated note that opens the turn, or null.
+   */
+  wake?: {
+    register: (tryWake: (conversationId: string) => boolean) => void
+    take: (conversationId: string) => string | null
+  }
   /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
    * code block, or null to render it plain. Kept as HTML (not ANSI) so the hljs
@@ -3297,6 +3313,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // (/resume, /login, plan handoff) is handled as a plain cancel, not a composer
   // reset/exit whose flag would leak into the next composer read.
   let atComposer = false
+  // Set when background news closed the idle composer: the next pass runs a turn on it.
+  let wakeRequested = false
+  deps.wake?.register((id) => {
+    if (id !== conversationId || !atComposer || activeRunId !== null || wakeRequested) return false
+    if (!deps.io.yieldComposer?.()) return false
+    wakeRequested = true
+    return true
+  })
   // A line typed mid-run goes to the turn that is running, so "no, not that" lands
   // while it can still change the outcome. With no live run there is nothing to
   // steer, and the io layer queues it as a follow-up instead. A slash command is
@@ -3566,6 +3590,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
     }
     atComposer = false // sub-prompts below are not the composer
+    // Background work finished while the composer was idle: its news is this turn's
+    // input. Taken now, not when it arrived, so a draft typed meanwhile still wins.
+    let wakeTurn = false
+    if (wakeRequested) {
+      wakeRequested = false
+      const note = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      if (note) {
+        raw = note
+        wakeTurn = true
+        deps.io.out(paint('· background work finished; continuing on its own\n', 'dim'))
+      } else if (raw === null && !resetComposer) continue
+    }
     if (resetComposer) continue // Ctrl-C discarded the input — draw a fresh prompt
     if (raw === null) break // clean Ctrl-D (or a second Ctrl-C) at the composer → exit
     let text = raw.trim()
@@ -3575,7 +3611,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     let invokedAs: PromptInvocation | undefined
     // Persist composer submissions (commands included) for cross-restart recall;
     // approval/question answers go through a different read and aren't saved.
-    deps.persistHistory?.(text)
+    if (!wakeTurn) deps.persistHistory?.(text)
 
     // `#note` — remember this for next time. Checked with the other prefixes, before
     // the line is treated as something to say to the model.
@@ -4500,7 +4536,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       reasoningEffort: effort,
       messages,
       // show_images results print as clickable file links (see renderImageLinks).
-      imageLinks: true
+      imageLinks: true,
+      ...(wakeTurn ? { wake: true } : {})
     }
     // Serialize interactive prompts (approvals/questions) so two readLine calls
     // never overlap on the single input stream.

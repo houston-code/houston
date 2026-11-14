@@ -1983,6 +1983,38 @@ the terminal. `/agent` alone (or `/agents`) lists them.
 A project file that links outside the project can't be switched, opened, or deleted
 from here.
 
+## Background work wakes the chat
+
+The agent runs open-ended commands (dev servers, watchers, long builds) with
+`run_shell` and `background: true`. It doesn't have to keep checking on them:
+
+- **When a background command exits,** the agent is told, with its exit code and the
+  last lines it printed.
+- **Watched lines.** Started with `notify_on` (up to five plain phrases, such as
+  `"error"` or `"compiled successfully"`), each output line containing one is
+  reported as it prints. Matching ignores case; phrases are text, not regular
+  expressions. After 50 matching lines, that command stops being watched.
+- **While the agent works,** the news arrives at its next step. **While the chat is
+  idle,** it continues on its own in a new turn that opens with a Houston note (it
+  shows as a notice, not as a message from you). Spawned sessions that finish wake
+  their parent chat the same way.
+
+What doesn't wake a chat:
+
+- A command the agent stopped itself, or one stopped because Houston quit.
+- A command you stopped from Background tasks, or one that ended because you stopped
+  the turn. The agent hears about these with your next message.
+- A chat whose last turn you stopped or that failed, until you send a message.
+- More than 8 turns in a row that started on their own: news then waits for your next
+  message.
+
+A turn that starts on its own uses the chat's own model and approval mode, so anything
+needing approval still asks you. To turn waking off, clear **Continue a chat on its
+own when background work finishes** under Settings, Notifications: the agent then
+hears the news with your next message. In the terminal, a session continues only
+while the composer is empty; once you've started typing, your message goes first and
+carries the news with it.
+
 ## Spawn separate sessions
 
 A subagent reports back into the current turn. `spawn_session` instead spins off a
@@ -1993,10 +2025,11 @@ A subagent reports back into the current turn. `spawn_session` instead spins off
   the spawning chat so far.
 - **Never more permissive.** It inherits the current approval policy.
 - **When it ends,** the chat that started it gets a short report (title, how it ended,
-  the start of its answer) as a Houston note at the start of its next turn, and you see
-  a notice in the transcript. The report says whether it finished, failed, was stopped,
-  or hit a limit (the step limit, the model's output limit, or a stall), so unfinished
-  work isn't reported as done.
+  the start of its answer) as a Houston note, and you see a notice in the transcript.
+  The report says whether it finished, failed, was stopped, or hit a limit (the step
+  limit, the model's output limit, or a stall), so unfinished work isn't reported as
+  done. A chat that is working hears it at its next step; an idle one continues on its
+  own (see "Background work wakes the chat").
 
 ### In the desktop app
 
