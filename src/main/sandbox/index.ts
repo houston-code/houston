@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
-import { selectBackend } from './select'
+import { selectBackend, selectBackendAsync } from './select'
 import { log } from '../logger'
 import { runWithBackend, spawnWithBackend } from './shared'
 import type {
@@ -61,7 +61,7 @@ export { buildSeatbeltProfile, SeatbeltBackend } from './darwin'
 export { UnsandboxedBackend, unsandboxedLaunch } from './unsandboxed'
 export { BubblewrapBackend } from './linux'
 export { WindowsBackend, makeWindowsBackend, resolveWindowsBash, windowsLaunch } from './windows'
-export { selectBackend, sandboxAvailable } from './select'
+export { selectBackend, selectBackendAsync, sandboxAvailable } from './select'
 
 /**
  * The confinement backend chosen for this host, resolved once on first use rather than
@@ -70,13 +70,37 @@ export { selectBackend, sandboxAvailable } from './select'
  */
 let backend: SandboxBackend | undefined
 
+/** Record the chosen backend, logging which confinement this process got. */
+function chooseBackend(chosen: SandboxBackend): SandboxBackend {
+  backend = chosen
+  log.info(`sandbox backend = ${chosen.id} (sandboxed=${chosen.sandboxed})`)
+  return chosen
+}
+
 function activeBackend(): SandboxBackend {
-  if (!backend) {
-    backend = selectBackend()
-    // Every client selects here, so the log says which confinement this process got.
-    log.info(`sandbox backend = ${backend.id} (sandboxed=${backend.sandboxed})`)
-  }
-  return backend
+  // Every client selects here (or in prepareSandbox), so the log names the backend once.
+  return backend ?? chooseBackend(selectBackend())
+}
+
+let preparing: Promise<void> | undefined
+
+/**
+ * Choose the backend without blocking the process, resolving once it is chosen.
+ * Selection on first use is synchronous, and on Linux that means a bubblewrap probe
+ * spawned synchronously (up to its 3 s timeout) inside whatever first asks. The
+ * terminal clients call this at launch and every run awaits it before reading the
+ * backend, so the probe runs as an asynchronous spawn instead, alongside their startup
+ * and the run's other start-up work. Same answer as the synchronous selection; if the
+ * asynchronous path fails in any way, the backend is left unchosen and the first use
+ * selects synchronously, exactly as before. Idempotent.
+ */
+export function prepareSandbox(): Promise<void> {
+  if (backend) return Promise.resolve()
+  return (preparing ??= selectBackendAsync()
+    .then((chosen) => {
+      if (!backend) chooseBackend(chosen)
+    })
+    .catch(() => {}))
 }
 
 /** Run a command under the host's sandbox backend. `result.sandboxed` is honest. */

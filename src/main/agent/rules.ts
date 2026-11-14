@@ -68,6 +68,13 @@ export interface LoadRulesOptions {
   maxNestedDepth?: number
   /** Max number of nested rules files to load (default MAX_NESTED_RULES_FILES). */
   maxNestedFiles?: number
+  /**
+   * Reuse the nested-rules discovery from this workspace's previous load and refresh
+   * it in the background, instead of listing the repository on every call (see
+   * {@link discoverNestedRulesReused}). For the agent's run start, which loads the
+   * rules on every turn. Every file's text is still read fresh on each call.
+   */
+  reuseDiscovery?: boolean
 }
 
 /**
@@ -93,6 +100,124 @@ async function discoverNestedRules(
 }
 
 type NestedRule = { path: string; label: string; depth: number }
+
+/** A workspace's last nested-rules discovery, and the background refresh of it, if one is running. */
+interface ReusedDiscovery {
+  found: { path: string; label: string }[]
+  /** Starts the background refresh now (for a load that can't wait for the timer). */
+  start: () => Promise<void>
+  /** The background refresh's timer, until it fires. */
+  timer?: ReturnType<typeof setTimeout>
+  /** The background refresh, while it runs. */
+  running?: Promise<void>
+}
+
+/** Workspaces whose nested-rules discovery is kept between loads; the least recent is dropped. */
+const MAX_REUSED_DISCOVERIES = 32
+
+/**
+ * How long after a load its background refresh starts: past the rest of the run's
+ * start (tens of milliseconds once the rules are reused), so the refresh's git
+ * processes run while the model answers rather than alongside the run start, and
+ * still long before a next turn.
+ */
+const REFRESH_DELAY_MS = 250
+
+const reusedDiscoveries = new Map<string, ReusedDiscovery>()
+
+/** Whether `path` is still a regular file (not a symlink, not deleted), as discovery requires. */
+async function isRegularRulesFile(path: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(path)).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * {@link discoverNestedRules}, reusing this workspace's previous result. Listing a
+ * repository's rules files takes three git processes (one walks every untracked
+ * directory), tens of milliseconds on every turn and more on a large repository, while
+ * the set of nested rules files rarely changes between turns.
+ *
+ * The first load for a workspace discovers synchronously. Later loads return the
+ * previous result at once, minus any file that is no longer a regular file (deleted,
+ * or replaced by a symlink), and schedule a fresh discovery in the background, shortly
+ * after (see REFRESH_DELAY_MS), for the next load to use. A load that finds that
+ * refresh still pending starts it or waits for it first, so a rules file created at
+ * any point is listed no later than the second load after it appears. The files' text
+ * is never cached: the caller reads each one on every load, so an edit shows up on the
+ * next turn.
+ */
+async function discoverNestedRulesReused(
+  workspace: string,
+  maxDepth: number,
+  maxFiles: number
+): Promise<{ path: string; label: string }[]> {
+  if (maxDepth <= 0 || maxFiles <= 0) return []
+  const key = `${workspace}\0${maxDepth}\0${maxFiles}`
+  const entry = reusedDiscoveries.get(key)
+  if (!entry) {
+    const found = await discoverNestedRules(workspace, maxDepth, maxFiles)
+    const created: ReusedDiscovery = {
+      found,
+      // One refresh at a time: runs starting together in one workspace share it.
+      start: () =>
+        (created.running ??= discoverNestedRules(workspace, maxDepth, maxFiles)
+          .then((next) => {
+            created.found = next
+          })
+          // Never throws today; if it ever did, the previous result stands.
+          .catch(() => {})
+          .finally(() => {
+            created.running = undefined
+          }))
+    }
+    reusedDiscoveries.set(key, created)
+    if (reusedDiscoveries.size > MAX_REUSED_DISCOVERIES) {
+      const oldest = reusedDiscoveries.keys().next().value
+      if (oldest !== undefined) reusedDiscoveries.delete(oldest)
+    }
+    return found
+  }
+  // Most recently used last, so the first key is the one to drop.
+  reusedDiscoveries.delete(key)
+  reusedDiscoveries.set(key, entry)
+  if (entry.timer !== undefined || entry.running) {
+    clearTimeout(entry.timer)
+    entry.timer = undefined
+    await entry.start()
+  }
+  const listed = entry.found
+  // A load that started alongside this one may have scheduled one already: keep one.
+  clearTimeout(entry.timer)
+  entry.timer = setTimeout(() => {
+    entry.timer = undefined
+    void entry.start()
+  }, REFRESH_DELAY_MS)
+  // Never what keeps a process alive: a one-shot client exits without it.
+  entry.timer.unref?.()
+  const regular = await Promise.all(listed.map((r) => isRegularRulesFile(r.path)))
+  return listed.filter((_, i) => regular[i])
+}
+
+/** Test seam: forget every reused nested-rules discovery, and cancel their refreshes. */
+export function resetReusedRulesDiscovery(): void {
+  for (const entry of reusedDiscoveries.values()) clearTimeout(entry.timer)
+  reusedDiscoveries.clear()
+}
+
+/** Test seam: run every scheduled background refresh now, and wait for all of them. */
+export async function settleReusedRulesDiscovery(): Promise<void> {
+  await Promise.all(
+    [...reusedDiscoveries.values()].map((entry) => {
+      if (entry.timer === undefined && !entry.running) return undefined
+      clearTimeout(entry.timer)
+      entry.timer = undefined
+      return entry.start()
+    })
+  )
+}
 
 /** Nested rules files from git's listing, or null when the workspace is not in a repo. */
 async function listNestedRulesFromGit(workspace: string, maxDepth: number): Promise<NestedRule[] | null> {
@@ -357,7 +482,11 @@ export async function loadProjectRules(
   const files: string[] = []
 
   const nested =
-    maxNestedDepth > 0 ? await discoverNestedRules(workspace, maxNestedDepth, maxNestedFiles) : []
+    maxNestedDepth > 0
+      ? opts.reuseDiscovery
+        ? await discoverNestedRulesReused(workspace, maxNestedDepth, maxNestedFiles)
+        : await discoverNestedRules(workspace, maxNestedDepth, maxNestedFiles)
+      : []
 
   // Canonical workspace root used to confine workspace-sourced @imports. Only the
   // global ~/.houston/AGENTS.md is trusted to import from outside the workspace

@@ -23,6 +23,7 @@ import {
   sandboxedLoopbackHint,
   toolSchemas,
   resolveInRoots,
+  rootsResolver,
   formatPrList,
   formatPrView,
   formatIssueList,
@@ -3920,6 +3921,76 @@ describe('resolveInRoots (multi-root containment)', () => {
 
   it('does not treat a sibling with a shared prefix as inside', () => {
     expect(() => resolveInRoots(['/ws'], '/ws-evil/x')).toThrow(/escapes the allowed roots/)
+  })
+})
+
+describe('rootsResolver (one pass, roots canonicalized once)', () => {
+  let base: string
+  let roots: string[]
+  let outside: string
+  beforeEach(() => {
+    // Not realpath'd: on macOS the temp dir sits behind /var -> /private/var, the
+    // non-canonical root the canonicalization exists for.
+    base = mkdtempSync(join(tmpdir(), 'houston-roots-'))
+    roots = [join(base, 'ws'), join(base, 'extra')]
+    outside = join(base, 'outside')
+    for (const dir of [...roots, outside, join(roots[0], 'src')]) mkdirSync(dir, { recursive: true })
+    writeFileSync(join(roots[0], 'src', 'a.ts'), 'a')
+    writeFileSync(join(outside, 'secret.txt'), 'SECRET')
+  })
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true })
+  })
+
+  /** What resolveInRoots answers for `p`: the path, or the message it refuses with. */
+  const outcome = (resolveFn: (p: string) => string, p: string): string => {
+    try {
+      return `ok ${resolveFn(p)}`
+    } catch (e) {
+      return `refused ${(e as Error).message}`
+    }
+  }
+  const agrees = (paths: string[]): string[] => {
+    const once = rootsResolver(roots)
+    const answers = paths.map((p) => outcome(once, p))
+    expect(answers).toEqual(paths.map((p) => outcome((q) => resolveInRoots(roots, q), p)))
+    return answers
+  }
+
+  it('answers exactly as resolveInRoots, refusals included', () => {
+    const answers = agrees([
+      'src/a.ts',
+      'src/new-file.ts',
+      join(roots[1], 'lib', 'x.ts'),
+      roots[1],
+      '../outside/secret.txt',
+      join(outside, 'secret.txt'),
+      `${roots[0]}-evil/x`,
+      '',
+      'src/a.ts'
+    ])
+    expect(answers.filter((a) => a.startsWith('refused'))).toHaveLength(4)
+  })
+
+  it.skipIf(process.platform === 'win32')('refuses every symlink escape resolveInRoots refuses', () => {
+    const ws = roots[0]
+    symlinkSync(join(outside, 'secret.txt'), join(ws, 'escape-file'))
+    symlinkSync(outside, join(ws, 'escape-dir'))
+    symlinkSync(join(outside, 'planted.txt'), join(ws, 'dangling-out'))
+    symlinkSync(join(ws, 'src', 'later.ts'), join(ws, 'dangling-in'))
+    symlinkSync(join(ws, 'src', 'a.ts'), join(ws, 'inside-link'))
+    symlinkSync(join(ws, 'loop-b'), join(ws, 'loop-a'))
+    symlinkSync(join(ws, 'loop-a'), join(ws, 'loop-b'))
+    const answers = agrees([
+      'escape-file',
+      'escape-dir/new.txt',
+      'dangling-out',
+      'dangling-in',
+      'inside-link',
+      'loop-a',
+      'escape-file'
+    ])
+    expect(answers.map((a) => a.split(' ')[0])).toEqual(['refused', 'refused', 'refused', 'ok', 'ok', 'refused', 'refused'])
   })
 })
 

@@ -177,6 +177,7 @@ import { runOutcome, runOutcomePhrase } from '@shared/runEnd'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
 import { highlightToHtml, type HljsLike } from './syntax'
 import { filterTerminalOutput, stripControlChars } from './tui-wrap'
+import { prepareSandbox } from './sandbox'
 import {
   createConversation,
   setMessages,
@@ -669,6 +670,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     process.stderr.write('Interactive mode (-i) needs a terminal. In a pipe, use `-p "<prompt>"`.\n')
     return 2
   }
+  // Choose the sandbox backend while the client starts (an asynchronous spawn on
+  // Linux), so the first run never blocks on a synchronous probe.
+  void prepareSandbox()
   // The launch flags that name files, tools or folders are read and checked before
   // the session starts, as a one-shot run does: a missing file is a usage error, not
   // a session that quietly runs without it. A bad flag value is runTui's to report.
@@ -1577,6 +1581,9 @@ export async function runScheduleDaemonEntry(
 
 /** Run the one-shot headless client to completion. Returns the exit code. */
 export async function runHeadlessEntry(headless: HeadlessOptions, opts: TerminalHost = {}): Promise<number> {
+  // Choose the sandbox backend alongside the rest of the start (an asynchronous spawn
+  // on Linux); the run awaits it rather than blocking on a synchronous probe.
+  void prepareSandbox()
   // spawn_session works headless too: children run concurrently in this process
   // and are awaited below so the one-shot exit doesn't kill them mid-run. The
   // scheduler backend is wired without starting timers — a headless run can
@@ -1750,6 +1757,9 @@ export function reserveStdoutForProtocol(): (frame: string) => void {
  */
 export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOptions = {}): Promise<number> {
   const writeFrame = reserveStdoutForProtocol()
+  // Choose the sandbox backend while the editor connects (an asynchronous spawn on
+  // Linux), so the first prompt never blocks on a synchronous probe.
+  void prepareSandbox()
   // The editor went away mid-write: there is no one left to serve, so live prompts
   // are cancelled rather than left editing files for a reader that is gone.
   const outputClosed = new AbortController()
