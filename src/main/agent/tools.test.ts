@@ -11,7 +11,9 @@ import {
   mkdirSync,
   chmodSync,
   statSync,
-  utimesSync
+  utimesSync,
+  renameSync,
+  readdirSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -55,6 +57,7 @@ import {
   type ToolContext
 } from './tools'
 import { FileReadTracker } from './readCache'
+import { setContainedWriteRaceHookForTests } from './safeWrite'
 import type { EvidenceDraft } from './evidence'
 import type { FetchedDocument } from './webfetch'
 import type { GhResult } from './github'
@@ -4956,6 +4959,147 @@ describe('symlink confinement (file tools run outside the sandbox)', () => {
     expect(readFileSync(join(workspace, 'made.txt'), 'utf8')).toBe('created')
   })
 })
+
+// The containment check above runs on a path string; the write used to run several
+// awaits later on the same string, in the unsandboxed main process. A sandboxed
+// background shell may create symlinks in the workspace, so it could swap a folder on
+// the path for a symlink to somewhere outside in that gap. The race hook in safeWrite
+// runs after the tool's check and before the write, which is exactly that gap, so each
+// test here performs the attacker's swap deterministically.
+;(process.platform === 'win32' ? describe.skip : describe)(
+  'file writes when a folder is swapped for a symlink after the check',
+  () => {
+    let outside: string
+    const patch = (...body: string[]): string => ['*** Begin Patch', ...body, '*** End Patch'].join('\n')
+    /** Replace `workspace/<rel>` with a symlink to the outside folder. */
+    const swap = (rel: string): void => {
+      renameSync(join(workspace, rel), join(workspace, `${rel}.moved`))
+      symlinkSync(outside, join(workspace, rel))
+    }
+    /** Swap `rels` the first time an operation of kind `op` reaches `whenPath`. */
+    const swapWhen = (op: string, whenPath: string, ...rels: string[]): void => {
+      let done = false
+      setContainedWriteRaceHookForTests((o, abs) => {
+        if (done || o !== op || !abs.endsWith(whenPath)) return
+        done = true
+        rels.forEach(swap)
+      })
+    }
+    /** The outside folder exactly as the test left it: nothing created, changed or removed. */
+    const outsideUntouched = (): void => {
+      expect(readdirSync(outside).sort()).toEqual(['a.txt', 'a.ipynb', 'new.txt'].sort())
+      expect(readFileSync(join(outside, 'a.txt'), 'utf8')).toBe('OUTSIDE')
+      expect(readFileSync(join(outside, 'new.txt'), 'utf8')).toBe('OUTSIDE')
+    }
+
+    beforeEach(() => {
+      outside = realpathSync(mkdtempSync(join(tmpdir(), 'houston-race-out-')))
+      // Same names as the workspace files, so an escaped write would land on these.
+      writeFileSync(join(outside, 'a.txt'), 'OUTSIDE')
+      writeFileSync(join(outside, 'new.txt'), 'OUTSIDE')
+      writeFileSync(join(outside, 'a.ipynb'), 'OUTSIDE')
+      mkdirSync(join(workspace, 'sub'))
+      mkdirSync(join(workspace, 'other'))
+      writeFileSync(join(workspace, 'sub/a.txt'), 'inside\n')
+      writeFileSync(join(workspace, 'top.txt'), 'top\n')
+    })
+    afterEach(() => {
+      setContainedWriteRaceHookForTests(null)
+      rmSync(outside, { recursive: true, force: true })
+    })
+
+    it('write_file: overwriting', async () => {
+      swapWhen('write', 'a.txt', 'sub')
+      await expect(run('write_file', { path: 'sub/a.txt', content: 'PWNED' })).rejects.toThrow(/symlink/)
+      outsideUntouched()
+    })
+
+    it('write_file: creating, including new folders', async () => {
+      swapWhen('write', 'x.txt', 'sub')
+      await expect(run('write_file', { path: 'sub/deep/x.txt', content: 'PWNED' })).rejects.toThrow(/symlink/)
+      outsideUntouched()
+    })
+
+    it('edit_file', async () => {
+      swapWhen('write', 'a.txt', 'sub')
+      await expect(
+        run('edit_file', { path: 'sub/a.txt', old_string: 'inside', new_string: 'PWNED' })
+      ).rejects.toThrow(/symlink/)
+      outsideUntouched()
+    })
+
+    it('multi_edit', async () => {
+      swapWhen('write', 'a.txt', 'sub')
+      await expect(
+        run('multi_edit', { path: 'sub/a.txt', edits: [{ old_string: 'inside', new_string: 'PWNED' }] })
+      ).rejects.toThrow(/symlink/)
+      outsideUntouched()
+    })
+
+    it('notebook_edit', async () => {
+      const nb = { cells: [{ cell_type: 'code', metadata: {}, source: ['x = 1'], outputs: [], execution_count: null }], metadata: {}, nbformat: 4, nbformat_minor: 5 }
+      writeFileSync(join(workspace, 'sub/a.ipynb'), JSON.stringify(nb))
+      swapWhen('write', 'a.ipynb', 'sub')
+      await expect(run('notebook_edit', { path: 'sub/a.ipynb', cell: 1, source: 'PWNED' })).rejects.toThrow(/symlink/)
+      outsideUntouched()
+    })
+
+    it('apply_patch: Add File', async () => {
+      swapWhen('write', 'new.txt', 'sub')
+      await expect(run('apply_patch', { patch: patch('*** Add File: sub/new.txt', '+PWNED') })).rejects.toThrow(
+        /symlink/
+      )
+      outsideUntouched()
+    })
+
+    it('apply_patch: Update File', async () => {
+      swapWhen('write', 'a.txt', 'sub')
+      await expect(
+        run('apply_patch', { patch: patch('*** Update File: sub/a.txt', '-inside', '+PWNED') })
+      ).rejects.toThrow(/symlink/)
+      outsideUntouched()
+    })
+
+    it('apply_patch: Delete File', async () => {
+      swapWhen('remove', 'a.txt', 'sub')
+      await expect(run('apply_patch', { patch: patch('*** Delete File: sub/a.txt') })).rejects.toThrow(/symlink/)
+      outsideUntouched()
+    })
+
+    it('apply_patch: Move to (and the moved-away source is restored)', async () => {
+      swapWhen('write', 'new.txt', 'sub')
+      await expect(
+        run('apply_patch', { patch: patch('*** Update File: top.txt', '*** Move to: sub/new.txt', '-top', '+PWNED') })
+      ).rejects.toThrow(/symlink/)
+      outsideUntouched()
+      expect(readFileSync(join(workspace, 'top.txt'), 'utf8')).toBe('top\n')
+    })
+
+    it('apply_patch rollback: neither restores nor deletes through a swapped folder', async () => {
+      // sub/a.txt commits and sub/new.txt is added; then the write to other/x.txt is
+      // refused because `other` was swapped, and in the same instant `sub` was too. The
+      // rollback must then restore sub/a.txt and delete sub/new.txt, and both would land
+      // in the outside folder (clobbering a.txt, deleting new.txt) if they followed it.
+      swapWhen('write', 'x.txt', 'sub', 'other')
+      const err = await run('apply_patch', {
+        patch: patch(
+          '*** Update File: sub/a.txt',
+          '-inside',
+          '+changed',
+          '*** Add File: sub/new.txt',
+          '+added',
+          '*** Add File: other/x.txt',
+          '+x'
+        )
+      }).catch((e: Error) => e)
+      expect(err).toBeInstanceOf(Error)
+      // The tree really is half-patched (the in-root sub/ was moved aside, holding the
+      // committed edits), and the tool says so instead of claiming a clean rollback.
+      expect((err as Error).message).toMatch(/PARTIALLY PATCHED/)
+      outsideUntouched()
+    })
+  }
+)
 
 describe('skill', () => {
   it('delegates to useSkill and returns the instructions', async () => {

@@ -1,5 +1,6 @@
 import { promises as fs, realpathSync, lstatSync, readlinkSync } from 'node:fs'
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path'
+import { removeEmptyDirContained, removeFileContained, writeFileContained } from './safeWrite'
 import type {
   AgentQuestion,
   ChatMessage,
@@ -901,8 +902,7 @@ const writeFile: ToolDef = {
         )
       }
     }
-    await fs.mkdir(dirname(abs), { recursive: true })
-    await fs.writeFile(abs, content, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, content, { display: rel })
     ctx.fileTracker?.noteWrite(abs, content)
     const done = `Wrote ${Buffer.byteLength(content)} bytes to ${rel}.`
     const feedback = previous === null ? '' : rewriteFeedback(previous, content)
@@ -1091,7 +1091,7 @@ const editFile: ToolDef = withShellCwdHint({
     const sensitive = isSensitivePath(rel)
     const result = resolveEdit(data, oldStr, newStr, replaceAll, { showCandidate: !sensitive })
     assertNoRedactedValues(data, result.content)
-    await fs.writeFile(abs, result.content, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, result.content, { display: rel })
     ctx.fileTracker?.noteWrite(abs, result.content)
     const n = result.replacements
     const fuzzy = result.strategy === 'exact' ? '' : ` [matched via ${result.strategy}]`
@@ -1204,7 +1204,7 @@ const multiEdit: ToolDef = withShellCwdHint({
       data = result.content
     })
     assertNoRedactedValues(original, data)
-    await fs.writeFile(abs, data, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, data, { display: rel })
     ctx.fileTracker?.noteWrite(abs, data)
     const done = `Edited ${rel} (${edits.length} edit${edits.length === 1 ? '' : 's'}).`
     if (flagged.length === 0) return done
@@ -1286,7 +1286,7 @@ const notebookEdit: ToolDef = withShellCwdHint({
       cellType: typeof args.cell_type === 'string' ? args.cell_type : undefined
     })
     const serialized = serializeNotebook(updated)
-    await fs.writeFile(abs, serialized, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, serialized, { display: rel })
     ctx.fileTracker?.noteWrite(abs, serialized)
     const what =
       mode === 'insert'
@@ -1360,19 +1360,21 @@ async function snapshotForRollback(paths: string[]): Promise<Map<string, FileSna
  * thing is to say so — silently swallowing it would report "nothing was changed"
  * over a working tree that had in fact been changed.
  */
-async function rollbackTo(
+function rollbackTo(
+  roots: string[],
   snaps: Map<string, FileSnapshot>,
   createdDirs: string[]
-): Promise<string[]> {
+): string[] {
   const failures: string[] = []
+  // Every restore goes through the contained helpers, like the commit itself: a
+  // rollback runs after an arbitrary delay and must not follow a symlink planted on
+  // the path in the meantime any more than the patch could.
   for (const [abs, snap] of snaps) {
     try {
       if (snap.data === null) {
-        await fs.rm(abs, { force: true })
+        removeFileContained(roots, abs)
       } else {
-        await fs.mkdir(dirname(abs), { recursive: true })
-        await fs.writeFile(abs, snap.data)
-        if (snap.mode !== undefined) await fs.chmod(abs, snap.mode)
+        writeFileContained(roots, abs, snap.data, { mode: snap.mode })
       }
     } catch (e) {
       failures.push(`${abs} (${(e as Error).message})`)
@@ -1380,13 +1382,11 @@ async function rollbackTo(
   }
   // Directories this call brought into being hold nothing but files it just wrote
   // and has now removed, so they go too — otherwise a rolled-back patch would leave
-  // a scaffold of empty directories behind. Deepest first, and best-effort.
+  // a scaffold of empty directories behind. Deepest first, and best-effort. Each is
+  // removed only while empty (rmdir, never a recursive rm): anything else that
+  // appeared in one since stays, rather than being deleted on the patch's say-so.
   for (const dir of [...createdDirs].sort((a, b) => b.length - a.length)) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true })
-    } catch {
-      // An empty directory left behind is untidy, not incorrect; never fail on it.
-    }
+    removeEmptyDirContained(roots, dir)
   }
   return failures
 }
@@ -1510,21 +1510,22 @@ const applyPatch: ToolDef = {
       // Phase 2: commit. Deletes first so a Move's delete can't clobber its target.
       for (const change of staged.filter((c) => c.content === null)) {
         failing = change
-        await fs.rm(change.abs, { force: true })
+        removeFileContained(roots, change.abs, { display: change.rel })
       }
       for (const change of staged.filter((c) => c.content !== null)) {
         failing = change
-        // mkdir reports the topmost directory it had to create, which is exactly what
-        // a rollback needs to remove; undefined means they all already existed.
-        const created = await fs.mkdir(dirname(change.abs), { recursive: true })
-        if (created) createdDirs.push(created)
-        await fs.writeFile(change.abs, change.content as string, 'utf8')
-        if (change.mode !== undefined) await fs.chmod(change.abs, change.mode)
+        // The helper reports every directory it had to create, which is exactly what
+        // a rollback needs to remove.
+        writeFileContained(roots, change.abs, change.content as string, {
+          display: change.rel,
+          mode: change.mode,
+          createdDirs
+        })
       }
     } catch (e) {
       const where = failing ? ` on ${failing.rel}` : ''
       const relOf = new Map(staged.map((c) => [c.abs, c.rel]))
-      const restoreFailures = (await rollbackTo(snaps, createdDirs)).map(
+      const restoreFailures = rollbackTo(roots, snaps, createdDirs).map(
         (f) => f.replace(/^(\S+)/, (abs) => relOf.get(abs) ?? abs)
       )
       if (restoreFailures.length > 0) {
