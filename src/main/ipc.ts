@@ -84,6 +84,7 @@ import { isDirectory, LastChatStore, launchChat } from './lastChat'
 import { applyAppBadge, attentionCount, dotPng } from './appBadge'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
+import { providerQuotas } from './providers/quota'
 import {
   cancelRun,
   resolveApproval,
@@ -1178,6 +1179,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.settingsTestKey, (_event, providerId: unknown, key: unknown) =>
     testProviderKey(providerId, key)
   )
+
+  // The quota each provider's latest response reported (its ratelimit headers), for a
+  // quota readout. In-memory and read-only: it carries no key or request content.
+  handle(IPC.providerQuotas, () => providerQuotas())
 
   // Preflight: does this local model support tool calling? Only meaningful for an
   // Ollama-style (openai-compatible) provider; anything else returns null (unknown)

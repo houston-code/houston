@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { outboundFetch } from '../outbound-proxy'
+import { recordResponseQuota } from './quota'
 
 /**
  * A `fetch` for the provider SDKs that fails a response body which stops delivering
@@ -153,6 +154,8 @@ export function idleTimeoutFetch(
   return async (input, init) => {
     const idleMs = Math.max(baseIdleMs, requestedWindow.getStore() ?? 0)
     const res = await base(input, init)
+    // Every response's rate-limit headers, success or not, for the quota readout.
+    recordResponseQuota(res.headers, res.status)
     // Statuses that can never carry a body; wrapping one would make Response throw.
     if (!res.body || [101, 204, 205, 304].includes(res.status)) return res
     const reader = res.body.getReader()

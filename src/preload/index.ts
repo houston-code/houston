@@ -20,6 +20,7 @@ import type {
   SandboxStatus
 } from '@shared/types'
 import type { ForkPoint } from '@shared/conversation-io'
+import type { ProviderQuota } from '@shared/rateLimit'
 import type { RecordShellResult } from '@shared/shellEscape'
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
@@ -278,6 +279,8 @@ const api = {
   /** Whether a local model supports tool calling: true / false / null (unknown). */
   ollamaSupportsTools: (providerId: string, model: string): Promise<boolean | null> =>
     ipcRenderer.invoke(IPC.ollamaSupportsTools, providerId, model),
+  /** The rate-limit quota each provider reported on its latest response, by provider id. */
+  getProviderQuotas: (): Promise<Record<string, ProviderQuota>> => ipcRenderer.invoke(IPC.providerQuotas),
   /** Status of optional integrations (gh CLI, formatters) for the Settings hint. */
   getIntegrations: (): Promise<IntegrationsInfo> => ipcRenderer.invoke(IPC.integrationsGet),
   /** Scheduled runs (Settings > Scheduled runs). */

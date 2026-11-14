@@ -65,7 +65,8 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { throttleNotice } from '@shared/rateLimit'
+import { quotaIsLow, quotaStatusText, throttleNotice, type ProviderQuota } from '@shared/rateLimit'
+import { providerQuota } from './providers/quota'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
@@ -907,6 +908,8 @@ export interface StatusState {
   contextTokens: number
   /** The checked-out git branch, or null outside a repository (or on a detached HEAD). */
   branch?: string | null
+  /** The rate-limit quota the provider reported on its latest response, when it sent one. */
+  quota?: ProviderQuota
 }
 
 /** A path under the home folder written from `~` (`~/code/app`); any other path as is. */
@@ -939,6 +942,8 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
   parts.push(formatUsd(s.cost.cost))
   const ctx = renderContextUsage(s.contextTokens, s.model, paint)
   if (ctx) parts.push(ctx)
+  const quota = quotaStatusText(s.quota)
+  if (quota) parts.push(paint(quota, quotaIsLow(s.quota) ? 'yellow' : 'dim'))
   return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
 }
 
@@ -3782,7 +3787,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       `${
         providerId && model
           ? renderStatusLine(
-              { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens, branch },
+              {
+                providerId,
+                model,
+                policy,
+                cwd: opts.cwd,
+                cost: sessionCost,
+                contextTokens,
+                branch,
+                quota: providerQuota(providerId)
+              },
               columns(),
               paint
             )

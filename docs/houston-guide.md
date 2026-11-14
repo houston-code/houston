@@ -531,6 +531,14 @@ retries the turn with a growing pause between attempts and tells you it's retryi
   said it would take requests again) stays in the status bar, and the Usage view lists
   it for every provider, until the app quits. Nothing shows before a provider has
   rate limited a request.
+- **Quota is shown before you hit it.** Providers that send rate-limit headers (the
+  Claude API, OpenAI and compatible hosts) report what's left on every reply, not only
+  on a refusal. The terminal's status line shows it (`rate 45 req · 12k tok left`),
+  in yellow once under a tenth of the window or after a throttle.
+- **A garbled tool call gets one more try.** When Gemini can't parse the tool call a
+  model wrote (`MALFORMED_FUNCTION_CALL`) and the reply is otherwise empty, Houston asks
+  again once before treating the reply as empty. A Claude web search the API pauses
+  partway (`pause_turn`) is resumed, up to twice.
 - **Nothing half-runs.** Tool calls in a discarded reply never run.
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.

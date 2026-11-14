@@ -172,6 +172,8 @@ export const IPC = {
   settingsTestKey: 'settings:testKey',
   /** Whether a local (Ollama) model supports tool calling — true / false / null (unknown). */
   ollamaSupportsTools: 'ollama:supportsTools',
+  /** The rate-limit quota each provider reported on its latest response, by provider id. */
+  providerQuotas: 'providers:quotas',
   // MCP: remote-server OAuth sign-in/out + live connection status (Settings UI).
   mcpOAuthLogin: 'mcp:oauthLogin',
   mcpOAuthLogout: 'mcp:oauthLogout',
