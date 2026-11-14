@@ -56,9 +56,16 @@ describe('overlays', () => {
     expect(occludesPreview(only('find'))).toBe(false)
   })
 
-  it('hides the preview under the What’s new card but leaves Shift+Tab to the chat', () => {
-    expect(occludesPreview(only('whatsNew'))).toBe(true)
+  it('keeps the preview up beside the What’s new card and leaves Shift+Tab to the chat', () => {
+    // The card sits in the chat column, offset by the dock's width, so it never
+    // overlaps the native preview views; it still holds tips back.
+    expect(occludesPreview(only('whatsNew'))).toBe(false)
     expect(ownsShiftTab(only('whatsNew'))).toBe(false)
+    expect(suppressesTips(only('whatsNew'))).toBe(true)
+  })
+
+  it('still hides the preview when a modal opens over the What’s new card', () => {
+    expect(occludesPreview({ ...only('whatsNew'), settings: true })).toBe(true)
   })
 
   it('lets only the keys that close the open modal act over it', () => {
