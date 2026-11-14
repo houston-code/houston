@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto'
 import type { ApprovalPolicy } from '@shared/types'
 import type { ChatMessage, Conversation, ProposalState, ToolCall } from '@shared/agent'
 import {
@@ -11,7 +10,7 @@ import {
   type SpawnSessionResult
 } from './agent/spawn'
 import { parseContextArg, parseWorktreeArg } from './agent/tools'
-import { getRepoInfo, slugifyBranch } from './agent/worktree'
+import { autoBranchFor, getRepoInfo } from './agent/worktree'
 import { getConversation, setProposalState } from './conversations'
 
 /**
@@ -78,14 +77,8 @@ export function proposalsIn(messages: ChatMessage[]): ProposalEntry[] {
   return out
 }
 
-/**
- * The branch a proposal gets when it didn't name one: `houston/<title-slug>-<suffix>`.
- * The random suffix keeps two proposals with similar titles from colliding.
- */
-export function autoBranchFor(title: string, suffix: string = randomBytes(3).toString('hex')): string {
-  const slug = slugifyBranch(title).slice(0, 40).replace(/-+$/, '') || 'session'
-  return `houston/${slug}-${suffix}`
-}
+/** The branch a proposal gets when it didn't name one (shared with spawn_session). */
+export { autoBranchFor }
 
 /** The store and spawn operations a proposal needs, injected so this stays testable. */
 export interface ProposalDeps {

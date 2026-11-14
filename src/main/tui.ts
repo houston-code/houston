@@ -73,6 +73,7 @@ import { providerSendsXhigh } from '@shared/model-facts'
 import type { ContextParts, ModelUsage, RunLimitReason } from '@shared/agent'
 import { latestRunEnd, limitNoticeText, runEndNoticeText, runOutcomePhrase, type RunOutcome } from '@shared/runEnd'
 import { renderContextReport } from '@shared/contextBreakdown'
+import { compactionLimitFrom, compactionThresholdNote } from '@shared/compactionThreshold'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
@@ -83,7 +84,15 @@ import type { ConversationSettingsPatch, ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, deniedPromptText, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
-import { truncateVisible, stripControlChars, osc52Copy, osc8Link, visibleWidth, wrapAnsi } from './tui-wrap'
+import {
+  truncateVisible,
+  stripControlChars,
+  stripControlCharsKeepLines,
+  osc52Copy,
+  osc8Link,
+  visibleWidth,
+  wrapAnsi
+} from './tui-wrap'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -363,8 +372,10 @@ export function renderTodoList(todos: Todo[], paint: Painter): string {
  */
 export function renderToolStart(name: string, args: Record<string, unknown>, paint: Painter): string {
   const { verb, target } = describeToolCall(name, args)
-  // A tool the shared labels don't know keeps the old best-effort argument hint.
-  const hint = truncate((target || (verb === name ? toolArgHint(args) : '')).replace(/\s+/g, ' ').trim(), 80)
+  // A tool the shared labels don't know keeps the old best-effort argument hint. The
+  // hint is the model's argument (a command, a path), so its control characters go.
+  const raw = stripControlChars((target || (verb === name ? toolArgHint(args) : '')).replace(/\s+/g, ' '))
+  const hint = truncate(raw.trim(), 80)
   const suffix = hint ? `  ${paint(hint, 'dim')}` : ''
   return `${paint('·', 'dim')} ${paint(verb, 'cyan')}${suffix}`
 }
@@ -398,7 +409,7 @@ export function tagResultLines(rendered: string, tag: string, paint: Painter): s
 export function toolArgHint(args: Record<string, unknown>): string {
   for (const key of ['path', 'file', 'file_path', 'command', 'cmd', 'query', 'url', 'pattern']) {
     const v = args[key]
-    if (typeof v === 'string' && v.trim()) return truncate(v.replace(/\s+/g, ' ').trim(), 80)
+    if (typeof v === 'string' && v.trim()) return truncate(stripControlChars(v.replace(/\s+/g, ' ')).trim(), 80)
   }
   return ''
 }
@@ -418,6 +429,10 @@ export function renderApprovalPrompt(
   // and "deny" as "keep offline", not "block".
   // The egress question likewise comes after the proxy refused a host the allowlist
   // doesn't name; it decides that one host for the chat.
+  // The summary is the model's own text (for a shell call, the command itself), so a
+  // carriage return or an erase-line escape in it could overwrite what is about to be
+  // approved with something harmless. Its control characters go; its lines stay.
+  const summary = stripControlCharsKeepLines(ev.summary)
   if (ev.egressHost) {
     const host = stripControlChars(ev.egressHost)
     const head = paint(`A command tried to reach ${host}, which isn't on the sandbox's allowed domains.`, 'bold')
@@ -426,7 +441,7 @@ export function renderApprovalPrompt(
       'dim'
     )
     const keys = opts.picker ? '' : `\n${paint(`  [y] allow ${host} for this chat   [n] keep blocked`, 'dim')}`
-    return `\n${head}\n  ${ev.summary}\n${note}${keys}`
+    return `\n${head}\n  ${summary}\n${note}${keys}`
   }
   if (ev.shellNetwork) {
     const head = paint('This command could not reach the network.', 'bold')
@@ -435,7 +450,7 @@ export function renderApprovalPrompt(
       'dim'
     )
     const keys = opts.picker ? '' : `\n${paint('  [y] allow network for this chat   [n] keep offline', 'dim')}`
-    return `\n${head}\n  ${ev.summary}\n${note}${keys}`
+    return `\n${head}\n  ${summary}\n${note}${keys}`
   }
   const warn =
     ev.kind === 'shell' && ev.sandboxed === false
@@ -452,7 +467,7 @@ export function renderApprovalPrompt(
     : ''
   // A network grant reaches one destination; say which before the user picks it.
   const scope = ev.networkScope
-    ? `\n${paint(`  "Allow for run" covers ${ev.networkScope} for the rest of this chat.`, 'dim')}`
+    ? `\n${paint(`  "Allow for run" covers ${stripControlChars(ev.networkScope)} for the rest of this chat.`, 'dim')}`
     : ''
   // Named as the call's tool line names it ("Run", "Write"), not by its wire name.
   const head = paint(`Approve ${describeToolCall(ev.name, ev.args).verb}`, 'bold')
@@ -461,7 +476,7 @@ export function renderApprovalPrompt(
     ? ''
     : `\n${paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim')}` +
       paint('\n  …or type why not, and that goes back to the agent', 'dim')
-  return `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}${scope}${keys}`
+  return `\n${head} ${kind}\n  ${summary}${warn}${offline}${scope}${keys}`
 }
 
 /**
@@ -588,7 +603,9 @@ export function extractDiff(args: Record<string, unknown>): string | null {
 
 /** Colorize a unified diff, capped at `maxLines` so a huge edit doesn't flood the terminal. */
 export function colorizeDiff(diff: string, paint: Painter, maxLines = 40): string {
-  const lines = diff.split('\n')
+  // Built from the model's arguments: drop control characters so none can paint over
+  // the change being approved (tabs stay, as indentation).
+  const lines = stripControlCharsKeepLines(diff).split('\n')
   const shown = lines.slice(0, maxLines).map((l) => {
     // Header markers must be checked before +/- since `+++`/`---` also start with them.
     if (l.startsWith('+++') || l.startsWith('---') || l.startsWith('@@')) return paint(l, 'cyan')
@@ -676,7 +693,9 @@ export function renderToolResult(
   // for it, so a "✗ Run failed" line over the model-facing text would only repeat it.
   if (!ok && deniedPromptText(output) !== null) return ''
   if (ok && name === PRESENT_PLAN_TOOL) return paint(`  ↳ ${PLAN_OUTCOME_LABEL[planOutcome(output)]}`, 'dim')
-  const lines = output.split('\n')
+  // A command's output (or a fetched page, or an MCP result) can carry escapes that
+  // move the cursor or write the clipboard; show its text without them.
+  const lines = output.split('\n').map(stripControlCharsKeepLines)
   if (!ok) {
     // "✗ Run failed", matching the row above it, not the wire name.
     const failed = paint(`  ✗ ${describeToolCall(name, undefined).verb} failed`, 'red')
@@ -741,7 +760,7 @@ export function renderRecoveredOutput(
     return paint(`· no tool call #${index} (this conversation has ${results.length})`, 'yellow')
   }
   const picked = results[results.length - index]
-  const lines = picked.output.split('\n')
+  const lines = picked.output.split('\n').map(stripControlCharsKeepLines)
   const shown = lines.slice(0, OUTPUT_LINES)
   const head = paint(`▣ ${picked.name}`, 'bold') + paint(`  (${index} back, ${lines.length} lines)`, 'dim')
   const more =
@@ -860,7 +879,7 @@ export function renderEditSummary(preview: FileDiffPreview[], paint: Painter): s
   const files = preview.slice(0, EDIT_SUMMARY_FILES).map((f) => {
     const { added, removed } = diffStat(f.diff)
     const more = f.truncated ? '…' : ''
-    const name = f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path
+    const name = stripControlChars(f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path)
     const tag = f.created ? paint(' (new)', 'dim') : f.deleted ? paint(' (deleted)', 'dim') : ''
     const counts = [
       added || !removed ? paint(`+${added}${more}`, 'green') : '',
@@ -1285,14 +1304,14 @@ export function formatRelativeTime(then: number, now: number): string {
 
 /** The question line of an `ask_user` prompt. */
 export function renderQuestionHeader(question: string, paint: Painter): string {
-  return `\n${paint('? ', 'magenta')}${paint(question, 'bold')}`
+  return `\n${paint('? ', 'magenta')}${paint(stripControlCharsKeepLines(question), 'bold')}`
 }
 
 /** The numbered options + typing hint for answering an `ask_user` question by hand. */
 export function renderQuestionChoices(options: QuestionOption[], multiSelect: boolean, paint: Painter): string {
   const lines = options.map((o, i) => {
-    const desc = o.description ? paint(`  (${o.description})`, 'dim') : ''
-    return `  ${paint(String(i + 1), 'cyan')}. ${o.label}${desc}`
+    const desc = o.description ? paint(`  (${stripControlChars(o.description)})`, 'dim') : ''
+    return `  ${paint(String(i + 1), 'cyan')}. ${stripControlChars(o.label)}${desc}`
   })
   const hint = multiSelect
     ? 'Enter numbers (comma-separated) or type an answer'
@@ -1375,15 +1394,17 @@ export function renderPlan(
   paint: Painter,
   opts: { actions?: boolean; width?: number; highlight?: (lang: string, code: string) => string } = {}
 ): string {
-  const lines = [`\n${paint('▣ Plan:', 'magenta')} ${paint(plan.title, 'bold')}`]
+  // Every part of the plan is the model's text, so none of it reaches the terminal
+  // with its control characters (the body's are dropped by the markdown renderer).
+  const lines = [`\n${paint('▣ Plan:', 'magenta')} ${paint(stripControlChars(plan.title), 'bold')}`]
   const body = plan.body?.trim()
   if (body) {
     lines.push('', renderMarkdownAnsi(body, { paint, width: opts.width ?? 0, highlight: opts.highlight }))
   } else {
-    if (plan.overview) lines.push('', plan.overview)
-    for (const step of plan.steps ?? []) lines.push(`  • ${step}`)
+    if (plan.overview) lines.push('', stripControlCharsKeepLines(plan.overview))
+    for (const step of plan.steps ?? []) lines.push(`  • ${stripControlChars(step)}`)
   }
-  if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.join(', ')}`, 'dim'))
+  if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.map(stripControlChars).join(', ')}`, 'dim'))
   const verify = planVerifySteps(plan)
   if (verify.length) lines.push('', paint(`Checks: ${verify.map(stripControlChars).join('; ')}`, 'dim'))
   // Houston's own answer to whether those checks can run here, worked out from the
@@ -4694,7 +4715,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       switch (e.type) {
         case 'reasoning':
           deps.io.setSpinnerLabel?.('Thinking')
-          deps.io.out(paint(e.delta, 'dim'))
+          deps.io.out(paint(stripControlCharsKeepLines(e.delta), 'dim'))
           roundShown = true
           break
         case 'turn_discarded':
@@ -4777,7 +4798,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'tool_progress': {
           if (!e.message.trim()) break
           const tag = callTag(e.callId)
-          deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(e.message.trim(), 80)}\n`, 'dim'))
+          deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(stripControlChars(e.message).trim(), 80)}\n`, 'dim'))
           break
         }
         case 'subagent_start':
@@ -4793,14 +4814,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'subagent':
           // Line mode can't update a row in place, so print discrete markers: a
           // start line, then a done/error line, indented under the parent tool.
-          deps.io.out(paint(`    ${subagentGlyph(e.status)} ${e.label}\n`, 'dim'))
+          deps.io.out(paint(`    ${subagentGlyph(e.status)} ${stripControlChars(e.label)}\n`, 'dim'))
           break
         case 'review_finding': {
           const line = printFinding(e.parentCallId, e.finding)
           if (line) {
             const s = e.finding.status
             const tone = s === 'confirmed' ? 'yellow' : s === 'candidate' ? undefined : 'dim'
-            const text = `      ${truncate(line, 120)}\n`
+            const text = `      ${truncate(stripControlChars(line), 120)}\n`
             deps.io.out(tone ? paint(text, tone) : text)
           }
           break
@@ -4809,13 +4830,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
           if (retryStreak === 0) {
             const line = e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `retrying (${retryProgress(e)})… ${e.message}`
-            deps.io.out(paint(`\n· ${line}\n`, 'yellow'))
+            deps.io.out(paint(`\n· ${stripControlCharsKeepLines(line)}\n`, 'yellow'))
           }
           retryStreak = e.attempt
           break
         case 'model_fallback':
           deps.io.setSpinnerLabel?.('Switching model')
-          deps.io.out(paint(`\n· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`, 'yellow'))
+          deps.io.out(
+            paint(`\n· ${stripControlCharsKeepLines(`${e.from} unavailable, falling back to ${e.to}… ${e.reason}`)}\n`, 'yellow')
+          )
           break
         case 'tool_approval':
           if (e.kind === 'write') promptedWrites.add(e.callId)
@@ -4911,7 +4934,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               const r = await deps.io.select({
                 title: '',
                 multiSelect: multi,
-                options: e.options.map((o) => ({ label: o.label, value: o.label, description: o.description }))
+                // Shown cleaned; the answer is still the label as the agent wrote it.
+                options: e.options.map((o) => ({
+                  label: stripControlChars(o.label),
+                  value: o.label,
+                  ...(o.description ? { description: stripControlChars(o.description) } : {})
+                }))
               })
               if (r.kind === 'commit') answer = r.value
               // cancel/type → fall through so the user can still type a custom answer
@@ -4929,8 +4957,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // values go to that external server), offer a decline, then collect one
           // line per field, re-prompting on invalid values.
           enqueue(async () => {
+            // Everything here but the field values is the remote server's text.
             deps.io.out(
-              `\n${paint(`MCP server "${e.serverId}" requests input:`, 'cyan')} ${e.message}\n`
+              `\n${paint(`MCP server "${stripControlChars(e.serverId)}" requests input:`, 'cyan')} ${stripControlCharsKeepLines(e.message)}\n`
             )
             const proceed = await deps.io.readLine('Provide it? [y/N] ', { discardPending: true })
             if (proceed === null || !/^y(es)?$/i.test(proceed.trim())) {
@@ -4942,7 +4971,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             }
             const raw: Record<string, string> = {}
             for (const f of e.fields) {
-              if (f.description) deps.io.out(paint(`  ${f.name}: ${f.description}\n`, 'dim'))
+              if (f.description) {
+                deps.io.out(paint(`  ${stripControlChars(f.name)}: ${stripControlCharsKeepLines(f.description)}\n`, 'dim'))
+              }
               for (;;) {
                 const hints = [
                   f.kind === 'enum' ? (f.options ?? []).join(' | ') : f.kind !== 'string' ? f.kind : '',
@@ -4950,7 +4981,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                 ]
                   .filter(Boolean)
                   .join('; ')
-                const ans = await deps.io.readLine(`${f.title ?? f.name}${hints ? ` (${hints})` : ''}: `, {
+                const label = stripControlChars(`${f.title ?? f.name}${hints ? ` (${hints})` : ''}`)
+                const ans = await deps.io.readLine(`${label}: `, {
                   discardPending: true
                 })
                 if (ans === null) {
@@ -4963,7 +4995,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                   raw[f.name] = ans
                   break
                 }
-                deps.io.out(paint(`· ${check.error}\n`, 'yellow'))
+                deps.io.out(paint(`· ${stripControlChars(check.error)}\n`, 'yellow'))
               }
             }
             const built = buildElicitationContent(e.fields, raw)
@@ -5001,7 +5033,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               paint(`\n· tried ${retryStreak} more time${retryStreak === 1 ? '' : 's'}, then stopped\n`, 'yellow')
             )
           }
-          deps.io.out(paint(`\nError: ${e.message}\n`, 'red'))
+          deps.io.out(paint(`\nError: ${stripControlCharsKeepLines(e.message)}\n`, 'red'))
           break
         case 'limit':
           deps.io.out(paint(`\n· ${limitNoticeText(e.reason)}\n`, 'yellow'))
@@ -5012,7 +5044,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension) — display-only, never
           // part of the model's context.
-          deps.io.out(paint(`\n· ${e.message}\n`, 'dim'))
+          deps.io.out(paint(`\n· ${stripControlCharsKeepLines(e.message)}\n`, 'dim'))
           break
         case 'runtime_missing':
           // Display-only: the model already got the hint in the run_shell result.
@@ -5238,7 +5270,8 @@ function handleInfoCommand(
   if (name === 'context') {
     const window = state.model ? contextWindowFor(state.model) : null
     const tier = state.model ? longContextTierAbove(state.model) : null
-    deps.io.out(`${renderContextReport(state.contextParts ?? null, state.contextTokens ?? 0, window, tier)}\n`)
+    const compaction = compactionThresholdNote(compactionLimitFrom(deps.getSettings()), window, tier)
+    deps.io.out(`${renderContextReport(state.contextParts ?? null, state.contextTokens ?? 0, window, tier, compaction)}\n`)
     return
   }
   if (name === 'theme') {

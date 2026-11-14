@@ -103,9 +103,18 @@ export function UpdateBanner({
         <span className="update-banner__icon" aria-hidden="true">
           ↑
         </span>
+        {/* The live text stays put while the download runs, so it is announced once;
+            the percent lives on the progress bar, which is read when visited. */}
         <span className="update-banner__label">
-          Downloading update… {pct}%
-          <span className="update-banner__progress" aria-hidden="true">
+          Downloading update… <span aria-hidden="true">{pct}%</span>
+          <span
+            className="update-banner__progress"
+            role="progressbar"
+            aria-label="Update download"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={pct}
+          >
             <span className="update-banner__progress-fill" style={{ width: `${pct}%` }} />
           </span>
         </span>

@@ -15,6 +15,7 @@ import {
 import { shouldAutoInstallUpdates, shouldAutoUpdate, shouldShowWhatsNew } from './update-policy'
 import { readLastSeenVersion, writeLastSeenVersion } from './update-state'
 import { openExternalSafely } from './safeExternal'
+import { log } from './logger'
 
 /**
  * App updates, in two parts:
@@ -123,7 +124,7 @@ export function cancelDownload(): boolean {
   pendingDownload = null
   cancelledDownloads.add(entry.promise)
   entry.token.cancel()
-  console.log('[updater] download cancelled')
+  log.info('[updater] download cancelled')
   return true
 }
 
@@ -171,7 +172,7 @@ async function configureUpdater(): Promise<ElectronUpdater['autoUpdater']> {
     const autoInstall = shouldAutoInstallUpdates()
     autoUpdater.autoDownload = autoInstall
     autoUpdater.autoInstallOnAppQuit = autoInstall
-    autoUpdater.on('error', (err) => console.error('[updater] error:', err?.message ?? err))
+    autoUpdater.on('error', (err) => log.warn(`[updater] error: ${err?.message ?? String(err)}`))
     if (autoInstall) {
       // The download runs in the background; surface its progress and the "ready to
       // install" transition so the banner can show a bar + a Restart-to-install button
@@ -186,7 +187,7 @@ async function configureUpdater(): Promise<ElectronUpdater['autoUpdater']> {
         broadcast(IPC.updateDownloadProgress, payload)
       })
       autoUpdater.on('update-downloaded', (info) => {
-        console.log('[updater] downloaded', info?.version, '(waiting for the signature check)')
+        log.info(`[updater] downloaded ${info?.version} (waiting for the signature check)`)
         beginVerification(info?.version ?? '')
       })
       // Squirrel.Mac's verdict on that download. Its errors only come from the update
@@ -225,7 +226,7 @@ function acceptVerified(): void {
   verifying = null
   downloadedVersion = version
   if (refusedVersion === version) refusedVersion = null
-  console.log('[updater]', version, 'verified (ready to install)')
+  log.info(`[updater] ${version} verified (ready to install)`)
   const payload: UpdateDownloaded = { version }
   broadcast(IPC.updateDownloaded, payload)
   accept()
@@ -239,7 +240,7 @@ function refuseVerified(err: unknown): void {
   if (downloadedVersion === version) downloadedVersion = null
   refusedVersion = version
   const message = (err as Error)?.message ?? String(err)
-  console.error('[updater] macOS refused to install', version, ':', message)
+  log.error(`[updater] macOS refused to install ${version}: ${message}`)
   const payload: UpdateInstallFailed = { version, releaseUrl: DOWNLOAD_URL }
   broadcast(IPC.updateInstallFailed, payload)
   refuse(new UpdateRefusedError(message))
@@ -268,7 +269,7 @@ export async function installUpdate(): Promise<boolean> {
     autoUpdater.quitAndInstall()
     return true
   } catch (e) {
-    console.error('[updater] install failed:', (e as Error)?.message ?? e)
+    log.error(`[updater] install failed: ${(e as Error)?.message ?? String(e)}`)
     onInstallAborted()
     return false
   }
@@ -395,7 +396,7 @@ async function runCheck(): Promise<UpdateCheckResult> {
     return { status: 'up-to-date', currentVersion }
   } catch (e) {
     const message = (e as Error)?.message ?? String(e)
-    console.error('[updater] check failed:', message)
+    log.warn(`[updater] check failed: ${message}`)
     return { status: 'error', currentVersion, message }
   }
 }
@@ -508,7 +509,7 @@ export async function checkForUpdatesFromMenu(): Promise<void> {
     await downloadAndInstall(result.status === 'available' ? result.latestVersion : '')
   } catch (e) {
     const refused = e instanceof UpdateRefusedError
-    if (!refused) console.error('[updater] download failed:', (e as Error)?.message ?? e)
+    if (!refused) log.warn(`[updater] download failed: ${(e as Error)?.message ?? String(e)}`)
     const hint = refused ? null : updateErrorHint((e as Error)?.message ?? String(e))
     const choice = await showBox({
       type: 'warning',
@@ -545,7 +546,7 @@ function stageWhatsNew(): void {
     try {
       writeLastSeenVersion(current)
     } catch (e) {
-      console.error('[updater] could not record version:', (e as Error)?.message ?? e)
+      log.warn(`[updater] could not record version: ${(e as Error)?.message ?? String(e)}`)
     }
   }
 }
@@ -564,7 +565,7 @@ let periodicTimer: ReturnType<typeof setInterval> | null = null
 function backgroundCheck(): void {
   void checkForUpdates().then((r) => {
     if (r.status === 'available') {
-      console.log('[updater] update available:', r.latestVersion)
+      log.info(`[updater] update available: ${r.latestVersion}`)
     }
   })
 }

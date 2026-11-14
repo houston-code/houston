@@ -1,7 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { ProviderConfig } from '@shared/types'
 import { modelDisplayName } from '@shared/models'
-import { filterPalette, modelPaletteItems, type PaletteItem } from './palette'
+import { chatPlace, filterPalette, modelPaletteItems, type PaletteItem } from './palette'
+
+describe('chatPlace', () => {
+  it("names a worktree chat's project and branch, not its checkout folder", () => {
+    expect(
+      chatPlace({ workspace: '/code/app/.houston/worktrees/fix-login', worktree: { repoRoot: '/code/app', branch: 'fix/login' } })
+    ).toBe('app · fix/login')
+    expect(chatPlace({ workspace: '/code/site' })).toBe('site')
+  })
+})
 
 const item = (over: Partial<PaletteItem> & { id: string; title: string }): PaletteItem => ({
   section: 'Actions',

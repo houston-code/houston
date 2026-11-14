@@ -24,6 +24,7 @@ import { branchNameError, canCreateWorktree } from '../lib/worktree'
 import { baseName } from '../lib/paths'
 import { ModelPicker } from './ModelPicker'
 import { CostBreakdown } from './CostBreakdown'
+import { compactionLimitFrom, compactionThresholdNote } from '@shared/compactionThreshold'
 import { ChoiceMenu, type Choice } from './ChoiceMenu'
 import { Popover } from './Popover'
 import { recentFolders } from '../lib/recentFolders'
@@ -349,6 +350,7 @@ export function ControlBar({
           usage={usage}
           contextWindow={ctxWindow}
           priceTierAbove={priceTier}
+          compactionNote={compactionThresholdNote(compactionLimitFrom(settings), ctxWindow, priceTier)}
           meterPct={pct}
           meterClass={meterClass}
           agents={subagentSpend}

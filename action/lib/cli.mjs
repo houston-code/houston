@@ -49,21 +49,24 @@ export const ALWAYS_DENIED_TOOLS = [
 export const MODE_TOOLS = {
   respond: ['gh_issue_view', 'gh_pr_view'],
   review: ['review_changes', 'gh_pr_view'],
-  'fix-ci': ['gh_run_view']
+  'fix-ci': ['gh_run_view'],
+  implement: ['gh_issue_view'],
+  task: []
 }
 
 export const APPROVAL_POLICIES = ['plan', 'ask', 'auto-edit', 'full-auto']
 
 /**
  * The approval policy for a run. Unset (or `default`) picks the safe one per mode:
- * read-only plan mode to answer or review, and for fix-ci auto-edit with shell commands
+ * read-only plan mode to answer, review, or run a scheduled task, and for fix-ci and
+ * implement (the modes that end in a new branch and a pull request) auto-edit with shell commands
  * allowed by rule inside the sandbox (see {@link permissionRules}). That is full autonomy
  * within the sandbox, offline, without full-auto's one-time network-consent prompt, which
  * nobody is there to answer.
  */
 export function resolveApproval(mode, input) {
   const v = (input ?? '').trim()
-  if (v === '' || v === 'default') return mode === 'fix-ci' ? 'auto-edit' : 'plan'
+  if (v === '' || v === 'default') return mode === 'fix-ci' || mode === 'implement' ? 'auto-edit' : 'plan'
   if (!APPROVAL_POLICIES.includes(v)) {
     throw new Error(`approval must be one of default, ${APPROVAL_POLICIES.join(', ')} (got ${JSON.stringify(v)})`)
   }
@@ -154,11 +157,14 @@ export function budgetInputs({ maxTurns, maxCost }) {
 
 /**
  * Fold the CLI's `--json` stdout into what the action acts on: the closing `result` line,
- * the tools that ran, whether a final verification passed, and any error messages.
+ * the tools that ran, whether a final verification passed, any error messages, and each
+ * review finding in its last reported state (a `review_finding` event repeats a finding
+ * as the verification pass confirms, rejects, or merges it).
  */
 export function parseRunOutput(stdout) {
   const tools = []
   const errors = []
+  const findings = new Map()
   let result = null
   let verification = null
   for (const line of stdout.split('\n')) {
@@ -173,6 +179,12 @@ export function parseRunOutput(stdout) {
     else if (e.type === 'tool_start' && typeof e.name === 'string') tools.push(e.name)
     else if (e.type === 'verification') verification = e.passed === true
     else if (e.type === 'error' && typeof e.message === 'string') errors.push(e.message)
+    else if (e.type === 'review_finding' && e.finding && typeof e.finding.id === 'string') {
+      // Ids are stable within one review_changes call, so key by the call as well.
+      const key = `${e.parentCallId ?? ''}\u0000${e.finding.id}`
+      // Map.set keeps a key's first position: findings stay in the order they were raised.
+      findings.set(key, e.finding)
+    }
   }
-  return { result, tools, errors, verification }
+  return { result, tools, errors, verification, findings: [...findings.values()] }
 }

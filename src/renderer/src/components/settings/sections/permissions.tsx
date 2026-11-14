@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEscapeWithin } from '../../../lib/useFocusTrap'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_HINT,
@@ -215,8 +216,11 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
   // Default to 'ask', not 'allow': an all-approving rule shouldn't be one careless
   // click away (the empty match pattern would otherwise auto-approve every
   // run_shell call). New rules go last, so they never pre-empt an existing one.
-  const addRuleFor = (tool: string): void =>
+  // The filter is cleared so the new, still empty rule is in view.
+  const addRuleFor = (tool: string): void => {
+    setRuleFilter('')
     setRules([...rules, { action: 'ask', tool, match: '', addedAt: Date.now(), source: 'settings' }])
+  }
   const patchRule = (i: number, patch: Partial<PermissionRule>): void =>
     setRules(rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
   const removeRule = (i: number): void => setRules(rules.filter((_, idx) => idx !== i))
@@ -521,6 +525,9 @@ function RulesTextEditor({
   onCancel: () => void
 }): JSX.Element {
   const [text, setText] = useState(() => rulesToText(rules))
+  // Escape cancels this edit rather than closing Settings.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEscapeWithin(rootRef, onCancel)
   const parsed = useMemo(() => parseRulesText(text), [text])
   const issues = useMemo(() => (parsed.ok ? lintPermissionRules(parsed.rules) : new Map<number, RuleIssue[]>()), [parsed])
   const diff = parsed.ok ? diffRules(rules, parsed.rules) : null
@@ -536,7 +543,7 @@ function RulesTextEditor({
     return `Applying ${joined}.`
   }
   return (
-    <div className="rules-text">
+    <div className="rules-text" ref={rootRef}>
       <p className="field__hint">
         One rule per line: <code>{'{"action": "allow" | "ask" | "deny", "tool": "run_shell", "match": "git *"}'}</code>
         , with <code>{'"exact": true'}</code> to match one target only. Order matters: the first match wins.

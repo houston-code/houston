@@ -517,6 +517,33 @@ export function providerSendsXhigh(
 }
 
 /**
+ * Whether a PDF read_file attaches reaches the model as a document. Mirrors the request
+ * builders: the Claude hosts send `document` blocks, hosted OpenAI (the Responses API)
+ * sends `input_file`, and Gemini sends inline data, the last two only for the multimodal
+ * models that read them. Chat Completions hosts and a proxied OpenAI base URL have no
+ * document part, so a PDF sent there would silently vanish.
+ */
+export function providerAcceptsPdf(
+  kind: 'anthropic' | 'openai' | 'gemini' | 'openai-compatible' | 'bedrock' | 'vertex' | 'azure-openai' | 'foundry',
+  model: string,
+  customBaseUrl: boolean
+): boolean {
+  switch (kind) {
+    case 'anthropic':
+    case 'bedrock':
+    case 'vertex':
+    case 'foundry':
+      return true
+    case 'openai':
+      return !customBaseUrl && modelHasVision(model)
+    case 'gemini':
+      return modelHasVision(model)
+    default:
+      return false
+  }
+}
+
+/**
  * Claude models that run adaptive thinking even when the request sends no thinking config,
  * at the model's default effort (medium or high). "Reasoning off" can't stop them thinking,
  * so it maps to the lowest effort instead of leaving them at that default.
