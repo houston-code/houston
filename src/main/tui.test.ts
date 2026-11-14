@@ -174,9 +174,18 @@ describe('parseTuiArgs', () => {
     })
   })
 
-  it('--full-auto sets the policy, invalid --approval is ignored', () => {
+  it('--full-auto sets the policy, an invalid --approval is a usage error', () => {
     expect(parseTuiArgs(['-i', '--full-auto'], '/d')?.approvalPolicy).toBe('full-auto')
-    expect(parseTuiArgs(['-i', '--approval', 'bogus'], '/d')?.approvalPolicy).toBeUndefined()
+    const bogus = parseTuiArgs(['-i', '--approval', 'bogus'], '/d')
+    expect(bogus?.approvalPolicy).toBeUndefined()
+    expect(bogus?.usageError).toMatch(/--approval must be one of plan, ask, auto-edit, full-auto \(got "bogus"\)/)
+    expect(parseTuiArgs(['-i', '--approval'], '/d')?.usageError).toMatch(/got nothing/)
+    expect(parseTuiArgs(['-i', '--approval', 'ask'], '/d')?.usageError).toBeUndefined()
+  })
+
+  it('resolves a relative --cwd against the current directory', () => {
+    expect(parseTuiArgs(['-i', '--cwd', 'sub/dir'], process.cwd())?.cwd).toBe(resolvePath(process.cwd(), 'sub/dir'))
+    expect(parseTuiArgs(['-i', '-C', '..'], process.cwd())?.cwd).toBe(resolvePath(process.cwd(), '..'))
   })
 
   it('defaultInteractive treats a bare invocation as interactive', () => {
@@ -2697,6 +2706,33 @@ describe('runTui', () => {
     expect(called).toBe(false) // no conversation to compact
     expect(rec.runs).toHaveLength(0)
     expect(t.text()).toContain('nothing to compact yet')
+  })
+
+  it('Ctrl-C while compacting cancels it and returns the prompt', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    d.persist = fp.persist
+    const t = fakeIo(['first', '/compact', 'again', null])
+    let sawSignal = false
+    d.compact = (_id, _p, _m, o) =>
+      new Promise((resolve) => {
+        sawSignal = Boolean(o?.signal)
+        o?.onRetry?.({ attempt: 1, max: 6, error: 'overloaded' })
+        // Resolves only once the TUI aborts it: a hung provider, cancelled by the user.
+        o?.signal?.addEventListener('abort', () => resolve({ ok: false, summarized: 0, reason: 'cancelled' }))
+        queueMicrotask(() => t.fireInterrupt())
+      })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(sawSignal).toBe(true)
+    expect(t.text()).toContain('compaction cancelled; nothing changed')
+    // The retry surfaced on the spinner, and the spinner was torn down after.
+    expect(t.spinner).toContain('start:Compacting')
+    expect(t.spinner).toContain('label:Compacting (retrying, attempt 1 of 6)')
+    // The prompt came back: the next line ran as a normal turn, and the Ctrl-C did
+    // not leak into it as an interrupted run.
+    expect(rec.runs).toHaveLength(2)
+    expect(t.text()).not.toContain('^C interrupted')
   })
 
   it('/compact explains when a single big turn cannot be split', async () => {
@@ -6133,6 +6169,53 @@ describe('/proposals and /btw', () => {
     expect(rec.runs[1].messages.map((m) => m.content)).toEqual(['hello', 'next'])
   })
 
+  it('Ctrl-C stops a side answer that is still working and returns to the composer', async () => {
+    const { d, t } = wired(['hello', '/btw why PKCE?', 'next', null])
+    const cancelled: string[] = []
+    let typed: string[] = []
+    t.io.takeQueued = () => {
+      const q = typed
+      typed = []
+      return q
+    }
+    d.sideChat = {
+      // Never answers: only the interrupt can end the wait.
+      ask: () => {
+        typed = ['typed meanwhile']
+        setTimeout(() => t.fireInterrupt(), 0)
+        return new Promise(() => {})
+      },
+      clear: () => {},
+      cancel: (conv) => void cancelled.push(conv)
+    }
+    await runTui(opts, d)
+    expect(cancelled).toEqual(['conv-1'])
+    expect(t.text()).toContain('side chat stopped')
+    expect(t.spinner.slice(t.spinner.indexOf('start:Side chat'))).toContain('stop')
+    // The composer came back (the next line was read), and the line typed during the
+    // side chat was offered back rather than lost or sent unasked.
+    expect(t.reads.length).toBeGreaterThanOrEqual(3)
+    expect(t.text()).toContain('not sent (the turn was interrupted): typed meanwhile')
+  })
+
+  it('a line typed while a side answer works is sent as the next turn', async () => {
+    const { d, rec, t } = wired(['hello', '/btw why PKCE?', null])
+    let typed: string[] = []
+    t.io.takeQueued = () => {
+      const q = typed
+      typed = []
+      return q
+    }
+    const ask = d.sideChat!.ask
+    d.sideChat!.ask = (input) => {
+      typed = ['and then?']
+      return ask(input)
+    }
+    await runTui(opts, d)
+    expect(t.text()).toContain('Because the client is public.')
+    expect(rec.runs[1].messages.map((m) => m.content)).toEqual(['hello', 'and then?'])
+  })
+
   it('prints a failed side answer as an error, and /btw clear starts it over', async () => {
     const { d, t, calls } = wired(['hello', '/btw this will fail', '/btw clear', null])
     await runTui(opts, d)
@@ -6393,6 +6476,35 @@ describe('session commands', () => {
     expect(t.text()).toContain('this is a new chat')
     // The next message starts fresh: no history from the deleted chat.
     expect(rec.runs[1].messages).toEqual([{ role: 'user', content: 'again' }])
+  })
+
+  it('/delete forgets the deleted chat\'s context and last run', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'usage', inputTokens: 21_000, outputTokens: 10, cost: 0, context: { system: 4000, tools: 5000, instructions: 1000, memory: 200, conversation: 6000, toolResults: 3800 } },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const st = withStore()
+    d.persist = st.persist
+    const undone: string[] = []
+    d.checkpoint = {
+      // The new chat has no stored checkpoint; only a stale in-memory run id could
+      // point /undo at the deleted chat's files.
+      info: async () => null,
+      undo: async (runId) => {
+        undone.push(runId)
+        return 1
+      },
+      redo: async () => 0
+    }
+    const t = fakeIo(['hi', '/delete', 'y', '/context', '/undo', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(st.removed).toEqual(['conv-1'])
+    expect(undone).toEqual([])
+    const after = t.text().slice(t.text().indexOf('this is a new chat'))
+    expect(after).toContain('No context yet')
+    expect(after).not.toMatch(/Tool results/)
+    expect(after).toContain('no changes from this chat to undo')
   })
 
   it('/export writes Markdown by default, and JSON on request', async () => {

@@ -3,7 +3,7 @@ import type { ModelOption } from '@shared/types'
 import { BEDROCK_MODELS } from '@shared/provider-catalog'
 import { createMessagesProvider, type MessagesClient } from './anthropic'
 import { idleTimeoutFetch } from './idle-fetch'
-import { ProviderError } from '../agent/retry'
+import { ProviderError, SDK_MAX_RETRIES } from '../agent/retry'
 
 /**
  * Claude on Amazon Bedrock.
@@ -47,6 +47,7 @@ export function createBedrockProvider(opts: BedrockOptions = {}): Provider {
       (m) =>
         new m.AnthropicBedrockMantle({
           fetch: idleTimeoutFetch(),
+          maxRetries: SDK_MAX_RETRIES,
           ...(opts.region ? { awsRegion: opts.region } : {}),
           ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
           ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),

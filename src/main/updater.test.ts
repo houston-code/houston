@@ -989,6 +989,20 @@ describe('initUpdates / takePendingWhatsNew', () => {
     expect(h.written).toContain('0.1.0')
   })
 
+  it('still shows the popup when the renderer asks before initUpdates runs', async () => {
+    h.isPackaged = false
+    h.version = '0.1.0'
+    h.lastSeen = '0.0.9'
+    const { initUpdates, takePendingWhatsNew } = await load()
+    // The window's request is answered once the credential store is ready, a few
+    // ticks ahead of initUpdates.
+    expect(takePendingWhatsNew()).toEqual({ version: '0.1.0', highlights: WHATS_NEW })
+    initUpdates()
+    // initUpdates stages no second popup, and the version is recorded once.
+    expect(takePendingWhatsNew()).toBeNull()
+    expect(h.written).toEqual(['0.1.0'])
+  })
+
   it('does not stage anything on a fresh install, but records the version', async () => {
     h.isPackaged = false
     h.version = '0.1.0'

@@ -5,6 +5,7 @@ import {
   branchNameError,
   canCreateWorktree,
   defaultBaseBranch,
+  newChatFolder,
   planNewChatWorkspace, initialWorktreeMode } from './worktree'
 
 describe('suggestBranch', () => {
@@ -49,6 +50,7 @@ describe('planNewChatWorkspace', () => {
     currentBranch: 'main',
     unborn: false,
     branches: ['main'],
+    defaultBranch: null,
     isLinkedWorktreeRoot: false,
     exists: true,
     ...over
@@ -101,6 +103,7 @@ describe('unborn repos (no commits on the current branch)', () => {
     currentBranch: 'main',
     unborn: true,
     branches: [],
+    defaultBranch: null,
     isLinkedWorktreeRoot: false,
     exists: true,
     ...over
@@ -124,6 +127,47 @@ describe('unborn repos (no commits on the current branch)', () => {
     // Born branch: itself. Detached HEAD: '' (the "HEAD (detached)" option).
     expect(defaultBaseBranch(info({ unborn: false, branches: ['main'] }))).toBe('main')
     expect(defaultBaseBranch(info({ unborn: false, currentBranch: null }))).toBe('')
+  })
+})
+
+describe('defaultBaseBranch with a known mainline', () => {
+  const info = (over: Partial<RepoInfo> = {}): RepoInfo => ({
+    isRepo: true,
+    root: '/repo',
+    currentBranch: 'backport/0.11',
+    unborn: false,
+    branches: ['backport/0.11', 'main', 'feature'],
+    defaultBranch: 'main',
+    isLinkedWorktreeRoot: false,
+    exists: true,
+    ...over
+  })
+
+  it('starts on the mainline, not the branch the main checkout has out', () => {
+    expect(defaultBaseBranch(info())).toBe('main')
+    expect(defaultBaseBranch(info({ currentBranch: null }))).toBe('main')
+    expect(defaultBaseBranch(info({ unborn: true, currentBranch: 'fresh' }))).toBe('main')
+  })
+
+  it('falls back to the current branch when the mainline is not listed', () => {
+    expect(defaultBaseBranch(info({ defaultBranch: null }))).toBe('backport/0.11')
+    expect(defaultBaseBranch(info({ defaultBranch: 'gone' }))).toBe('backport/0.11')
+  })
+})
+
+describe('newChatFolder', () => {
+  it("starts a new chat from a worktree chat in its repo's root", () => {
+    expect(
+      newChatFolder({
+        workspace: '/repo/.houston/worktrees/swift-falcon',
+        worktree: { repoRoot: '/repo' }
+      })
+    ).toBe('/repo')
+  })
+
+  it("keeps any other chat's folder, subdirectories included", () => {
+    expect(newChatFolder({ workspace: '/repo/packages/app' })).toBe('/repo/packages/app')
+    expect(newChatFolder({ workspace: '/repo', worktree: { repoRoot: '' } })).toBe('/repo')
   })
 })
 

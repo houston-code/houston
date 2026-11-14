@@ -232,22 +232,28 @@ export function registerShell(
   // would otherwise decode as two replacement characters.
   const outDecoder = new StringDecoder('utf8')
   const errDecoder = new StringDecoder('utf8')
-  child.stdout?.on('data', (c: Buffer) => {
-    const s = outDecoder.write(c)
+  const onOut = (s: string): void => {
+    if (!s) return
     shell.stdoutProduced += s.length
     shell.stdout = appendCapped(shell.stdout, s)
     shell.recent = appendRecent(shell.recent, s)
     sniff(s)
-  })
-  child.stderr?.on('data', (c: Buffer) => {
-    const s = errDecoder.write(c)
+  }
+  const onErr = (s: string): void => {
+    if (!s) return
     shell.stderrProduced += s.length
     shell.stderr = appendCapped(shell.stderr, s)
     shell.recent = appendRecent(shell.recent, s)
     sniff(s)
-  })
-  // Nothing more will be appended: give back the slack appendCapped let build up.
+  }
+  child.stdout?.on('data', (c: Buffer) => onOut(outDecoder.write(c)))
+  child.stderr?.on('data', (c: Buffer) => onErr(errDecoder.write(c)))
+  // Nothing more will be appended: flush any partial character the decoders still
+  // hold (as U+FFFD, rather than dropping it), then give back the slack
+  // appendCapped let build up.
   const settle = (): void => {
+    onOut(outDecoder.end())
+    onErr(errDecoder.end())
     shell.stdout = windowOf(shell.stdout)
     shell.stderr = windowOf(shell.stderr)
   }
@@ -432,6 +438,27 @@ export function killShell(id: string): KillShellResult {
     return 'killed-leftovers'
   }
   return 'already-exited'
+}
+
+/**
+ * Stop every background shell a conversation started (running ones and the leftovers of
+ * exited ones) and drop them from the registry. For a chat being deleted: its dev
+ * servers must not keep their ports, or show in the Tasks list, after the chat is gone.
+ * Returns how many process groups were signalled.
+ */
+export function killShellsFor(conversationId: string): number {
+  let signalled = 0
+  for (const [id, s] of shells) {
+    if (s.conversationId !== conversationId) continue
+    if (s.running || hasLeftover(s)) {
+      killProcessTree(s.child)
+      signalled++
+    }
+    shells.delete(id)
+  }
+  if (signalled) persistLedger()
+  notifyShellsChanged()
+  return signalled
 }
 
 /** The process groups of every background shell this run of Houston started. */

@@ -73,6 +73,19 @@ const SS3_RE = new RegExp(`^${ESC}O([A-Za-z])`)
 /** A CSI/SS3 introducer with no final byte yet — held until the rest arrives. */
 const PARTIAL_SEQ_RE = new RegExp(`^${ESC}(\\[[0-9;]*|O)$`)
 
+/**
+ * OSC (ESC ] <number> ; <payload> BEL | ESC \): never typed, only a terminal's reply
+ * to a query. A background-colour reply (OSC 11) that arrives after the startup probe
+ * gave up waiting (slow links, SSH) lands in the first read, and must not become text.
+ * A number is required straight after `ESC ]`, so Alt-] followed by a letter still
+ * decodes as Alt-] and the letter.
+ */
+const OSC_RE = new RegExp(`^${ESC}\\](\\d+)(;[^\\x07${ESC}]*)?(\\x07|${ESC}\\\\)`)
+/** An OSC reply with no terminator yet, held until the rest arrives. */
+const PARTIAL_OSC_RE = new RegExp(`^${ESC}\\](\\d+(;[^\\x07${ESC}]*)?${ESC}?)?$`)
+/** Longest OSC reply held while waiting for its terminator; past it, the bytes are input. */
+const MAX_OSC = 1024
+
 /** Terminal escape codes for bracketed paste (DEC private mode 2004). */
 export const PASTE_START = '\x1b[200~'
 export const PASTE_END = '\x1b[201~'
@@ -362,6 +375,15 @@ export function decodeInput(
       // ESC, which is the Escape key itself (see below) — holding that would mean
       // Escape never fires until the user pressed another key.
       if (buf.length > 1 && PASTE_START.startsWith(buf)) {
+        next.pending = buf
+        break
+      }
+      const osc = OSC_RE.exec(buf)
+      if (osc) {
+        buf = buf.slice(osc[0].length)
+        continue
+      }
+      if (buf.length > 1 && buf.length <= MAX_OSC && PARTIAL_OSC_RE.test(buf)) {
         next.pending = buf
         break
       }

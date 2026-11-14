@@ -90,6 +90,23 @@ const HELP: Record<TurnErrorCause, TurnErrorHelp> = {
   }
 }
 
+/**
+ * A credit check against the reply's full output allowance rather than an empty
+ * account: some providers (OpenRouter) hold back the cost of the longest reply the
+ * request allows before starting, and refuse when the balance can't cover it, even
+ * though the turn would have cost far less. Said apart from "out of credit", which
+ * reads as wrong to a user who can see money left on the account.
+ */
+const CREDIT_RESERVATION = /can only afford|fewer max_tokens/i
+
+const QUOTA_RESERVATION: TurnErrorHelp = {
+  summary: "The provider account doesn't have enough credit left for this request.",
+  hint:
+    'The provider holds back credit for the longest reply the model could write, so a low balance can block even a short turn. ' +
+    "Add credit in the provider's billing settings and retry, or switch to another model.",
+  actions: ['provider-settings', 'switch-model', 'retry']
+}
+
 const UNKNOWN: TurnErrorHelp = {
   summary: 'The last turn failed.',
   hint: 'Retry, or run the doctor to check your setup.',
@@ -105,7 +122,11 @@ export function causeFromMessage(message: string): TurnErrorCause | undefined {
   const m = message.toLowerCase()
   if (/no api key set|invalid[ _-]?(?:x-)?api[ _-]?key|incorrect api key|api key not valid|authentication_error|\b401\b|unauthorized|permission_denied|\b403\b/.test(m))
     return 'auth'
-  if (/insufficient_quota|exceeded your current quota|credit balance is too low|billing/.test(m)) return 'quota'
+  if (
+    /insufficient_quota|exceeded your current quota|credit balance is too low|billing|requires more credits|insufficient credits|payment required/.test(m) ||
+    /^\s*402\b/.test(m)
+  )
+    return 'quota'
   if (/doesn't recognize the model|model_not_found|not_found_error/.test(m)) return 'model-not-found'
   if (/doesn't support tool calling|does not support tools/.test(m)) return 'tools-unsupported'
   if (/too large for this model's context window|context[_ ]length|prompt is too long|maximum context length/.test(m))
@@ -120,6 +141,7 @@ export function causeFromMessage(message: string): TurnErrorCause | undefined {
 /** The explanation and next steps for a failed turn. */
 export function turnErrorHelp(cause: TurnErrorCause | undefined, message: string): TurnErrorHelp {
   const c = cause ?? causeFromMessage(message)
+  if (c === 'quota' && CREDIT_RESERVATION.test(message)) return QUOTA_RESERVATION
   return c ? HELP[c] : UNKNOWN
 }
 

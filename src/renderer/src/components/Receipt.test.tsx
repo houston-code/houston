@@ -110,6 +110,24 @@ describe('Receipt test runs that shrank', () => {
     ).toBeInTheDocument()
   })
 
+  it('lists test edits to review and highlights the receipt', () => {
+    const { container } = render(
+      <Receipt
+        receipt={receipt({
+          checks: [],
+          filesChanged: ['src/a.test.ts'],
+          filesChangedCount: 1,
+          testEdits: [{ path: 'src/a.test.ts', kind: 'asserts', detail: '1 assertion, down from 3' }]
+        })}
+      />
+    )
+    expect(screen.getByText('No tests ran · 1 file changed · 1 test edit to review')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('What ran'))
+    expect(screen.getByText('Test edits to review')).toBeInTheDocument()
+    expect(screen.getByText('assertions removed: src/a.test.ts (1 assertion, down from 3)')).toBeInTheDocument()
+    expect(container.querySelector('.receipt--failed')).not.toBeNull()
+  })
+
   it('lists todos checked only before the last change', () => {
     const { container } = render(<Receipt receipt={receipt({ checks: [], todoStale: ['Run the test suite'] })} />)
     fireEvent.click(screen.getByText('What ran'))

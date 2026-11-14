@@ -586,6 +586,34 @@ describe('Composer draft persistence', () => {
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('draft for chat two')
   })
 
+  it('keeps a folded large paste across a chat switch (unmount + remount)', () => {
+    const { unmount } = render(<Composer {...baseProps({ conversationId: 'c1' })} />)
+    const input = type('see this')
+    const big = Array.from({ length: 60 }, (_, i) => `log line ${i}`).join('\n')
+    fireEvent.paste(input, { clipboardData: { files: [], getData: () => big } })
+    expect(screen.getByText('Pasted text')).toBeInTheDocument()
+    unmount()
+
+    const props = baseProps({ conversationId: 'c1' })
+    render(<Composer {...props} />)
+    expect(screen.getByText('Pasted text')).toBeInTheDocument()
+    const again = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(again.value).toBe('see this')
+    fireEvent.keyDown(again, { key: 'Enter' })
+    expect(props.onSend).toHaveBeenCalledWith(`see this\n\n${big}`, undefined)
+  })
+
+  it('clears persisted chips once the message is sent', () => {
+    const first = render(<Composer {...baseProps({ conversationId: 'c1' })} />)
+    const input = type('x')
+    fireEvent.paste(input, { clipboardData: { files: [], getData: () => 'z'.repeat(5000) } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    first.unmount()
+
+    render(<Composer {...baseProps({ conversationId: 'c1' })} />)
+    expect(screen.queryByText('Pasted text')).toBeNull()
+  })
+
   it('clears the persisted draft once the message is sent', () => {
     const { unmount } = render(<Composer {...baseProps({ conversationId: 'c1' })} />)
     const input = type('send me')

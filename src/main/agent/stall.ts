@@ -62,6 +62,25 @@ export const STALL_WINDOW = 8
 export const REVERT_LIMIT = 2
 
 /**
+ * Consecutive tool-call iterations with no text to the user and no file written before
+ * the model is asked for a short status update ({@link SILENT_CHECK_IN}). High enough that
+ * an ordinary investigation finishes or says something first.
+ */
+export const SILENT_ITERATION_LIMIT = 20
+
+/**
+ * The check-in sent after {@link SILENT_ITERATION_LIMIT} silent iterations. Not a stall:
+ * it never counts toward stopping the run, and the model carries on after answering it.
+ */
+export const SILENT_CHECK_IN =
+  `You have made ${SILENT_ITERATION_LIMIT} rounds of tool calls without writing anything to the ` +
+  'user or changing any file. Before your next tool call, write a short update in plain text: ' +
+  'what you have found so far, your current hypothesis, and what you will check next. If ' +
+  'something in the environment keeps getting in the way (a tool or command that fails no ' +
+  'matter how you call it, a repository git cannot open, a path that does not exist), say so ' +
+  'plainly and ask the user, instead of trying more variations. Then carry on.'
+
+/**
  * Resolve effective thresholds from a (possibly partial) user override, clamping
  * each to a sane minimum so a bogus 0/negative can't disable detection or make it
  * fire on the very first iteration. `undefined`/invalid falls back to the default.
@@ -177,6 +196,14 @@ export interface IterationObservation {
   changed?: boolean
   /** Files (workspace-relative) a write this iteration put back to content they already had this turn. */
   reverts?: string[]
+  /**
+   * Whether the model wrote any visible text to the user this iteration. Left unset by
+   * callers whose output nobody reads as it streams (a subagent reports at the end), which
+   * turns the silent-run check-in off for them.
+   */
+  spoke?: boolean
+  /** Whether a call this iteration wrote a file (a `write`-kind tool). */
+  wrote?: boolean
 }
 
 /** A shell command that ran to completion and exited non-zero. */
@@ -261,8 +288,11 @@ interface WindowEntry {
 export type StallAction =
   /** Nothing unusual — carry on. */
   | { kind: 'ok' }
-  /** Inject this corrective reminder as a user message before the next turn. */
-  | { kind: 'nudge'; message: string }
+  /**
+   * Inject this corrective reminder as a user message before the next turn. `checkIn`
+   * marks the silent-run status request, which is not a stall (see {@link SILENT_CHECK_IN}).
+   */
+  | { kind: 'nudge'; message: string; checkIn?: true }
   /** The stall persisted past the nudge — end the run with a 'stalled' limit. */
   | { kind: 'stop'; reason: string }
 
@@ -287,6 +317,8 @@ export class StallDetector {
    * a second identical one).
    */
   private nudged = false
+  /** Consecutive iterations that called tools, said nothing to the user, and wrote no file. */
+  private silentIterations = 0
 
   constructor(thresholds: StallThresholds = DEFAULT_STALL_THRESHOLDS) {
     this.thresholds = thresholds
@@ -301,7 +333,7 @@ export class StallDetector {
     const reverted = this.repeatedInWindow((e) => e.reverts, REVERT_LIMIT)
 
     const trigger = this.pickTrigger(repeatedCallSig, repeatedErrorSig, failure, reverted)
-    if (!trigger) return { kind: 'ok' }
+    if (!trigger) return this.trackSilence(obs)
 
     if (this.nudged) {
       // Already gave a nudge and the model kept stalling — end the run cleanly.
@@ -441,8 +473,27 @@ export class StallDetector {
     return null
   }
 
+  /**
+   * Count iterations that called tools without a word to the user or a file written. A
+   * long run of them is how a model looks while it circles a problem it can't name (a
+   * broken repository, the wrong checkout), and the user sees nothing but tool rows. At
+   * {@link SILENT_ITERATION_LIMIT} it asks for a status update once, then counts again.
+   * Only `spoke === false` counts: a caller that doesn't report speech never trips it.
+   */
+  private trackSilence(obs: IterationObservation): StallAction {
+    if (obs.calls.length === 0 || obs.spoke !== false || obs.wrote === true) {
+      this.silentIterations = 0
+      return { kind: 'ok' }
+    }
+    this.silentIterations += 1
+    if (this.silentIterations < SILENT_ITERATION_LIMIT) return { kind: 'ok' }
+    this.silentIterations = 0
+    return { kind: 'nudge', message: SILENT_CHECK_IN, checkIn: true }
+  }
+
   /** Clear the running tallies (used after a nudge so the next window is fresh). */
   private reset(): void {
+    this.silentIterations = 0
     this.repeatCall = null
     this.readsSinceChange.clear()
     this.window = []

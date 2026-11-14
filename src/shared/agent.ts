@@ -274,7 +274,18 @@ export type ProviderStreamEvent =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; call: ToolCall }
-  | { type: 'done'; stopReason: StopReason; usage?: TokenUsage; reasoning?: ReasoningBlock[] }
+  | {
+      type: 'done'
+      stopReason: StopReason
+      usage?: TokenUsage
+      reasoning?: ReasoningBlock[]
+      /**
+       * Set when the provider ended the reply itself instead of the model finishing it:
+       * a refusal, a content or safety filter. The provider's own reason (`refusal`,
+       * `content_filter`, `SAFETY`, ...). The loop reports it rather than ending silently.
+       */
+      refusal?: string
+    }
   | {
       type: 'error'
       message: string
@@ -391,6 +402,12 @@ export interface RepoInfo {
   /** Local branch names, newest-committed first, for picking a base. */
   branches: string[]
   /**
+   * The repo's mainline as a local branch: the one `origin/HEAD` names, else `main`
+   * or `master`. Always one of `branches`; null when none of them exists locally.
+   * New worktrees start from it, not from whatever the main checkout has out.
+   */
+  defaultBranch: string | null
+  /**
    * True when the queried path is itself the root of a linked (non-main)
    * worktree — e.g. a per-chat checkout inherited from a previously-open chat.
    * False for the main root, for any subdirectory, and for non-repos, so the
@@ -405,6 +422,11 @@ export interface RepoInfo {
    * new-chat UI can drop the stale default instead of anchoring to a phantom.
    */
   exists: boolean
+  /**
+   * True (with `isRepo` false) when git can't open the path although a `.git` sits
+   * in it or a parent folder, so it isn't offered a fresh `git init`.
+   */
+  unreadable?: boolean
 }
 
 /** Outcome of tearing down a conversation's worktree, for reporting to the user. */

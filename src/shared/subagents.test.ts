@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   capSteps,
   formatDuration,
@@ -152,6 +152,28 @@ describe('limitSubagentHistory', () => {
     expect(out[1].subagents![0].trimmed).toBeUndefined()
     // The input is never mutated.
     expect(msgs[0].subagents[0].trimmed).toBeUndefined()
+  })
+
+  it('serializes each saved record once across repeated checks', () => {
+    const recs = [heavy('a'), heavy('b'), heavy('c')]
+    const msgs = recs.map((r) => ({ subagents: [r] }))
+    const spy = vi.spyOn(JSON, 'stringify')
+    try {
+      const sized = (): number => spy.mock.calls.filter(([v]) => recs.includes(v as SubagentRecord)).length
+      expect(limitSubagentHistory(msgs, 10 * 1024 * 1024)).toBe(msgs)
+      expect(sized()).toBe(3)
+      // A later dispatch re-checks the same history without serializing it again,
+      // and reaches the same decision with the cached sizes.
+      msgs.push({ subagents: [heavy('d')] })
+      expect(limitSubagentHistory(msgs, 10 * 1024 * 1024)).toBe(msgs)
+      expect(sized()).toBe(3)
+      const total = recordBytes(heavy('x')) * 4
+      const out = limitSubagentHistory(msgs, total - 1)
+      expect(out[0].subagents![0].trimmed).toBe(true)
+      expect(out.slice(1).every((m) => !m.subagents![0].trimmed)).toBe(true)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('trims everything at 0', () => {

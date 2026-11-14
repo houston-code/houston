@@ -47,7 +47,7 @@ import {
   type PromptInvocation
 } from '@shared/promptInvocation'
 import { parseMemoryCapture, type MemoryScope } from '@shared/memory'
-import type { CompactResult } from './agent/compact'
+import type { CompactOptions, CompactResult } from './agent/compact'
 import type { McpServerStatus } from './mcp/manager'
 import type {
   AgentEvent,
@@ -164,6 +164,11 @@ export interface TuiOptions {
    * used only while no theme is saved: a `/theme` choice always wins.
    */
   detectedTheme?: ThemeName
+  /**
+   * The first bad flag value (`--approval nonsense`). runTui reports it and exits
+   * with a usage error before anything runs, rather than silently ignoring it.
+   */
+  usageError?: string
 }
 
 /**
@@ -190,6 +195,7 @@ export function parseTuiArgs(
   let approvalPolicy: ApprovalPolicy | undefined
   let continueSession = false
   let resumeId: string | undefined
+  let usageError: string | undefined
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
@@ -197,7 +203,9 @@ export function parseTuiArgs(
       interactive = true
     } else if (name === '-C' || name === '--cwd') {
       const { value, next } = flagValue(argv, i)
-      if (value) cwd = value
+      // Relative to where the command was typed, so the session's folder is a real
+      // absolute path for persistence, trust, and the agent's workspace.
+      if (value) cwd = isAbsolute(value) ? value : resolvePath(defaultCwd, value)
       i = next
     } else if (name === '--model') {
       const { value, next } = flagValue(argv, i)
@@ -210,6 +218,10 @@ export function parseTuiArgs(
     } else if (name === '--approval') {
       const { value, next } = flagValue(argv, i)
       if (isApprovalPolicy(value)) approvalPolicy = value
+      else
+        usageError ??= `--approval must be one of ${APPROVAL_POLICIES.join(', ')} (got ${
+          value === undefined ? 'nothing' : JSON.stringify(value)
+        })`
       i = next
     } else if (name === '--full-auto') {
       approvalPolicy = 'full-auto'
@@ -230,7 +242,8 @@ export function parseTuiArgs(
     ...(approvalPolicy ? { approvalPolicy } : {}),
     color: true,
     ...(continueSession ? { continueSession } : {}),
-    ...(resumeId ? { resumeId } : {})
+    ...(resumeId ? { resumeId } : {}),
+    ...(usageError !== undefined ? { usageError } : {})
   }
 }
 
@@ -2691,7 +2704,7 @@ export interface TuiDeps {
   /** Load the workspace's custom `.houston/commands`, so `/<name>` runs one as a turn. */
   commands?: () => Promise<Command[]>
   /** Compact the given conversation on demand (the `/compact` command). */
-  compact?: (id: string, providerId: string, model: string) => Promise<CompactResult>
+  compact?: (id: string, providerId: string, model: string, opts?: CompactOptions) => Promise<CompactResult>
   /** Persist a settings patch (for /hooks and /mcp editing). Absent ⇒ editing disabled. */
   updateSettings?: (patch: Partial<AppSettings>) => void
   /**
@@ -2788,6 +2801,8 @@ export interface TuiDeps {
     }) => Promise<{ answer?: string; error?: string }>
     /** Start the chat's side chat over (`/btw clear`). */
     clear: (conversationId: string) => void
+    /** Stop the chat's in-flight side chat answer (Ctrl-C / Esc while it works). */
+    cancel?: (conversationId: string) => void
   }
   /**
    * Append a standing instruction to the project's or the user's rules file (the
@@ -3097,6 +3112,11 @@ export async function runTrustCommand(
 }
 
 export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
+  // A bad flag value is a usage mistake: say so and stop before anything runs.
+  if (opts.usageError) {
+    deps.io.out(`${opts.usageError}\n`)
+    return 2
+  }
   // Reassigned by /theme (takes effect from the next output); the spinner keeps
   // the initial theme since its painter lives in the terminal adapter.
   const settings = deps.getSettings()
@@ -3153,6 +3173,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let effort: ReasoningEffort = deps.getSettings().reasoningEffort ?? DEFAULT_REASONING_EFFORT
   let messages: ChatMessage[] = []
   let activeRunId: string | null = null
+  // A /compact in flight: Ctrl-C or Esc cancels it and returns the prompt.
+  let compactAbort: AbortController | null = null
   // Prints whatever assistant text the running turn is still holding back (markdown
   // renders block by block, so a paragraph waits for its end). The interrupt handler
   // calls it first, so the text the user stopped lands above "^C interrupted", not
@@ -3258,6 +3280,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let returnedSteers: string[] = []
   let interruptedQueued: string[] | null = null
   let restoreDraft = ''
+  // Set while a /btw side chat answer is in flight: Ctrl-C / Esc stops it.
+  let stopSideChat: (() => void) | null = null
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
   // Per-model tallies for /cost. The aggregate above still drives the status line;
   // this is what makes "which model spent it, and how much was cached?" answerable.
@@ -3319,6 +3343,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     return deps.steerRun?.(activeRunId, text) ?? false
   })
   deps.io.onInterrupt?.(() => {
+    if (compactAbort) {
+      compactAbort.abort()
+      return
+    }
     if (activeRunId) {
       deps.cancelRun(activeRunId)
       deps.io.stopSpinner?.()
@@ -3331,6 +3359,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // input so the aborted run doesn't leave the loop waiting on a dead read.
       deps.io.out(paint('\n^C interrupted\n', 'dim'))
       deps.io.cancelRead?.()
+      return
+    }
+    // A /btw side chat is working: there is no run to cancel, but the user is waiting
+    // on it with the spinner up, so stop it and hand the composer back.
+    if (stopSideChat) {
+      stopSideChat()
       return
     }
     // A between-turn sub-prompt (the /resume picker, /login, plan handoff, …) also
@@ -3778,6 +3812,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         persistedSettings = null
         pendingImages = []
         contextTokens = 0
+        contextParts = null // /context must not show the deleted chat
+        lastRunId = null // /undo must not restore files from the deleted chat's run
         deps.io.out(paint(`· deleted "${title}"; this is a new chat\n`, 'dim'))
         continue
       }
@@ -4253,8 +4289,23 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· nothing to compact yet; start a conversation first\n', 'dim'))
           continue
         }
-        deps.io.out(paint('· compacting…\n', 'dim'))
-        const res = await deps.compact(conversationId, providerId, model)
+        deps.io.out(paint('· compacting… (Esc or Ctrl-C cancels)\n', 'dim'))
+        const ctl = new AbortController()
+        compactAbort = ctl
+        deps.io.startSpinner?.('Compacting')
+        let res: CompactResult
+        try {
+          res = await deps.compact(conversationId, providerId, model, {
+            signal: ctl.signal,
+            onRetry: ({ attempt, max }) =>
+              deps.io.setSpinnerLabel?.(`Compacting (retrying, attempt ${attempt}${max ? ` of ${max}` : ''})`)
+          })
+        } catch (e) {
+          res = { ok: false, summarized: 0, error: (e as Error).message }
+        } finally {
+          compactAbort = null
+          deps.io.stopSpinner?.()
+        }
         if (res.ok && res.messages) {
           messages = res.messages
           deps.io.out(paint(`· compacted ${res.summarized} earlier message(s)\n`, 'dim'))
@@ -4267,6 +4318,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               'dim'
             )
           )
+        } else if (res.reason === 'cancelled') {
+          deps.io.out(paint('· compaction cancelled; nothing changed\n', 'dim'))
         } else {
           deps.io.out(paint(`· couldn't compact: ${res.error ?? 'unknown error'}\n`, 'yellow'))
         }
@@ -4294,11 +4347,29 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· side chat cleared; the next /btw starts a new one\n', 'dim'))
           continue
         }
+        const sideChat = deps.sideChat
+        const sideConversationId = conversationId
+        let stopped = false
+        const stop = new Promise<null>((resolve) => {
+          stopSideChat = () => {
+            stopped = true
+            stopSideChat = null
+            sideChat.cancel?.(sideConversationId)
+            resolve(null)
+          }
+        })
         deps.io.startSpinner?.('Side chat')
         try {
           // The chat's one side chat, stored with it: follow-ups keep its context.
-          const turn = await deps.sideChat.ask({ conversationId, question: result.question, providerId, model })
-          if (turn.answer !== undefined) {
+          // Raced against Ctrl-C / Esc, so a stop returns to the composer at once even
+          // if the answer is slow to wind down.
+          const ask = sideChat.ask({ conversationId, question: result.question, providerId, model })
+          ask.catch(() => {}) // a late failure after a stop has no one to report to
+          const turn = await Promise.race([ask, stop])
+          if (turn === null || stopped) {
+            deps.io.stopSpinner?.()
+            deps.io.out(paint('\n^C side chat stopped\n', 'dim'))
+          } else if (turn.answer !== undefined) {
             deps.io.out(`${paint('side chat (not added to this chat):', 'dim')}\n${turn.answer.trim()}\n`)
           } else {
             deps.io.out(paint(`· side chat failed: ${turn.error ?? 'no answer'}\n`, 'red'))
@@ -4306,7 +4377,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         } catch (e) {
           deps.io.out(paint(`· side chat failed: ${(e as Error).message}\n`, 'red'))
         } finally {
+          stopSideChat = null
           deps.io.stopSpinner?.()
+        }
+        // A line typed while the side chat worked was queued (there was no run to
+        // steer): send it as the next turn, or after a stop, offer it as the draft.
+        const typed = deps.io.takeQueued?.() ?? []
+        if (typed.length) {
+          if (stopped) restoreDraft = [restoreDraft, ...typed].filter(Boolean).join('\n\n')
+          else pendingQueued = [...pendingQueued, ...typed]
         }
         continue
       }

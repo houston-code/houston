@@ -609,6 +609,14 @@ export interface AcpServer {
   receive: (line: string) => void
   /** The input ended: fail requests to the client and wait for live prompts to finish. */
   close: () => Promise<void>
+  /**
+   * Stop serving now: cancel every live prompt instead of letting it finish. With
+   * `peerGone` (the client's end of the output broke) nothing more is written either.
+   * Then `close` as usual.
+   */
+  stop: (opts?: { peerGone?: boolean }) => void
+  /** Called once when a write to the client fails: there is no one left to serve. */
+  onPeerGone?: () => void
 }
 
 /**
@@ -632,8 +640,18 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   let nextRequestId = 1
   const outgoing = new Map<JsonRpcId, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 
+  let peerGone = false
   const frame = (m: JsonRpcMessage): void => {
-    deps.write(`${JSON.stringify({ jsonrpc: '2.0', ...m })}\n`)
+    if (peerGone) return
+    try {
+      deps.write(`${JSON.stringify({ jsonrpc: '2.0', ...m })}\n`)
+    } catch (e) {
+      // The client's end broke (EPIPE): a run left going would keep editing files
+      // for a reader that is gone.
+      log(`acp: write to the client failed: ${String(e)}`)
+      stop({ peerGone: true })
+      server.onPeerGone?.()
+    }
   }
   const notify = (method: string, params: unknown): void => frame({ method, params })
   const request = (method: string, params: unknown): Promise<unknown> => {
@@ -1394,6 +1412,18 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     )
   }
 
+  const stop = (opts: { peerGone?: boolean } = {}): void => {
+    if (opts.peerGone) peerGone = true
+    inputClosed = true
+    for (const p of outgoing.values()) p.reject(new Error('connection closed'))
+    outgoing.clear()
+    for (const s of sessions.values()) {
+      if (!s.runId) continue
+      s.cancelled = true
+      deps.cancelRun(s.runId)
+    }
+  }
+
   const close = async (): Promise<void> => {
     // The client can no longer answer, so every outstanding and future request to it
     // fails, and each blocking prompt resolves its safe way (deny, decline, reject).
@@ -1406,17 +1436,44 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     while (running.size) await Promise.allSettled([...running])
   }
 
-  return { receive, close }
+  const server: AcpServer = { receive, close, stop }
+  return server
 }
 
 /**
  * Serve ACP over a line stream until it ends. Every frame goes through
  * `deps.write`; the caller makes sure nothing else reaches stdout.
  */
-export async function serveAcp(input: Readable, deps: AcpDeps): Promise<void> {
+export async function serveAcp(input: Readable, deps: AcpDeps, opts: ServeAcpOptions = {}): Promise<void> {
   const server = createAcpServer(deps)
   const rl = createInterface({ input, crlfDelay: Infinity })
+  // Ending the session closes the reader explicitly: destroying the input stream
+  // emits 'close' on it but never 'end', which is all readline listens for.
+  const end = (peerGone: boolean): void => {
+    server.stop({ peerGone })
+    rl.close()
+  }
+  server.onPeerGone = () => rl.close()
+  const closed = new Promise<void>((done) => rl.once('close', done))
   rl.on('line', (line) => server.receive(line))
-  await new Promise<void>((done) => rl.once('close', done))
-  await server.close()
+  const onShutdown = (): void => end(false)
+  const onOutputClosed = (): void => end(true)
+  if (opts.shutdown?.aborted) onShutdown()
+  else opts.shutdown?.addEventListener('abort', onShutdown, { once: true })
+  if (opts.outputClosed?.aborted) onOutputClosed()
+  else opts.outputClosed?.addEventListener('abort', onOutputClosed, { once: true })
+  try {
+    await closed
+    await server.close()
+  } finally {
+    opts.shutdown?.removeEventListener('abort', onShutdown)
+    opts.outputClosed?.removeEventListener('abort', onOutputClosed)
+  }
+}
+
+export interface ServeAcpOptions {
+  /** Aborted to stop serving (a termination signal): live prompts are cancelled. */
+  shutdown?: AbortSignal
+  /** Aborted when the client's end of the output broke: cancel, and write nothing more. */
+  outputClosed?: AbortSignal
 }

@@ -9,7 +9,7 @@ import type {
 } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { geminiThinkingConfig, geminiUsesThinkingLevel } from './reasoning'
-import { idleTimeoutFetch } from './idle-fetch'
+import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS } from './idle-fetch'
 
 /** Output floor for models that always think (Gemini 4): Google's recommended minimum. */
 const GEMINI_THINKING_MIN_OUTPUT = 32_768
@@ -26,6 +26,9 @@ function callSignatures(m: ChatMessage, model: string): Map<string, string> {
   }
   return out
 }
+
+/** Gemini finish reasons that mean a filter stopped the reply, not the model finishing it. */
+const GEMINI_BLOCKED = new Set(['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII', 'IMAGE_SAFETY'])
 
 export function toGeminiContents(messages: ChatMessage[], model = ''): Content[] {
   const out: Content[] = []
@@ -134,6 +137,9 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
 export function createGeminiProvider(apiKey: string): Provider {
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
+  // No retry option to turn off: this SDK retries only when `httpOptions.retryOptions` is
+  // set, so the RetryBudget in agent/retry.ts is already the only layer (sdk-retries.test.ts
+  // fails if an upgrade changes that default).
   let aiPromise: Promise<GoogleGenAI> | undefined
   const getAi = (): Promise<GoogleGenAI> =>
     (aiPromise ??= import('@google/genai').then(
@@ -230,6 +236,7 @@ export function createGeminiProvider(apiKey: string): Provider {
         // seen. Otherwise a tool call means tool_use, and a plain finish is end_turn.
         stopReason:
           finishReason === 'MAX_TOKENS' ? 'max_tokens' : sawToolCall ? 'tool_use' : 'end_turn',
+        ...(finishReason && GEMINI_BLOCKED.has(finishReason) ? { refusal: finishReason } : {}),
         usage: {
           inputTokens,
           outputTokens,
@@ -263,12 +270,25 @@ export function modelOptionFromGeminiListing(m: {
 /** Fetch the live model list from the Gemini API. */
 export async function listGeminiModels(apiKey: string): Promise<ModelOption[]> {
   const { GoogleGenAI } = await import('@google/genai')
-  const ai = new GoogleGenAI({ apiKey })
+  // Without a fetch of its own the SDK turns off Node's fetch timeouts and sets no
+  // signal, so a request into a network that drops packets never settled. `timeout`
+  // aborts each page request at the deadline; the idle fetch bounds a body that stalls.
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: { fetch: idleTimeoutFetch(LIST_MODELS_TIMEOUT_MS), timeout: LIST_MODELS_TIMEOUT_MS }
+  })
   const out: ModelOption[] = []
-  const pager = await ai.models.list()
-  for await (const m of pager) {
-    const opt = modelOptionFromGeminiListing(m)
-    if (opt) out.push(opt)
+  try {
+    const pager = await ai.models.list()
+    for await (const m of pager) {
+      const opt = modelOptionFromGeminiListing(m)
+      if (opt) out.push(opt)
+    }
+  } catch (e) {
+    // The only abort here is that timeout: say so, as the other SDKs do, rather than
+    // "This operation was aborted".
+    if ((e as { name?: unknown } | null)?.name === 'AbortError') throw new Error('Request timed out.', { cause: e })
+    throw e
   }
   return out
 }
