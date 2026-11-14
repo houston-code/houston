@@ -9,6 +9,7 @@ import {
   MAX_EXITED_SHELLS,
   appendCapped,
   backgroundShellGroups,
+  findRunningDuplicate,
   killAllShells,
   killShell,
   killShellsFor,
@@ -17,6 +18,7 @@ import {
   onShellsChanged,
   readShellOutput,
   registerShell,
+  runningShellsFor,
   peekShell,
   shellTail,
   stopShell,
@@ -48,6 +50,48 @@ describe('killShellsFor', () => {
 
   it('does nothing for a conversation with no shells', () => {
     expect(killShellsFor('conv-none')).toBe(0)
+  })
+})
+
+describe('runningShellsFor / findRunningDuplicate', () => {
+  it("lists a chat's running shells and finds one running the same command in the same folder", async () => {
+    const a = node('setInterval(() => {}, 1000)')
+    const b = node('setInterval(() => {}, 1000)')
+    const done = node('process.exit(0)')
+    const idA = registerShell('npm run dev', a, 'conv-run', '/ws/one')
+    const idB = registerShell('npm run api', b, 'conv-run', '/ws/one')
+    registerShell('npm run old', done, 'conv-run', '/ws/one')
+    await onClose(done)
+    try {
+      expect(runningShellsFor('conv-run', '/ws/one')).toEqual([
+        { id: idA, command: 'npm run dev' },
+        { id: idB, command: 'npm run api' }
+      ])
+      expect(findRunningDuplicate('conv-run', '/ws/one', '  npm run dev ')?.id).toBe(idA)
+      // Another folder, another chat, a different command, or one that exited: no duplicate.
+      expect(findRunningDuplicate('conv-run', '/ws/two', 'npm run dev')).toBeUndefined()
+      expect(findRunningDuplicate('conv-else', '/ws/one', 'npm run dev')).toBeUndefined()
+      expect(findRunningDuplicate('conv-run', '/ws/one', 'npm run dev -- --port 3001')).toBeUndefined()
+      expect(findRunningDuplicate('conv-run', '/ws/one', 'npm run old')).toBeUndefined()
+      expect(runningShellsFor('conv-else', '/ws/one')).toEqual([])
+    } finally {
+      killShellsFor('conv-run')
+      await Promise.all([onClose(a), onClose(b)])
+    }
+  })
+
+  it('keys shells started without a chat by their folder', async () => {
+    const a = node('setInterval(() => {}, 1000)')
+    const id = registerShell('make watch', a, undefined, '/ws/nochat')
+    try {
+      expect(runningShellsFor(undefined, '/ws/nochat')).toEqual([{ id, command: 'make watch' }])
+      expect(findRunningDuplicate(undefined, '/ws/nochat', 'make watch')?.id).toBe(id)
+      expect(runningShellsFor(undefined, '/ws/elsewhere')).toEqual([])
+    } finally {
+      const closed = onClose(a)
+      killShell(id)
+      await closed
+    }
   })
 })
 
