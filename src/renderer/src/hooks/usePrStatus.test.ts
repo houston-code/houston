@@ -87,4 +87,30 @@ describe('usePrStatus', () => {
     await flush()
     expect(result.current?.number).toBe(9)
   })
+
+  it('does not poll while the window is hidden, and reads the PR when it is shown again', async () => {
+    let state: DocumentVisibilityState = 'visible'
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => state)
+    const setVisibility = (next: DocumentVisibilityState): Promise<void> =>
+      act(async () => {
+        state = next
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+    try {
+      renderHook(() => usePrStatus('/ws', true, false))
+      await flush()
+      expect(gitPrStatus).toHaveBeenCalledTimes(1)
+      await setVisibility('hidden')
+      await act(async () => void vi.advanceTimersByTime(PR_REFRESH_MS * 3))
+      expect(gitPrStatus).toHaveBeenCalledTimes(1)
+      await setVisibility('visible')
+      await flush()
+      expect(gitPrStatus).toHaveBeenCalledTimes(2)
+      // Polling resumes on the usual interval.
+      await act(async () => void vi.advanceTimersByTime(PR_REFRESH_MS))
+      expect(gitPrStatus).toHaveBeenCalledTimes(3)
+    } finally {
+      visibility.mockRestore()
+    }
+  })
 })

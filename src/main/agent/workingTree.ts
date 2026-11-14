@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { realpathSync, statSync, readFileSync } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -52,6 +53,46 @@ function readUntracked(root: string, rel: string): FileDiff {
   } catch {
     return untrackedToFileDiff(rel, null, { unreadable: true })
   }
+}
+
+/** How many untracked files the badge counts read at a time. */
+const UNTRACKED_READS_AT_ONCE = 8
+
+/**
+ * The added-line count {@link readUntracked} gives an untracked file, without a blocking
+ * read or building its diff: its lines (a final newline ends the last line, it doesn't
+ * start another), or 0 for a binary, oversized, empty or unreadable file. Newlines are counted in the raw bytes, which decoding as UTF-8 never adds to or
+ * drops, so the number is the one the full diff shows.
+ */
+async function untrackedLineCount(root: string, rel: string): Promise<number> {
+  try {
+    const full = join(root, rel)
+    if ((await stat(full)).size > MAX_FILE_BYTES) return 0
+    const buf = await readFile(full)
+    if (looksBinary(buf)) return 0
+    let lines = 0
+    for (let i = buf.indexOf(0x0a); i !== -1; i = buf.indexOf(0x0a, i + 1)) lines++
+    if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) lines++
+    return lines
+  } catch {
+    return 0
+  }
+}
+
+/** The added lines across `paths`, read a few files at a time. */
+async function untrackedLines(root: string, paths: string[]): Promise<number> {
+  let total = 0
+  let next = 0
+  const reader = async (): Promise<void> => {
+    while (next < paths.length) {
+      // Awaited before the sum is read: `total += await ...` would read it first and
+      // drop what the other readers added meanwhile.
+      const lines = await untrackedLineCount(root, paths[next++])
+      total += lines
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(UNTRACKED_READS_AT_ONCE, paths.length) }, reader))
+  return total
 }
 
 /**
@@ -214,8 +255,9 @@ export function sumNumstat(out: string): { files: number; added: number; removed
  * The counts behind the Changes badge (file count, added and removed lines, ship
  * state): the numbers {@link collectWorkingTreeChanges} yields for the same tree,
  * without building or shipping the full diff. Tracked files are summed from
- * `git diff --numstat` rather than a parsed patch; untracked files are counted
- * exactly as the full path counts them, under the same file cap.
+ * `git diff --numstat` rather than a parsed patch; untracked files are read off the
+ * main thread and their lines counted from the bytes, to the numbers the full path
+ * gives, under the same file cap.
  */
 export async function collectWorkingTreeStats(workspace: string): Promise<WorkingTreeStats> {
   const probe = await workTreeRoot(workspace)
@@ -237,8 +279,7 @@ export async function collectWorkingTreeStats(workspace: string): Promise<Workin
   ])
   const tracked = diff.ok ? sumNumstat(diff.stdout) : { files: 0, added: 0, removed: 0 }
   const untracked = untrackedPaths.slice(0, MAX_UNTRACKED_FILES)
-  let added = tracked.added
-  for (const rel of untracked) added += readUntracked(root, rel).added
+  const added = tracked.added + (await untrackedLines(root, untracked))
   return {
     isRepo: true,
     branch,

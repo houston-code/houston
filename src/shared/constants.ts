@@ -278,6 +278,8 @@ export const IPC = {
   /** main → renderer: play an attention sound (the window is not focused). */
   attentionSound: 'attention:sound',
   agentEvent: 'agent:event',
+  /** Main → renderer: several run events at once, in order (a window that was hidden). */
+  agentEvents: 'agent:events',
   // Session proposals (propose_session cards)
   /** Renderer → main: start a proposed session as its own chat. */
   proposalStart: 'proposal:start',

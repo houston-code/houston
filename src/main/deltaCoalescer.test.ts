@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AgentEvent } from '@shared/agent'
-import { createDeltaCoalescer, flushAllDeltas, resetDeltaCoalescers, type CoalescerTimers } from './deltaCoalescer'
+import {
+  createDeltaCoalescer,
+  createWindowEventGate,
+  flushAllDeltas,
+  HIDDEN_WINDOW_COALESCE_MS,
+  resetDeltaCoalescers,
+  type CoalescerTimers
+} from './deltaCoalescer'
 
 /** Timers the test fires by hand. */
 function manualTimers(): CoalescerTimers & { fire: () => void; pending: () => number } {
@@ -133,5 +140,101 @@ describe('delta coalescer', () => {
     timers.fire()
     expect(a).toHaveLength(2)
     expect(b).toHaveLength(2)
+  })
+})
+
+describe('window event gate', () => {
+  const toolStart = (callId: string): AgentEvent => ({ runId: 'r1', type: 'tool_start', callId, name: 'read_file', args: {} })
+  const approval: AgentEvent = {
+    runId: 'r1',
+    type: 'tool_approval',
+    callId: 'w1',
+    name: 'write_file',
+    summary: 'write a.txt',
+    kind: 'write'
+  }
+
+  function gate(visible: boolean) {
+    const batches: AgentEvent[][] = []
+    const timers = manualTimers()
+    const state = { visible }
+    const g = createWindowEventGate((events) => batches.push(events), () => state.visible, timers)
+    return { g, batches, timers, state }
+  }
+
+  it('sends each event as it comes while the window is visible', () => {
+    const { g, batches, timers } = gate(true)
+    g.push(text('a'))
+    g.push(toolStart('t1'))
+    g.push(text('b'))
+    expect(batches).toEqual([[text('a')], [toolStart('t1')], [text('b')]])
+    expect(timers.pending()).toBe(0)
+  })
+
+  it('holds a hidden window’s events and sends them as one batch, in order, deltas joined', () => {
+    const { g, batches, timers } = gate(false)
+    g.push(text('Hel'))
+    g.push(text('lo'))
+    g.push(reasoning('hm'))
+    g.push(toolStart('t1'))
+    g.push(text(' again'))
+    g.push(text('!'))
+    expect(batches).toEqual([])
+    expect(timers.pending()).toBe(1)
+    timers.fire()
+    expect(batches).toEqual([[text('Hello'), reasoning('hm'), toolStart('t1'), text(' again!')]])
+    // Nothing more until something new arrives.
+    timers.fire()
+    expect(batches).toHaveLength(1)
+  })
+
+  it('sends what needs the user at once, after what was held', () => {
+    for (const urgent of [approval, done(), { runId: 'r1', type: 'error', message: 'boom' } as AgentEvent]) {
+      const { g, batches, timers } = gate(false)
+      g.push(text('let me '))
+      g.push(text('write'))
+      g.push(urgent)
+      expect(batches).toEqual([[text('let me write'), urgent]])
+      expect(timers.pending()).toBe(0)
+    }
+    // Nothing held: it goes alone.
+    const { g, batches } = gate(false)
+    g.push(approval)
+    expect(batches).toEqual([[approval]])
+  })
+
+  it('sends what was held when the window is shown, before anything newer', () => {
+    const { g, batches, state } = gate(false)
+    g.push(text('while '))
+    g.push(text('away'))
+    state.visible = true
+    g.flush()
+    expect(batches).toEqual([[text('while away')]])
+    g.push(text('back'))
+    expect(batches).toEqual([[text('while away')], [text('back')]])
+    // Shown without a show event (the gate only sees it on the next event): still in order.
+    const late = gate(false)
+    late.g.push(text('held'))
+    late.state.visible = true
+    late.g.push(text('next'))
+    expect(late.batches).toEqual([[text('held'), text('next')]])
+  })
+
+  it('is drained by flushAllDeltas, including what a coalescer hands it while draining', () => {
+    const { g, batches, timers } = gate(false)
+    const c = createDeltaCoalescer((e) => g.push(e), timers)
+    c.push(text('a'))
+    c.push(text('b'))
+    // The coalescer still holds 'b' and the gate holds 'a': one call sends both, in order,
+    // and leaves nothing held for later (which would show it twice after a state read).
+    flushAllDeltas()
+    expect(batches.flat()).toEqual([text('a'), text('b')])
+    timers.fire()
+    expect(batches.flat()).toHaveLength(2)
+  })
+
+  it('waits the hidden window interval', () => {
+    expect(HIDDEN_WINDOW_COALESCE_MS).toBeGreaterThanOrEqual(250)
+    expect(HIDDEN_WINDOW_COALESCE_MS).toBeLessThanOrEqual(500)
   })
 })

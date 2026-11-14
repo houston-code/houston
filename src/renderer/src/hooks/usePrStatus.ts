@@ -10,7 +10,8 @@ export const PR_REFRESH_MS = 3 * 60_000
  * the main process, and only for a folder whose remote is on GitHub (`enabled`), so a
  * repository elsewhere never starts gh at all. Refreshed when the folder changes, when
  * a run ends (the agent may have just opened or updated a PR), when the window regains
- * focus, and every few minutes; never in a tight loop. Null hides the chip: no PR, or
+ * focus or is shown again, and every few minutes while it can be seen (a hidden or
+ * minimized window doesn't poll); never in a tight loop. Null hides the chip: no PR, or
  * gh missing or signed out.
  */
 export function usePrStatus(workspace: string | null, enabled: boolean, running: boolean): PrStatus | null {
@@ -53,15 +54,26 @@ export function usePrStatus(workspace: string | null, enabled: boolean, running:
 
   useEffect(() => {
     if (!enabled) return
+    let timer: ReturnType<typeof setInterval> | null = null
+    const poll = (): void => {
+      if (timer !== null) clearInterval(timer)
+      timer = document.visibilityState === 'hidden' ? null : setInterval(() => void refresh(), PR_REFRESH_MS)
+    }
     const onFocus = (): void => void refresh()
+    const onVisibility = (): void => {
+      if (document.visibilityState !== 'hidden') void refresh()
+      poll()
+    }
     window.addEventListener('focus', onFocus)
     // A commit, push or revert made from the Changes view: the chip follows at once.
     window.addEventListener(TREE_CHANGED, onFocus)
-    const timer = setInterval(() => void refresh(), PR_REFRESH_MS)
+    document.addEventListener('visibilitychange', onVisibility)
+    poll()
     return () => {
       window.removeEventListener('focus', onFocus)
       window.removeEventListener(TREE_CHANGED, onFocus)
-      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+      if (timer !== null) clearInterval(timer)
     }
   }, [enabled, refresh])
 
