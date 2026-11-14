@@ -66,7 +66,7 @@ function launchableExts(env: NodeJS.ProcessEnv): string[] {
  * every PATHEXT suffix before the next dir, as Windows does), or relative to `cwd` /
  * as given for a path. The current directory is never searched for a bare name, so
  * a checkout can't plant an `npx.cmd` that shadows the real one. Null when nothing
- * matches, and the command is then spawned unchanged (to fail with ENOENT as before).
+ * matches, and {@link planStdioLaunch} then refuses the launch (see there).
  */
 export function resolveWindowsCommand(
   command: string,
@@ -104,7 +104,14 @@ function quoteForCmd(arg: string, what: string): string {
   return `"${arg.replace(/(\\+)$/, '$1$1')}"`
 }
 
-/** Plan the spawn of a stdio server: unchanged off Windows, PATHEXT-aware on it. */
+/**
+ * Plan the spawn of a stdio server: unchanged off Windows, PATHEXT-aware on it.
+ *
+ * On Windows a command that doesn't resolve is refused here rather than handed to
+ * spawn by its bare name: libuv's own search tries the spawn's working directory
+ * (the server's `cwd`, usually the workspace) before PATH, so a checkout holding an
+ * `npx.exe` or `uvx.com` would run in place of a missing or misspelled real one.
+ */
 export function planStdioLaunch(
   command: string,
   args: string[],
@@ -113,7 +120,13 @@ export function planStdioLaunch(
 ): StdioLaunch {
   if ((deps.platform ?? process.platform) !== 'win32') return { command, args }
   const resolved = resolveWindowsCommand(command, env, deps)
-  if (!resolved) return { command, args }
+  if (!resolved) {
+    throw new Error(
+      /[\\/:]/.test(command)
+        ? `MCP server command not found: ${command}`
+        : `MCP server command not found on PATH: ${command}. Install it, or set the server's command to its full path.`
+    )
+  }
   if (!BATCH_EXTS.has(win32.extname(resolved).toLowerCase())) return { command: resolved, args }
   const line = [
     quoteForCmd(resolved, 'The command path'),

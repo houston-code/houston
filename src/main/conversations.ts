@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { writeFileAtomicStampedSync } from './atomic-write'
 import { buildUsageReport, type UsageInput, type UsageReport } from '@shared/usageReport'
@@ -48,9 +48,24 @@ import { getUserDataDir } from './userData'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
 
+/** Conversations folders already tightened to 0700 in this process. */
+const securedDirs = new Set<string>()
+
 function dir(): string {
   const d = join(getUserDataDir(), 'conversations')
-  mkdirSync(d, { recursive: true })
+  // Transcripts hold everything the agent read and ran, so the folder is private to
+  // the user (the files are written 0600). mkdir's mode is masked by the umask and
+  // ignored for a folder that exists, so a folder an earlier version created 0755 is
+  // chmodded once per process too (no-op on Windows).
+  mkdirSync(d, { recursive: true, mode: 0o700 })
+  if (!securedDirs.has(d)) {
+    securedDirs.add(d)
+    try {
+      chmodSync(d, 0o700)
+    } catch {
+      // Best effort: a filesystem without POSIX modes.
+    }
+  }
   return d
 }
 

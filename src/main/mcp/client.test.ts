@@ -109,6 +109,24 @@ describe('McpClient (fake stdio server)', () => {
     client.close()
   })
 
+  it('on Windows, refuses a command that resolves nowhere without spawning it (no cwd search)', async () => {
+    const spawned: string[] = []
+    const spawnFn: SpawnFn = (command, args, options) => {
+      spawned.push(command)
+      return fakeServer([], () => ({}))(command, args, options)
+    }
+    // C:\work\npx.exe exists, but the cwd is never searched for a bare name.
+    const client = new McpClient(spawnFn, {
+      platform: 'win32',
+      exists: (p) => p === 'C:\\work\\npx.exe',
+      comspec: 'C:\\Windows\\system32\\cmd.exe'
+    })
+    await expect(
+      client.connect({ command: 'npx', env: { PATH: 'C:\\nodejs', PATHEXT: '.EXE;.CMD' }, cwd: 'C:\\work' })
+    ).rejects.toThrow(/not found on PATH: npx/)
+    expect(spawned).toEqual([])
+  })
+
   it('initializes and lists tools', async () => {
     const client = new McpClient(
       fakeServer([{ name: 'echo', description: 'Echoes input' }], () => ({}))

@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, realpathSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { posix } from 'node:path'
 import type { EgressProxyEndpoints, SandboxBackend, ShellLaunch } from './contract'
 import { EGRESS_PROXY_INNER_PORT, egressProxyEnv, egressProxyUrl } from './egress-proxy'
 import { resolvePosixShell } from './shared'
@@ -177,10 +178,71 @@ export function buildBwrapArgs(input: BwrapArgsInput): string[] {
   return args
 }
 
+/** Whether `p` is an executable regular file. */
+function isExecutableFile(p: string): boolean {
+  try {
+    if (!statSync(p).isFile()) return false
+    accessSync(p, fsConstants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Where `bwrap` lives: the first executable `bwrap` in the PATH entries that are
+ * absolute, or undefined when none holds one.
+ *
+ * The wrapper must never be spawned by its bare name. That lookup happens on the
+ * child's PATH at spawn time with the workspace as the working directory, so a PATH
+ * holding a relative or empty entry (`.`, `node_modules/.bin`, a leading or trailing
+ * `:`, which means the cwd) would run a `bwrap` the workspace planted: an unconfined
+ * command reported as sandboxed. Resolving once here, from absolute entries only, and
+ * spawning that path closes it. Distributions install bwrap in different places
+ * (`/usr/bin`, `/usr/local/bin`, a Nix profile), hence a PATH search rather than one
+ * fixed path.
+ */
+export function resolveBwrapPath(
+  pathEnv: string = process.env.PATH ?? '',
+  isExecutable: (p: string) => boolean = isExecutableFile
+): string | undefined {
+  for (const dir of pathEnv.split(':')) {
+    if (!dir || !posix.isAbsolute(dir)) continue
+    const candidate = posix.join(dir, 'bwrap')
+    if (isExecutable(candidate)) return candidate
+  }
+  return undefined
+}
+
+/**
+ * Where bwrap is spawned from when the PATH search found nothing. Only reached by a
+ * launch built without a successful probe (`selectBackend` picks this backend only
+ * after one), and still absolute, so it fails with ENOENT rather than searching PATH.
+ */
+const FALLBACK_BWRAP_PATH = '/usr/bin/bwrap'
+
+let cachedBwrapPath: string | null | undefined
+
+/** {@link resolveBwrapPath} for this process, memoized (null: not found). */
+function bwrapPath(): string | undefined {
+  if (cachedBwrapPath === undefined) cachedBwrapPath = resolveBwrapPath() ?? null
+  return cachedBwrapPath ?? undefined
+}
+
+/** The absolute path a bubblewrap launch spawns (see {@link resolveBwrapPath}). */
+export function bwrapExecutable(): string {
+  return bwrapPath() ?? FALLBACK_BWRAP_PATH
+}
+
 export interface BwrapProbeDeps {
   /** Runs the probe command; throws on any failure. Injectable for tests. */
   exec?: (file: string, args: string[]) => void
   shell?: string
+  /**
+   * The resolved bwrap path, or undefined for none on PATH (default: the real
+   * {@link resolveBwrapPath} result). Injectable for tests.
+   */
+  bwrapPath?: () => string | undefined
 }
 
 const defaultProbeExec = (file: string, args: string[]): void => {
@@ -220,20 +282,28 @@ export function probeBwrapUsable(deps: BwrapProbeDeps = {}): boolean {
     '-c',
     ':'
   ]
+  // Probe the very file a launch will spawn, so "usable" is never judged on one
+  // bwrap and the command run under another.
+  const file = (deps.bwrapPath ?? bwrapPath)()
   let ok: boolean
-  try {
-    exec('bwrap', args)
-    ok = true
-  } catch {
+  if (file === undefined) {
     ok = false
+  } else {
+    try {
+      exec(file, args)
+      ok = true
+    } catch {
+      ok = false
+    }
   }
   if (!injected) cachedProbe = ok
   return ok
 }
 
-/** Test seam: clear the memoized probe result. */
+/** Test seam: clear the memoized probe result and bwrap path. */
 export function resetBwrapProbeCache(): void {
   cachedProbe = undefined
+  cachedBwrapPath = undefined
 }
 
 export const BubblewrapBackend: SandboxBackend = {
@@ -259,7 +329,7 @@ export const BubblewrapBackend: SandboxBackend = {
       shell
     })
     return {
-      file: 'bwrap',
+      file: bwrapExecutable(),
       args,
       detached: true,
       windowsHide: false,

@@ -2613,6 +2613,13 @@ The structured file tools stay confined to the project on every platform.
 **Working across repos.** **Additional folders** (Settings) adds folders to the file
 tools' allowed roots and to the shell sandbox.
 
+**Environment.** Shell commands and local MCP servers inherit your environment minus
+credential-shaped variables (names like `*_TOKEN`, `*_API_KEY`, `*_PASSWORD`, `*_PAT`,
+`*_DSN`, `AWS_*`). A `*_URL` or `*_URI` variable is kept without its `user:password@`
+part, so `DATABASE_URL=postgres://me:pw@db/app` arrives as `postgres://db/app`. A
+command that needs a credential has to get it another way, such as a config file it
+reads; an MCP server gets it from the server's own environment settings.
+
 ### Network for shell commands
 
 Network from `run_shell` always goes through the egress allowlist (see "Egress
@@ -2703,6 +2710,8 @@ proxy is the only road out.
   commands only, and the answer holds until Houston quits. A deny-list entry or a
   private address is never offered. Headless runs keep the host blocked and tell the
   agent so.
+- A plain-HTTP request whose `Host` header names a different host than its URL is
+  refused (400), so a request can't reach another site behind an allowed one's server.
 - Only HTTP(S) flows through the proxy, so other protocols (SSH, for example) are
   blocked under the allowlist. Use HTTPS remotes inside the sandbox, or switch the
   egress mode to "All domains" (Settings) to restore unrestricted granted network.
