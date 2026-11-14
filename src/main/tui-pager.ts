@@ -41,7 +41,7 @@ interface Block {
 
 /** Display-safe text: tabs expanded, every other control character removed, line by line. */
 export function sanitizeLines(text: string): string[] {
-  return stripControlCharsKeepLines(text)
+  return stripControlCharsKeepLines(text.replace(/\t/g, '    '))
     .split('\n')
     .map((l) => l.replace(/\s+$/, ''))
 }
