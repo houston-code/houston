@@ -923,6 +923,15 @@ launch. In this mode:
   character. Pasting several lines still lands as one message. Up and Down, `Shift-Tab`
   and `Ctrl-U` print the prompt again on a new line with the text as it now stands.
   Ctrl-R search and in-line cursor movement are off in this mode.
+- **Composer keys that work here:** `Ctrl-V`/`Alt-V` and pasting or dropping image
+  files attach images and say so in one line, then print the prompt again with your
+  text. `Ctrl-G` (or `Ctrl-X Ctrl-E`) opens the draft in your editor. `Ctrl-Z`
+  suspends to the shell, and `fg` prints the prompt again with the draft. `Esc Esc`
+  clears the draft (Up brings it back), or opens `/rewind` on an empty prompt.
+  `Ctrl-C` discards the draft into history too. Invisible characters are removed
+  from what you send, as in the full composer.
+- **Composer keys that are off here:** undo and redo (`Ctrl-_`, `Ctrl-^`) and the
+  `Ctrl-S` stash, since they rewrite the line in place. Pressing them does nothing.
 - **`Ctrl-O` and `/transcript` print the whole session** as plain lines, ending with
   `end of transcript`, instead of opening the full-screen viewer.
 - **Typing while it works** is not drawn on screen; Enter says whether the line went to

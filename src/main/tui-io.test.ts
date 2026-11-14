@@ -2034,6 +2034,133 @@ describe('screen-reader mode', () => {
     expect(written.length).toBe(before)
     io.stopSpinner!()
   })
+
+  it('attaches a clipboard image and a pasted image path as plain lines, with no redraw escapes', async () => {
+    const t = harness()
+    const reqs: unknown[] = []
+    t.io.onImagePaste!((req) => {
+      reqs.push(req)
+      return {
+        handled: true,
+        notes: [req.kind === 'clipboard' ? '· attached the image from your clipboard (1 staged)' : '· attached shot.png (2 staged)']
+      }
+    })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('what is')
+    t.stdin.push('\x16') // Ctrl-V
+    t.stdin.push(`${ESC}[200~'/tmp/shot.png'${ESC}[201~`)
+    t.tick()
+    t.stdin.push(' this\r')
+    // The draft is untouched: the path was not inserted as text.
+    await expect(read).resolves.toBe('what is this')
+    expect(reqs).toEqual([{ kind: 'clipboard' }, { kind: 'files', paths: ['/tmp/shot.png'] }])
+    const text = t.text()
+    expect(text).toContain('you: what is\nattached the image from your clipboard (1 staged)\nyou: what is\n')
+    expect(text).toContain('\nattached shot.png (2 staged)\nyou: what is this\n')
+    expect(text).not.toMatch(REDRAW)
+    expect(text).not.toContain('[?1049h')
+  })
+
+  it('Ctrl-Z suspends and resumes with the prompt and draft restated, with no redraw escapes', async () => {
+    let resume: (() => void) | null = null
+    const t = harness({ platform: 'darwin', suspendProcess: (cb) => (resume = cb) })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('half')
+    const before = t.text().length
+    t.stdin.push('\x1a')
+    expect(resume).not.toBeNull()
+    expect(t.stdin.rawModes.at(-1)).toBe(false) // cooked for the shell
+    expect(t.text().slice(before)).toContain('[?2004l')
+    resume!()
+    expect(t.stdin.rawModes.at(-1)).toBe(true)
+    // Keys arrive exactly once after resuming.
+    t.stdin.push(' done\r')
+    await expect(read).resolves.toBe('half done')
+    const text = t.text()
+    expect(text).toContain('you: half\n')
+    // The prompt is stated again after resuming, the draft with it.
+    expect(text).toMatch(new RegExp(`you: half\\n(${ESC}\\[[^a-z]*[a-z])*you: half done\\n`))
+    expect(text).not.toMatch(REDRAW)
+    expect(text).not.toContain('[?1049h')
+  })
+
+  it('Ctrl-Z on Windows says it is unavailable as a plain line', async () => {
+    let suspends = 0
+    const t = harness({ platform: 'win32', suspendProcess: () => suspends++ })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('x\x1a')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('x')
+    expect(suspends).toBe(0)
+    expect(t.text()).toContain('not available on Windows')
+    expect(t.text()).not.toMatch(REDRAW)
+  })
+
+  it('Esc Esc clears the draft into history, and on an empty composer asks for rewind', async () => {
+    const remembered: string[] = []
+    const t = harness({ remember: (s) => remembered.push(s) })
+    let rewinds = 0
+    t.io.onRewindKey!(() => rewinds++)
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('oops')
+    t.tick()
+    t.stdin.push(ESC)
+    t.tick(100)
+    t.stdin.push(ESC)
+    expect(remembered).toEqual(['oops'])
+    t.tick(100)
+    t.stdin.push(ESC)
+    t.tick(100)
+    t.stdin.push(ESC)
+    await expect(read).resolves.toBeNull()
+    expect(rewinds).toBe(1)
+    const text = t.text()
+    expect(text).toContain('(cleared)')
+    expect(text).not.toMatch(REDRAW)
+  })
+
+  it('Ctrl-G opens the draft in the editor and states the edited text on a new line', async () => {
+    const seen: string[] = []
+    const t = harness({
+      editText: async (initial) => {
+        seen.push(initial)
+        return 'edited text\n'
+      }
+    })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('draft')
+    t.stdin.push('\x07') // Ctrl-G
+    await new Promise((r) => setImmediate(r))
+    expect(seen).toEqual(['draft'])
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('edited text')
+    expect(t.text()).toContain('\nyou: edited text\n')
+    expect(t.text()).not.toMatch(REDRAW)
+  })
+
+  it('ignores undo, redo and the stash without writing anything', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('abc')
+    const before = t.text().length
+    t.stdin.push('\x1f') // Ctrl-_ undo
+    t.stdin.push('\x1e') // Ctrl-^ redo
+    t.stdin.push('\x13') // Ctrl-S stash
+    expect(t.text().length).toBe(before)
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('abc')
+  })
+
+  it('Ctrl-C keeps the discarded draft in history', async () => {
+    const remembered: string[] = []
+    const t = harness({ remember: (s) => remembered.push(s) })
+    t.io.onInterrupt!(() => {})
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('a draft')
+    t.stdin.push('\x03')
+    await expect(read).resolves.toBeNull()
+    expect(remembered).toEqual(['a draft'])
+  })
 })
 
 describe('notification modes and the idle reminder', () => {

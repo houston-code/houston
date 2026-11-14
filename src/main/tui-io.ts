@@ -587,6 +587,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           // Ctrl-Z mid-run: hand the terminal back and stop. The run is not
           // cancelled; it carries on from where it was once `fg` resumes us.
           if (platform === 'win32') {
+            if (screenReader) {
+              announce(NO_SUSPEND_NOTE)
+              break
+            }
             atomically(() => {
               rawWrite(`${CLEAR_LINE}${paint(NO_SUSPEND_NOTE, 'dim')}\n`)
               drawSpinner()
@@ -887,6 +891,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       let buf = opts.initial ?? ''
       let dec: DecoderState = initialDecoderState()
       let done = false
+      // When the last Esc came, so a second one inside DOUBLE_ESC_MS is Esc Esc.
+      let lastEscAt = -Infinity
       const priorKeypress = stdin.listeners('keypress') as Array<(...args: unknown[]) => void>
       // The user's own text, echoed as lines: control characters never reach the
       // terminal (a paste can carry anything).
@@ -989,6 +995,32 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         rawWrite(promptNow())
         echo(buf)
       }
+      /** Notes about the draft (an attached image, say), each a line, then the prompt again. */
+      const noteLines = (lines: string[]): void => {
+        rawWrite('\n')
+        for (const l of lines) announce(l)
+        rawWrite(promptNow())
+        echo(buf)
+      }
+      /**
+       * Ctrl-Z: hand the terminal back cooked and stop; on `fg`, take it again and
+       * state the prompt with the draft on a fresh line (the shell printed its own).
+       */
+      const suspendLinear = (): void => {
+        if (platform === 'win32') return noteLines([NO_SUSPEND_NOTE])
+        rawWrite('\n')
+        teardown()
+        suspendProcess(() => {
+          if (done) return
+          try {
+            setup()
+          } catch {
+            /* best-effort: the read still settles through close/cancel */
+          }
+          rawWrite(promptNow())
+          echo(buf)
+        })
+      }
       function onData(data: Buffer | string): void {
         const r = decodeInput(decodeChunk(data), dec)
         dec = r.state
@@ -999,6 +1031,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         lastPasteAt = guarded.lastPasteAt
         for (const key of guarded.keys) {
           if (done) return
+          if (key.type !== 'escape' && key.type !== 'focus') lastEscAt = -Infinity
           switch (key.type) {
             case 'focus':
               noteFocus(key.on)
@@ -1008,6 +1041,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               echo(key.value)
               break
             case 'paste': {
+              // A paste that is only image files attaches them, as in the full composer.
+              if (composer && imagePasteHandler) {
+                const paths = parseImagePaths(key.value, { windows: platform === 'win32' })
+                const r = paths ? imagePasteHandler({ kind: 'files', paths }) : null
+                if (r?.handled) {
+                  noteLines(r.notes)
+                  break
+                }
+              }
               // A sub-prompt answer is one line; only the composer keeps line breaks.
               const text = composer ? key.value.replace(/\r\n?/g, '\n') : key.value.replace(/\r\n|\r|\n/g, ' ')
               buf += text
@@ -1038,6 +1080,39 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
                 restate()
               }
               break
+            case 'escape': {
+              // Esc Esc: clear the draft (kept in history for Up), or on an empty
+              // composer open /rewind. A lone Esc does nothing here.
+              if (!composer) break
+              const t = now()
+              const double = t - lastEscAt < DOUBLE_ESC_MS
+              lastEscAt = double ? -Infinity : t
+              if (!double) break
+              if (buf.trim()) {
+                deps.remember?.(buf)
+                buf = ''
+                rawWrite('\n(cleared)')
+                restate()
+              } else if (rewindHandler) {
+                rawWrite('\n')
+                rewindHandler()
+                finish(null)
+                return
+              }
+              break
+            }
+            case 'paste-image':
+              if (!composer) break
+              noteLines(
+                imagePasteHandler
+                  ? imagePasteHandler({ kind: 'clipboard' }).notes
+                  : ['· pasting images is unavailable here; use /image <path>']
+              )
+              break
+            case 'suspend':
+              if (!composer) break
+              suspendLinear()
+              return
             case 'up':
             case 'down':
               if (!composer || !history.length) break
@@ -1087,14 +1162,17 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               return
             case 'interrupt':
               rawWrite('\n')
+              // The discarded draft goes to history first, so Up brings it back.
+              if (composer && buf.trim()) deps.remember?.(buf)
               // The shared handler owns what Ctrl-C means here (discard, exit, stop
               // the run); it settles this read through cancelRead, or we do.
               interruptHandler?.()
               finish(null)
               return
             default:
-              // Cursor movement, Ctrl-R search and Ctrl-L repaint all need a redraw;
-              // in this mode the line is only ever appended to.
+              // Cursor movement, Ctrl-R search, Ctrl-L repaint, undo/redo and the
+              // Ctrl-S stash all need a redraw; in this mode the line is only ever
+              // appended to.
               break
           }
         }
