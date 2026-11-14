@@ -69,7 +69,17 @@ import {
   spawnSandboxed,
   type EgressProxyEndpoints
 } from '../sandbox'
-import { backgroundShellGroups, normalizeNotifyOn, readShellOutput, registerShell, stopShell } from './shells'
+import {
+  backgroundShellGroups,
+  findRunningDuplicate,
+  MAX_RUNNING_SHELLS_PER_CHAT,
+  normalizeNotifyOn,
+  readShellOutput,
+  registerShell,
+  runningShellsFor,
+  stopShell
+} from './shells'
+import { detachedLaunchNote } from './detached'
 import { reviewGitChanges, type GitGuard } from './gitGuard'
 import { foreignListenerNote, urlPort, type PortListener } from './portOwner'
 import { cwdFromRoot, runInSession, shellCwdLabel, shellCwdLine, type ShellSession } from './shell-session'
@@ -1932,6 +1942,31 @@ export const BACKGROUND_AMPERSAND_ERROR =
   'its output go to stdout (no `> file` redirect) so read_shell_output and the Preview pane ' +
   'can see it. Drop any trailing `sleep`/`cat log`; poll with read_shell_output instead.'
 
+/** The result when a background start repeats a command this chat already has running. */
+export function duplicateShellMessage(id: string): string {
+  return (
+    `Not started: background shell ${id} is already running this exact command in this folder. ` +
+    `Read its output with read_shell_output({ shell_id: "${id}" }). To restart it, stop it first with ` +
+    `kill_shell({ shell_id: "${id}" }) and then start it again.`
+  )
+}
+
+/** A command shortened for a one-line listing. */
+function shortCommand(command: string, max = 120): string {
+  const line = command.replace(/\s+/g, ' ').trim()
+  return line.length > max ? `${line.slice(0, max - 3)}...` : line
+}
+
+/** The refusal when a chat already has {@link MAX_RUNNING_SHELLS_PER_CHAT} background shells running. */
+export function tooManyShellsError(running: { id: string; command: string }[]): string {
+  const list = running.map((s) => `- ${s.id}: ${shortCommand(s.command)}`).join('\n')
+  return (
+    `Refused: this chat already has ${running.length} background shells running (the limit is ` +
+    `${MAX_RUNNING_SHELLS_PER_CHAT}). Stop one you no longer need with kill_shell, or reuse one ` +
+    `(read_shell_output shows its output), before starting another. Running now:\n${list}`
+  )
+}
+
 /** Take the run's git baseline before a shell command, if it hasn't one yet. Never throws. */
 async function gitGuardBefore(ctx: ToolContext): Promise<void> {
   try {
@@ -1990,6 +2025,10 @@ const runShell: ToolDef = {
     await gitGuardBefore(ctx)
     if (args.background === true) {
       if (backgroundsItself(command)) throw new Error(BACKGROUND_AMPERSAND_ERROR)
+      const duplicate = findRunningDuplicate(ctx.conversationId, ctx.workspace, command)
+      if (duplicate) return duplicateShellMessage(duplicate.id)
+      const running = runningShellsFor(ctx.conversationId, ctx.workspace)
+      if (running.length >= MAX_RUNNING_SHELLS_PER_CHAT) throw new Error(tooManyShellsError(running))
       const child = spawnSandboxed({
         command,
         cwd: ctx.workspace,
@@ -2116,6 +2155,10 @@ const runShell: ToolDef = {
     // Honest signal: if the command ran unconfined, say so — run_shell's contract
     // promises a sandbox, and approval auto-approves shell on that premise.
     if (!result.sandboxed) parts.push(UNSANDBOXED_SHELL_NOTE)
+    // `docker compose up -d`, `pm2 start`, `nohup x &`: something outlives this
+    // command, and Houston's Stop and quit won't reach it. Say how to stop it.
+    const detachedNote = detachedLaunchNote(command, backgroundsItself(command))
+    if (detachedNote) parts.push(detachedNote)
     const gitNote = await gitGuardAfter(ctx)
     if (gitNote) parts.push(gitNote)
     return parts.join('\n')

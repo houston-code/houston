@@ -1986,7 +1986,22 @@ from here.
 ## Background work wakes the chat
 
 The agent runs open-ended commands (dev servers, watchers, long builds) with
-`run_shell` and `background: true`. It doesn't have to keep checking on them:
+`run_shell` and `background: true`. Two limits keep these from piling up:
+
+- **No duplicates.** Starting a command that the chat already has running in the same
+  folder doesn't start a second copy: the agent is pointed at the running one, to read
+  its output or stop it and start again.
+- **At most 8 at once per chat.** A ninth is refused with the list of the ones still
+  running, so the agent stops one it no longer needs first.
+
+Something a regular (foreground) command leaves running on its own, such as
+`docker compose up -d`, `docker run -d`, `pm2 start`, a detached `tmux` or `screen`
+session, `brew services start`, `systemctl start`, or a process sent to the
+background with `&`, isn't one of Houston's background commands, so Stop and quitting
+Houston don't stop it. The agent is told so, along with the command that stops it
+(for example `docker compose down` or `pm2 delete`).
+
+The agent doesn't have to keep checking on its background commands:
 
 - **When a background command exits,** the agent is told, with its exit code and the
   last lines it printed.

@@ -89,7 +89,9 @@ describe('run_shell surfaces the honest sandbox signal', () => {
   it('warns when a background shell starts WITHOUT the sandbox', async () => {
     h.available = false
     h.sandboxed = false
-    const out = await runShell({ command: 'sleep 1', background: true })
+    // A different command from the test above: its fake shell never exits, and a
+    // repeat of a running command is answered with that shell instead of a new one.
+    const out = await runShell({ command: 'sleep 2', background: true })
     expect(out).toMatch(/Started background shell \w+/)
     expect(out).toContain(UNSANDBOXED_SHELL_NOTE)
   })

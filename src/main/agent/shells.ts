@@ -574,6 +574,53 @@ export function killShellsFor(conversationId: string): number {
   return signalled
 }
 
+/**
+ * Most background shells one chat may have running at once. The agent can otherwise
+ * start dev servers and watchers without end (each a process tree holding ports and
+ * memory), most often by restarting one it lost track of.
+ */
+export const MAX_RUNNING_SHELLS_PER_CHAT = 8
+
+/** A running background shell, as the agent is told about it. */
+export interface RunningShell {
+  id: string
+  command: string
+}
+
+/**
+ * Whether a shell belongs to a chat: its conversation, or, when there is none (a
+ * caller without a chat id), the workspace it started in.
+ */
+function sameChat(s: Shell, conversationId: string | undefined, workspace: string): boolean {
+  return conversationId !== undefined ? s.conversationId === conversationId : s.conversationId === undefined && s.workspace === workspace
+}
+
+/** The background shells still running for a chat, oldest first. */
+export function runningShellsFor(conversationId: string | undefined, workspace: string): RunningShell[] {
+  return [...shells.values()]
+    .filter((s) => s.running && sameChat(s, conversationId, workspace))
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .map((s) => ({ id: s.id, command: s.command }))
+}
+
+/**
+ * A still-running background shell of this chat that runs exactly `command` in
+ * `workspace`, so a second start of the same dev server can point at the first.
+ */
+export function findRunningDuplicate(
+  conversationId: string | undefined,
+  workspace: string,
+  command: string
+): RunningShell | undefined {
+  const want = command.trim()
+  for (const s of shells.values()) {
+    if (s.running && sameChat(s, conversationId, workspace) && s.workspace === workspace && s.command.trim() === want) {
+      return { id: s.id, command: s.command }
+    }
+  }
+  return undefined
+}
+
 /** How often {@link stopShell} checks whether a stopping shell is gone. */
 const STOP_POLL_MS = 50
 
