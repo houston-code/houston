@@ -61,14 +61,19 @@ export function priceTierNote(total: number, tierAbove: number | null | undefine
  * The terminal's `/context` report: one line per part with its share, then the total
  * against the model's window. `measured` is the provider's count for the request
  * (0 when it reported none) and `window` the model's context window, when known.
+ * `compaction` is where automatic compaction kicks in (`compactionThresholdNote`).
  */
 export function renderContextReport(
   parts: ContextParts | null,
   measured: number,
   window: number | null,
-  tierAbove: number | null = null
+  tierAbove: number | null = null,
+  compaction: string | null = null
 ): string {
-  if (!parts) return 'No context yet: send a message, and /context shows what fills the window.'
+  if (!parts) {
+    const empty = 'No context yet: send a message, and /context shows what fills the window.'
+    return compaction ? `${empty}\n${compaction}` : empty
+  }
   const rows = contextRows(parts)
   const estimate = contextEstimate(parts)
   const width = Math.max(...rows.map((r) => r.label.length))
@@ -83,6 +88,7 @@ export function renderContextReport(
     ...lines,
     `  ${'Total'.padEnd(width)}  ${measured > 0 ? ' ' : '~'}${formatTokens(total).padStart(6)}${of}`,
     ...(tier ? [tier] : []),
+    ...(compaction ? [compaction] : []),
     CONTEXT_APPROX_NOTE
   ].join('\n')
 }

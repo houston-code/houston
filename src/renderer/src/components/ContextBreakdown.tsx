@@ -11,7 +11,8 @@ export function ContextBreakdown({
   parts,
   measured,
   contextWindow,
-  priceTierAbove = null
+  priceTierAbove = null,
+  compactionNote = null
 }: {
   /** The estimated parts of the most recent request; null before one was recorded. */
   parts: ContextParts | null | undefined
@@ -20,6 +21,8 @@ export function ContextBreakdown({
   contextWindow: number | null
   /** Prompt size past which the model bills at its long-context rate, when it has one. */
   priceTierAbove?: number | null
+  /** Where automatic compaction kicks in (`compactionThresholdNote`). */
+  compactionNote?: string | null
 }): JSX.Element {
   const pct = contextWindow && measured > 0 ? Math.min(100, Math.round((measured / contextWindow) * 100)) : null
   const tier = priceTierNote(measured, priceTierAbove)
@@ -30,6 +33,7 @@ export function ContextBreakdown({
         {contextWindow ? ` of ${contextWindow.toLocaleString()} tokens (${pct}%)` : ' tokens'}
       </p>
       {tier && <p className="usage-panel__note">{tier}</p>}
+      {compactionNote && <p className="usage-panel__note">{compactionNote}</p>}
     </>
   )
   if (!parts) {
