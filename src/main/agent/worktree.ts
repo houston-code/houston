@@ -287,6 +287,21 @@ function removalFailureMessage(wt: ConversationWorktree, e: unknown): string {
     : `Couldn't remove the worktree for branch "${wt.branch}"; left it in place at ${wt.path}.`
 }
 
+/** origin's default branch, as the clone or last fetch recorded it. Never fetched here. */
+const ORIGIN_DEFAULT = 'refs/remotes/origin/HEAD'
+
+/** Whether every commit on the worktree's branch is in `base`. Never throws. */
+async function mergedInto(wt: ConversationWorktree, base: string, exec: GitRun): Promise<boolean> {
+  try {
+    // Fully qualified so the branch can never be read as an option; exits non-zero
+    // (rejects) when the branch has commits `base` doesn't contain, or `base` is unknown.
+    await exec(['merge-base', '--is-ancestor', `refs/heads/${wt.branch}`, base], wt.repoRoot)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Tear down a conversation's worktree. Without `force`, this is safe: the worktree
  * is only removed when it has no uncommitted changes, and the branch only when
@@ -314,7 +329,17 @@ export async function removeWorktree(
     await exec(['branch', force ? '-D' : '-d', wt.branch], wt.repoRoot)
     branchDeleted = true
   } catch {
-    // `-d` refuses an unmerged branch — leave it so commits aren't lost.
+    // `-d` refuses a branch the main checkout's HEAD lacks. When origin's default
+    // branch already has every commit (merged upstream, main checkout not pulled),
+    // deleting it loses nothing; otherwise leave it so commits aren't lost.
+    if (!force && isSafeGitRef(wt.branch) && (await mergedInto(wt, ORIGIN_DEFAULT, exec))) {
+      try {
+        await exec(['branch', '-D', wt.branch], wt.repoRoot)
+        branchDeleted = true
+      } catch {
+        // leave it
+      }
+    }
   }
   return {
     removed: true,
@@ -328,8 +353,8 @@ export async function removeWorktree(
 /**
  * True when tearing the worktree down would lose nothing: the checkout exists, has
  * no uncommitted or untracked changes, and its branch is fully merged into the main
- * worktree's HEAD (the same checks `removeWorktree`'s non-forced `worktree remove`
- * and `branch -d` apply). Lets the delete dialog skip the keep/remove choice for an
+ * worktree's HEAD or origin's default branch (the checks `removeWorktree`'s
+ * non-forced removal applies). Lets the delete dialog skip the keep/remove choice for an
  * untouched worktree. Read-only and never throws: any doubt (missing path, bad
  * ref, git failure) answers false so the user is still asked.
  */
@@ -342,10 +367,9 @@ export async function isWorktreeDisposable(
   try {
     const status = await exec(['status', '--porcelain'], wt.path)
     if (status.trim() !== '') return false
-    // Fully qualified so the branch can never be read as an option; exits non-zero
-    // (rejects) when the branch has commits HEAD doesn't contain.
-    await exec(['merge-base', '--is-ancestor', `refs/heads/${wt.branch}`, 'HEAD'], wt.repoRoot)
-    return true
+    // Merged into the main checkout's HEAD, or into origin's default branch (a PR
+    // merged upstream while the main checkout wasn't pulled yet).
+    return (await mergedInto(wt, 'HEAD', exec)) || (await mergedInto(wt, ORIGIN_DEFAULT, exec))
   } catch {
     return false
   }
