@@ -1192,7 +1192,9 @@ describe('SettingsModal', () => {
     it('saves a removed setting as removed', async () => {
       const api = installApi()
       renderModal({ compactionThreshold: 50000 }, { initialTab: 'agent' })
-      fireEvent.change(screen.getByDisplayValue('50000'), { target: { value: '' } })
+      // The limit is shown as a token count; switching back to Automatic removes it.
+      expect(screen.getByDisplayValue('50000')).toBeTruthy()
+      fireEvent.change(screen.getByDisplayValue('Token count'), { target: { value: 'auto' } })
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
       expect(api.saveSettings.mock.calls.at(-1)![0]).not.toHaveProperty('compactionThreshold')
     })

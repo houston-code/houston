@@ -3005,13 +3005,17 @@ window:
   context window: a large-window model compacts later, a small local model sooner.
   When a model bills long prompts at a higher rate past some size, compaction keeps
   the conversation under that size, and `/context` says where the conversation stands
-  against it. A fixed threshold in Settings governs both trimming and summarizing.
+  against it. Your own limit in Settings governs both trimming and summarizing.
 - **Built up, not redone.** The summary is saved with the conversation, so later turns
   extend it instead of re-summarizing from scratch.
 - **Nothing disappears on screen.** The full transcript stays visible; only what's sent
   to the model is compacted.
-- **Settings:** set a fixed token threshold, or turn compaction off, in Settings,
-  *Agent Behavior*, *Context window*.
+- **Settings:** in Settings, *Agent Behavior*, *Context window*, choose Automatic,
+  a share of the context window (for example 50%), a token count, or Off. Your own
+  limit can only make compaction start sooner: it never goes past 80% of the window
+  or above a long-context price tier, which still apply as a ceiling. `/context`
+  shows where compaction will start and whether your setting or the automatic
+  sizing set it.
 - **`/compact` on demand.** It shows progress (including when it retries a slow or
   overloaded model) and can be cancelled: **Cancel** in the desktop app, **Esc** or
   **Ctrl-C** in the terminal. It gives up after 3 minutes. A cancelled or failed

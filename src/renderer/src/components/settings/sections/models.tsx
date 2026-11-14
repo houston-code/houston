@@ -10,6 +10,14 @@ import {
 import { SEARCH_PROVIDERS, DEFAULT_SEARCH_PROVIDER_ID, getSearchProviderInfo } from '@shared/search'
 import { DEFAULT_SUBAGENT_HISTORY_MB } from '@shared/subagents'
 import {
+  COMPACTION_WINDOW_FRACTION,
+  DEFAULT_COMPACTION_PERCENT,
+  DEFAULT_COMPACTION_TOKENS,
+  compactionMode,
+  withCompactionMode,
+  type CompactionMode
+} from '@shared/compactionThreshold'
+import {
   catalogForPlatform,
   catalogEntryToProvider,
   customEndpointToProvider,
@@ -406,6 +414,7 @@ export function SystemPromptSection({ ctx }: { ctx: SettingsCtx }): JSX.Element 
 
 export function ContextWindowSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
+  const mode = compactionMode(settings)
   return (
     <SettingsSection
       title="Context window"
@@ -413,32 +422,58 @@ export function ContextWindowSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
     >
       <label className="field">
         <span>
-          Compact the conversation when it grows past this many tokens. Leave empty
-          for automatic sizing from the selected model&apos;s context window; set 0 to
-          disable compaction.
+          Compact the conversation automatically when it grows past a limit. Automatic
+          sizes the limit from the selected model&apos;s context window. Your own limit,
+          a share of the window or a token count, can make compaction start sooner but
+          never later than {Math.round(COMPACTION_WINDOW_FRACTION * 100)}% of the window.
         </span>
-        <input
-          type="number"
-          min={0}
-          step={1000}
-          placeholder="Automatic"
-          value={settings.compactionThreshold ?? ''}
-          onChange={(e) => {
-            const raw = e.target.value
-            setSettings((s) => {
-              // Empty input = automatic: store no override at all rather than a number.
-              if (raw.trim() === '') {
-                const { compactionThreshold: _threshold, ...rest } = s
-                return rest
-              }
-              return {
-                ...s,
-                compactionThreshold: Math.max(0, Math.floor(Number(raw) || 0))
-              }
-            })
-          }}
-        />
+        <select
+          value={mode}
+          onChange={(e) => setSettings((s) => withCompactionMode(s, e.target.value as CompactionMode))}
+        >
+          <option value="auto">Automatic</option>
+          <option value="percent">Share of the context window</option>
+          <option value="tokens">Token count</option>
+          <option value="off">Off</option>
+        </select>
       </label>
+      {mode === 'percent' && (
+        <label className="field">
+          <span>Compact at this percentage of the context window (1 to 100).</span>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            step={5}
+            value={settings.compactionThresholdPercent ?? DEFAULT_COMPACTION_PERCENT}
+            onChange={(e) => {
+              const n = Math.floor(Number(e.target.value))
+              setSettings((s) => ({
+                ...s,
+                compactionThresholdPercent: Math.min(100, Math.max(1, Number.isFinite(n) ? n : 1))
+              }))
+            }}
+          />
+        </label>
+      )}
+      {mode === 'tokens' && (
+        <label className="field">
+          <span>Compact when the conversation grows past this many tokens.</span>
+          <input
+            type="number"
+            min={1000}
+            step={1000}
+            value={settings.compactionThreshold ?? DEFAULT_COMPACTION_TOKENS}
+            onChange={(e) => {
+              const n = Math.floor(Number(e.target.value))
+              setSettings((s) => ({
+                ...s,
+                compactionThreshold: Math.max(1000, Number.isFinite(n) ? n : 1000)
+              }))
+            }}
+          />
+        </label>
+      )}
       <label className="field">
         <span>
           Truncate a single command&apos;s output to this many bytes, keeping both ends
