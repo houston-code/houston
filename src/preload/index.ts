@@ -370,14 +370,16 @@ const api = {
   compactConversation: (
     id: string,
     providerId: string,
-    model: string
+    model: string,
+    /** `/compact <focus>`: what the summary should keep in detail. */
+    focus?: string
   ): Promise<{
     ok: boolean
     summarized: number
     messages?: ChatMessage[]
     reason?: 'empty' | 'single-turn' | 'cancelled' | 'timeout' | 'running' | 'changed' | 'busy'
     error?: string
-  }> => ipcRenderer.invoke(IPC.conversationCompact, id, providerId, model),
+  }> => ipcRenderer.invoke(IPC.conversationCompact, id, providerId, model, focus),
   /** Cancel the chat's in-flight /compact. Resolves false when none was running. */
   cancelCompaction: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.conversationCompactCancel, id),
   /** Subscribe to /compact retry notices (a summary request failed and is being retried). */

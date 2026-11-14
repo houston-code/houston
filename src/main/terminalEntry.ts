@@ -1199,7 +1199,8 @@ export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOpti
         commands: (cwd) => loadSlashCommands(cwd),
         skills: async (cwd) => (await loadSkills(cwd)).map((k) => ({ name: k.name, description: k.description })),
         agents: async (cwd) => (await loadAgents(cwd)).map((a) => ({ name: a.name, description: a.description })),
-        compact: (id, providerId, model) => compactConversationNow(id, providerId, model)
+        compact: (id, providerId, model, focus) =>
+          compactConversationNow(id, providerId, model, focus ? { focus } : {})
       },
       { shutdown: shutdown.signal, outputClosed: outputClosed.signal }
     )

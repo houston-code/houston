@@ -272,7 +272,11 @@ export interface BuiltinCommand extends Command {
 export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'new', group: 'Chat', description: 'Start a new chat', clients: ['gui', 'tui'] },
   { name: 'clear', group: 'Chat', description: 'Start a new chat (alias for /new)', clients: ['gui', 'tui'] },
-  { name: 'compact', group: 'Chat', description: 'Summarize older turns to free up context now', clients: ['gui', 'tui'] },
+  {
+    name: 'compact', group: 'Chat', args: '[focus]',
+    description: 'Summarize older turns to free up context now (/compact [what to keep in detail])',
+    clients: ['gui', 'tui']
+  },
   {
     name: 'retry', group: 'Chat',
     description: 'Run your last message again after a turn that failed',

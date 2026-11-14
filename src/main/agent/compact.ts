@@ -81,6 +81,8 @@ export interface CompactOptions {
   deadlineMs?: number
   /** Called before each retry of a failed summarization request. */
   onRetry?: (info: CompactRetryInfo) => void
+  /** What the summary should focus on (`/compact <focus>`); see normalizeCompactFocus. */
+  focus?: string
 }
 
 export const COMPACT_ERR_CANCELLED = 'Compaction cancelled.'
@@ -177,7 +179,7 @@ export async function compactConversationNow(
     release = () => ctl.signal.removeEventListener('abort', done)
   })
   try {
-    return await Promise.race([stopped, compactUnderSignal(id, providerId, model, ctl.signal, opts.onRetry)])
+    return await Promise.race([stopped, compactUnderSignal(id, providerId, model, ctl.signal, opts.onRetry, opts.focus)])
   } finally {
     release()
     clearTimeout(timer)
@@ -191,7 +193,8 @@ async function compactUnderSignal(
   providerId: string,
   model: string,
   signal: AbortSignal,
-  onRetry: CompactOptions['onRetry']
+  onRetry: CompactOptions['onRetry'],
+  focus: string | undefined
 ): Promise<CompactResult> {
   // A live turn is appending to this log; a summary of it would race those writes.
   if (activeRunForConversation(id)) {
@@ -251,7 +254,7 @@ async function compactUnderSignal(
         for await (const ev of provider.streamChat({
           model,
           system: summarizationSystemPrompt,
-          messages: buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next)),
+          messages: buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next), focus),
           maxTokens: summaryMaxTokens(window),
           signal
         })) {

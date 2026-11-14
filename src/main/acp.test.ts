@@ -1014,6 +1014,22 @@ describe('ACP server: slash commands, config options and session info', () => {
     await h.end()
   })
 
+  it('passes /compact focus text to the summarizer', async () => {
+    const compact = vi.fn(async () => ({ ok: true, summarized: 2 }))
+    const h: Harness = harness({
+      run: async (req, send, _loop, onMessages) => {
+        onMessages?.([...req.messages, { role: 'assistant', content: 'ok' }])
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      },
+      deps: { compact }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('first') })
+    await h.call('session/prompt', { sessionId, prompt: text('/compact keep the API decisions') })
+    expect(compact).toHaveBeenCalledWith(sessionId, 'anthropic', 'claude-sonnet-4-5', 'keep the API decisions')
+    await h.end()
+  })
+
   it('lists the workspace skills and agents, and the commands, as replies', async () => {
     const h = harness({
       run: done,

@@ -185,6 +185,36 @@ Keep exact identifiers verbatim (file paths, function and variable names, comman
 const SUMMARY_INSTRUCTION =
   'Produce the summary now, following your instructions. Output only the summary text.'
 
+/** The longest `/compact` focus passed to the summarizer; the rest is dropped. */
+export const COMPACT_FOCUS_MAX_CHARS = 2000
+
+/**
+ * Normalize a `/compact` focus: trimmed, capped at {@link COMPACT_FOCUS_MAX_CHARS}
+ * (by code point), and undefined when there is nothing left.
+ */
+export function normalizeCompactFocus(focus: unknown): string | undefined {
+  if (typeof focus !== 'string') return undefined
+  const cps = [...focus.trim()]
+  if (!cps.length) return undefined
+  return cps.slice(0, COMPACT_FOCUS_MAX_CHARS).join('').trim()
+}
+
+/**
+ * The closing instruction of a summary request. A focus from `/compact <focus>` asks
+ * for its details to get the most room, without dropping what the summary must carry
+ * anyway: it narrows emphasis, it doesn't replace the system prompt's checklist.
+ */
+function summaryInstruction(focus: string | undefined): string {
+  const f = normalizeCompactFocus(focus)
+  if (!f) return SUMMARY_INSTRUCTION
+  return (
+    `${SUMMARY_INSTRUCTION}\n\n` +
+    'The user asked for this summary to focus on what follows. Keep everything about it in full detail ' +
+    'and give it the most room; still keep the goal, the current state and the next steps.\n' +
+    `<focus>\n${f}\n</focus>`
+  )
+}
+
 /**
  * Rough token estimate (~4 characters per token) over the system prompt and the
  * messages that would be sent, plus a small per-message framing overhead. This is
@@ -538,10 +568,12 @@ export function findCompactionCutByBudget(
  */
 export function buildSummaryRequestMessages(
   priorSummary: ChatMessage[],
-  head: ChatMessage[]
+  head: ChatMessage[],
+  /** What the user asked this summary to focus on (`/compact <focus>`), if anything. */
+  focus?: string
 ): ChatMessage[] {
   const out: ChatMessage[] = []
-  for (const m of [...priorSummary, ...head, { role: 'user', content: SUMMARY_INSTRUCTION } as ChatMessage]) {
+  for (const m of [...priorSummary, ...head, { role: 'user', content: summaryInstruction(focus) } as ChatMessage]) {
     const last = out[out.length - 1]
     if (m.role === 'user' && last?.role === 'user') {
       out[out.length - 1] = mergeUserMessages(last, m)

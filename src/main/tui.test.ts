@@ -649,6 +649,7 @@ describe('parseSlashCommand', () => {
   it('maps /plan to plan mode and /compact to compact', () => {
     expect(parseSlashCommand('/plan', s)).toEqual({ kind: 'set-approval', policy: 'plan' })
     expect(parseSlashCommand('/compact', s)).toEqual({ kind: 'compact' })
+    expect(parseSlashCommand('/compact  keep the   schema talk ', s)).toEqual({ kind: 'compact', focus: 'keep the schema talk' })
   })
 
   it('resolves first-party template commands (/review) to a prompt turn', () => {
@@ -3218,6 +3219,20 @@ describe('runTui', () => {
     expect(between).toContain('anthropic/claude')
     expect(between).not.toMatch(/90[,.k]/)
     expect(t.text().split('next step')[0]).toMatch(/90[,.k]/) // it was shown before
+  })
+
+  it('/compact <focus> hands the focus to the summarizer', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.persist = fakePersist().persist
+    const focuses: Array<string | undefined> = []
+    d.compact = async (_id, _p, _m, o) => {
+      focuses.push(o?.focus)
+      return { ok: true, summarized: 0, reason: 'empty' }
+    }
+    const t = fakeIo(['first', '/compact the migration plan', '/compact', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(focuses).toEqual(['the migration plan', undefined])
   })
 
   it('/compact before any turn reports there is nothing to compact yet', async () => {

@@ -1640,7 +1640,8 @@ export type SlashResult =
   /** Run the last message again after its turn failed (/retry), as the desktop's Retry does. */
   | { kind: 'retry' }
   | { kind: 'set-model'; providerId: string; model: string; asDefault?: boolean }
-  | { kind: 'compact' }
+  /** Summarize older turns now (/compact [focus]), steering the summary toward `focus`. */
+  | { kind: 'compact'; focus?: string }
   /** The settings overview hub (/settings). */
   | { kind: 'settings' }
   /** Environment diagnostics (/doctor). */
@@ -1890,7 +1891,7 @@ export function parseSlashCommand(
       // Shortcut for the read-only research-and-propose policy (parity with the GUI's /plan).
       return { kind: 'set-approval', policy: 'plan' }
     case 'compact':
-      return { kind: 'compact' }
+      return arg.trim() ? { kind: 'compact', focus: arg.trim() } : { kind: 'compact' }
     case 'model': {
       const { rest, asDefault } = splitDefaultFlag(arg)
       // Bare /model: pick from a list (the desktop's model picker), or list them
@@ -1941,7 +1942,7 @@ export const HELP_TEXT = [
   '  /plan                 plan mode: read-only research & propose',
   '  /ask /auto /full      ask every time · auto-approve edits · full auto (sandboxed)',
   '  /clear, /new          start a fresh conversation',
-  '  /compact              summarize older turns to free up context now',
+  '  /compact [focus]      summarize older turns to free up context now (focus: what the summary keeps in detail)',
   '  /retry                run your last message again after a turn that failed',
   '  /review               adversarial review of your uncommitted changes',
   '  /init                 write or improve AGENTS.md, the instructions file for this project',
@@ -5022,6 +5023,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         try {
           res = await deps.compact(conversationId, providerId, model, {
             signal: ctl.signal,
+            ...(result.focus ? { focus: result.focus } : {}),
             onRetry: ({ attempt, max }) =>
               deps.io.setSpinnerLabel?.(`Compacting (retrying, attempt ${attempt}${max ? ` of ${max}` : ''})`)
           })

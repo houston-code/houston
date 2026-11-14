@@ -685,7 +685,7 @@ Both clients accept the same names, so a command learned in one works in the oth
 | Command | Does |
 | --- | --- |
 | `/new` (or `/clear`) | start a fresh conversation |
-| `/compact` | summarize older turns now to free up context |
+| `/compact [focus]` | summarize older turns now to free up context; text after it says what the summary keeps in detail |
 | `/retry` | run your last message again after a turn that failed |
 | `/plan`, `/ask`, `/auto`, `/full` | switch the approval mode: plan, ask every time, auto-approve edits, full auto |
 | `/approval` | show the current approval mode |
@@ -3449,6 +3449,11 @@ window:
   **Ctrl-C** in the terminal. It gives up after 3 minutes. A cancelled or failed
   compaction changes nothing, and it never overwrites the chat if a turn started or a
   new message arrived while it was summarizing; run it again instead.
+- **Steer what it keeps.** Text after the command tells the summarizer what to keep in
+  full detail: `/compact keep the database migration decisions`. The summary still
+  carries the goal, the current state, and the next steps. It works the same in the
+  desktop app, the terminal, and an editor over ACP; the focus is capped at 2,000
+  characters.
 
 ### Tools loaded on demand
 
