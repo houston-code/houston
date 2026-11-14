@@ -257,6 +257,13 @@ export interface ToolContext {
   }
   /** Attach an image read by the agent to the tool result (injected by the loop). */
   attachImage?: (img: ImageAttachment) => void
+  /**
+   * What the current model can take in from read_file: images (vision) and PDFs (a
+   * provider that serializes documents). A false field makes read_file say the file
+   * can't be viewed instead of attaching bytes the model would never see. Unset means
+   * both are accepted.
+   */
+  modelSees?: { images: boolean; documents: boolean }
   /** Attach a document (e.g. PDF) read by the agent to the tool result. */
   attachDocument?: (doc: DocumentAttachment) => void
   /** Screenshot + console-capture a loopback URL (injected by the loop; Electron-backed). */
@@ -649,6 +656,9 @@ const readFile: ToolDef = withShellCwdHint({
       if (!ctx.attachImage) {
         return `[image: ${rel} (${humanSize(buf.byteLength)}): cannot be displayed in this context]`
       }
+      if (ctx.modelSees?.images === false) {
+        return `[image: ${rel} (${imageType}, ${humanSize(buf.byteLength)}): not attached, because the current model cannot view images. Describe what you need from it to the user, or inspect it with run_shell (e.g. file, exiftool).]`
+      }
       ctx.attachImage({ mediaType: imageType, data: buf.toString('base64') })
       return `[image: ${rel} (${imageType}, ${humanSize(buf.byteLength)}): attached below for viewing]`
     }
@@ -662,6 +672,9 @@ const readFile: ToolDef = withShellCwdHint({
       ctx.fileTracker?.noteRead(abs, buf)
       if (!ctx.attachDocument) {
         return `[pdf: ${rel} (${humanSize(buf.byteLength)}): cannot be displayed in this context; extract its text with run_shell (e.g. pdftotext)]`
+      }
+      if (ctx.modelSees?.documents === false) {
+        return `[pdf: ${rel} (${humanSize(buf.byteLength)}): could not be viewed, because the current model or provider does not accept PDF attachments. Extract its text with run_shell (e.g. pdftotext file.pdf -) instead.]`
       }
       ctx.attachDocument({ mediaType: 'application/pdf', data: buf.toString('base64'), name: rel })
       return `[pdf: ${rel} (${humanSize(buf.byteLength)}): attached below for viewing]`

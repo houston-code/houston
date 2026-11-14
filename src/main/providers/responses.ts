@@ -32,6 +32,15 @@ import { SDK_MAX_RETRIES } from '../agent/retry'
 type InputItem = Record<string, unknown>
 
 /**
+ * The filename an `input_file` carries: the base name read_file recorded (never a
+ * directory path, which would only leak the project layout), else a numbered default.
+ */
+export function documentFileName(name: string | undefined, index: number): string {
+  const base = (name ?? '').split(/[\\/]/).pop()?.trim()
+  return base || `document-${index + 1}.pdf`
+}
+
+/**
  * Rebuild the `reasoning` input items for an assistant turn.
  *
  * Reasoning models keep their chain of thought in server-side state keyed to a
@@ -104,17 +113,21 @@ export function toResponsesInput(messages: ChatMessage[], replayReasoning = fals
       input.push({ type: 'function_call_output', call_id: m.toolCallId ?? '', output: m.content })
       // A function_call_output's output is text-only, so images a tool produced
       // (e.g. a view_localhost screenshot) follow as a user turn — the documented
-      // way to hand a tool's image to the model.
-      if (m.images?.length) {
-        input.push({
-          role: 'user',
-          content: m.images.map((img) => ({
-            type: 'input_image',
-            image_url: imageDataUrl(img),
-            detail: 'auto'
-          }))
-        })
-      }
+      // way to hand a tool's image to the model. A PDF read_file attached rides the
+      // same turn as an `input_file`.
+      const media: InputItem[] = [
+        ...(m.images ?? []).map((img) => ({
+          type: 'input_image',
+          image_url: imageDataUrl(img),
+          detail: 'auto'
+        })),
+        ...(m.documents ?? []).map((doc, i) => ({
+          type: 'input_file',
+          filename: documentFileName(doc.name, i),
+          file_data: `data:${doc.mediaType};base64,${doc.data}`
+        }))
+      ]
+      if (media.length) input.push({ role: 'user', content: media })
     }
   }
   return input

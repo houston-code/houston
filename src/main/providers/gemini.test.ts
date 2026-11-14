@@ -40,6 +40,32 @@ describe('toGeminiContents', () => {
     ])
   })
 
+  it('sends a PDF a tool attached as inline data after the tool result', () => {
+    const msgs: ChatMessage[] = [
+      {
+        role: 'tool',
+        content: '[pdf: spec.pdf (1 KB): attached below for viewing]',
+        toolCallId: 'call_1',
+        toolName: 'read_file',
+        documents: [{ mediaType: 'application/pdf', data: 'PDFDATA', name: 'docs/spec.pdf' }]
+      }
+    ]
+    expect(toGeminiContents(msgs)).toEqual([
+      {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'read_file',
+              response: { result: '[pdf: spec.pdf (1 KB): attached below for viewing]' }
+            }
+          }
+        ]
+      },
+      { role: 'user', parts: [{ inlineData: { mimeType: 'application/pdf', data: 'PDFDATA' } }] }
+    ])
+  })
+
   it('follows a tool result that has images with a separate inlineData user turn', () => {
     const msgs: ChatMessage[] = [
       {
