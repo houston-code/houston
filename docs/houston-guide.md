@@ -458,7 +458,12 @@ retries the turn with a growing pause between attempts and tells you it's retryi
   printed), and headless mode never writes it to stdout.
 - **Stalled connections are cut.** A reply that stops arriving for two minutes (a
   network switch or a laptop waking from sleep can leave the connection open but
-  dead) is treated as dropped and retried on a fresh connection.
+  dead) is treated as dropped and retried on a fresh connection. A model served
+  from your own machine or private network (Ollama, LM Studio, and other local
+  servers) gets ten minutes, since loading a model or reading a long prompt can
+  take that long before the first word, and so does a Chat Completions request
+  that asks for reasoning, which streams nothing while the model thinks. A stall
+  that long is retried once, not waited out like an outage.
 - **Outages are waited out.** If the network goes away after the provider has
   already answered in this run, Houston keeps retrying for up to five minutes and
   picks up when the connection comes back. Before the provider has answered once,
