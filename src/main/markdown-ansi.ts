@@ -1,6 +1,6 @@
 import { parseMarkdown, type Block, type Inline, type ListItem } from '@shared/markdown'
 import type { Painter } from './tui'
-import { wrapAnsi, visibleWidth } from './tui-wrap'
+import { wrapAnsi, visibleWidth, stripControlCharsKeepLines } from './tui-wrap'
 
 /**
  * Render markdown to ANSI for the terminal, reusing the same parser the GUI uses
@@ -35,7 +35,10 @@ export function visualHint(lang: string, info: string): string | null {
 }
 
 export function renderMarkdownAnsi(src: string, opts: MarkdownOpts): string {
-  return renderBlocks(parseMarkdown(src), opts, 0)
+  // The source is the model's text. Its control characters go before it is parsed, so
+  // a reply can't move the cursor, rewrite the lines above it or write the clipboard;
+  // the only escapes in the output are the colours added here.
+  return renderBlocks(parseMarkdown(stripControlCharsKeepLines(src)), opts, 0)
 }
 
 function renderBlocks(blocks: Block[], opts: MarkdownOpts, depth: number): string {
@@ -283,7 +286,8 @@ export class MarkdownStream {
   }
 
   push(delta: string): string {
-    this.buf += delta
+    // Cleaned as it arrives too, so a stray carriage return can't hide a block boundary.
+    this.buf += stripControlCharsKeepLines(delta)
     // A block can only finalize at a blank line, which needs a newline to end it.
     if (!delta.includes('\n')) return ''
     this.scan.advance(this.buf)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stripAnsi, visibleWidth, truncateVisible, wrapAnsi } from './tui-wrap'
+import { stripAnsi, visibleWidth, truncateVisible, wrapAnsi, stripControlChars, stripControlCharsKeepLines } from './tui-wrap'
 
 const RED = '\x1b[31m'
 const RESET = '\x1b[0m'
@@ -9,6 +9,17 @@ describe('stripAnsi / visibleWidth', () => {
     expect(stripAnsi(`${RED}hello${RESET}`)).toBe('hello')
     expect(visibleWidth(`${RED}hello${RESET}`)).toBe(5)
     expect(visibleWidth('plain')).toBe(5)
+  })
+})
+
+describe('stripControlChars / stripControlCharsKeepLines', () => {
+  const hostile = 'a\x1b]52;c;ZXZpbA==\x07\tb\r\x1b[2K\x9bc\nd\x7f'
+  it('drops every control character on one line', () => {
+    expect(stripControlChars(hostile)).toBe('a]52;c;ZXZpbA==b[2Kcd')
+  })
+  it('keeps newlines and tabs when the text spans lines', () => {
+    expect(stripControlCharsKeepLines(hostile)).toBe('a]52;c;ZXZpbA==\tb[2Kc\nd')
+    expect(stripControlCharsKeepLines('one\r\ntwo')).toBe('one\ntwo')
   })
 })
 

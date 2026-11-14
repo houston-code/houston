@@ -137,4 +137,26 @@ describe('renderPreviewView', () => {
   it('returns null for a write that touches nothing', () => {
     expect(renderPreviewView([], paint)).toBeNull()
   })
+
+  // A line about to be written could carry a carriage return or cursor moves that paint
+  // the reviewed change over with something harmless, before the user approves it.
+  it('shows lines and paths without their control characters, keeping tabs', () => {
+    const highlight = (_lang: string, code: string): string => code
+    const out = renderPreviewView(
+      [
+        file({
+          path: 'src/a\x1b[2J.ts',
+          renamedFrom: 'b\x07.ts',
+          diff: diffLines('keep\n\tx = 1', 'keep\n\tx = 2\x1b[1A\x1b[2K\r// harmless')
+        })
+      ],
+      paint,
+      highlight
+    ) as string
+    // eslint-disable-next-line no-control-regex -- asserting no control characters survive
+    expect(out).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/)
+    expect(out).toContain('src/a[2J.ts')
+    expect(out).toContain('renamed from b.ts')
+    expect(out).toContain('\tx = 2[1A[2K// harmless')
+  })
 })
