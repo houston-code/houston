@@ -1,5 +1,5 @@
 import { promises as fs, realpathSync } from 'node:fs'
-import { relative } from 'node:path'
+import { relative, sep } from 'node:path'
 import { expandTemplate } from '@shared/commands'
 import { CONTEXT_SENTINEL_RE, findContext } from '@shared/commandContext'
 import { captureUserShell, type ShellCapture } from '../userShell'
@@ -168,7 +168,8 @@ export async function expandCommandContext(
       literal.add(i) // names no file: it stays text
       continue
     }
-    const shown = relative(opts.workspace, abs) || p.path
+    // Shown with forward slashes on every platform, the way the template names it.
+    const shown = relative(opts.workspace, abs).split(sep).join('/') || p.path
     files.set(i, { abs, shown })
     // Judged by the name written, where it points and what it really is, so an
     // innocent-looking link to `.env` still asks.

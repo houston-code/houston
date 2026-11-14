@@ -77,6 +77,8 @@ export function captureUserShell(
     const stop = (): void => {
       try {
         if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL')
+        // cmd.exe has no process groups: stop the whole tree it started, not just the shell.
+        else if (child.pid) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => child.kill('SIGKILL'))
         else child.kill('SIGKILL')
       } catch {
         // Already gone.

@@ -148,17 +148,26 @@ describe('expandCommandContext', () => {
 })
 
 describe('captureUserShell', () => {
+  // The command runs in the user's own shell: POSIX sh syntax here, cmd.exe on Windows.
+  const win = process.platform === 'win32'
+
   it('collects stdout, keeps stderr apart, and reports the exit code', async () => {
-    const r = await captureUserShell(ws, 'echo out; echo err >&2; exit 3', { timeoutMs: 5000, maxBytes: 1000 })
-    expect(r).toMatchObject({ exitCode: 3, stdout: 'out\n', timedOut: false, truncated: false })
+    const cmd = win ? 'echo out& echo err 1>&2& exit /b 3' : 'echo out; echo err >&2; exit 3'
+    const r = await captureUserShell(ws, cmd, { timeoutMs: 10_000, maxBytes: 1000 })
+    expect(r).toMatchObject({ exitCode: 3, timedOut: false, truncated: false })
+    expect(r.stdout.replace(/\r\n/g, '\n')).toBe('out\n')
     expect(r.stderr).toContain('err')
   })
 
   it('caps output and stops a command at its time limit', async () => {
-    const big = await captureUserShell(ws, 'yes | head -c 5000', { timeoutMs: 5000, maxBytes: 100 })
+    const bigCmd = win
+      ? `node -e "process.stdout.write('y'.repeat(5000))"`
+      : 'yes | head -c 5000'
+    const big = await captureUserShell(ws, bigCmd, { timeoutMs: 10_000, maxBytes: 100 })
     expect(big.stdout).toHaveLength(100)
     expect(big.truncated).toBe(true)
-    const slow = await captureUserShell(ws, 'sleep 10', { timeoutMs: 200, maxBytes: 100 })
+    const slowCmd = win ? 'ping -n 30 127.0.0.1 >nul' : 'sleep 10'
+    const slow = await captureUserShell(ws, slowCmd, { timeoutMs: 200, maxBytes: 100 })
     expect(slow.timedOut).toBe(true)
-  })
+  }, 20_000)
 })
