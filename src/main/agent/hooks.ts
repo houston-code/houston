@@ -89,6 +89,11 @@ export interface HookSession {
   id: string
   /** The conversation's saved transcript file, when it has one. */
   transcriptPath?: string
+  /**
+   * Bring the transcript file up to date before a hook reads it: the store saves
+   * recent changes to a log beside it (see conversations.ts) and folds them in here.
+   */
+  flushTranscript?: () => void
 }
 
 export interface HookContext {
@@ -348,6 +353,13 @@ export async function runHooks(
     return failure('Could not pass the hook its input', e)
   }
 
+  if (ctx.session?.transcriptPath && ctx.session.flushTranscript) {
+    try {
+      ctx.session.flushTranscript()
+    } catch {
+      // The hook still runs; the file holds the chat as of its last fold.
+    }
+  }
   const stdin = hookStdinPayload(event, ctx, workspace)
 
   try {

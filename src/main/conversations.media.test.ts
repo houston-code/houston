@@ -57,9 +57,11 @@ afterEach(() => {
 
 describe('conversation media store', () => {
   it('writes attachment bytes beside the JSON and keeps only references inline', async () => {
-    const { createConversation, setMessages } = await import('./conversations')
+    const { createConversation, setMessages, flushConversation } = await import('./conversations')
     const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
     setMessages(conv.id, messagesWithImages())
+    expect(readFileSync(join(convDir(), `${conv.id}.jsonl`), 'utf8')).not.toContain(PNG)
+    flushConversation(conv.id)
 
     const raw = readFileSync(join(convDir(), `${conv.id}.json`), 'utf8')
     expect(raw).not.toContain(PNG)

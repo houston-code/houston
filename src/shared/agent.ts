@@ -690,6 +690,10 @@ export interface ConversationError {
  * v2: attachment bytes (images, documents) are stored in a media folder beside the
  * JSON and referenced as `{ mediaType, mediaRef }` (see main/conversationMedia.ts).
  * v1 files carry inline base64, which still loads as-is and moves out on the next save.
+ *
+ * Not a version bump: a v2 chat may also have a `<id>.jsonl` log beside its JSON file,
+ * holding saves made since the file was last written whole (see main/conversations.ts).
+ * The JSON file alone stays a complete, valid conversation, as of its last fold.
  */
 export const CONVERSATION_SCHEMA_VERSION = 2
 
