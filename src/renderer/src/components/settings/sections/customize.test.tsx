@@ -50,6 +50,31 @@ function installApi(overview: CustomizeOverview) {
 }
 
 describe('CustomizeSection', () => {
+  it('shows an .agents skill with its format details, problems and shadowing', async () => {
+    installApi({
+      items: [
+        item({
+          id: 'skill-agents:project:pdf',
+          kind: 'skill',
+          name: 'pdf',
+          file: '.agents/skills/pdf/SKILL.md',
+          source: 'agents',
+          details: ['Tools: Read Grep', 'Paths: *.pdf'],
+          problems: ['A description is required.'],
+          shadowed: true
+        })
+      ],
+      instructions: []
+    })
+    render(<CustomizeSection ctx={ctx()} />)
+    expect(await screen.findByText('pdf')).toBeTruthy()
+    expect(screen.getByText('.agents', { selector: '.pill' })).toBeTruthy()
+    expect(screen.getByText('Tools: Read Grep')).toBeTruthy()
+    expect(screen.getByText('Paths: *.pdf')).toBeTruthy()
+    expect(screen.getByText(/Not loaded: A description is required\./)).toBeTruthy()
+    expect(screen.getByText(/\.houston\/skills over \.agents\/skills/)).toBeTruthy()
+  })
+
   it('lists items by kind with their place, and notes a user item the project hides', async () => {
     installApi({
       items: [item(), item({ id: 'command:user:review', scope: 'user', file: '~/.houston/commands/review.md', shadowed: true })],

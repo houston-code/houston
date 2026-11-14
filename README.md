@@ -266,7 +266,10 @@ Open source under the [Apache License 2.0](LICENSE).
   `model:` pins the agent to a
   (usually cheaper) sibling model from the current provider. Add a
   `.houston/skills/<name>/SKILL.md` to register a skill: its description is
-  surfaced to the agent, which reads the full instructions on demand. Agents,
+  surfaced to the agent, which reads the full instructions on demand. Skills in
+  the open Agent Skills format are read from `.agents/skills/` too, with their
+  `license`, `compatibility`, `metadata`, `allowed-tools` (which only ever narrows
+  the tools in use) and `paths:` triggers, and `/<skill-name>` runs one. Agents,
   skills, and custom commands in `~/.houston/` work in every project (a project's
   own wins a name clash). **Settings > Customize** lists them all, creates new
   ones from a template, opens them in your editor, switches them off and on, and

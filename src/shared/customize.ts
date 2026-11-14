@@ -8,7 +8,10 @@ export type CustomKind = 'skill' | 'command' | 'agent'
 export type CustomScope = 'project' | 'user'
 
 export interface CustomItem {
-  /** `<kind>:<scope>:<name>`; the only handle the renderer sends back. */
+  /**
+   * `<kind>:<scope>:<name>`, or `skill-agents:<scope>:<name>` for a skill in
+   * `.agents/skills`; the only handle the renderer sends back.
+   */
   id: string
   kind: CustomKind
   scope: CustomScope
@@ -19,8 +22,17 @@ export interface CustomItem {
   file: string
   /** False when its front matter says `disabled: true`. */
   enabled: boolean
-  /** A user item hidden by a project one with the same name. */
+  /**
+   * An item hidden by another with the same name: a user item by a project one, or
+   * a skill in `.agents/skills` by one in `.houston/skills` in the same place.
+   */
   shadowed?: boolean
+  /** A skill from `.agents/skills`, the Agent Skills format's own folder. */
+  source?: 'agents'
+  /** A skill's format fields worth showing: license, compatibility, allowed tools, paths. */
+  details?: string[]
+  /** Where a skill's front matter breaks the format (an `.agents` skill with these is not loaded). */
+  problems?: string[]
 }
 
 export interface InstructionFile {

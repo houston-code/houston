@@ -238,7 +238,14 @@ import {
 } from './scheduler'
 import { matchingHooks, notificationFor, runHooks, type HookOutcome, type HookSession } from './hooks'
 import { loadAgents, type CustomAgent } from './agents'
-import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
+import { findSkill, loadSkills, pathTriggeredSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
+import {
+  blockingRestriction,
+  notedSkillNames,
+  skillPathNote,
+  skillRestrictionRefusal,
+  type SkillRestriction
+} from './skillSpec'
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
@@ -1752,6 +1759,12 @@ export async function startRun(
       await loadSkills(workspace),
       builtinNames
     )
+    // Skills loaded this turn whose `allowed-tools` narrow what runs (see skillSpec.ts).
+    // They only ever narrow: with two active, a tool must be allowed by both.
+    const skillRestrictions: SkillRestriction[] = []
+    // Skills whose `paths:` globs surfaced them already in this conversation, so each
+    // is mentioned once (an earlier run's notes count too).
+    const notedSkills = notedSkillNames(messages.filter((m) => m.role === 'user').map((m) => m.content))
     // Local plugins (.houston/plugins/*.js) register observational lifecycle
     // hooks. They are executable JS run in-process and `vm` is not a security
     // boundary, so they are NEVER auto-run for an opened repo — only when the user
@@ -3220,7 +3233,14 @@ export async function startRun(
         : {}),
       // Back the `skill` tool: resolve a skill name to its full instructions (or a
       // note listing what's available) from the skills loaded for this run.
-      useSkill: (name) => resolveSkillInstructions(workspace, skills, name),
+      useSkill: async (name) => {
+        const text = await resolveSkillInstructions(workspace, skills, name)
+        const skill = findSkill(skills, name)
+        if (skill?.allowedTools?.length && !skillRestrictions.some((r) => r.skill === skill.name)) {
+          skillRestrictions.push({ skill: skill.name, allowedTools: skill.allowedTools })
+        }
+        return text
+      },
       // Back `spawn_session` when a backend is wired (desktop only). Fills in the
       // run-scoped fields the tool doesn't take: provider/model, the workspace, and
       // `run.policy` (read live) so the spawned session inherits the parent's CURRENT
@@ -3297,6 +3317,8 @@ export async function startRun(
       // ask_user blocks on a human; keep it sequential so its prompt never appears
       // in the middle of a concurrent read batch.
       if (call.name === ASK_USER_NAME) return false
+      // A call an active skill refuses goes the sequential way, where it is refused.
+      if (blockingRestriction(skillRestrictions, call.name)) return false
       const tool = lookupTool(call.name)
       if (!tool) return false
       const ruleAction = matchRun(call.name, permissionSubject(call.name, call.arguments))
@@ -4895,6 +4917,11 @@ export async function startRun(
           // Attributed to the managed tier when it originates there (see ruleDenialText).
           output = ruleDenialText(call.name, call.arguments)
           ok = false
+        } else if (blockingRestriction(skillRestrictions, call.name)) {
+          // An active skill's `allowed-tools` leaves this tool out: refused before any
+          // hook or approval, the way a deny rule is. It can only narrow, never allow.
+          output = skillRestrictionRefusal(blockingRestriction(skillRestrictions, call.name)!, call.name)
+          ok = false
         } else if (isBlockedByPlan(run.policy, tool)) {
           output =
             'Blocked: Houston is in Plan mode (read-only). Do not modify files, run commands, or change remote/PR state. Finish your plan and present it; the user will switch off Plan mode to let you carry it out.'
@@ -5376,6 +5403,14 @@ export async function startRun(
         return
       }
       if (observeStall()) return
+      // A skill whose `paths:` globs match a file this step touched is named to the
+      // model once, as a note after the results: the prompt and everything before it
+      // stay byte-identical, so the provider cache keeps them.
+      const pathNote = skillPathNote(pathTriggeredSkills(skills, workspace, toolCalls, notedSkills))
+      if (pathNote) {
+        messages.push(systemNoteMessage(pathNote))
+        persist(messages)
+      }
     }
 
     // Fell off the end of the iteration budget — the agent stopped mid-task rather

@@ -19,6 +19,8 @@ export interface Command {
   group?: CommandGroup
   /** What may follow the name, shown dimmed beside it (for example `[name]`). */
   args?: string
+  /** `/<skill-name>`: runs a skill (listed under its own heading). */
+  skill?: boolean
 }
 
 /** Menu headings, in the order the menu shows them. Custom commands come last. */
@@ -26,6 +28,8 @@ export const COMMAND_GROUPS = ['Chat', 'Modes', 'Review and undo', 'Extend', 'Se
 export type CommandGroup = (typeof COMMAND_GROUPS)[number]
 /** Heading for a workspace's own commands (`.houston/commands`). */
 export const CUSTOM_COMMAND_GROUP = 'Custom'
+/** Heading for the skills, each runnable as `/<skill-name>`. */
+export const SKILL_COMMAND_GROUP = 'Skills'
 
 /** Parse a leading slash command from composer text: "/name the rest" → {name, args}. */
 export function parseSlashCommand(text: string): { name: string; args: string } | null {
@@ -58,12 +62,12 @@ export function expandTemplate(template: string, args: string): string {
 
 /** The heading a command is listed under. */
 export function commandGroup(cmd: Command): string {
-  return cmd.group ?? CUSTOM_COMMAND_GROUP
+  return cmd.group ?? (cmd.skill ? SKILL_COMMAND_GROUP : CUSTOM_COMMAND_GROUP)
 }
 
 /** The commands ordered by menu heading (stable within one), for an unfiltered menu. */
 export function groupCommands(commands: Command[]): Command[] {
-  const order: string[] = [...COMMAND_GROUPS, CUSTOM_COMMAND_GROUP]
+  const order: string[] = [...COMMAND_GROUPS, CUSTOM_COMMAND_GROUP, SKILL_COMMAND_GROUP]
   return commands
     .map((c, i) => ({ c, i, g: order.indexOf(commandGroup(c)) }))
     .sort((a, b) => a.g - b.g || a.i - b.i)
@@ -322,7 +326,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   {
     name: 'skills', group: 'Extend',
-    description: 'List the workspace skills (.houston/skills)',
+    description: 'List the skills (.houston/skills and .agents/skills); run one with /<name>',
     clients: ['gui', 'tui']
   },
   {
