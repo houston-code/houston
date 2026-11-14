@@ -262,7 +262,7 @@ const RENAMED_BUILT_IN_LABELS: Record<string, { from: string; to: string }> = {
  */
 export function renameBuiltInProviderLabels(saved: ProviderConfig[]): ProviderConfig[] {
   return saved.map((p) => {
-    const rename = RENAMED_BUILT_IN_LABELS[p.id]
+    const rename = Object.hasOwn(RENAMED_BUILT_IN_LABELS, p.id) ? RENAMED_BUILT_IN_LABELS[p.id] : undefined
     return p.builtIn && rename && p.label === rename.from ? { ...p, label: rename.to } : p
   })
 }
