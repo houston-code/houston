@@ -65,7 +65,7 @@ import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { throttleNotice } from '@shared/rateLimit'
-import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, modelCapabilities } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import type { ContextParts, ModelUsage, RunLimitReason } from '@shared/agent'
@@ -5160,7 +5160,8 @@ function handleInfoCommand(
   }
   if (name === 'context') {
     const window = state.model ? contextWindowFor(state.model) : null
-    deps.io.out(`${renderContextReport(state.contextParts ?? null, state.contextTokens ?? 0, window)}\n`)
+    const tier = state.model ? longContextTierAbove(state.model) : null
+    deps.io.out(`${renderContextReport(state.contextParts ?? null, state.contextTokens ?? 0, window, tier)}\n`)
     return
   }
   if (name === 'theme') {

@@ -55,7 +55,7 @@ import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
 import { hostPlatform, installHost } from './installHost'
-import { resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
+import { longContextTierAbove, resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
 import { providerSendsXhigh } from '@shared/model-facts'
 import {
   addPermissionRule,
@@ -248,6 +248,7 @@ import { GitGuard } from './gitGuard'
 import { ghRepoKey, githubContext, resolveGh, runGh } from './github'
 import {
   COMPACTION_TAIL_FRACTION,
+  EARLY_EVICTION_MIN_GAIN_FRACTION,
   EVICTION_TARGET_FRACTION,
   KEEP_RECENT_USER_TURNS,
   SUMMARY_TRUNCATED_MESSAGE,
@@ -259,6 +260,7 @@ import {
   estimateTokens,
   estimateToolTokens,
   evictStaleToolResults,
+  evictableTokens,
   evictionBoundary,
   findCompactionCut,
   findForcedCompactionCut,
@@ -266,6 +268,7 @@ import {
   isContextOverflowError,
   isValidCompactionState,
   resolveCompactionThreshold,
+  resolveEvictionTrigger,
   summarizationSystemPrompt,
   summaryMaxTokens
 } from './compaction'
@@ -3180,10 +3183,17 @@ export async function startRun(
     // messages before `cut`) followed by `messages.slice(cut)` (see buildWindow
     // below for the rest of the assembly). The threshold scales
     // to the model's context window (host-listed caps first, then the family
-    // heuristic); an explicit setting overrides it, and the fixed default covers
-    // models whose window is unknown.
+    // heuristic), capped under the model's long-context price tier when it has one;
+    // an explicit setting overrides it, and the fixed default covers models whose
+    // window is unknown. Stale tool results start going out as stubs at a lower,
+    // separate trigger (see resolveEvictionTrigger).
     const contextWindow = resolveContextWindow(req.model, selectedModelCaps)
-    const threshold = resolveCompactionThreshold(settings.compactionThreshold, contextWindow)
+    const threshold = resolveCompactionThreshold(
+      settings.compactionThreshold,
+      contextWindow,
+      longContextTierAbove(req.model, selectedModelCaps)
+    )
+    const evictionTrigger = resolveEvictionTrigger(settings.compactionThreshold, threshold)
     let cut = 0
     let summary = ''
     let summaryMsgs: ChatMessage[] = []
@@ -3432,10 +3442,13 @@ export async function startRun(
     // iteration age, whichever reaches further), when that would stub something new.
     // The cheap step under context pressure: no model call, and nothing is lost that
     // recall_history or a re-run can't bring back. Returns whether the window changed.
-    const advanceEviction = (): boolean => {
+    // `minGain` (estimated tokens) refuses an advance that would free less than that.
+    const advanceEviction = (minGain = 0): boolean => {
       const boundary = evictionBoundary(messages)
       if (boundary <= evictBefore) return false
-      if (!hasEvictableToolResults(messages, Math.max(cut, evictBefore), boundary)) return false
+      const from = Math.max(cut, evictBefore)
+      if (!hasEvictableToolResults(messages, from, boundary)) return false
+      if (minGain > 0 && evictableTokens(messages, from, boundary) < minGain) return false
       evictBefore = boundary
       lastInputTokens = 0
       workspaceState = captureWorkspaceState()
@@ -3749,13 +3762,19 @@ export async function startRun(
       // stubbing stale tool results (cheap, no model call), then, unless that alone
       // bought real headroom, by summarizing, which can now cut inside this turn.
       // Both rewrite the window and both are sticky, so neither runs below the
-      // threshold: under it the window stays append-only and the provider cache keeps
-      // the whole conversation. The visible transcript (persisted `messages`) is
-      // untouched — only the window sent to the provider shrinks.
+      // eviction trigger: under it the window stays append-only and the provider cache
+      // keeps the whole conversation. Between the trigger and the threshold only the
+      // cheap step runs, and only when it frees a real share of the trigger, so it
+      // never re-misses the cache every iteration for a sliver of room. The visible
+      // transcript (persisted `messages`) is untouched — only the window sent to the
+      // provider shrinks.
       if (threshold > 0) {
         const windowSize = (): number =>
           Math.max(estimateTokens(system, buildWindow()) + toolTokens, lastInputTokens)
-        if (windowSize() > threshold) {
+        const size = windowSize()
+        if (size <= threshold && size > evictionTrigger) {
+          advanceEviction(Math.floor(evictionTrigger * EARLY_EVICTION_MIN_GAIN_FRACTION))
+        } else if (size > threshold) {
           // What the threshold leaves the messages once the system prompt and tool
           // schemas (resent with every request) are paid for. Both targets below are
           // shares of it, so a large prompt can't leave them unreachable.

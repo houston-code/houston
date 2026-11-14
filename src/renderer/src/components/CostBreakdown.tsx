@@ -20,6 +20,7 @@ const MAX_AGENT_ROWS = 8
 export function CostBreakdown({
   usage,
   contextWindow,
+  priceTierAbove = null,
   meterPct,
   meterClass,
   agents = [],
@@ -29,6 +30,8 @@ export function CostBreakdown({
   /** What each subagent in the chat spent (already counted in the model rows). */
   agents?: SubagentSpend[]
   contextWindow: number | null
+  /** Prompt size past which the model bills at its long-context rate, when it has one. */
+  priceTierAbove?: number | null
   /** Context-fill percent for the inline meter, or null when the window is unknown. */
   meterPct: number | null
   /** Extra class for the meter fill at warn/danger fill levels. */
@@ -107,7 +110,12 @@ export function CostBreakdown({
       </button>
       {open && (
         <div className="usage-panel" role="dialog" aria-label="Cost breakdown">
-          <ContextBreakdown parts={usage.contextParts} measured={usage.context} contextWindow={contextWindow} />
+          <ContextBreakdown
+            parts={usage.contextParts}
+            measured={usage.context}
+            contextWindow={contextWindow}
+            priceTierAbove={priceTierAbove}
+          />
           <div className="usage-panel__head">
             <span>Model</span>
             <span>In</span>
