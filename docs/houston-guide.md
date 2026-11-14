@@ -531,6 +531,24 @@ Anything else reads "The last turn failed" with Retry and Run the doctor.
 **Details** shows the provider's own message, which is also in the transcript.
 `/retry` works in both clients.
 
+### A smaller model for side tasks
+
+Some requests Houston makes for you need far less than your chat's model: naming a
+chat, summarizing older turns when it compacts, suggesting your next message, and
+reading a web page flagged as possible prompt injection. Each provider sends these to
+a cheaper sibling of the same family: Claude Haiku 5.5 on Anthropic, Bedrock, Vertex
+and Foundry, GPT-6 Luna on OpenAI, and Gemini 3.5 Flash-Lite on Gemini.
+
+- It is used only when that model is in the provider's model list and costs less
+  than the chat's model. A summary goes to it only when the conversation fits its
+  context window.
+- If a request on it fails, the chat's own model does it instead.
+- Change it per provider in Settings, *Models*, **Model for side tasks**: pick any
+  model in the list, or **The chat's model** to turn this off. In settings.json it is
+  the provider's `smallModel` (`""` for the chat's model).
+- `/cost` and the usage panel list what the summaries and web-page reads spent under
+  the model that ran them.
+
 ### Fallback models
 
 Name backup models for Houston to try when your selected model can't serve a turn:

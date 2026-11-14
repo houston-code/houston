@@ -174,6 +174,17 @@ export function summaryMaxTokens(contextWindow: number | null | undefined): numb
 }
 
 /**
+ * Whether a summary request of `requestTokens` (estimated) leaves room for its output
+ * cap on a model with this window, within the same share of the window compaction
+ * keeps a conversation under. A model whose window is unknown never qualifies: the
+ * loop uses it to decide whether a smaller model can write the summary at all.
+ */
+export function summaryFits(requestTokens: number, contextWindow: number | null | undefined): boolean {
+  if (!contextWindow || contextWindow <= 0) return false
+  return requestTokens + summaryMaxTokens(contextWindow) <= Math.floor(contextWindow * COMPACTION_WINDOW_FRACTION)
+}
+
+/**
  * Error message for a summary the model stopped at its output cap. A truncated
  * summary loses the tail of what it was summarizing (usually the most recent work
  * and the next steps), so it is treated as a failed compaction, never kept.
