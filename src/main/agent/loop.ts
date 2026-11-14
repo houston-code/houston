@@ -384,6 +384,7 @@ import {
   inferredVerifyBlockedUnconfined,
   resolveVerifyMaxPasses
 } from './verify-gate'
+import { MAX_UNATTENDED_STOP_CONTINUATIONS, UNATTENDED_STOP_NOTE, endsOnUndoneWork } from './unattended-stop'
 
 /** Max times a Stop hook may force another turn, so a blocking hook can't spin forever. */
 const MAX_STOP_CONTINUATIONS = 3
@@ -3912,6 +3913,8 @@ export async function startRun(
     let testEditsNoted = false
     // Whether the evidence-of-done note went out this turn (once).
     let doneEvidenceNoted = false
+    // Times an unattended turn was sent back for ending on undone work (unattended-stop.ts).
+    let unattendedStopContinuations = 0
     // What the ledger says about the turn at a natural stop, for that note. The todo
     // list counts only if this turn wrote it: one left from an earlier turn isn't
     // this turn's plan.
@@ -4959,6 +4962,24 @@ export async function startRun(
             persist(messages)
             continue
           }
+        }
+
+        // Nobody will answer an unattended run, so a reply that ends on announced but
+        // undone work, or on a question for the user, would end the task there. Send the
+        // turn back a bounded number of times. Not on a forced final reply (step cap,
+        // stall, cost cap): those end the run on purpose.
+        if (
+          stopReason === 'end_turn' &&
+          req.unattended === true &&
+          run.policy !== 'plan' &&
+          !finalStep &&
+          unattendedStopContinuations < MAX_UNATTENDED_STOP_CONTINUATIONS &&
+          endsOnUndoneWork(assistantText)
+        ) {
+          unattendedStopContinuations++
+          messages.push(systemNoteMessage(UNATTENDED_STOP_NOTE))
+          persist(messages)
+          continue
         }
 
         // A course correction can arrive AFTER this iteration's top-of-loop drain —

@@ -186,6 +186,9 @@ Each model round's text is written once that round has finished.
   non-zero, so a script can tell the run hit a permission wall.
 - **Questions.** The agent isn't offered `ask_user`. It is told no user is
   available, makes the call itself, and states its assumptions in the final answer.
+- **Early stops.** A reply that ends on a step the agent announced but did not do
+  ("Next I'll add the tests"), or on a question for the user, would end the run with
+  the work undone, so the agent is sent back to keep working, at most twice per prompt.
 - **Shell network.** Under `--full-auto`, shell commands reach the network through the
   egress allowlist from the start. Under ask or auto-edit, approving a shell command
   with `--on-approval allow` is an "Allow once", so the command runs without network.
@@ -340,8 +343,12 @@ and cost as usage.
 - **Launch flags** set defaults for clients that never change them (a benchmark
   runner, a CI job): `--approval <policy>` or `--full-auto` sets the mode new
   sessions start in, `--effort <level>` their reasoning effort, and `--max-turns <n>`
-  a hard step cap on every prompt, for example
-  `houston --acp --full-auto --max-turns 1000`.
+  a hard step cap on every prompt. `--unattended` says nobody reads or answers the
+  session while a prompt runs: Houston then works the way a headless run does, making
+  every judgment call itself instead of asking, and when a reply ends on a step it
+  announced but did not do, or on a question, it is sent back to keep working (twice
+  at most). For example
+  `houston --acp --unattended --full-auto --max-turns 1000`.
 - **Token usage**: each prompt's reply carries the turn's token totals (input,
   output, and cached input), alongside the running cost.
 - **Slash commands** the editor can offer: `/review`, `/init`, `/compact`,
