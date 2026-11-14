@@ -1814,8 +1814,8 @@ const NETWORK_ERROR_RE =
 /** The hint appended to a network-looking failure that ran without network access. */
 export const NETWORK_BLOCKED_HINT =
   '[note: this command ran in the sandbox WITHOUT network access. If it failed because it needs the network ' +
-  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user grants network for the rest ' +
-  'of the run by choosing "Allow for run" on a shell command\'s approval prompt. Then retry.]'
+  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user is asked whether shell ' +
+  'commands may reach the network for this chat. Retry only once they have allowed it.]'
 
 /**
  * {@link NETWORK_BLOCKED_HINT} for a headless run, which has no approval prompt to
@@ -1829,7 +1829,7 @@ export const HEADLESS_NETWORK_BLOCKED_HINT =
   'the network.]'
 
 /**
- * Replaces the network hint on a full-auto command that failed offline once the user
+ * Replaces the network hint on a command that failed offline once the user
  * has answered the shell-network question it raised (see offerShellNetwork in loop.ts).
  */
 export const SHELL_NETWORK_GRANTED_NOTE =

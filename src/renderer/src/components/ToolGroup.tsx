@@ -768,7 +768,7 @@ function ApprovalPrompt({
       )}
       {item.shellOffline && (
         <p className="tool-row__approval-note">
-          Runs without network. Choose "Allow for run" to also allow network for this run.
+          Runs without network. If it needs the network, Houston asks before allowing it.
         </p>
       )}
       {item.networkScope && (

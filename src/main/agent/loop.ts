@@ -571,9 +571,10 @@ interface RunState {
   /**
    * Whether shell commands may reach the network this run. Drives the sandbox's network
    * switch — network egress is all-or-nothing at the OS layer, so this is one boolean,
-   * not a per-host set. Set by the one-time full-auto shell-network consent, by
-   * "Allow for run" on a shell command (auto-edit/ask), or up front by a headless
-   * `--allow-shell-network`. When false, shell runs offline.
+   * not a per-host set. Set only by the one-time shell-network consent (asked the first
+   * time a sandboxed command fails without network, in any mode) or up front by a
+   * headless `--allow-shell-network`. Approving shell commands never sets it. When
+   * false, shell runs offline.
    */
   shellNetworkGranted: boolean
   /**
@@ -2300,12 +2301,9 @@ export async function startRun(
           // "Allow for run" on an unconfined-shell prompt is the conscious consent
           // to keep running unsandboxed; a generic override never sets this.
           if (unsandboxedShell) run.shellUnsandboxedOverride = true
-          // Granting shell for the run also lets shell reach the network — the
-          // pre-existing auto-edit/ask semantics; the sandbox reads this flag.
-          if (kind === 'shell') {
-            run.shellNetworkGranted = true
-            grantConversationShellNetwork(conversationId, true)
-          }
+          // Shell network is NOT part of this grant: approving commands for the chat
+          // says nothing about letting them reach the network. That is its own question
+          // (offerShellNetwork), asked the first time a command fails without network.
           grantConversationOverride(conversationId, key, unsandboxedShell)
         }
       } else if (decision === 'rule-allow' || decision === 'rule-deny') {
@@ -2988,10 +2986,13 @@ export async function startRun(
       output: string
     ): Promise<string> => {
       // A stopped run asks nothing: nobody is left to answer the card.
-      if (abort.signal.aborted || run.policy !== 'full-auto' || !isSandboxed() || shellNetworkOn() || egressUnavailable) {
+      if (abort.signal.aborted || !isSandboxed() || shellNetworkOn() || egressUnavailable) {
         return output
       }
       const unattended = req.unattended === true
+      // Outside full auto a run with nobody to answer keeps its contract: network only
+      // via --allow-shell-network, never from an automatic answer to this question.
+      if (unattended && run.policy !== 'full-auto') return output
       // Asked once per chat; a decline is remembered, so later failures just say so.
       if (run.shellNetworkDecided) {
         return unattended ? output : withShellNetworkDecision(output, SHELL_NETWORK_DECLINED_NOTE)
@@ -5333,11 +5334,10 @@ export async function startRun(
             const networkScope = netDest !== null ? describeNetworkDestination(netDest) : undefined
 
             // A shell command on a confining host with no shell-network grant yet runs
-            // offline. Flag its prompt so the card can say only "Allow for run" also grants
-            // network. Not when the egress proxy failed to start: then no grant brings
-            // network back, so pointing at one would mislead. (Full auto never prompts up
-            // front for network: see offerShellNetwork, which asks after a command fails
-            // for lack of it.)
+            // offline. Flag its prompt so the card can say so before the user answers,
+            // and that network is asked about separately (offerShellNetwork, after a
+            // command fails for lack of it). Not when the egress proxy failed to start:
+            // then no answer brings network back, so promising a question would mislead.
             const shellOffline =
               tool.kind === 'shell' &&
               isSandboxed() &&

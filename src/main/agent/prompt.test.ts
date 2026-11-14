@@ -281,7 +281,8 @@ describe('buildSystemPrompt', () => {
 
   it('points an unattended run at --allow-shell-network for shell network, not an approval prompt', () => {
     const attended = promptFor(toolNames())
-    expect(attended).toContain('"Allow for run" on a shell approval')
+    expect(attended).toContain('it is off until the user allows it when asked')
+    expect(attended).not.toContain('"Allow for run" on a shell approval')
     expect(attended).not.toContain('--allow-shell-network')
     const unattended = promptFor(toolNames({ askUser: false }))
     expect(unattended).toContain('re-running with --allow-shell-network')

@@ -9126,7 +9126,9 @@ describe('egress hardening', () => {
       expect(resultOf(r, 'n1')).toContain(NETWORK_BLOCKED_HINT)
     })
 
-    it('does not ask outside full auto (there "Allow for run" on the command grants network)', async () => {
+    it('asks the shell-network question outside full auto too, after a command fails offline', async () => {
+      // Approving the command is not consent to network: it runs offline, and only the
+      // separate question that follows its offline failure can grant network.
       h.probeTools = [probeNeedsNetShell()]
       const r = await run({
         policy: 'auto-edit',
@@ -9136,10 +9138,54 @@ describe('egress hardening', () => {
           [{ type: 'done', stopReason: 'end_turn' }]
         ]
       })
-      const approvals = r.events.filter((e) => e.type === 'tool_approval')
-      expect(approvals).toHaveLength(1)
-      expect((approvals[0] as { shellNetwork?: boolean }).shellNetwork).toBeUndefined()
-      expect(resultOf(r, 'n1')).toContain(NETWORK_BLOCKED_HINT)
+      const approvals = r.events.filter((e) => e.type === 'tool_approval') as Array<{ shellNetwork?: boolean }>
+      expect(approvals).toHaveLength(2)
+      expect(approvals[0].shellNetwork).toBeUndefined()
+      expect(approvals[1].shellNetwork).toBe(true)
+      expect(needsNetRuns).toEqual([false])
+      expect(resultOf(r, 'n1')).toContain(SHELL_NETWORK_GRANTED_NOTE)
+      expect(resultOf(r, 'n1')).not.toContain(NETWORK_BLOCKED_HINT)
+    })
+
+    it('does not ask an unattended run outside full auto (network stays a launch flag)', async () => {
+      h.probeTools = [probeNeedsNetShell()]
+      const r = await run({
+        policy: 'auto-edit',
+        unattended: true,
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const approvals = r.events.filter((e) => e.type === 'tool_approval') as Array<{ shellNetwork?: boolean }>
+      expect(approvals.some((a) => a.shellNetwork === true)).toBe(false)
+      expect(needsNetRuns).toEqual([false])
+      expect(resultOf(r, 'n1')).toContain(HEADLESS_NETWORK_BLOCKED_HINT)
+    })
+
+    it('keeps shell offline outside full auto when the network question is declined', async () => {
+      h.probeTools = [probeNeedsNetShell()]
+      const r = await run({
+        policy: 'ask',
+        // The network question reuses the command's call id, so answer by order: the
+        // command prompt gets "for the chat", the network question a decline.
+        onApproval: (() => {
+          let n = 0
+          return (_id: string, decide: (d: ToolApprovalDecision) => void) => decide(n++ === 0 ? 'always' : 'deny')
+        })(),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [needsNetCall('n2'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // n1's command prompt, then its network question (declined); n2 runs on the chat
+      // grant, offline, and the declined question is not asked again.
+      const approvals = r.events.filter((e) => e.type === 'tool_approval') as Array<{ shellNetwork?: boolean }>
+      expect(approvals.map((a) => a.shellNetwork === true)).toEqual([false, true])
+      expect(needsNetRuns).toEqual([false, false])
+      expect(resultOf(r, 'n2')).toContain(SHELL_NETWORK_DECLINED_NOTE)
     })
 
     it('a command approved for an ESCAPE reason does not silently grant network', async () => {
@@ -9163,14 +9209,14 @@ describe('egress hardening', () => {
       }>
       expect(evs.map((e) => e.callId)).toEqual(['x1'])
       expect(evs[0].shellNetwork).toBeUndefined()
-      // Its prompt says it runs offline, since only "Allow for run" grants network.
+      // Its prompt says it runs offline: no approval grants network.
       expect(evs[0].shellOffline).toBe(true)
       expect(shellNetPerCall.map((c) => c.sawNetwork)).toEqual([false, false])
     })
 
-    it('does not gate shell network under auto-edit until shell is granted for the run', async () => {
-      // Under auto-edit shell already prompts per command; granting it "for the run"
-      // is the gesture that also opens shell networking (pre-existing semantics).
+    it('never grants shell network by approving shell for the chat', async () => {
+      // "Allow for the chat" on a shell command auto-approves later commands; it is not
+      // consent to let them reach the network (that is the shell-network question).
       h.probeTools = [probeNetShell()]
       const r = await run({
         policy: 'auto-edit',
@@ -9181,12 +9227,12 @@ describe('egress hardening', () => {
           [{ type: 'done', stopReason: 'end_turn' }]
         ]
       })
-      // s1 prompts (normal shell gate, not the network consent — no shellNetwork flag);
-      // "Allow for run" grants shell, so s2 auto-runs with network on.
+      // s1 prompts (normal shell gate, not the network consent: no shellNetwork flag);
+      // the chat grant auto-approves s2, which still runs offline.
       const approvals = r.events.filter((e) => e.type === 'tool_approval')
       expect(approvals).toHaveLength(1)
       expect((approvals[0] as { shellNetwork?: boolean }).shellNetwork).toBeUndefined()
-      expect(shellSawNetwork).toBe(true)
+      expect(shellSawNetwork).toBe(false)
     })
   })
 
@@ -9405,9 +9451,9 @@ describe('egress hardening', () => {
       expect(shellSawNetwork).toBe(false)
     })
 
-    it('drops the flag once "Allow for run" has granted shell network', async () => {
-      // s1 grants the run shell network; x2 still prompts (it names a path outside the
-      // project), but it will run online, so it carries no offline note.
+    it('keeps the flag after a chat grant for shell, which grants no network', async () => {
+      // s1 grants shell for the chat; x2 still prompts (it names a path outside the
+      // project) and still runs offline, so it keeps the offline note.
       h.probeTools = [probeRunShell()]
       const r = await run({
         policy: 'auto-edit',
@@ -9419,8 +9465,8 @@ describe('egress hardening', () => {
         ]
       })
       expect(approvalCallIds(r)).toEqual(['s1', 'x2'])
-      expect(offlineFlags(r)).toEqual([true, undefined])
-      expect(shellNetPerCall.map((c) => c.sawNetwork)).toEqual([true, true])
+      expect(offlineFlags(r)).toEqual([true, true])
+      expect(shellNetPerCall.map((c) => c.sawNetwork)).toEqual([false, false])
     })
 
     it('replays the flag when the conversation is re-adopted mid-prompt', async () => {

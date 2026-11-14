@@ -513,10 +513,10 @@ export function renderApprovalPrompt(
         : ev.sensitiveWrite
           ? `\n${paint('⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)', 'yellow', 'bold')}`
           : ''
-  // Until the run has a shell-network grant, "allow" runs the command offline; say
-  // which answer also grants network before the user picks, not after it fails.
+  // Until the chat has a shell-network grant, every answer runs the command offline;
+  // say so before the user picks, and that network is a separate question.
   const offline = ev.shellOffline
-    ? `\n${paint('  Runs without network. Choose "Allow for run" to also allow network for this run.', 'dim')}`
+    ? `\n${paint('  Runs without network. If it needs the network, Houston asks before allowing it.', 'dim')}`
     : ''
   // A network grant reaches one destination; say which before the user picks it.
   const scope = ev.networkScope
