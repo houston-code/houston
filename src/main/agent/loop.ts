@@ -73,6 +73,7 @@ import {
   setModelUnavailable
 } from '../agentHost'
 import { createSecretRedactor } from './redact'
+import { runShellSpill } from './shellSpill'
 import { log } from '../logger'
 import { runQuarantineExtraction } from './untrusted'
 import { smallModelFor, withSmallModel } from '@shared/smallModel'
@@ -2042,6 +2043,8 @@ export async function startRun(
     const knownSecrets = collectSecrets()
     const redact = createSecretRedactor(knownSecrets)
     scrubError = redact
+    // Whole output of a clamped run_shell command, kept for this run (see shellSpill.ts).
+    const shellSpill = runShellSpill(req.runId, redact)
     // What tools report for the turn's receipt. Model-written text it keeps (a command,
     // a page URL, a step's description) is masked like any other text the run keeps; a
     // command's output is only scanned for a test summary and never stored.
@@ -2143,9 +2146,11 @@ export async function startRun(
     }
 
     // Allowed roots: the workspace plus any configured additional directories
-    // that still resolve (deduped). This is the file-tool + sandbox boundary.
+    // that still resolve (deduped), and the session's own (`--add-dir`, `/add-dir`),
+    // which are the same thing scoped to the session. This is the file-tool + sandbox
+    // boundary.
     const roots = [workspace]
-    for (const dir of settings.additionalRoots ?? []) {
+    for (const dir of [...(settings.additionalRoots ?? []), ...(req.addDirs ?? [])]) {
       try {
         const real = realpathSync(dir)
         if (!roots.includes(real)) roots.push(real)
@@ -3093,6 +3098,7 @@ export async function startRun(
       ...(req.unattended === true ? { unattended: true } : {}),
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
+      ...(shellSpill ? { spillShellOutput: (out: string, note?: string) => shellSpill.spill(out, note) } : {}),
       gitGuard,
       // Nobody can answer a headless run, so the guard undoes a change instead of asking.
       ...(req.unattended === true ? {} : { askGitGuard: (q: AgentQuestion) => askRunUser(callId, q) }),

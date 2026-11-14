@@ -296,6 +296,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'add-dir', group: 'Terminal', args: '[path]',
+    description: 'Let the agent work in another folder this session (/add-dir alone lists them)',
+    clients: ['tui']
+  },
+  {
     name: 'verbose', group: 'Terminal',
     description: "Show each tool's full output as it runs",
     clients: ['tui']
@@ -431,6 +436,7 @@ export function builtinCommands(client: CommandClient): Command[] {
  */
 const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   vim: 'the app\'s composer has no vim mode',
+  'add-dir': 'in the app, add folders the agent may use under Settings, Workspace, Additional folders',
   verbose: 'in the app, open a tool row to see its full output',
   output: 'in the app, open a tool row to see its full output',
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
