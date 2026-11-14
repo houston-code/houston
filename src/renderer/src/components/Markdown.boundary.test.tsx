@@ -16,7 +16,7 @@ describe('Markdown visual error boundary', () => {
   it('replaces only the failing visual with a notice and keeps the surrounding text', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     render(<Markdown text={'Before\n\n```svg\n<svg></svg>\n```\n\nAfter'} visuals />)
-    expect(screen.getByText("This item couldn't be shown.")).toBeInTheDocument()
+    expect(screen.getByText("This item failed to render.")).toBeInTheDocument()
     expect(screen.getByText('Before')).toBeInTheDocument()
     expect(screen.getByText('After')).toBeInTheDocument()
   })

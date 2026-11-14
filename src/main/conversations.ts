@@ -45,6 +45,7 @@ import { clearConversationOverride } from './agent/overrides'
 import { forgetSubAgentSessions } from './agent/subagentSessions'
 import { redactSecrets } from './agent/redact'
 import { getUserDataDir } from './userData'
+import { log } from './logger'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
 
@@ -164,12 +165,9 @@ function stampedVersion(onDisk: number | undefined): number {
 function quarantine(path: string, reason: string): void {
   try {
     renameSync(path, `${path}.corrupt`)
-    console.error(`[conversations] quarantined ${path} -> ${path}.corrupt (${reason})`)
+    log.warn(`[conversations] quarantined ${path} -> ${path}.corrupt (${reason})`)
   } catch (e) {
-    console.error(
-      `[conversations] failed to quarantine ${path} (${reason}):`,
-      (e as Error)?.message ?? e
-    )
+    log.error(`[conversations] failed to quarantine ${path} (${reason}): ${(e as Error)?.message ?? String(e)}`)
   }
 }
 
@@ -184,7 +182,7 @@ function read(id: string): Conversation | null {
     // Can't read it right now (EACCES after a sudo run, Windows EBUSY/EPERM while
     // antivirus or another process holds it, EMFILE): the bytes may be fine, so skip
     // the chat this time rather than quarantining it for good.
-    console.error(`[conversations] could not read ${path}:`, (e as Error)?.message ?? e)
+    log.warn(`[conversations] could not read ${path}: ${(e as Error)?.message ?? String(e)}`)
     return null
   }
   let raw: unknown

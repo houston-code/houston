@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { reportRendererError } from '../lib/rendererErrors'
 
 interface Props {
   children: ReactNode
@@ -15,7 +16,7 @@ interface State {
 
 /**
  * A small error boundary around one piece of content (a transcript row, a rendered
- * markdown body, an inline visual). A render error there replaces only that piece
+ * markdown body, an inline visual, a dock panel). A render error there replaces only that piece
  * with a one-line notice, instead of reaching the app-level boundary and taking the
  * whole window down with it.
  */
@@ -33,13 +34,14 @@ export class ItemBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error('Item error boundary caught:', error, info.componentStack)
+    reportRendererError('boundary', error, info.componentStack)
   }
 
   render(): ReactNode {
     if (!this.state.error) return this.props.children
     return (
       <div className="notice notice--error" role="alert">
-        This item couldn't be shown.
+        This item failed to render.
       </div>
     )
   }
