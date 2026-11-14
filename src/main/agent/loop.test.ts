@@ -51,6 +51,7 @@ import { MAX_PROVIDER_RETRIES } from './retry'
 import { SUBAGENT_COST_LANDING_NOTE } from './subagent'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import { turnCostUsd } from '@shared/usage'
+import { resetOllamaContextCache } from '../providers/ollama'
 import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
@@ -11531,5 +11532,47 @@ describe('background news delivery', () => {
       () => {}
     )
     expect(wakeBlocker('conv-bg-streak')).toBe('held')
+  })
+})
+
+describe('Ollama context check', () => {
+  const ollama = { id: 'ollama', kind: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', models: [] }
+  /** An Ollama that runs every model with `ctx` tokens of context. */
+  const serve = (ctx: number): ReturnType<typeof vi.fn> => {
+    const f = vi.fn(async (url: string) =>
+      url.endsWith('/api/ps')
+        ? new Response(JSON.stringify({ models: [{ name: 'qwen3:8b', context_length: ctx }] }))
+        : new Response(JSON.stringify({ parameters: '' }))
+    )
+    vi.stubGlobal('fetch', f)
+    return f
+  }
+  const reply = (): ProviderStreamEvent[][] => [[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+  const contextNotices = (r: RunResult): string[] =>
+    r.events.flatMap((e) => (e.type === 'notice' && /OLLAMA_CONTEXT_LENGTH/.test(e.message) ? [e.message] : []))
+
+  afterEach(() => {
+    delete h.extraConfigs.anthropic
+    vi.unstubAllGlobals()
+    resetOllamaContextCache()
+  })
+
+  it('warns, naming the fix, when the prompt is bigger than the context Ollama runs the model with', async () => {
+    h.extraConfigs.anthropic = ollama
+    serve(2048)
+    const r = await run({ turns: reply(), model: 'qwen3:8b' })
+    expect(contextNotices(r)).toHaveLength(1)
+    expect(contextNotices(r)[0]).toMatch(/2,048-token context/)
+  })
+
+  it('says nothing when the prompt fits, or on a provider that is not Ollama', async () => {
+    h.extraConfigs.anthropic = ollama
+    serve(262_144)
+    expect(contextNotices(await run({ turns: reply(), model: 'qwen3:8b' }))).toEqual([])
+    delete h.extraConfigs.anthropic
+    resetOllamaContextCache()
+    const f = serve(2048)
+    expect(contextNotices(await run({ turns: reply(), model: 'qwen3:8b' }))).toEqual([])
+    expect(f).not.toHaveBeenCalled()
   })
 })
