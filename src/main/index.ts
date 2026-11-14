@@ -18,7 +18,7 @@ import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates, setInstallGuard } from './updater'
 import { log } from './logger'
-import { pruneRecentWorkspaces } from './store'
+import { getSettings, pruneRecentWorkspaces } from './store'
 import { setUserDataDir } from './userData'
 import { wireAgentHost } from './wireAgentHost'
 import { flushSecrets, hasPendingSecretWrites, initSecrets } from './secrets'
@@ -37,6 +37,7 @@ import { parseTuiArgs } from './tui'
 import { runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from './terminalEntry'
 import { activeBackendId, isSandboxed } from './sandbox'
 import { trustSystemCertificates } from './system-ca'
+import { configureOutboundProxy } from './outbound-proxy'
 import { flushRuleUsage } from './ruleUsage'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
@@ -243,6 +244,11 @@ const headless = acp || tui ? null : parseHeadlessArgs(process.argv, process.cwd
 // app is ready rather than while the main bundle loads, where it held up `ready` itself.
 // It must still come before any outbound request: each call sits in the synchronous
 // stretch that starts its client, so nothing can open a socket ahead of it.
+//
+// Every mode also sends provider, MCP and search traffic through the proxy the user
+// named (the proxyUrl setting, else HTTPS_PROXY). Only a getter is stored here; the
+// setting is read per request, so a change in Settings applies without a restart.
+configureOutboundProxy(() => getSettings().proxyUrl)
 if (acp) {
   app.whenReady().then(async () => {
     trustSystemCertificates()

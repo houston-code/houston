@@ -1,3 +1,5 @@
+import type { ShortcutId } from './shortcuts'
+
 /**
  * Which app surfaces are open, and what each kind of overlay means for the rest of
  * the window. App.tsx used to keep three separate hand-written lists of these flags
@@ -58,6 +60,21 @@ export function occludesPreview(f: OverlayFlags): boolean {
  */
 export function ownsShiftTab(f: OverlayFlags): boolean {
   return modalOpen(f) || f.find
+}
+
+/**
+ * Whether a global shortcut may act while a modal is open over the chat. Only the keys
+ * that close or toggle that modal pass: Esc, and the palette or shortcuts-sheet key
+ * while that sheet is the one open. The rest (new chat, find, Settings, switching
+ * chats, the sidebar) would change the view behind the dialog, or open a second one
+ * under its backdrop where its focus trap then fights the first.
+ */
+export function shortcutAllowedOverModal(action: ShortcutId | null, f: OverlayFlags): boolean {
+  if (!modalOpen(f)) return true
+  if (action === 'escape') return true
+  if (action === 'command-palette') return f.palette
+  if (action === 'show-help') return f.help
+  return false
 }
 
 /** Whether onboarding tips should hold back (something else has the user's attention). */

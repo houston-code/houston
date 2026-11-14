@@ -58,7 +58,9 @@ import {
   isEditableTarget,
   isMacPlatform,
   shortcutHint,
-  terminalKeepsKey
+  terminalKeepsKey,
+  shiftTabCyclesMode,
+  escapeStopsRun
 } from './lib/shortcuts'
 import { chatAtIndex, cycleChatId } from './lib/sessionNav'
 import { coalesced } from './lib/coalesce'
@@ -70,7 +72,7 @@ import { playAttentionSound } from './lib/attentionSound'
 import { RunMeterText } from './components/RunMeterText'
 import { newGroupId } from './lib/chatGroups'
 import { checkpointNotice } from './lib/checkpointNotice'
-import { occludesPreview, ownsShiftTab, suppressesTips, type OverlayFlags } from './lib/overlays'
+import { occludesPreview, ownsShiftTab, shortcutAllowedOverModal, suppressesTips, type OverlayFlags } from './lib/overlays'
 import { baseName } from './lib/paths'
 import {
   clampSidebarWidth,
@@ -3020,16 +3022,18 @@ export default function App(): JSX.Element {
       // shortcut, or the same Escape would additionally cancel the running turn.
       if (e.defaultPrevented) return
       // Plain-character shortcuts (e.g. `?`) must not fire while typing in a field;
-      // mod-bearing chords (⌘…) still work everywhere, and Esc is always allowed.
-      const inEditable = isEditableTarget(e.target)
-      if (inEditable && !(e.metaKey || e.ctrlKey) && e.key !== 'Escape') return
+      // mod-bearing chords (⌘…) still work everywhere, Esc is always allowed, and so is
+      // Shift+Tab in the message box (see shiftTabCyclesMode).
       const action = matchShortcut(e, shortcuts)
+      const inEditable = isEditableTarget(e.target)
+      if (inEditable && !(e.metaKey || e.ctrlKey) && e.key !== 'Escape' && action !== 'cycle-mode') return
       // Keys typed inside the terminal mostly belong to the shell (Esc → vim, Ctrl+C
       // → SIGINT, etc.). The terminal toggle and ⌘-chords (macOS app shortcuts the
       // shell never sees) still reach the app; everything else passes through.
       const inTerminal =
         e.target instanceof HTMLElement && e.target.closest('.terminal-dock') !== null
       if (inTerminal && terminalKeepsKey(action, e.metaKey)) return
+      if (!shortcutAllowedOverModal(action, overlaysRef.current)) return
       if (action === 'new-chat') {
         e.preventDefault()
         void onNewChat()
@@ -3076,6 +3080,7 @@ export default function App(): JSX.Element {
         // What's new card) owns the key while focus is inside it.
         const inDialog = e.target instanceof Element && e.target.closest('[role="dialog"]') !== null
         if (ownsShiftTab(overlaysRef.current) || isAnyPopoverOpen() || inDialog) return
+        if (!shiftTabCyclesMode(e.target)) return
         e.preventDefault()
         cyclePolicy()
       } else if (action === 'escape') {
@@ -3090,7 +3095,7 @@ export default function App(): JSX.Element {
         else if (o.scorecard) setScorecardOpen(false)
         else if (o.usage) setUsageOpen(false)
         else if (o.doctor) setDoctorOpen(false)
-        else if (chat.running) chat.cancel()
+        else if (chat.running && escapeStopsRun(e.target)) chat.cancel()
       }
     }
     window.addEventListener('keydown', onKey)

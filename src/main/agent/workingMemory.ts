@@ -1,5 +1,6 @@
 import {
   COMPACTION_SUMMARY_PREFIX,
+  SYSTEM_NOTE_PREFIX,
   type BackgroundShellInfo,
   type ChatMessage,
   type PinnedShell,
@@ -66,7 +67,11 @@ const MAX_TASK_CHARS = 2000
 /** Cap the "files in play" list — most recent first, deduped. */
 const MAX_FILES = 12
 /** Overall guard on the assembled block, so it always stays a small, bounded segment. */
-const MAX_BLOCK_CHARS = 6000
+const MAX_BLOCK_CHARS = 9000
+/** Each of the user's later messages is kept to this many characters. */
+const MAX_USER_MESSAGE_CHARS = 400
+/** Budget for the later-messages section; the newest are kept when it runs out. */
+const MAX_USER_MESSAGES_CHARS = 3000
 
 /** Cap the background shells listed; the most recently started come first. */
 export const MAX_PINNED_SHELLS = 8
@@ -167,6 +172,40 @@ export function filesInPlay(messages: ChatMessage[], max = MAX_FILES): string[] 
   return out
 }
 
+/**
+ * Every message the user wrote after the original task and before `before`, oldest
+ * first: the follow-ups and mid-run corrections a summary would otherwise only
+ * paraphrase. Houston's own user-role turns are left out: its automated notes, a
+ * `/compact` summary, and prompts it wrote for a command or button (`invokedAs`).
+ */
+export function laterUserMessages(messages: ChatMessage[], before: number = messages.length): string[] {
+  const task = originalTaskIndex(messages)
+  if (task === -1) return []
+  const out: string[] = []
+  for (let i = task + 1; i < Math.min(before, messages.length); i++) {
+    const m = messages[i]
+    if (m.role !== 'user' || m.invokedAs) continue
+    const text = m.content.trim()
+    if (!text || text.startsWith(SYSTEM_NOTE_PREFIX) || text.startsWith(COMPACTION_SUMMARY_PREFIX)) continue
+    out.push(text)
+  }
+  return out
+}
+
+/** The later-messages section's lines, clipped, keeping the newest when the budget runs out. */
+function userMessageLines(texts: string[]): string[] {
+  const lines: string[] = []
+  let used = 0
+  for (let i = texts.length - 1; i >= 0; i--) {
+    const line = `- ${clip(texts[i].replace(/\s+/g, ' '), MAX_USER_MESSAGE_CHARS)}`
+    if (used + line.length > MAX_USER_MESSAGES_CHARS) break
+    used += line.length + 1
+    lines.unshift(line)
+  }
+  const dropped = texts.length - lines.length
+  return dropped > 0 ? [`- (${dropped} earlier message${dropped === 1 ? '' : 's'} not shown)`, ...lines] : lines
+}
+
 export interface PinnedMemoryOptions {
   /**
    * Leave out the original-task section: the caller sends that request verbatim
@@ -179,6 +218,12 @@ export interface PinnedMemoryOptions {
    * caller must pass the same value until the next advance, or the block moves.
    */
   workspaceState?: PinnedWorkspaceState
+  /**
+   * List the user's later messages only from before this index: the ones a summary
+   * now stands in for. Those after it are still in the window verbatim (eviction
+   * stubs tool results, never the user's words). Defaults to all of `messages`.
+   */
+  userMessagesBefore?: number
 }
 
 /** One line of text: control characters (newlines included) folded to spaces. */
@@ -286,6 +331,11 @@ export function buildPinnedMemory(messages: ChatMessage[], opts: PinnedMemoryOpt
   if (!task) return ''
 
   const sections: string[] = opts.omitTask ? [] : [`Original task:\n${clip(task, MAX_TASK_CHARS)}`]
+
+  const later = laterUserMessages(messages, opts.userMessagesBefore)
+  if (later.length > 0) {
+    sections.push(`The user's later messages, in order (clipped):\n${userMessageLines(later).join('\n')}`)
+  }
 
   const todos = latestTodos(messages)
   if (todos.length > 0) {

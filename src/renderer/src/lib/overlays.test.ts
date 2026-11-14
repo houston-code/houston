@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { modalOpen, occludesPreview, ownsShiftTab, suppressesTips, type OverlayFlags } from './overlays'
+import { modalOpen, occludesPreview, ownsShiftTab, shortcutAllowedOverModal, suppressesTips, type OverlayFlags } from './overlays'
 
 const none: OverlayFlags = {
   settings: false,
@@ -59,6 +59,21 @@ describe('overlays', () => {
   it('hides the preview under the What’s new card but leaves Shift+Tab to the chat', () => {
     expect(occludesPreview(only('whatsNew'))).toBe(true)
     expect(ownsShiftTab(only('whatsNew'))).toBe(false)
+  })
+
+  it('lets only the keys that close the open modal act over it', () => {
+    expect(shortcutAllowedOverModal('new-chat', none)).toBe(true)
+    expect(shortcutAllowedOverModal('find-in-chat', only('find'))).toBe(true)
+    for (const key of MODALS) {
+      expect(shortcutAllowedOverModal('escape', only(key))).toBe(true)
+      for (const action of ['new-chat', 'find-in-chat', 'open-settings', 'select-chat-n', 'toggle-sidebar'] as const) {
+        expect(shortcutAllowedOverModal(action, only(key)), `${action} over ${key}`).toBe(false)
+      }
+    }
+    expect(shortcutAllowedOverModal('command-palette', only('palette'))).toBe(true)
+    expect(shortcutAllowedOverModal('command-palette', only('settings'))).toBe(false)
+    expect(shortcutAllowedOverModal('show-help', only('help'))).toBe(true)
+    expect(shortcutAllowedOverModal('show-help', only('palette'))).toBe(false)
   })
 
   it('holds tips while the inline Connect panel is open, without counting it as a modal', () => {

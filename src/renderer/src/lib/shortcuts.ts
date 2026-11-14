@@ -279,6 +279,41 @@ export function isEditableTarget(el: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true
 }
 
+/** The chat's message box, where the main-view shortcuts still apply while typing. */
+const COMPOSER_INPUT = '.composer__input'
+/**
+ * The side panels beside the chat (the dock's tabs, the side chat, a docked plan).
+ * Keys typed or pressed there belong to that panel, not to the chat's run or mode.
+ */
+const SIDE_PANELS = '.preview-dock, .side-chat, .plan-panel'
+/** Controls that take focus, where Shift+Tab must keep moving focus back. */
+const FOCUSABLE =
+  'button, a[href], input, select, textarea, summary, [contenteditable], [tabindex]:not([tabindex="-1"])'
+
+/**
+ * Whether Shift+Tab pressed at `target` cycles the approval mode. It does in the
+ * message box (the coding-agent convention its key hints advertise) and with nothing
+ * in particular focused; on any other control it stays the reverse-focus key, so a
+ * keyboard user can always move back through buttons and fields.
+ */
+export function shiftTabCyclesMode(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true
+  if (target.closest(COMPOSER_INPUT)) return true
+  if (target.closest(SIDE_PANELS)) return false
+  return !target.matches(FOCUSABLE)
+}
+
+/**
+ * Whether Esc pressed at `target` may stop the running turn. Not from a side panel
+ * (closing a filter or leaving the side chat must not cancel the main run), and not
+ * from a field other than the message box, whose own Esc means "leave this field".
+ */
+export function escapeStopsRun(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true
+  if (target.closest(SIDE_PANELS)) return false
+  return !isEditableTarget(target) || target.closest(COMPOSER_INPUT) !== null
+}
+
 /**
  * When a key event lands inside the integrated terminal, decide whether the shell
  * keeps it (true) or the app handles it as a shortcut (false). The terminal toggle

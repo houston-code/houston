@@ -2982,6 +2982,27 @@ describe('compaction persistence across runs', () => {
     expect(history[stored.cut].role).toBe('user') // always lands on a turn boundary
   })
 
+  it("pins the user's own words from the summarized turns, and none from the kept tail", async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const history = historyOf(5) // user turns at 0,2,4,6,8; current question at 10
+    setMessages(conv.id, history)
+    setCompaction(conv.id, { cut: 6, summary: 'PRIOR SUMMARY' })
+    const sends: ChatMessage[][] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        sends.push(req.messages)
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    await run({ provider, messages: history, conversationId: conv.id })
+    const pinned = sends[0].find((m) => m.content.startsWith(PINNED_MEMORY_PREFIX))!
+    expect(pinned.content).toContain('Original task:\nquestion 0')
+    expect(pinned.content).toContain("The user's later messages, in order (clipped):\n- question 1\n- question 2")
+    // question 3 onward is still in the window verbatim.
+    expect(pinned.content).not.toContain('question 3')
+  })
+
   it('resumes from persisted state instead of re-summarizing the head again', async () => {
     const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
     const history = historyOf(5) // user turns at 0,2,4,6,8; current question at 10
@@ -7161,6 +7182,77 @@ describe('loop control — verification gate', () => {
     expect(types(r).at(-1)).toBe('done')
   })
 
+  describe('with no command set', () => {
+    const writePackage = (): void =>
+      writeFileSync(join(ws, 'package.json'), JSON.stringify({ scripts: { typecheck: 'tsc', test: 'vitest run' } }))
+
+    it('uses the command the project suggests in Full auto, and says so once', async () => {
+      writePackage()
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      const r = await withSettings({ verifyOnStop: true, verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto' })
+      )
+      expect(h.verifyRuns).toHaveLength(1)
+      expect(h.verifyRuns[0]).toMatchObject({ command: 'npm run typecheck && npm test', allowNetwork: false })
+      const notices = r.events.filter(
+        (e) => e.type === 'notice' && /Verifying with `npm run typecheck && npm test`/.test(e.message)
+      )
+      expect(notices).toHaveLength(1)
+      expect((notices[0] as { message: string }).message).toContain('package.json')
+    })
+
+    it('says so only once across several passes', async () => {
+      writePackage()
+      let stops = 0
+      const provider: Provider = {
+        async *streamChat() {
+          if (stops++ % 2 === 0) {
+            yield { type: 'tool_call', call: { id: `w${stops}`, name: 'write_file', arguments: { path: 'out.txt', content: `v${stops}` } } }
+            yield { type: 'done', stopReason: 'tool_use' }
+          } else {
+            yield { type: 'text', text: 'done' }
+            yield { type: 'done', stopReason: 'end_turn' }
+          }
+        }
+      }
+      h.verifyRunner = async () => ({ passed: false, output: 'still failing', aborted: false })
+      const r = await withSettings(
+        { verifyOnStop: true, verifyMaxPasses: 2, maxIterations: 40, stallDetection: false },
+        () => run({ provider, policy: 'full-auto' })
+      )
+      expect(h.verifyRuns).toHaveLength(2)
+      expect(r.events.filter((e) => e.type === 'notice' && /^Verifying with/.test(e.message))).toHaveLength(1)
+    })
+
+    it('runs nothing outside Full auto', async () => {
+      writePackage()
+      const r = await withSettings({ verifyOnStop: true, verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'auto-edit' })
+      )
+      expect(h.verifyRuns).toHaveLength(0)
+      expect(types(r)).not.toContain('verification')
+    })
+
+    it('runs nothing when the gate is off, or when the project suggests nothing', async () => {
+      writePackage()
+      await withSettings({ verifyOnStop: false }, () => run({ provider: writeThenStop(), policy: 'full-auto' }))
+      expect(h.verifyRuns).toHaveLength(0)
+      rmSync(join(ws, 'package.json'))
+      await withSettings({ verifyOnStop: true }, () => run({ provider: writeThenStop(), policy: 'full-auto' }))
+      expect(h.verifyRuns).toHaveLength(0)
+    })
+
+    it('keeps a command the user set over the inferred one, with no notice', async () => {
+      writePackage()
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      const r = await withSettings({ verifyOnStop: true, verifyCommand: 'make check', verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto' })
+      )
+      expect(h.verifyRuns[0]).toMatchObject({ command: 'make check' })
+      expect(r.events.some((e) => e.type === 'notice' && /^Verifying with/.test(e.message))).toBe(false)
+    })
+  })
+
   it('passes first time: emits a passed verification then done', async () => {
     h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
     const r = await withSettings(
@@ -7339,6 +7431,64 @@ describe('loop control — verification gate', () => {
       | undefined
     expect(shellResult?.ok).toBe(true)
     expect(h.verifyRuns).toHaveLength(0)
+  }, 20_000)
+
+  type ShellReceipt = {
+    filesChanged: string[]
+    checks: Array<{ kind: string; ok?: boolean; beforeLastWrite?: true }>
+  }
+  const receiptOf = (r: Awaited<ReturnType<typeof run>>): ShellReceipt | undefined =>
+    (r.events.find((e) => e.type === 'receipt') as { receipt: ShellReceipt } | undefined)?.receipt
+
+  it('files a shell command changed land on the receipt, without a verify command', async () => {
+    gitRepoWithTrackedFile()
+    const r = await shellOnlyRun("printf 'v2\\n' > tracked.txt && printf 'gen\\n' > generated.txt")
+    expect(receiptOf(r)?.filesChanged).toEqual(['generated.txt', 'tracked.txt'])
+  }, 20_000)
+
+  it('a read-only shell command adds no files to the receipt', async () => {
+    gitRepoWithTrackedFile()
+    writeFileSync(join(ws, 'tracked.txt'), 'dirty before the run\n')
+    const r = await shellOnlyRun('ls && cat tracked.txt && git status')
+    expect(receiptOf(r)?.filesChanged ?? []).toEqual([])
+  }, 20_000)
+
+  it('a shell edit after a passing test marks that pass as before the last change', async () => {
+    gitRepoWithTrackedFile()
+    writeFileSync(join(ws, 'test.mjs'), 'process.exit(0)\n')
+    const r = await run({
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'node test.mjs' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          {
+            type: 'tool_call',
+            call: { id: 's2', name: 'run_shell', arguments: { command: "sed -i.bak 's/v1/v2/' tracked.txt" } }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const receipt = receiptOf(r)
+    expect(readFileSync(join(ws, 'tracked.txt'), 'utf8')).toBe('v2\n')
+    expect(receipt?.filesChanged).toContain('tracked.txt')
+    expect(receipt?.checks).toEqual([expect.objectContaining({ kind: 'test', ok: true, beforeLastWrite: true })])
+  }, 20_000)
+
+  it('a test run after an edit in the same shell command still counts for the final code', async () => {
+    gitRepoWithTrackedFile()
+    writeFileSync(join(ws, 'test.mjs'), 'process.exit(0)\n')
+    const r = await shellOnlyRun("printf 'v2\\n' > tracked.txt && node test.mjs")
+    const receipt = receiptOf(r)
+    expect(receipt?.filesChanged).toContain('tracked.txt')
+    expect(receipt?.checks).toHaveLength(1)
+    expect(receipt?.checks[0]).toMatchObject({ kind: 'test', ok: true })
+    expect(receipt?.checks[0].beforeLastWrite).toBeUndefined()
   }, 20_000)
 })
 

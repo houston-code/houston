@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { outboundFetch } from '../outbound-proxy'
 
 /**
  * A `fetch` for the provider SDKs that fails a response body which stops delivering
@@ -147,7 +148,7 @@ export function streamIdleWindowOf(err: unknown): number | undefined {
  */
 export function idleTimeoutFetch(
   baseIdleMs: number = STREAM_IDLE_TIMEOUT_MS,
-  base: Fetch = (input, init) => globalThis.fetch(input, init)
+  base: Fetch = outboundFetch
 ): Fetch {
   return async (input, init) => {
     const idleMs = Math.max(baseIdleMs, requestedWindow.getStore() ?? 0)
