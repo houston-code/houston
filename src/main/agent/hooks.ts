@@ -306,6 +306,11 @@ export interface HookOutcome {
   additionalContext?: string
   /** Rewritten tool input (PreToolUse); the last hook that sets it wins. */
   updatedInput?: Record<string, unknown>
+  /**
+   * The hook whose {@link updatedInput} stands. Every hook is handed the original input,
+   * so an approve from any other hook was not given the rewritten one.
+   */
+  rewrittenBy?: Hook
   /** A user-facing note (not shown to the model); concatenated across hooks. */
   systemMessage?: string
 }
@@ -335,6 +340,7 @@ export async function runHooks(
   let approved = false
   const approvedBy: Hook[] = []
   let updatedInput: Record<string, unknown> | undefined
+  let rewrittenBy: Hook | undefined
 
   // A hook that can't be given its input, or can't be launched, never throws out of
   // here (that ended the whole turn). It counts as a failed hook instead: a blocking
@@ -404,7 +410,10 @@ export async function runHooks(
         if (directive.reason) reasons.push(directive.reason)
         if (directive.additionalContext) contexts.push(directive.additionalContext)
         if (directive.systemMessage) systemMsgs.push(directive.systemMessage)
-        if (directive.updatedInput) updatedInput = directive.updatedInput
+        if (directive.updatedInput) {
+          updatedInput = directive.updatedInput
+          rewrittenBy = hook
+        }
         if (directive.decision === 'block') blocked = true
         else if (directive.decision === 'approve') {
           approved = true
@@ -431,7 +440,7 @@ export async function runHooks(
     approvedBy: approved ? approvedBy : [],
     message: reasons.join('\n').trim(),
     ...(contexts.length ? { additionalContext: contexts.join('\n\n') } : {}),
-    ...(updatedInput ? { updatedInput } : {}),
+    ...(updatedInput ? { updatedInput, rewrittenBy } : {}),
     ...(systemMsgs.length ? { systemMessage: systemMsgs.join('\n') } : {})
   }
 }

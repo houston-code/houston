@@ -2931,4 +2931,107 @@ describe('URL rules, respelled servers', () => {
     const exact: PermissionRule[] = [{ ...allow('web_fetch', 'https://x.example'), exact: true }]
     expect(matchRule(exact, 'web_fetch', 'https://x.example', ROOTS)).toBe('allow')
   })
+
+  it('a deny holds for every spelling the URL parser fetches the same way', () => {
+    const spellings = [
+      'https:/blocked.example/secret',
+      'https:blocked.example/secret',
+      'https:\\\\blocked.example\\secret',
+      ' https://blocked.example/secret',
+      '\thttps://blocked.example/secret',
+      'ht\ttps://blocked.example/secret',
+      'https://blocked.example\\secret',
+      'https://blocked.example:443\\secret\\more'
+    ]
+    for (const rules of [blocked, [deny('web_fetch', 'https://blocked.example')]]) {
+      for (const url of spellings) expect(matchRule(rules, 'web_fetch', url, ROOTS), url).toBe('deny')
+    }
+    // A path-scoped deny sees the path a backslash starts.
+    const admin = [deny('web_fetch', 'https://host.example/admin/*')]
+    expect(matchRule(admin, 'web_fetch', 'https://host.example\\admin\\x', ROOTS)).toBe('deny')
+    // An exact rule for a bare origin still matches that origin, however it is spelled.
+    const exact: PermissionRule[] = [{ ...allow('web_fetch', 'https://x.example'), exact: true }]
+    expect(matchRule(exact, 'web_fetch', 'https:x.example', ROOTS)).toBe('allow')
+    expect(matchRule(exact, 'web_fetch', 'https://x.example/', ROOTS)).toBeNull()
+  })
+})
+
+describe('tripwires an allow prefix has to name', () => {
+  const ROOTS = ['/work/project']
+  const exactAllow = (match: string): PermissionRule => ({ action: 'allow', tool: 'run_shell', match, exact: true })
+
+  it('"Always allow" saves a control-file or credential-file write exact, never as a prefix', () => {
+    for (const command of ['npm run gen > .houston/settings.json', 'cp tasks.json .vscode/tasks.json', 'python gen.py > .env']) {
+      expect(persistedRules('allow', 'run_shell', { command }, ROOTS)).toEqual([exactAllow(command)])
+    }
+  })
+
+  it('a prefix or `*` that names no guarded path does not cover a write to one', () => {
+    const cases: Array<[PermissionRule[], string]> = [
+      [[allow('run_shell', 'npm run')], 'npm run x > .husky/pre-push'],
+      [[allow('run_shell', '*')], 'cp x .husky/pre-commit'],
+      [[allow('run_shell', 'cat payload.sh')], 'cat payload.sh > .github/workflows/ci.yml'],
+      [[allow('run_shell', 'python gen.py')], 'python gen.py > .env.production']
+    ]
+    for (const [rules, command] of cases) {
+      expect(matchRule(rules, 'run_shell', command, ROOTS)).toBe('allow')
+      expect(shellAllowCoversTripwires(rules, command, ROOTS), command).toBe(false)
+    }
+    // The exact rule "Always allow" saves covers it, and so does a pattern naming the path.
+    const cmd = 'npm run gen > .houston/settings.json'
+    expect(shellAllowCoversTripwires([exactAllow(cmd)], cmd, ROOTS)).toBe(true)
+    expect(shellAllowCoversTripwires([allow('run_shell', 'cp * .vscode/*')], 'cp a .vscode/tasks.json', ROOTS)).toBe(true)
+  })
+
+  it('a SQL statement piped or fed by a here-document to a client saves exact rules that cover it', () => {
+    const cmd = 'echo "DROP TABLE users" | psql mydb'
+    const rules = persistedRules('allow', 'run_shell', { command: cmd }, ROOTS)
+    expect(rules).toEqual([exactAllow('echo "DROP TABLE users"'), exactAllow('psql mydb')])
+    expect(matchRule(rules, 'run_shell', cmd, ROOTS)).toBe('allow')
+    expect(shellAllowCoversTripwires(rules, cmd, ROOTS)).toBe(true)
+    // ...and nothing wider: the client with another script is not allowed.
+    expect(matchRule(rules, 'run_shell', 'psql mydb -f wipe_everything.sql', ROOTS)).toBeNull()
+    // Prefixes match the pieces but never cover the line, so the exact rule isn't redundant.
+    const prefixes = [allow('run_shell', 'echo'), allow('run_shell', 'psql mydb')]
+    expect(shellAllowCoversTripwires(prefixes, cmd, ROOTS)).toBe(false)
+    expect(alreadyAllowedAsRule(prefixes, 'run_shell', 'psql mydb', ROOTS, undefined, cmd)).toBe(false)
+    expect(alreadyAllowedAsRule(rules, 'run_shell', 'psql mydb', ROOTS, undefined, cmd)).toBe(true)
+
+    const heredoc = 'psql mydb <<SQL\nDROP TABLE users;\nSQL'
+    const hd = persistedRules('allow', 'run_shell', { command: heredoc }, ROOTS)
+    expect(hd.every((r) => r.exact === true)).toBe(true)
+    expect(shellAllowCoversTripwires(hd, heredoc, ROOTS)).toBe(true)
+    expect(matchRule(hd, 'run_shell', 'psql mydb -f x.sql', ROOTS)).toBeNull()
+  })
+
+  it('a shell, ssh or container runner behind a wrapper or env assignment is saved exact', () => {
+    for (const command of [
+      'env FOO=1 bash build.sh',
+      'xargs kubectl exec pod --',
+      'sudo docker run ubuntu',
+      'timeout 60 ssh h uptime',
+      'FOO=1 ssh host uptime',
+      'DOCKER_BUILDKIT=1 docker run img'
+    ]) {
+      expect(persistedRules('allow', 'run_shell', { command }), command).toEqual([exactAllow(command)])
+    }
+    // A wrapper around an ordinary program keeps its verbatim prefix rule, and a word
+    // that is an Object key is no runner.
+    expect(persistedRules('allow', 'run_shell', { command: 'env FOO=1 npm test' })).toEqual([
+      allow('run_shell', 'env FOO=1 npm test')
+    ])
+    expect(persistedRules('allow', 'run_shell', { command: 'env grep constructor x' })).toEqual([
+      allow('run_shell', 'env grep constructor x')
+    ])
+  })
+
+  it('a bracketed route folder as the first path part stays in the project', () => {
+    for (const cmd of ['cat [...slug]/page.tsx', 'ls ./[[...slug]]', 'cat [[...slug]]/page.tsx']) {
+      expect(shellReferencesExternalPath(cmd, ROOTS), cmd).toBe(false)
+    }
+    // Globs that can still spell `..` climb.
+    for (const cmd of ['cat .[.]/x', 'cat {..,x}/y', 'cat [.][.]/x', 'cat [.]./x']) {
+      expect(shellReferencesExternalPath(cmd, ROOTS), cmd).toBe(true)
+    }
+  })
 })

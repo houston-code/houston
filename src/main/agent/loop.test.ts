@@ -981,6 +981,41 @@ describe('startRun', () => {
     expect(toolMsgs[1].content).toBe('RESULT_B')
   }, 20_000)
 
+  it("'Allow for run' on one MCP server's resource does not cover another server's resources or prompts", async () => {
+    const meta = (name: string): ToolDef => ({
+      kind: 'mcp',
+      summarize: (a) => `${name} ${String(a.server)}`,
+      schema: {
+        name,
+        description: name,
+        parameters: { type: 'object', properties: { server: { type: 'string' }, uri: { type: 'string' }, name: { type: 'string' } } }
+      },
+      execute: async (a) => `${name} from ${String(a.server)}`
+    })
+    h.mcpDefs = [meta('mcp_read_resource'), meta('mcp_get_prompt')]
+    const approvals: string[] = []
+    const call = (id: string, name: string, args: Record<string, unknown>): ProviderStreamEvent[] => [
+      { type: 'tool_call', call: { id, name, arguments: args } },
+      { type: 'done', stopReason: 'tool_use' }
+    ]
+    await run({
+      policy: 'full-auto',
+      onApproval: (callId, decide) => {
+        approvals.push(callId)
+        decide(callId === 'a1' ? 'always' : 'deny')
+      },
+      turns: [
+        call('a1', 'mcp_read_resource', { server: 'github', uri: 'gh://x' }),
+        call('a2', 'mcp_read_resource', { server: 'github', uri: 'gh://y' }),
+        call('b1', 'mcp_get_prompt', { server: 'proj-db', name: 'p' }),
+        call('b2', 'mcp_read_resource', { server: 'proj-db', uri: 'db://rows' }),
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    // The grant covered the same server's next read, and nothing on the other server.
+    expect(approvals).toEqual(['a1', 'b1', 'b2'])
+  })
+
   it('rejects a tool call with invalid arguments before dispatch and returns a repair message', async () => {
     // read_file requires `path`; sending a number where a string belongs must be
     // repaired (not executed) so the model self-corrects — and the file the model
@@ -2398,6 +2433,35 @@ describe('startRun', () => {
       })
       expect(approvals(r).map((a) => [a.callId, a.protectedWrite])).toEqual([['s1', true]])
       expect(existsSync(join(ws, '.envrc'))).toBe(false)
+    })
+
+    it('still asks when only a shell prefix or `*` that names no control file allows the command', async () => {
+      const saved = h.settings.permissionRules
+      try {
+        for (const [match, command] of [
+          ['npm run', 'npm run x > .husky/pre-push'],
+          ['*', 'cp x .husky/pre-commit'],
+          ['python gen.py', 'python gen.py > .env.production']
+        ]) {
+          h.settings.permissionRules = [{ action: 'allow', tool: 'run_shell', match }]
+          const r = await run({
+            policy: 'full-auto',
+            turns: [
+              [
+                { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command } } },
+                { type: 'done', stopReason: 'tool_use' }
+              ],
+              [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+            ],
+            onApproval: (_id, decide) => decide('deny')
+          })
+          expect(approvals(r).map((a) => [a.callId, a.sensitiveWrite]), command).toEqual([['s1', true]])
+        }
+        expect(existsSync(join(ws, '.husky'))).toBe(false)
+        expect(existsSync(join(ws, '.env.production'))).toBe(false)
+      } finally {
+        h.settings.permissionRules = saved
+      }
     })
 
     it('runs without asking when an exact allow rule names the file', async () => {

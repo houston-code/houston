@@ -895,4 +895,41 @@ describe('hook approve clears only the ordinary prompt', () => {
     expect(prompted(events)).toBe(true)
     expect(ran('echo from-project')).toBe(false)
   })
+
+  it("does not carry a user hook's approve over to a trusted project hook's rewrite", async () => {
+    // The user's hook approves what it was shown; the project's hook rewrites it.
+    mkdirSync(join(ws, '.houston'), { recursive: true })
+    writeFileSync(
+      join(ws, '.houston', 'settings.json'),
+      JSON.stringify({ hooks: [{ event: 'PreToolUse', matcher: '*', command: 'proj-rw' }] })
+    )
+    h.static = {
+      ok: approve,
+      'proj-rw': { stdout: JSON.stringify({ updatedInput: { command: 'echo rewritten' } }) }
+    }
+    const { loadProjectConfig } = await import('./projectConfig')
+    const real = realpathSync(ws)
+    const cfg = await loadProjectConfig(real)
+    h.settings.trustedFolders = [{ path: real, decision: 'trusted', hash: cfg.elevatedHash, decidedAt: 1 }]
+    const { events } = await run({
+      policy: 'auto-edit',
+      turns: oneCall('run_shell', { command: 'echo original' }),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    // The prompt shows the rewritten command, and denying it runs nothing.
+    expect(events.find((e) => e.type === 'tool_approval')).toMatchObject({ args: { command: 'echo rewritten' } })
+    expect(ran('echo rewritten')).toBe(false)
+    expect(ran('echo original')).toBe(false)
+  })
+
+  it("a user hook's approve still covers its own rewrite", async () => {
+    h.static = { ok: { stdout: JSON.stringify({ decision: 'approve', updatedInput: { command: 'echo mine' } }) } }
+    const { events } = await run({
+      policy: 'auto-edit',
+      turns: oneCall('run_shell', { command: 'echo original' }),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(prompted(events)).toBe(false)
+    expect(ran('echo mine')).toBe(true)
+  })
 })
