@@ -1,5 +1,6 @@
 import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
+import { randomUUID } from 'node:crypto'
 import { spinnerFrame, type TuiIo, type Painter, type ImagePasteRequest, type ImagePasteResult } from './tui'
 import { filterTerminalOutput, stripAnsi, stripControlChars, truncateVisible, truncateVisibleStart, visibleWidth } from './tui-wrap'
 import type { NotifySpec } from '@shared/notify'
@@ -49,6 +50,7 @@ import {
   type EditorOutcome
 } from './tui-editor'
 import type { EditorKey } from './tui-keys'
+import { midRunRows, oneLine, waitingAnnouncement, type WaitingInput } from './tui-midrun'
 import {
   initialVimState,
   reduceVim,
@@ -239,6 +241,8 @@ export interface ComposerReadOptions {
    * A thunk, read on each redraw. Absent reads as raising the turn.
    */
   ultrathinkEffect?: () => UltrathinkEffect
+  /** Told the draft's text after each edit, so it can be saved for this chat. */
+  onDraft?: (text: string) => void
 }
 
 /**
@@ -450,6 +454,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
    * stayed above the notice looking sent.
    */
   let printAbove: ((s: string) => void) | null = null
+  // Rows drawn under the spinner line (the waiting messages and a key hint). The
+  // cursor stays on the spinner line, so erasing the whole region is one clear to
+  // the end of the screen from there.
+  let regionRows = 0
+  const eraseRegionSeq = (): string => {
+    const s = regionRows ? `${CLEAR_LINE}\x1b[J` : CLEAR_LINE
+    regionRows = 0
+    return s
+  }
   const drawSpinner = (): void => {
     if (spinnerLabel === null || screenReader) return
     const frame = (status: string, shownDraft: string): string =>
@@ -458,26 +471,36 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         ...(modeLabel ? { mode: modeLabel } : {}),
         ...(status ? { status } : {}),
         ...(shownDraft ? { draft: shownDraft } : {}),
-        ...(queued.length ? { queued: queued.length } : {})
+        ...(waiting.length ? { queued: waiting.length } : {})
       })
     // A wrapped spinner line can't be erased in place: every frame would leave the
     // row above it behind. The status is the first thing to go when the line is full,
     // since the draft matters more; then the start of the draft, since its end is
-    // where the user is typing.
+    // where the user is typing. The draft is one row however many lines it has: its
+    // line breaks show as a mark.
     const width = columnsNow() - 1
-    let line = frame(statusLabel, draft)
-    if (statusLabel && visibleWidth(line) > width) line = frame('', draft)
-    if (draft && visibleWidth(line) > width) {
+    const flat = oneLine(draft)
+    let line = frame(statusLabel, flat)
+    if (statusLabel && visibleWidth(line) > width) line = frame('', flat)
+    if (flat && visibleWidth(line) > width) {
       // The draft shows after "  › ", four columns.
       const room = width - visibleWidth(frame('', '')) - 4
-      line = frame('', room > 1 ? truncateVisibleStart(draft, room) : '')
+      line = frame('', room > 1 ? truncateVisibleStart(flat, room) : '')
     }
     if (visibleWidth(line) > width) line = truncateVisible(line, width)
     tick++
     // The transcript viewer owns the screen while it is open.
     if (pagerOpen) return
     // Below a half-written line, not over it.
-    repaint(`${midLine ? '\n' : ''}${CLEAR_LINE}${line}`)
+    let s = `${midLine ? '\n' : ''}${eraseRegionSeq()}${line}`
+    const rows = midRunRows(waiting, { width, paint, typing: draft.length > 0 })
+    if (rows.length) {
+      s += `\n${rows.join('\n')}\x1b[${rows.length}A\r`
+      const col = visibleWidth(line)
+      if (col > 0) s += `\x1b[${col}C`
+      regionRows = rows.length
+    }
+    repaint(s)
     midLine = false
   }
   const startTimer = (): void => {
@@ -493,9 +516,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       cancelTimer()
       cancelTimer = null
     }
-    // Erase the spinner's line, never a half-written line of output, and nothing while
-    // the transcript viewer has the screen or in screen-reader mode (no redraws there).
-    if (erase && !pagerOpen && !screenReader && !midLine) rawWrite(CLEAR_LINE)
+    // Erase the spinner's line (and the rows under it), never a half-written line of
+    // output, and nothing while the transcript viewer has the screen or in
+    // screen-reader mode (no redraws there).
+    if (erase && !pagerOpen && !screenReader && !midLine) rawWrite(eraseRegionSeq())
   }
   /** Start a prompt at the left edge: below a half-written line rather than on it. */
   const toFreshLine = (): void => {
@@ -530,7 +554,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     // control character, so no string can repaint the lines above, write the
     // clipboard or query the terminal (see filterTerminalOutput).
     // A line still being written holds no spinner, and is continued instead.
-    if (cancelTimer && !midLine) repaint(CLEAR_LINE + safe)
+    if (cancelTimer && !midLine) repaint(eraseRegionSeq() + safe)
     else rawWrite(safe)
     midLine = !endsLine(safe)
   }
@@ -574,16 +598,47 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
    * false means there was nothing running to steer, and the line falls back to the
    * follow-up queue rather than being dropped.
    */
-  let steerHandler: ((text: string) => boolean) | null = null
+  let steerHandler: ((text: string, id: string) => boolean | 'handled') | null = null
+  // Take a steer back from the live run before it lands (Up on an empty line).
+  let unsteerHandler: ((id: string) => boolean) | null = null
+  // Told whenever the mid-run draft or the waiting messages change, so the driver can
+  // save them; `acked` when a message was just shown as queued or steered.
+  let pendingInputHandler: ((p: { draft: string; queued: string[] }, acked: boolean) => void) | null = null
   // The approval mode, shown on the spinner line so it stays visible while a turn
   // runs — the one time it matters most and the composer's status line is gone.
   let modeLabel = ''
   // The rest of the status line, carried on the spinner line while a turn runs.
   let statusLabel = ''
   let watching = false
-  // Messages typed while the agent works, waiting for the turn to end. Kept here
-  // (not in the driver) because the driver is blocked awaiting the run.
-  let queued: string[] = []
+  // Messages typed while the agent works that have not reached the model: steers the
+  // run holds for its next step, and follow-ups for after the turn. Kept here (not in
+  // the driver) because the driver is blocked awaiting the run.
+  let waiting: WaitingInput[] = []
+  const pendingChanged = (acked: boolean): void => {
+    pendingInputHandler?.({ draft, queued: waiting.map((w) => w.text) }, acked)
+  }
+  /** Add a message to the waiting list, say so, and save it before anything else. */
+  const addWaiting = (item: WaitingInput): void => {
+    waiting.push(item)
+    pendingChanged(true)
+    if (screenReader) announce(waitingAnnouncement(item, waiting.filter((w) => w.kind === 'queued').length))
+  }
+  /**
+   * Up on an empty line: the newest waiting message comes back into the draft. A steer
+   * is taken back from the run first; one the run already read stays where it is.
+   */
+  const takeBackLast = (): void => {
+    const last = waiting.at(-1)
+    if (!last) return
+    if (last.kind === 'steer' && !(unsteerHandler?.(last.id) ?? false)) {
+      if (screenReader) announce('that message already reached the turn')
+      return
+    }
+    waiting = waiting.slice(0, -1)
+    draft = last.text
+    pendingChanged(true)
+    if (screenReader) announce(`took back: ${last.text}`)
+  }
   // What the user is typing right now, rendered on the spinner line.
   let draft = ''
   let watchDec: DecoderState = initialDecoderState()
@@ -615,6 +670,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           // Both are "undo the thing in front of me", scaled to what is in front.
           if (draft) {
             draft = ''
+            pendingChanged(false)
             if (screenReader) announce('cleared what you typed')
             drawSpinner()
             return
@@ -643,7 +699,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               break
             }
             atomically(() => {
-              rawWrite(`${CLEAR_LINE}${paint(NO_SUSPEND_NOTE, 'dim')}\n`)
+              rawWrite(`${eraseRegionSeq()}${paint(NO_SUSPEND_NOTE, 'dim')}\n`)
               drawSpinner()
             })
             break
@@ -664,38 +720,52 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           return
         case 'char':
           draft += key.value
+          pendingChanged(false)
           drawSpinner()
           break
         case 'paste':
-          // One line: the spinner row is a single line, and a queued follow-up is a
-          // sentence, not a document.
-          draft += key.value.replace(/\n/g, ' ')
+          // Line breaks are kept: a follow-up can be several lines, as at the composer.
+          draft += key.value.replace(/\r\n?/g, '\n')
+          pendingChanged(false)
           drawSpinner()
           break
-        case 'enter': {
+        case 'newline':
+          // Shift-Enter, Alt-Enter or Ctrl-J: a line break in the draft.
+          draft += '\n'
+          pendingChanged(false)
+          drawSpinner()
+          break
+        case 'enter':
+        case 'tab': {
           const line = draft.trim()
-          // Steer the turn that is running if it can still take the line; a turn
-          // that has already finished cannot, and then this is a follow-up for the
-          // next one, exactly as before. Never dropped either way.
-          if (line) {
-            if (steerHandler?.(line)) {
-              if (screenReader) announce('sent to the running turn')
-            } else {
-              queued.push(line)
-              if (screenReader) announce(`queued for after this turn (${queued.length} waiting)`)
-            }
-          }
           draft = ''
+          // Enter steers the turn that is running if it can still take the line; a
+          // turn that has already finished cannot, and then this is a follow-up for
+          // the next one. Tab queues it for after the turn without steering. Never
+          // dropped either way.
+          if (line) {
+            const id = randomUUID()
+            const took = key.type === 'enter' ? (steerHandler?.(line, id) ?? false) : false
+            if (took === 'handled') pendingChanged(true)
+            else addWaiting({ id, text: line, kind: took ? 'steer' : 'queued' })
+          }
           drawSpinner()
           break
         }
+        case 'up':
+          if (draft) break
+          takeBackLast()
+          drawSpinner()
+          break
         case 'backspace':
           draft = [...draft].slice(0, -1).join('')
+          pendingChanged(false)
           drawSpinner()
           break
         case 'kill-to-start':
         case 'kill-line':
           draft = ''
+          pendingChanged(false)
           drawSpinner()
           break
         default:
@@ -712,6 +782,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // Ask the terminal to report focus while the turn runs — the window in which
       // the user is most likely to wander off, and the only time we ping them.
       rawWrite(ENABLE_FOCUS_REPORTING)
+      // A paste lands whole (its line breaks kept, never sent line by line), and
+      // Shift-Enter is told apart from Enter, as at the composer.
+      rawWrite(ENABLE_BRACKETED_PASTE)
+      rawWrite(ENABLE_MODIFIED_KEYS)
       stdin.on('data', onWatchData)
       watching = true
     } catch {
@@ -724,6 +798,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     try {
       // An armed idle reminder still wants focus reports (see armReminder).
       if (!cancelReminder) rawWrite(DISABLE_FOCUS_REPORTING)
+      rawWrite(DISABLE_BRACKETED_PASTE)
+      rawWrite(DISABLE_MODIFIED_KEYS)
       stdin.removeListener('data', onWatchData)
       stdin.pause()
     } catch {
@@ -934,7 +1010,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
    */
   const readLinear = (
     prompt: string | (() => string),
-    opts: { composer?: boolean; discardPending?: boolean; initial?: string } = {}
+    opts: { composer?: boolean; discardPending?: boolean; initial?: string; onDraft?: (text: string) => void } = {}
   ): Promise<string | null> => {
     const promptNow = (): string => plainText(typeof prompt === 'string' ? prompt : prompt())
     if (closed) return Promise.resolve(null)
@@ -1088,7 +1164,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         // must not submit or act (see sanitizePastedKeys).
         const guarded = sanitizePastedKeys(r.keys, lastPasteAt, now())
         lastPasteAt = guarded.lastPasteAt
-        for (const key of guarded.keys) {
+        const before = buf
+        try {
+          handleKeys(guarded.keys)
+        } finally {
+          if (!done && buf !== before) opts.onDraft?.(buf)
+        }
+      }
+      function handleKeys(keys: EditorKey[]): void {
+        for (const key of keys) {
           if (done) return
           if (key.type !== 'escape' && key.type !== 'focus') lastEscAt = -Infinity
           switch (key.type) {
@@ -1289,7 +1373,13 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     initial?: string,
     opts?: ComposerReadOptions
   ): Promise<string | null> => {
-    if (screenReader) return readLinear(prompt, { composer: true, ...(initial ? { initial } : {}) })
+    if (screenReader) {
+      return readLinear(prompt, {
+        composer: true,
+        ...(initial ? { initial } : {}),
+        ...(opts?.onDraft ? { onDraft: opts.onDraft } : {})
+      })
+    }
     const promptNow = (): string => (typeof prompt === 'string' ? prompt : prompt())
     if (closed) return Promise.resolve(null)
     // No TTY / no raw mode → the readline path still works (tests, pipes). It can't
@@ -1646,7 +1736,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
             next = r2.state
             outcome = r2.outcome
           }
+          const changed = state.lines !== next.lines
           state = next
+          if (changed && opts?.onDraft) opts.onDraft(editorText(state))
           if (!outcome) {
             draw()
             continue
@@ -1921,9 +2013,18 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
      */
     /** Take (and clear) what the user typed while the agent was working. */
     takeQueued: () => {
-      const out = queued
-      queued = []
+      // Steers still waiting come back from the run itself (`steers_returned`), so
+      // only the follow-ups are handed over here.
+      const out = waiting.filter((w) => w.kind === 'queued').map((w) => w.text)
+      waiting = []
       return out
+    },
+    steerLanded: (id) => {
+      const before = waiting.length
+      waiting = waiting.filter((w) => w.id !== id)
+      if (waiting.length === before) return
+      pendingChanged(true)
+      drawSpinner()
     },
     /** Take (and clear) the line typed mid-run but not yet sent with Enter. */
     takeDraft: () => {
@@ -1942,6 +2043,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     onSteer: (handler) => {
       steerHandler = handler
+    },
+    onUnsteer: (handler) => {
+      unsteerHandler = handler
+    },
+    onPendingInput: (handler) => {
+      pendingInputHandler = handler
     },
     setAccessibility: (a) => {
       if (a.screenReader !== undefined && a.screenReader !== screenReader) {
