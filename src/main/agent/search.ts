@@ -3,6 +3,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { promises as fs, existsSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
+import { BINARY_SNIFF_BYTES, looksBinary } from './attachments'
 import {
   FALLBACK_SKIP_DIRS,
   gitListFiles,
@@ -103,6 +104,9 @@ export function runRipgrep(
     const args = [
       '--no-heading',
       '--color=never',
+      // ripgrep drops the file name when handed exactly one file (a lone tracked
+      // hidden path, a `path` naming a file), which made hits read as another file's.
+      '--with-filename',
       // NOT --no-messages: it suppresses ripgrep's file/IO error text (e.g. a
       // missing search path), which would leave us with an empty stderr and a
       // generic "ripgrep error". We want the real reason so the caller can report
@@ -186,6 +190,38 @@ export function runRipgrep(
       resolve({ matches })
     })
   })
+}
+
+/**
+ * Keep the files whose head does not look binary (git's NUL rule, as read_file uses),
+ * returned workspace-relative with '/' separators. An unreadable file is kept so
+ * ripgrep reports it as it would any other.
+ */
+async function dropBinary(fulls: string[], workspace: string): Promise<string[]> {
+  const kept: string[] = []
+  const BATCH = 64 // bound the open descriptors
+  for (let i = 0; i < fulls.length; i += BATCH) {
+    const batch = fulls.slice(i, i + BATCH)
+    const binary = await Promise.all(
+      batch.map(async (full) => {
+        let fh: fs.FileHandle | undefined
+        try {
+          fh = await fs.open(full, 'r')
+          const buf = Buffer.alloc(BINARY_SNIFF_BYTES)
+          const { bytesRead } = await fh.read(buf, 0, BINARY_SNIFF_BYTES, 0)
+          return looksBinary(buf.subarray(0, bytesRead))
+        } catch {
+          return false
+        } finally {
+          await fh?.close().catch(() => {})
+        }
+      })
+    )
+    batch.forEach((full, k) => {
+      if (!binary[k]) kept.push(relative(workspace, full).split(sep).join('/'))
+    })
+  }
+  return kept
 }
 
 /** Scan one file's contents into `out`. Shared by the directory walk and the
@@ -320,12 +356,16 @@ export async function searchContents(o: SearchOptions): Promise<string> {
     // explicit arguments, which it always searches (and follows when symlinked):
     // so keep only regular files (a deleted one is an IO error that sinks the run)
     // and apply the glob here (--glob ignores explicit paths).
+    // Binary files are dropped too: ripgrep skips them on its walk but reports
+    // "binary file matches" for (and reads in full) every file it is handed.
     const extras = git
-      ? plan.explicit
-          .map((rel) => join(o.startAbs, rel))
-          .filter(isRegularFile)
-          .map((full) => relative(o.workspace, full).split(sep).join('/'))
-          .filter((rel) => !inGlobDot || inGlobDot(rel))
+      ? await dropBinary(
+          plan.explicit
+            .map((rel) => join(o.startAbs, rel))
+            .filter(isRegularFile)
+            .filter((full) => !inGlobDot || inGlobDot(relative(o.workspace, full).split(sep).join('/'))),
+          o.workspace
+        )
       : []
     const all: string[] = []
     for (const run of planRuns(o.searchRel || '.', extras, undefined, !git || plan.walk)) {

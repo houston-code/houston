@@ -157,6 +157,32 @@ describe('resolveEdit — indentation re-adaptation', () => {
     expect(r.content).toBe('        if x:\n            FOO()\n        bar()\n')
   })
 
+  it('re-bases a wholly dedented block whose replacement adds shallower lines', () => {
+    // old_string is the method with its base indent dropped; the replacement adds a
+    // sibling method at the block's base level, which must land at 4 spaces, not 8.
+    const file = 'class A:\n    def f(self):\n        return 1  \n'
+    const r = resolveEdit(
+      file,
+      'def f(self):\n    return 1',
+      'def f(self):\n    return 2\n\ndef g(self):\n    return 3'
+    )
+    expect(r.strategy).toBe('line-trimmed')
+    expect(r.content).toBe('class A:\n    def f(self):\n        return 2\n\n    def g(self):\n        return 3\n')
+  })
+
+  it('re-bases a wholly dedented YAML block so an added sibling key stays a sibling', () => {
+    const file = 'jobs:\n  build:\n    steps:\n      - run: a  \n'
+    const r = resolveEdit(
+      file,
+      'build:\n  steps:\n    - run: a',
+      'build:\n  steps:\n    - run: a\ntest:\n  steps:\n    - run: b'
+    )
+    expect(r.strategy).toBe('line-trimmed')
+    expect(r.content).toBe(
+      'jobs:\n  build:\n    steps:\n      - run: a\n  test:\n    steps:\n      - run: b\n'
+    )
+  })
+
   it('leaves a blank replacement line blank rather than indenting it', () => {
     const file = '    a\n    b\n'
     const r = resolveEdit(file, 'a\nb', 'a\n\nb')

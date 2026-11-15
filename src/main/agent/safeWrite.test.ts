@@ -13,6 +13,7 @@ import {
   symlinkSync,
   writeFileSync
 } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -267,6 +268,46 @@ posix('removeEmptyDirContained', () => {
     symlinkSync(join(ws, 'real'), join(ws, 'alias'))
     expect(removeEmptyDirContained([ws], join(ws, 'alias'))).toBe(false)
     expect(existsSync(join(ws, 'alias'))).toBe(true)
+  })
+})
+
+posix('writeFileContained: a FIFO at the path', () => {
+  /**
+   * A regression here would block the test process on the open itself, so a reader
+   * opens the FIFO after a delay to release it: the write then still fails, but late,
+   * and the timing assertion catches it instead of the suite hanging.
+   */
+  function withUnblocker(fifo: string, run: () => void): number {
+    const reader = spawn('sh', ['-c', 'sleep 2; cat "$0" >/dev/null', fifo], { stdio: 'ignore' })
+    const started = Date.now()
+    try {
+      run()
+    } finally {
+      reader.kill('SIGKILL')
+    }
+    return Date.now() - started
+  }
+
+  it('refuses a FIFO at once instead of waiting for a reader', () => {
+    const fifo = join(ws, 'ctl')
+    execFileSync('mkfifo', [fifo])
+    const took = withUnblocker(fifo, () => {
+      expect(() => writeFileContained([ws], fifo, 'x', { followSymlink: false })).toThrow(/not a regular file/)
+    })
+    expect(took).toBeLessThan(1500)
+  })
+
+  it('fails at once when a regular file is swapped for a FIFO right before the open', () => {
+    const p = join(ws, 'ctl')
+    writeFileSync(p, 'old')
+    swapOnce('open', () => {
+      rmSync(p)
+      execFileSync('mkfifo', [p])
+    })
+    const took = withUnblocker(p, () => {
+      expect(() => writeFileContained([ws], p, 'new')).toThrow()
+    })
+    expect(took).toBeLessThan(1500)
   })
 })
 

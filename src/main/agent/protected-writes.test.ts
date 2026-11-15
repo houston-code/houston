@@ -86,6 +86,23 @@ describe('isProtectedControlPath (anchored to the roots)', () => {
     symlinkSync(join(repo, '.vscode'), join(repo, 'editor'))
     expect(isProtectedControlPath('editor/tasks.json', [repo])).toBe(true)
   })
+
+  it('sees through a Windows 8.3 short name for a control folder', () => {
+    // Simulated: Windows resolves `HOUSTO~1` to `.houston` only through the native
+    // realpath (the JS one leaves it as written).
+    mkdirSync(join(repo, '.houston'))
+    const native = realpathSync.native
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    realpathSync.native = ((p: string) => native(p.replace('HOUSTO~1', '.houston'))) as typeof native
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      expect(isProtectedControlPath('HOUSTO~1/settings.json', [repo])).toBe(true)
+      expect(isProtectedControlPath('src/a.ts', [repo])).toBe(false)
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      realpathSync.native = native
+    }
+  })
 })
 
 describe('writesProtectedPath', () => {

@@ -265,8 +265,11 @@ interface Memo<T> {
  *  - the run makes a call that may have changed that. The loop invalidates it on
  *    every call that isn't a read (any write, apply_patch, a shell command, a git or
  *    gh tool that writes, a writable subagent), where it invalidates the read cache;
+ *  - the run hears from background work that may have written since: `wait_for`,
+ *    `read_shell_output` or `kill_shell` returns, or a background shell, agent, or
+ *    spawned session's news is delivered;
  *  - {@link SCOPE_CACHE_TTL_MS} passes, which bounds how long a change the run never
- *    saw (the user's own `git add`, a background command) goes unnoticed;
+ *    saw (the user's own `git add`, a background command still running) goes unnoticed;
  *  - the run ends. The loop makes one per run, and shares it with nothing else.
  *
  * Only an answer every git call behind it gave is kept (see {@link Planned}), and
