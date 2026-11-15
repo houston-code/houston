@@ -12,7 +12,7 @@ import type {
 import type { ImageAttachment } from '@shared/images'
 import type { PromptInvocation } from '@shared/promptInvocation'
 import type { SessionUsage } from '@shared/usage'
-import { reduceEvent, systemNoteSummary, type DisplayItem, type PlanStatus } from '../lib/items'
+import { elicitationOutcome, reduceEvent, systemNoteSummary, type DisplayItem, type PlanStatus } from '../lib/items'
 import { meterOnEvent, startMeter, type RunMeter } from '../lib/runMeter'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 
@@ -364,7 +364,7 @@ export function useChat(conversationId: string | null = null): ChatController {
     void window.api.answerElicitation(runIdRef.current, elicitId, result)
     // Optimistic UI: collapse the form to its outcome immediately (there is no
     // dedicated result event — the in-flight MCP tool call simply continues).
-    const outcome = result.action === 'accept' ? ('accepted' as const) : ('declined' as const)
+    const outcome = elicitationOutcome(result.action)
     setItems((prev) =>
       prev.map((it) => (it.kind === 'elicitation' && it.id === elicitId ? { ...it, outcome } : it))
     )

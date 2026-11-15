@@ -3389,9 +3389,11 @@ Houston also:
 A server can ask for input in the middle of a tool call, such as a region, a project
 name, or a confirmation.
 
-- **Desktop app:** a small form naming the server, with typed fields and Submit /
-  Decline. Your answer goes to that MCP server, not to the model.
-- **Terminal:** an inline prompt (decline with `n`).
+- **Desktop app:** a small form naming the server, with typed fields and Submit,
+  Decline (the server is told no), or Cancel (closed without an answer either way).
+  Your answer goes to that MCP server, not to the model.
+- **Terminal:** an inline prompt (decline with `n`, cancel with Ctrl-D). Each field
+  shows the shape the server expects when it names one, such as `email` or `date`.
 - **Headless or background runs:** declined automatically, so nothing hangs waiting
   for a user who isn't there, and the server proceeds along its no-answer path.
 - Stopping the run cancels any open request.

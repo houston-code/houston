@@ -4306,6 +4306,26 @@ describe('runTui — plan review (present_plan)', () => {
     ])
   })
 
+  it("shows an elicitation field's format, as the desktop's placeholder does", async () => {
+    const { d, rec } = deps([
+      {
+        runId: 'x',
+        type: 'elicitation',
+        callId: 'm1',
+        elicitId: 'm1:e1',
+        serverId: 'srv',
+        message: 'Contact?',
+        fields: [{ name: 'email', kind: 'string', format: 'email', required: true }]
+      },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', 'y', 'a@example.com', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.reads.find((r) => r.prompt.startsWith('email'))?.prompt).toBe('email (email; required): ')
+    expect(rec.elicitations).toEqual([['run-1', 'm1:e1', { action: 'accept', content: { email: 'a@example.com' } }]])
+  })
+
   it('declines an elicitation on "n" and cancels on end-of-input', async () => {
     const elicit = (id: string): AgentEvent => ({
       runId: 'x',

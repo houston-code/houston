@@ -6750,6 +6750,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               for (;;) {
                 const hints = [
                   f.kind === 'enum' ? (f.options ?? []).join(' | ') : f.kind !== 'string' ? f.kind : '',
+                  // The shape the server expects (email, uri, date, date-time), as the
+                  // desktop shows it in the field's placeholder.
+                  f.format ?? '',
                   f.required ? 'required' : 'optional'
                 ]
                   .filter(Boolean)
