@@ -386,6 +386,23 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 const TIMED_OUT = Symbol('timed out')
 
+/** How long a poll's first evaluation may take, whatever its timeout (one IPC round trip, with slack). */
+const FIRST_EVAL_MIN_MS = 1000
+
+/** Whether loading `next` from `current` only changes the hash (a same-document navigation). */
+export function isFragmentOnlyChange(current: string, next: string): boolean {
+  try {
+    const a = new URL(current)
+    const b = new URL(next)
+    if (!b.hash) return false
+    a.hash = ''
+    b.hash = ''
+    return a.href === b.href
+  } catch {
+    return false
+  }
+}
+
 /** `work`'s result, or TIMED_OUT once `ms` passes first (the abandoned call is left to settle unobserved). */
 function withinMs<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
   work.catch(() => {})
@@ -410,10 +427,14 @@ async function pollPage(
 ): Promise<unknown> {
   const deadline = Date.now() + timeoutMs
   let last: unknown
+  let first = true
   for (;;) {
     try {
       // A blocked main thread never answers, so each evaluation gets only the time left.
-      const result = await withinMs(wc.executeJavaScript(script, true), Math.max(0, deadline - Date.now()))
+      // The first one always gets a fair chance, so a 0 (or tiny) timeout still checks once.
+      const budget = Math.max(first ? FIRST_EVAL_MIN_MS : 0, deadline - Date.now())
+      first = false
+      const result = await withinMs(wc.executeJavaScript(script, true), budget)
       if (result !== TIMED_OUT) {
         last = result
         if (settled(last)) return last
@@ -602,24 +623,52 @@ async function openElectronWindow(opts: {
 
   return {
     load(url) {
+      // A URL that differs from the current one only by its hash is a same-document
+      // navigation: it fires did-navigate-in-page, never did-finish-load.
+      const sameDocument = isFragmentOnlyChange(wc.getURL(), url)
       return new Promise((resolve, reject) => {
         let done = false
+        const onFinish = (): void => settle({})
+        const onFail = (
+          _e: unknown,
+          errorCode: number,
+          errorDescription: string,
+          _validatedURL: string,
+          isMainFrame: boolean
+        ): void => {
+          // Only the main frame's failure means the page itself didn't load.
+          if (isMainFrame) settle({ loadError: `${errorDescription || 'load failed'} (${errorCode})` })
+        }
+        const onInPage = (_e: unknown, _url: string, isMainFrame: boolean): void => {
+          // During a full load the page's own pushState/replaceState fires this too,
+          // so it only ends a load that is itself a hash change.
+          if (isMainFrame && sameDocument) settle({})
+        }
+        // A window serves many loads in a browser session, so each load removes its
+        // listeners: none pile up, and a late event can't end the next load.
+        const unlisten = (): void => {
+          wc.removeListener('did-finish-load', onFinish)
+          wc.removeListener('did-fail-load', onFail)
+          wc.removeListener('did-navigate-in-page', onInPage)
+        }
         const settle = (r: { loadError?: string }): void => {
           if (done) return
           done = true
+          unlisten()
           setTimeout(() => resolve(r), PAINT_SETTLE_MS)
         }
-        wc.once('did-finish-load', () => settle({}))
-        wc.on('did-fail-load', (_e, errorCode, errorDescription, _validatedURL, isMainFrame) => {
-          // Only the main frame's failure means the page itself didn't load.
-          if (isMainFrame) settle({ loadError: `${errorDescription || 'load failed'} (${errorCode})` })
-        })
-        win.loadURL(url).catch((err) => {
-          if (!done) {
+        wc.on('did-finish-load', onFinish)
+        wc.on('did-fail-load', onFail)
+        wc.on('did-navigate-in-page', onInPage)
+        win.loadURL(url).then(
+          () => settle({}),
+          (err) => {
+            if (done) return
             done = true
+            unlisten()
             reject(err instanceof Error ? err : new Error(String(err)))
           }
-        })
+        )
       })
     },
     title: () => win.getTitle(),

@@ -32,19 +32,39 @@ const fake = vi.hoisted(() => {
     /** Step scripts never answer, as on a page whose main thread is blocked. */
     hang: false,
     /** How many times a capture window was destroyed. */
-    destroyed: 0
+    destroyed: 0,
+    /** What the page's getURL answers (null: http://localhost:3000/). */
+    url: null as string | null,
+    /** Page loads (after the blank page) navigate within the document: only did-navigate-in-page fires. */
+    sameDocumentLoads: false,
+    /** Page scripts answer only after this many ms, as over a real IPC round trip. */
+    answerAfterMs: 0,
+    /** The most recently built window's webContents. */
+    lastWebContents: null as { listenerCount(event: string): number } | null
   }
+  type Listener = (...args: unknown[]) => void
   class FakeWebContents {
-    private handlers = new Map<string, (...args: unknown[]) => void>()
-    on(event: string, fn: (...args: unknown[]) => void): this {
-      this.handlers.set(event, fn)
+    private handlers = new Map<string, Listener[]>()
+    on(event: string, fn: Listener): this {
+      this.handlers.set(event, [...(this.handlers.get(event) ?? []), fn])
       return this
     }
-    once(event: string, fn: (...args: unknown[]) => void): this {
-      return this.on(event, fn)
+    once(event: string, fn: Listener): this {
+      const wrapped = (...args: unknown[]): void => {
+        this.removeListener(event, wrapped)
+        fn(...args)
+      }
+      return this.on(event, wrapped)
     }
-    emit(event: string): void {
-      this.handlers.get(event)?.()
+    removeListener(event: string, fn: Listener): this {
+      this.handlers.set(event, (this.handlers.get(event) ?? []).filter((h) => h !== fn))
+      return this
+    }
+    listenerCount(event: string): number {
+      return this.handlers.get(event)?.length ?? 0
+    }
+    emit(event: string, ...args: unknown[]): void {
+      for (const h of [...(this.handlers.get(event) ?? [])]) h(...args)
     }
     setFrameRate(): void {}
     setWindowOpenHandler(): void {}
@@ -70,7 +90,7 @@ const fake = vi.hoisted(() => {
       }
     }
     getURL(): string {
-      return 'http://localhost:3000/'
+      return state.url ?? 'http://localhost:3000/'
     }
     isLoading(): boolean {
       return false
@@ -81,7 +101,9 @@ const fake = vi.hoisted(() => {
       state.scripts.push(script)
       state.onScript(script)
       if (state.hang) return new Promise<never>(() => {})
-      return state.results.length ? state.results.shift() : state.fallback
+      const answer = state.results.length ? state.results.shift() : state.fallback
+      if (state.answerAfterMs) await new Promise((r) => setTimeout(r, state.answerAfterMs))
+      return answer
     }
     sendInputEvent(event: unknown): void {
       state.inputs.push(event)
@@ -94,10 +116,17 @@ const fake = vi.hoisted(() => {
     webContents = new FakeWebContents()
     constructor(options: { webPreferences?: Record<string, unknown> }) {
       state.windowOptions = options
+      state.lastWebContents = this.webContents
     }
     async loadURL(url: string): Promise<void> {
       state.log.push(`load ${url}`)
       state.onLoad(url)
+      if (state.sameDocumentLoads && url !== 'about:blank') {
+        // A hash change: Chromium reports it in-page, and here loadURL never settles,
+        // so only that event can end the load.
+        this.webContents.emit('did-navigate-in-page', null, url, true)
+        return new Promise<never>(() => {})
+      }
       this.webContents.emit('did-finish-load')
     }
     getTitle(): string {
@@ -110,7 +139,12 @@ const fake = vi.hoisted(() => {
       state.destroyed++
     }
   }
-  const ses = { webRequest: { onBeforeRequest: () => {} }, on: () => {}, setPermissionRequestHandler: () => {} }
+  const ses = {
+    webRequest: { onBeforeRequest: () => {}, onSendHeaders: () => {}, onCompleted: () => {}, onErrorOccurred: () => {} },
+    on: () => {},
+    setPermissionRequestHandler: () => {},
+    clearStorageData: async () => {}
+  }
   return { state, BrowserWindow, session: { fromPartition: () => ses } }
 })
 vi.mock('electron', () => ({ BrowserWindow: fake.BrowserWindow, session: fake.session }))
@@ -124,8 +158,10 @@ const {
   stepScript,
   textScript,
   visibleScript,
+  isFragmentOnlyChange,
   wireLocalhostCapture
 } = await import('./localhostCapture')
+const { browserBackendOrNull, resetBrowserBackend } = await import('./agent/browserSession')
 const { PRESS_KEYS, REDACTED_PASSWORD, STEP_TIMEOUT_MS, captureLocalhost, resetCaptureBackend } = await import(
   './agent/viewlocalhost'
 )
@@ -633,5 +669,99 @@ describe('a blocked page in the Electron backend', () => {
     await vi.advanceTimersByTimeAsync(STEP_TIMEOUT_MS + 1000)
     await settled
     expect(fake.state.destroyed).toBe(1)
+  })
+})
+
+describe('loading pages in a browser session window', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    Object.assign(fake.state, { results: [], fallback: 'ok', pageText: '', scripts: [], log: [], url: null })
+    wireLocalhostCapture()
+  })
+  afterEach(() => {
+    fake.state.sameDocumentLoads = false
+    fake.state.url = null
+    vi.useRealTimers()
+    resetCaptureBackend()
+    resetBrowserBackend()
+  })
+
+  const openPage = async () => {
+    const p = browserBackendOrNull()!.open({ width: 800, height: 600 })
+    await vi.runAllTimersAsync()
+    return p
+  }
+
+  it('tells a hash change apart from a page load', () => {
+    expect(isFragmentOnlyChange('http://localhost:5173/#/home', 'http://localhost:5173/#/settings')).toBe(true)
+    expect(isFragmentOnlyChange('http://localhost:5173/', 'http://localhost:5173/#top')).toBe(true)
+    expect(isFragmentOnlyChange('http://localhost:5173/#/home', 'http://localhost:5173/')).toBe(false)
+    expect(isFragmentOnlyChange('http://localhost:5173/a#x', 'http://localhost:5173/b#x')).toBe(false)
+    expect(isFragmentOnlyChange('about:blank', 'not a url')).toBe(false)
+  })
+
+  it('finishes a load that only changes the hash as soon as the page navigates in place', async () => {
+    const page = await openPage()
+    fake.state.url = 'http://localhost:5173/#/home'
+    fake.state.sameDocumentLoads = true
+    let settled: { loadError?: string } | undefined
+    void page.load('http://localhost:5173/#/settings').then((r) => (settled = r))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(settled).toEqual({})
+  })
+
+  it('leaves no load listeners behind, however many pages it loads', async () => {
+    const page = await openPage()
+    for (let i = 0; i < 12; i++) {
+      const p = page.load(`http://localhost:3000/${i}`)
+      await vi.runAllTimersAsync()
+      expect(await p).toEqual({})
+    }
+    const wc = fake.state.lastWebContents!
+    expect(wc.listenerCount('did-fail-load')).toBe(0)
+    expect(wc.listenerCount('did-finish-load')).toBe(0)
+    expect(wc.listenerCount('did-navigate-in-page')).toBe(0)
+  })
+})
+
+describe('a zero timeout in the Electron backend', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    Object.assign(fake.state, { results: [], fallback: 'ok', pageText: '', scripts: [], inputs: [] })
+    // The page answers after a real round trip, never within 0 ms.
+    fake.state.answerAfterMs = 5
+    wireLocalhostCapture()
+  })
+  afterEach(() => {
+    fake.state.answerAfterMs = 0
+    vi.useRealTimers()
+    resetCaptureBackend()
+  })
+
+  const capture = async (
+    steps: Parameters<typeof captureLocalhost>[0]['steps']
+  ): ReturnType<typeof captureLocalhost> => {
+    const p = captureLocalhost({ url: 'http://localhost:3000', steps })
+    await vi.runAllTimersAsync()
+    return p
+  }
+
+  it('still checks expect_text once, and passes when the text is there', async () => {
+    fake.state.results = ['found']
+    const cap = await capture([{ action: 'expect_text', text: 'Welcome', absent: false, timeoutMs: 0 }])
+    expect(cap.steps).toEqual([{ step: 'expect text "Welcome"', ok: true }])
+    expect(fake.state.scripts).toHaveLength(1)
+  })
+
+  it('still checks absent expect_text once, and passes when the text is gone', async () => {
+    fake.state.results = ['missing']
+    const cap = await capture([{ action: 'expect_text', text: 'Welcome', absent: true, timeoutMs: 0 }])
+    expect(cap.steps).toEqual([{ step: 'expect no text "Welcome"', ok: true }])
+  })
+
+  it('still checks wait_for once, and passes when the element is visible', async () => {
+    fake.state.results = [true]
+    const cap = await capture([{ action: 'wait_for', selector: '.ok', timeoutMs: 0 }])
+    expect(cap.steps).toEqual([{ step: 'wait for ".ok"', ok: true }])
   })
 })
