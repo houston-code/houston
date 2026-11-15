@@ -1296,6 +1296,13 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
             for (const line of formatReceiptLines(e.receipt)) deps.err(`· ${stripControlChars(line)}\n`)
           }
           break
+        case 'reply_sent_back':
+          // The loop sent the reply back for another round, so it is no longer the
+          // run's answer: the result line keeps only what comes after. Text mode
+          // already printed it, so a blank line keeps the next reply apart from it.
+          if (!opts.json && t.finalText) deps.out('\n\n')
+          t.finalText = ''
+          break
         case 'verification':
           // The end-of-run verification command ran; report pass/fail. A failing
           // pass is fed back for self-correction inside the loop (it doesn't end the

@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent, StopReason } from '@shared/agent'
 import type { QueuedInputMeta } from '@shared/queue'
 import { addToQueue, clearQueue, listQueue } from './queue'
-import { runAndDrain, startWakeTurn, type DrainIO } from './drain'
-import { pushBackgroundEvent, resetBackgroundEventsForTest } from './backgroundEvents'
+import { drainQueue, runAndDrain, startWakeTurn, type DrainIO } from './drain'
+import { hasBackgroundNews, pushBackgroundEvent, resetBackgroundEventsForTest } from './backgroundEvents'
+import { withRewindLock } from './rewindLock'
 
 // Mock the run loop and the conversation store; use the real queue manager so the
 // drain path is exercised end-to-end against actual queue state.
@@ -214,6 +215,28 @@ describe('runAndDrain', () => {
     clearQueue(cid)
   })
 
+  it('leaves the queue alone while another run or a rewind holds the chat', async () => {
+    // A run the user started while the previous one's SessionEnd hooks ran: the
+    // previous run's drain must not take the queue into the live run's log.
+    const cid = 'conv-drain-busy'
+    addToQueue({ conversationId: cid, userText: 'A', providerId: 'anthropic', model: 'm', approvalPolicy: 'ask' })
+    const sink = io()
+    h.activeRun.mockReturnValue('run-live')
+    drainQueue(sink, cid)
+    h.activeRun.mockReturnValue(null)
+    let release!: () => void
+    const rewind = withRewindLock(cid, null, () => new Promise<null>((r) => (release = () => r(null))))
+    drainQueue(sink, cid)
+    release()
+    await rewind
+    expect(listQueue(cid).map((q) => q.text)).toEqual(['A'])
+    expect(h.setMessages).not.toHaveBeenCalled()
+    expect(h.startRun).not.toHaveBeenCalled()
+    expect(sink.emit).not.toHaveBeenCalled()
+    expect(sink.emitQueueChanged).not.toHaveBeenCalled()
+    clearQueue(cid)
+  })
+
   it('starts titling before the turn runs, not after it ends', async () => {
     const cid = 'conv-title-early'
     let calledBeforeRun = -1
@@ -396,6 +419,19 @@ describe('startWakeTurn', () => {
     expect(startWakeTurn(io(), 'c')).toBe(true)
     await settle()
     expect(h.startRun.mock.calls[0]![0].messages.at(-1).content).toContain('session "Child" finished')
+  })
+
+  it('starts nothing mid-rewind and leaves the news for later', async () => {
+    pushBackgroundEvent('c', exit, { wake: false })
+    let started: boolean | undefined
+    await withRewindLock('c', null, async () => {
+      started = startWakeTurn(io(), 'c')
+      return null
+    })
+    expect(started).toBe(false)
+    expect(h.setMessages).not.toHaveBeenCalled()
+    expect(h.startRun).not.toHaveBeenCalled()
+    expect(hasBackgroundNews('c')).toBe(true)
   })
 
   it('starts nothing for a running chat, a missing chat, or no news', () => {

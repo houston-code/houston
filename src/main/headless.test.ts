@@ -1437,6 +1437,23 @@ describe('runHeadless --json result line', () => {
     expect(resultLine(reverified.out).finalText).toBe('Fixed the type error.')
   })
 
+  it('keeps only the reply after a send-back as the final answer, set apart in text mode', async () => {
+    const events: AgentEvent[] = [
+      { runId: 'run-1', type: 'text', delta: 'Explained it. Want me to add tests?' },
+      { runId: 'run-1', type: 'usage', inputTokens: 10, outputTokens: 5, cost: 0 },
+      { runId: 'run-1', type: 'reply_sent_back' },
+      { runId: 'run-1', type: 'text', delta: 'Nothing more is needed.' },
+      { runId: 'run-1', type: 'usage', inputTokens: 10, outputTokens: 5, cost: 0 },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ]
+    const json = deps(events)
+    await runHeadless({ ...baseOpts, json: true }, json.d)
+    expect(resultLine(json.out).finalText).toBe('Nothing more is needed.')
+    const text = deps(events)
+    await runHeadless({ ...baseOpts, json: false }, text.d)
+    expect(text.out.join('')).toContain('Want me to add tests?\n\nNothing more is needed.')
+  })
+
   it('reports an empty final text when the run ended on a tool call', async () => {
     const { d, out } = deps([
       { runId: 'run-1', type: 'text', delta: 'Running it.' },

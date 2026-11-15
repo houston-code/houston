@@ -203,6 +203,14 @@ describe('present_plan', () => {
     plan: { title: 'Do the thing', steps: ['Step one', 'Step two'], files: ['a.ts'] }
   }
 
+  it('starts a new reply bubble after the loop sends a reply back', () => {
+    let items = reduceEvent([], { runId: 'r', type: 'text', delta: 'Want me to add tests?' })
+    items = reduceEvent(items, { runId: 'r', type: 'reply_sent_back' })
+    items = reduceEvent(items, { runId: 'r', type: 'text', delta: 'Nothing more is needed.' })
+    const replies = items.filter((i) => i.kind === 'assistant')
+    expect(replies.map((r) => (r.kind === 'assistant' ? r.text : ''))).toEqual(['Want me to add tests?', 'Nothing more is needed.'])
+  })
+
   it('turns plan_ready into a pending plan item', () => {
     const items = reduceEvent([], planReady)
     const plan = items.find((i): i is PlanItem => i.kind === 'plan')

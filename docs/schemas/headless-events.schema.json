@@ -73,6 +73,9 @@
       "$ref": "#/$defs/event_turn_discarded"
     },
     {
+      "$ref": "#/$defs/event_reply_sent_back"
+    },
+    {
       "$ref": "#/$defs/event_model_fallback"
     },
     {
@@ -1032,6 +1035,22 @@
         "reasoningChars": {
           "type": "integer",
           "minimum": 0
+        }
+      }
+    },
+    "event_reply_sent_back": {
+      "description": "Houston sent the agent's finished reply back for another round, so the text before it is not the final answer.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "reply_sent_back"
         }
       }
     },

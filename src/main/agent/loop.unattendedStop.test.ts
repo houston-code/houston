@@ -85,6 +85,12 @@ describe('unattended runs that stop on undone work', () => {
     expect(requests).toHaveLength(2)
     expect(notes(requests[1])).toBe(1)
     expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+    // Clients are told the first reply was sent back, between the two replies.
+    const kinds = events.map((e) => e.type)
+    const back = kinds.indexOf('reply_sent_back')
+    expect(back).toBeGreaterThan(kinds.indexOf('text'))
+    expect(back).toBeLessThan(kinds.lastIndexOf('text'))
+    expect(kinds.filter((k) => k === 'reply_sent_back')).toHaveLength(1)
   })
 
   it('stops sending it back after the bound, so a model that keeps asking cannot loop', async () => {
@@ -104,7 +110,8 @@ describe('unattended runs that stop on undone work', () => {
   })
 
   it('does not send back a finished reply', async () => {
-    const { requests } = await run(['Fixed it; the tests pass.'])
+    const { requests, events } = await run(['Fixed it; the tests pass.'])
     expect(requests).toHaveLength(1)
+    expect(events.some((e) => e.type === 'reply_sent_back')).toBe(false)
   })
 })

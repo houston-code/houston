@@ -1,3 +1,5 @@
+import { hasBackgroundNews, requestWake } from './backgroundEvents'
+
 /**
  * Conversations with a rewind (or its undo) in flight. Its own module so the loop can
  * refuse to start a run mid-rewind without importing rewind.ts, which imports the loop.
@@ -20,5 +22,7 @@ export async function withRewindLock<T>(
     return await work()
   } finally {
     inFlight.delete(conversationId)
+    // A wake refused while the rewind held the chat left its news waiting: ask again.
+    if (hasBackgroundNews(conversationId)) requestWake(conversationId)
   }
 }

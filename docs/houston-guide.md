@@ -339,7 +339,8 @@ In the result line:
 - `status` is `success`, `limit`, `stalled`, `approval_denied`, `error`,
   `schema_invalid`, `input_error`, `verify_failed`, or `aborted` (stopped by a
   signal).
-- `finalText` is the agent's closing answer (the text after its last tool call).
+- `finalText` is the agent's closing answer (the text after its last tool call,
+  or after the last time Houston sent a finished reply back for another round).
 - `receipt` is Houston's record of what the run actually ran (see "What actually
   ran"), present when it ran checks or changed files.
 - `structured_output` is the answer parsed against `--output-schema`.

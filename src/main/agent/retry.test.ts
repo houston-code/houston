@@ -440,6 +440,23 @@ describe('RetryBudget', () => {
     expect(b.allows(offline(), 7)).toBe(true)
   })
 
+  it('starts a new outage clock after an attempt that streamed', () => {
+    let now = 0
+    const b = new RetryBudget(() => true, { maxRetries: 2, now: () => now })
+    expect(b.allows(offline(), 1)).toBe(true)
+    // The redo streamed for six minutes, then dropped: a new outage, not the old one.
+    b.progressed()
+    now = 6 * 60_000
+    expect(b.allows(offline(), 2)).toBe(true)
+    expect(b.reportedMax).toBeUndefined()
+    // Without output in between, the same gap is the first outage running out.
+    const stuck = new RetryBudget(() => true, { maxRetries: 2, now: () => now })
+    now = 0
+    expect(stuck.allows(offline(), 1)).toBe(true)
+    now = 6 * 60_000
+    expect(stuck.allows(offline(), 2)).toBe(false)
+  })
+
   it('gives a stall past an extended idle window one retry, not the outage budget', () => {
     let now = 0
     const b = new RetryBudget(() => true, { maxRetries: 6, now: () => now })

@@ -7594,6 +7594,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'run_info':
           // Sent only to a run that asks for it (the headless --json init line); never here.
           break
+        case 'reply_sent_back':
+          // The reply above is closed (flushed above); the next one starts apart from it.
+          deps.io.out('\n')
+          break
         case 'turn_start':
           // Emitted only when the main process auto-starts a queued follow-up turn;
           // the TUI drives its own composer and never uses that buffer, so ignore it.
