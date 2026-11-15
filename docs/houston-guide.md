@@ -1671,6 +1671,22 @@ checks (passed, running, failing); click it to open the PR in your browser. It n
 the GitHub CLI (`gh`) installed and signed in, and a GitHub remote. It refreshes when
 the window regains focus, when a turn ends, and every few minutes.
 
+### Committing, pushing, and pull requests in the terminal
+
+The terminal has the same actions as commands, run by the same code with the same
+refusals (no repository hooks, no repository config that runs a program, no commit
+mid-merge, network remotes only):
+
+| Command | Does |
+| --- | --- |
+| `/commit [message]` | lists the files, shows the message, asks `[y/N]`, then stages every change and commits it. With no message, the chat's model suggests one first (as **Suggest message** does); you still confirm it |
+| `/push` | pushes the branch's new commits, or publishes the branch on a first push, as **Push** does |
+| `/ship` | sends the agent the request the shipping button would (**Create PR**, **Publish to GitHub**, **Push first commit**, or **Commit & push**, whichever fits), shown as that action |
+| `/pr` | the branch's pull request: number, state, link, and its checks, each listed with failures first. Needs `gh` signed in and a GitHub remote |
+
+A command of your own with one of these names (in `.houston/commands`) runs instead of
+the built-in.
+
 ### Prompts Houston writes for you
 
 `/review`, `/init`, `/agent`, the shipping buttons, and a session another chat handed off

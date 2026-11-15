@@ -6937,6 +6937,15 @@ describe('edits that land without a prompt', () => {
     expect(t.text()).toContain('no edits yet this session')
   })
 
+  it('parses the git commands, and lets a project command of the same name win', () => {
+    expect(parseSlashCommand('/commit Fix the parser', settings())).toEqual({ kind: 'git', op: { op: 'commit', message: 'Fix the parser' } })
+    expect(parseSlashCommand('/push', settings())).toEqual({ kind: 'git', op: { op: 'push' } })
+    expect(parseSlashCommand('/ship', settings())).toEqual({ kind: 'git', op: { op: 'ship' } })
+    expect(parseSlashCommand('/pr', settings())).toEqual({ kind: 'git', op: { op: 'pr' } })
+    const own = { name: 'commit', description: 'my commit', template: 'Commit with a conventional message. $ARGUMENTS', source: 'project' as const }
+    expect(parseSlashCommand('/commit now', settings(), [own]).kind).toBe('prompt')
+  })
+
   it('parses /diff last [n], leaving plain /diff and /changes as the working-tree summary', () => {
     expect(parseSlashCommand('/diff', settings())).toEqual({ kind: 'changes' })
     expect(parseSlashCommand('/changes', settings())).toEqual({ kind: 'changes' })
@@ -7055,6 +7064,30 @@ describe('/undo, /redo and /changes', () => {
     const code = await runTui(opts, d)
     expect(code).toBe(0)
     expect(t.text()).toContain('no changes from this chat to undo')
+  })
+
+  it('/ship sends the ship request as an invoked turn, and a declined /commit commits nothing', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['/commit Fix it', 'n', '/ship', null])
+    d.io = t.io
+    const commits: string[] = []
+    const file = { path: 'x.ts', status: 'modified' as const, hunks: [], added: 1, removed: 0, binary: false }
+    d.git = {
+      tree: async () => ({ isRepo: true, branch: 'feat', files: [file], added: 1, removed: 0, ship: { hasCommits: true, remote: { name: 'origin', host: 'github' } } }),
+      sync: async () => ({ branch: 'feat', upstream: null, ahead: 0, remote: 'origin' }),
+      suggest: async () => ({ ok: false, error: 'unused' }),
+      commit: async (m) => (commits.push(m), { ok: true }),
+      push: async () => ({ ok: true }),
+      pr: async () => ({ kind: 'none' })
+    }
+    await runTui(opts, d)
+    expect(commits).toEqual([])
+    expect(t.reads.find((r) => r.prompt.includes('[y/N]'))?.discardPending).toBe(true)
+    expect(rec.runs).toHaveLength(1)
+    const sent = rec.runs[0].messages.at(-1)!
+    expect(sent.invokedAs).toMatchObject({ kind: 'action', label: 'Create PR' })
+    expect(sent.content).toContain('gh_pr_create')
+    expect(t.text()).toContain('· Create PR')
   })
 
   it('renders the working tree as a summary', () => {

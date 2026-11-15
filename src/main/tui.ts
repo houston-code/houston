@@ -145,6 +145,7 @@ import {
   type TaskRow,
   type TasksOp
 } from './tui-tasks'
+import { parseGitCommand, runGitCommand, YIELDS_TO_CUSTOM, type GitDeps, type GitOp } from './tui-git'
 import {
   signalFor,
   idleTitle,
@@ -1943,6 +1944,8 @@ export type SlashResult =
        */
       command?: { cmd: Command; args: string }
     } & InvokedTurn)
+  /** Commit, push, ship, or show the branch's pull request (/commit, /push, /ship, /pr). */
+  | { kind: 'git'; op: GitOp }
   | { kind: 'unknown'; name: string }
   | { kind: 'not-a-command' }
 
@@ -1970,6 +1973,10 @@ export function parseSlashCommand(
   if (!line.startsWith('/')) return { kind: 'not-a-command' }
   const [name, ...rest] = line.slice(1).trim().split(/\s+/)
   const arg = rest.join(' ')
+  // A project's own /commit (or /push, /ship, /pr) keeps running as it did: these
+  // built-ins arrived after such commands were common, so they yield to them.
+  const git = YIELDS_TO_CUSTOM.has(name) && !resolveCommand(commands, name) ? parseGitCommand(name, arg) : null
+  if (git) return { kind: 'git', op: git }
   switch (name) {
     case 'exit':
     case 'quit':
@@ -2233,6 +2240,10 @@ export const HELP_TEXT = [
   '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
   '  /changes              what is different in the working tree (also /diff)',
   "  /diff last [n]        show the diff of this session's last edit (n edits back)",
+  '  /commit [message]     stage and commit every change, after a y/N (no message: the model suggests one)',
+  '  /push                 push this branch, or publish it on a first push',
+  "  /ship                 hand the changes to the agent to open a PR (the Changes view's Create PR)",
+  "  /pr                   this branch's pull request, its state, and its CI checks",
   '  /verbose [on|off]     show each tool\'s full output as it runs',
   '  /thoughts [mode]      how reasoning shows as it streams: show | summary | hide (Alt-T)',
   '  /transcript           the whole session full screen, with reasoning and full tool output (Ctrl-O)',
@@ -3586,6 +3597,8 @@ export interface TuiDeps {
    * replacing an existing file. Returns the full path written; throws on failure.
    */
   writeExport?: (path: string, content: string) => string
+  /** The desktop's commit, push, and pull-request handlers, for /commit, /push, /ship, /pr. */
+  git?: GitDeps
   /** Everything different in the working tree, for /changes. */
   workingTree?: () => Promise<{
     isRepo: boolean
@@ -5785,6 +5798,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         // "here": ask for it in this chat, as a normal turn. Fall through.
         const turn = proposalHereTurn(picked)
+        text = turn.text
+        invokedAs = turn.invokedAs
+        deps.io.out(paint(`${invocationEcho(turn.invokedAs)}\n`, 'dim'))
+      } else if (result.kind === 'git') {
+        const turn = await runGitCommand(result.op, {
+          deps: deps.git,
+          conversationId,
+          out: (t) => deps.io.out(t),
+          // discardPending: type-ahead must not answer whether to commit.
+          ask: (prompt) => deps.io.readLine(prompt, { discardPending: true }),
+          paint
+        })
+        if (!turn) continue
+        // /ship: the Changes view's ship button's request, as an invoked turn. Fall through.
         text = turn.text
         invokedAs = turn.invokedAs
         deps.io.out(paint(`${invocationEcho(turn.invokedAs)}\n`, 'dim'))

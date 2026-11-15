@@ -316,6 +316,18 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['gui', 'tui']
   },
   {
+    name: 'commit', group: 'Review and undo', args: '[message]',
+    description: 'Stage and commit every change, after a confirm (no message: the model suggests one)',
+    clients: ['tui']
+  },
+  { name: 'push', group: 'Review and undo', description: 'Push this branch, or publish it on a first push', clients: ['tui'] },
+  {
+    name: 'ship', group: 'Review and undo',
+    description: 'Hand the changes to the agent to open a pull request (or publish the project)',
+    clients: ['tui']
+  },
+  { name: 'pr', group: 'Review and undo', description: "This branch's pull request and its CI checks", clients: ['tui'] },
+  {
     name: 'reasoning', group: 'Modes', args: '[level]',
     description: 'Show or set thinking effort (off | low | medium | high | xhigh)',
     clients: ['gui', 'tui']
@@ -528,6 +540,10 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   export: "in the app, export a chat from its More actions menu in the sidebar, or the File menu",
   delete: "in the app, delete a chat from its More actions menu in the sidebar",
   permissions: 'in the app, saved rules are under Settings > Permissions',
+  commit: 'in the app, commit from the Changes view, where Suggest message writes one',
+  push: 'in the app, push from the Changes view',
+  ship: "in the app, the Changes view's Create PR button sends the same request",
+  pr: "in the app, the branch's pull request and its checks show beside the message box",
   exit: 'close the window to leave',
   quit: 'close the window to leave'
 }
