@@ -24,6 +24,7 @@ import {
 } from './tui-picker'
 import {
   decodeInput,
+  sanitizePastedNamed,
   initialDecoderState,
   sanitizePastedKeys,
   normalizePaste,
@@ -60,15 +61,33 @@ import {
   type EditorState,
   type EditorOutcome
 } from './tui-editor'
-import type { EditorKey } from './tui-keys'
+import type { EditorKey, NamedKey } from './tui-keys'
 import { midRunRows, oneLine, waitingAnnouncement, type WaitingInput } from './tui-midrun'
 import { markMenuRow, type MenuView } from './tui-complete'
+import {
+  CHORD_TIMEOUT_MS,
+  COMPOSER_ACTIONS,
+  PICKER_ACTIONS,
+  TRANSCRIPT_ACTIONS,
+  chordTable,
+  feedChord,
+  flushChord,
+  hasBindings,
+  keypressName,
+  charName,
+  type BindingAction,
+  type ChordOut,
+  type ChordTable,
+  type Held,
+  type KeyBindings
+} from './tui-keybindings'
+import { shortcutOverlayRows, shortcutPlainLines } from './tui-shortcuts'
 import {
   initialVimState,
   reduceVim,
   vimStatus,
-  CURSOR_BAR,
-  CURSOR_BLOCK,
+  vimCursor,
+  vimSelection,
   CURSOR_RESET,
   type VimState
 } from './tui-vim'
@@ -274,6 +293,14 @@ export interface TerminalIoDeps {
    * Injectable for tests; defaults to raising SIGTSTP and waiting for SIGCONT.
    */
   suspendProcess?: (onContinue: () => void) => void
+  /**
+   * The user's keybindings (`~/.houston/keybindings.json`), read live so an edit
+   * applies at the next prompt, picker or viewer. Absent, or empty for a context,
+   * reads keys exactly as without the file.
+   */
+  keybindings?: () => KeyBindings
+  /** What `?` on an empty prompt shows: the Keys section of /help, and the user's bindings. */
+  shortcutHelp?: () => string[]
 }
 
 /**
@@ -291,6 +318,9 @@ export function resolveColor(env: NodeJS.ProcessEnv, isTTY: boolean): boolean {
 }
 
 /** Per-read options for the composer. */
+/** What the composer acts on: an editor key, or a user keybinding the composer handles itself. */
+type ComposerInput = EditorKey | { type: 'bound-command'; name: string } | { type: 'bound-shortcuts' }
+
 export interface ComposerReadOptions {
   /**
    * What the `ultrathink` keyword would do to a turn sent now (see ultrathinkEffect).
@@ -1289,6 +1319,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               noteFocus(key.on)
               break
             case 'char':
+              // `?` on an empty prompt: the key shortcuts, as plain lines, then the
+              // prompt again.
+              if (composer && key.value === '?' && !buf) {
+                noteLines(shortcutPlainLines(deps.shortcutHelp?.() ?? []))
+                break
+              }
               buf += key.value
               echo(key.value)
               break
@@ -1515,6 +1551,14 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // The last Esc: when, and whether vim was already in normal mode for it (in
       // vim, only two presses both made in normal mode are a double press).
       let lastEsc = { at: -Infinity, normal: false }
+      // The user's composer keybindings, read per read so an edit to the file applies
+      // at the next prompt. Null without any: then keys are read exactly as before.
+      const bindings = deps.keybindings?.()
+      const keyTable = bindings && hasBindings(bindings, 'composer') ? chordTable(bindings, 'composer') : null
+      let held: Held<EditorKey | null>[] = []
+      let cancelChord: (() => void) | null = null
+      // `?` on an empty prompt: the key shortcuts, drawn under it until the next key.
+      let helpOverlay = false
       let done = false
       let drawn = false
       let prevCursorRow = 0
@@ -1582,6 +1626,19 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const view = (withMenu = true): ReturnType<typeof renderEditor> => {
         // The line under the cursor drives the menu: typing `/` shows what you can
         // run, without having to already know its name.
+        if (withMenu && helpOverlay) {
+          return renderEditor(state, {
+            prompt: vimOn ? vimStatus(vim.mode, paint) + promptNow() : promptNow(),
+            width: width(),
+            paint,
+            continuation: paint('… ', 'dim'),
+            below: shortcutOverlayRows(deps.shortcutHelp?.() ?? [], {
+              width: width(),
+              rows: deps.rows?.() ?? process.stdout.rows ?? 24,
+              paint
+            })
+          })
+        }
         const menu = withMenu ? menuRows() : []
         // The `ultrathink` keyword in the draft: say what it will do to this turn, and
         // colour the word where it will raise the turn's reasoning. The hint only where
@@ -1602,7 +1659,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         // The menus show the workspace's text (file names, command descriptions): the
         // same filter as every other write, so none of it drives the terminal.
         const below = belowRows.map((r) => truncateVisible(filterTerminalOutput(r), width()))
-        const marks = effect === 'raises' ? marksByLine(state.lines, uses) : undefined
+        // A visual selection is drawn in reverse video; it takes the place of the
+        // keyword colouring while it is up (the two never matter at once).
+        const selection = vimOn ? vimSelection(vim, state) : null
+        const marks = selection ?? (effect === 'raises' ? marksByLine(state.lines, uses) : undefined)
         const rendered = renderEditor(state, {
           // The mode marker rides in front of the prompt, so which mode you are in
           // is answered where you are already looking.
@@ -1611,7 +1671,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           paint,
           continuation: paint('… ', 'dim'),
           ...(below.length ? { below } : {}),
-          ...(marks ? { marks } : {})
+          ...(marks ? { marks } : {}),
+          ...(selection ? { markPaint: (t: string) => `\x1b[7m${t}\x1b[27m` } : {})
         })
         // A draft taller than the screen (a long one handed back) shows the rows
         // around the cursor, so the redraw never climbs past the top of the screen.
@@ -1690,6 +1751,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const teardown = (): void => {
         stopResize?.()
         stopResize = null
+        cancelChord?.()
+        cancelChord = null
+        held = []
         try {
           stdin.removeListener('data', onData)
           // Hand the cursor back: a block cursor left behind outlives Houston and
@@ -1770,7 +1834,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           if (done) return
           try {
             setup()
-            if (vimOn) rawWrite(vim.mode === 'normal' ? CURSOR_BLOCK : CURSOR_BAR)
+            if (vimOn) rawWrite(vimCursor(vim.mode))
           } catch {
             /* best-effort: the read still settles through close/cancel */
           }
@@ -1844,8 +1908,65 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         draw()
       }
 
+      /**
+       * A user keybinding that fired: the editor key its action stands for, or one
+       * the composer handles itself (a slash command, the shortcut overlay).
+       */
+      const boundInput = (action: BindingAction): ComposerInput | null => {
+        if (action.kind === 'unbind') return null
+        if (action.kind === 'command') return { type: 'bound-command', name: action.name }
+        if (action.name === 'shortcuts') return { type: 'bound-shortcuts' }
+        return COMPOSER_ACTIONS[action.name] ?? null
+      }
+      /** Run what the chord layer let through, in order. */
+      const runChordOutput = (outs: ChordOut<EditorKey | null>[]): void => {
+        const inputs: ComposerInput[] = []
+        for (const o of outs) {
+          const input = o.kind === 'pass' ? o.value : boundInput(o.action)
+          if (input) inputs.push(input)
+        }
+        handleKeys(inputs)
+      }
+      /** A chord in progress waits this long for its next key, then counts as what was typed. */
+      const armChord = (): void => {
+        cancelChord?.()
+        cancelChord = null
+        if (!held.length || !keyTable) return
+        const table = keyTable
+        cancelChord = timeout(() => {
+          cancelChord = null
+          if (done) return
+          const outs = flushChord(table, held)
+          held = []
+          runChordOutput(outs)
+        }, CHORD_TIMEOUT_MS)
+      }
+
       function onData(data: Buffer | string): void {
         const chunk = decodeChunk(data)
+        if (keyTable) {
+          const r = decodeInput(chunk, dec, { named: true })
+          dec = r.state
+          if (r.named.some((e) => e.key?.type !== 'focus')) disarmReminder()
+          // The same paste guard as below; inside its window no key keeps its name,
+          // so a paste can never fire a binding.
+          const guarded = sanitizePastedNamed(r.named, lastPasteAt, now())
+          lastPasteAt = guarded.lastPasteAt
+          const outs: ChordOut<EditorKey | null>[] = []
+          for (const e of guarded.entries) {
+            // A focus report is the window, not the keyboard: it never breaks a chord.
+            if (e.key?.type === 'focus') {
+              outs.push({ kind: 'pass', value: e.key })
+              continue
+            }
+            const fed = feedChord(keyTable, held, { name: e.name, value: e.key })
+            held = fed.held
+            outs.push(...fed.out)
+          }
+          armChord()
+          runChordOutput(outs)
+          return
+        }
         const r = decodeInput(chunk, dec)
         dec = r.state
         if (r.keys.some((k) => k.type !== 'focus')) disarmReminder()
@@ -1854,12 +1975,42 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         // as real keys (submitting the turn, quitting, spawning $EDITOR).
         const guarded = sanitizePastedKeys(r.keys, lastPasteAt, now())
         lastPasteAt = guarded.lastPasteAt
-        for (const key of guarded.keys) {
+        handleKeys(guarded.keys)
+      }
+
+      function handleKeys(keys: ComposerInput[]): void {
+        for (const input of keys) {
           if (done) return
           // The user is typing here, so focus can only mean the window state — and
           // the editor has nothing to do with it.
-          if (key.type === 'focus') {
-            noteFocus(key.on)
+          if (input.type === 'focus') {
+            noteFocus(input.on)
+            continue
+          }
+          // The shortcut overlay is up: any key takes it down, and does nothing else.
+          if (helpOverlay) {
+            helpOverlay = false
+            draw()
+            continue
+          }
+          if (input.type === 'bound-shortcuts') {
+            openShortcuts()
+            continue
+          }
+          if (input.type === 'bound-command') {
+            runBoundCommand(input.name)
+            return
+          }
+          const key: EditorKey = input
+          // `?` on an empty prompt: the keys, over the composer, until the next key.
+          if (
+            key.type === 'char' &&
+            key.value === '?' &&
+            editorEmpty(state) &&
+            !state.search &&
+            (!vimOn || vim.mode === 'insert' || vim.mode === 'normal')
+          ) {
+            openShortcuts()
             continue
           }
           // A pasted (or dropped) list of image files attaches them, when every one is
@@ -1903,7 +2054,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
             outcome = r2.outcome
             // The cursor shape is the signal a vim user reads without looking; only
             // written when the mode actually changed, so a keystroke stays one write.
-            if (vim.mode !== before) rawWrite(vim.mode === 'normal' ? CURSOR_BLOCK : CURSOR_BAR)
+            if (vim.mode !== before) rawWrite(vimCursor(vim.mode))
           } else {
             const r2 = reduceEditor(state, k)
             next = r2.state
@@ -2009,6 +2160,28 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         }
       }
 
+      /** Show the key-shortcut overlay under the prompt; the next key takes it down. */
+      const openShortcuts = (): void => {
+        helpOverlay = true
+        draw()
+      }
+
+      /**
+       * A key bound to `command:<name>`: send `/name` as if typed. A draft in
+       * progress is stashed rather than lost (Ctrl-S brings it back); when the stash
+       * is already taken, the older stash goes to history, as Ctrl-S does it.
+       */
+      const runBoundCommand = (name: string): void => {
+        if (!editorEmpty(state)) {
+          const r = reduceEditor(state, { type: 'stash' })
+          if (r.outcome?.kind === 'remember') deps.remember?.(r.outcome.text)
+          state = r.state
+        }
+        const line = `/${name}`
+        state = setEditorText(state, line)
+        finish(line, true)
+      }
+
       try {
         setup()
         draw()
@@ -2054,6 +2227,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       let stopResize: (() => void) | null = null
       let editing = false
       let done = false
+      // The user's transcript keybindings; null without any (keys read as before).
+      const bindings = deps.keybindings?.()
+      const keyTable = bindings && hasBindings(bindings, 'transcript') ? chordTable(bindings, 'transcript') : null
+      let held: Held<EditorKey | null>[] = []
+      let cancelChord: (() => void) | null = null
       pagerOpen = true
       let unsubscribe: (() => void) | null = null
       const draw = (): void => {
@@ -2078,6 +2256,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         closePager = null
         unsubscribe?.()
         stopResize?.()
+        cancelChord?.()
         try {
           unlisten()
         } catch {
@@ -2126,10 +2305,64 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         state = { ...state, top: Math.max(0, Math.min(maxTop(doc, rows() - 1), top)) }
         draw()
       }
-      function onData(data: Buffer | string): void {
-        const r = decodeInput(decodeChunk(data), dec)
-        dec = r.state
-        for (const key of r.keys) {
+      /** Keys for the viewer, through the user's bindings when there are any. */
+      const pagerKeys = (named: NamedKey[]): EditorKey[] => {
+        if (!keyTable) return []
+        const out: EditorKey[] = []
+        const take = (outs: ChordOut<EditorKey | null>[]): void => {
+          for (const o of outs) {
+            if (o.kind === 'pass') {
+              if (o.value) out.push(o.value)
+            } else if (o.action.kind === 'action') {
+              const k = TRANSCRIPT_ACTIONS[o.action.name]
+              if (k) out.push(k)
+            }
+          }
+        }
+        for (const e of named) {
+          // A search being typed is text: the bindings wait until it is done.
+          if (state.input !== null || e.key?.type === 'focus' || e.key?.type === 'paste') {
+            take(flushChord(keyTable, held))
+            held = []
+            if (e.key) out.push(e.key)
+            continue
+          }
+          // A typed run is single keys here: each character is its own command.
+          const parts: NamedKey[] =
+            e.key?.type === 'char' && e.name === null
+              ? [...e.key.value].map((ch) => ({ key: { type: 'char', value: ch }, name: charName(ch) }))
+              : [e]
+          for (const p of parts) {
+            const fed = feedChord(keyTable, held, { name: p.name, value: p.key })
+            held = fed.held
+            take(fed.out)
+          }
+        }
+        return out
+      }
+      const armChord = (): void => {
+        cancelChord?.()
+        cancelChord = null
+        if (!held.length || !keyTable) return
+        const table = keyTable
+        cancelChord = timeout(() => {
+          cancelChord = null
+          if (done || editing) return
+          const outs = flushChord(table, held)
+          held = []
+          const keys: EditorKey[] = []
+          for (const o of outs) {
+            if (o.kind === 'pass' && o.value) keys.push(o.value)
+            else if (o.kind === 'bound' && o.action.kind === 'action') {
+              const k = TRANSCRIPT_ACTIONS[o.action.name]
+              if (k) keys.push(k)
+            }
+          }
+          applyKeys(keys, true)
+        }, CHORD_TIMEOUT_MS)
+      }
+      function applyKeys(keys: EditorKey[], redraw: boolean): void {
+        for (const key of keys) {
           if (done || editing) return
           if (key.type === 'focus') {
             noteFocus(key.on)
@@ -2140,7 +2373,25 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           if (next.outcome?.kind === 'close') return finish()
           if (next.outcome?.kind === 'edit') return void edit()
         }
-        draw()
+        if (redraw) draw()
+      }
+      function onData(data: Buffer | string): void {
+        if (keyTable) {
+          const r = decodeInput(decodeChunk(data), dec, { named: true })
+          dec = r.state
+          // Keys are applied one at a time because a binding can open the search
+          // prompt (`/`), after which the rest of the chunk is its text.
+          for (const e of r.named) {
+            applyKeys(pagerKeys([e]), false)
+            if (done || editing) return
+          }
+          armChord()
+          draw()
+          return
+        }
+        const r = decodeInput(decodeChunk(data), dec)
+        dec = r.state
+        applyKeys(r.keys, true)
       }
       try {
         rawWrite(ALT_SCREEN_ON + HIDE_CURSOR)
@@ -2366,11 +2617,14 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // screen: a stray buffered "y" must not approve something the user never saw.
       drainInput()
       try {
+        const bindings = deps.keybindings?.()
+        const table = bindings && hasBindings(bindings, 'picker') ? chordTable(bindings, 'picker') : null
         return await runPicker(spec, rl, repaint, paint, stdin, {
           size: () => ({ rows: deps.rows?.() ?? process.stdout.rows ?? 0, columns: columnsNow() }),
           printAbove: (fn) => {
             printAbove = fn
           },
+          keys: table ? { table, timeout } : null,
           ...(typing
             ? {
                 typingGuard: {
@@ -2444,6 +2698,8 @@ function runPicker(
       graceMs: number
       onHeld: (key: { name?: string; sequence?: string }) => void
     }
+    /** The user's picker keybindings and the chord timer, or null for the built-in keys. */
+    keys?: { table: ChordTable; timeout: (fn: () => void, ms: number) => () => void } | null
   }
 ): Promise<PickerOutcome> {
   // No real terminal, or no raw mode available → let the driver use the typed path.
@@ -2493,6 +2749,7 @@ function runPicker(
       if (done) return
       done = true
       screen.printAbove(null)
+      cancelChord?.()
       try {
         stdin.removeListener('keypress', onKey)
         for (const l of priorKeypress) if (!stdin.listeners('keypress').includes(l)) stdin.on('keypress', l)
@@ -2504,8 +2761,40 @@ function runPicker(
       }
       resolve(outcome)
     }
-    const onKey = (_str: string, key: { name?: string; sequence?: string; ctrl?: boolean }): void => {
-      const pk = pickerKeyFor(spec, key ?? {})
+    type Keypress = { name?: string; sequence?: string; ctrl?: boolean; meta?: boolean; shift?: boolean }
+    // The user's picker keybindings: keys held while a chord may follow, and its timer.
+    const keys = screen.keys ?? null
+    let held: Held<Keypress>[] = []
+    let cancelChord: (() => void) | null = null
+    /** Run what the chord layer let through: the keys as pressed, or a bound action's key. */
+    const runChord = (outs: ChordOut<Keypress>[]): void => {
+      for (const o of outs) {
+        if (o.kind === 'pass') press(o.value)
+        else if (o.action.kind === 'action') {
+          const k = PICKER_ACTIONS[o.action.name]
+          if (k) press(k)
+        }
+      }
+    }
+    const onKey = (_str: string, key: Keypress): void => {
+      if (!keys) return press(key ?? {})
+      const fed = feedChord(keys.table, held, { name: keypressName(key ?? {}), value: key ?? {} })
+      held = fed.held
+      cancelChord?.()
+      cancelChord = null
+      if (held.length) {
+        cancelChord = keys.timeout(() => {
+          cancelChord = null
+          if (done) return
+          const outs = flushChord(keys.table, held)
+          held = []
+          runChord(outs)
+        }, CHORD_TIMEOUT_MS)
+      }
+      runChord(fed.out)
+    }
+    const press = (key: Keypress): void => {
+      const pk = pickerKeyFor(spec, key)
       if (!pk) return
       const guard = screen.typingGuard
       if (guard && guardUntil > 0 && HELD_WHILE_TYPING.has(pk.type)) {

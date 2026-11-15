@@ -229,6 +229,36 @@ export function sanitizePastedKeys(
 }
 
 /**
+ * `sanitizePastedKeys` for named keys: the same window, and inside it no key keeps
+ * its name, so clipboard bytes can never trigger a user keybinding (a bound slash
+ * command least of all).
+ */
+export function sanitizePastedNamed(
+  entries: NamedKey[],
+  lastPasteAt: number,
+  now: number,
+  windowMs = 50
+): { entries: NamedKey[]; lastPasteAt: number } {
+  let last = lastPasteAt
+  const out: NamedKey[] = []
+  for (const e of entries) {
+    if (e.key?.type === 'paste') {
+      last = now
+      out.push({ key: e.key, name: null })
+      continue
+    }
+    if (now - last >= windowMs) {
+      out.push(e)
+      continue
+    }
+    if (!e.key) continue
+    if (e.key.type === 'enter') out.push({ key: { type: 'newline' }, name: null })
+    else if (PASTE_SAFE_KEYS.has(e.key.type)) out.push({ key: e.key, name: null })
+  }
+  return { entries: out, lastPasteAt: last }
+}
+
+/**
  * How many trailing characters of `buf` could be the start of `marker`. Lets the
  * decoder hold a marker that got split across chunk boundaries instead of leaking
  * half of it into the paste body.
@@ -397,6 +427,102 @@ function controlKey(ch: string, pasted: boolean): EditorKey | null {
 }
 
 /**
+ * A decoded key with the name of the physical key that sent it (`ctrl-k`, `alt-b`,
+ * `up`, `f5`, `q`), for user keybindings. `key` is null for a key the composer does
+ * not bind (Ctrl-T, Alt-X, a function key), which still has a name a binding can
+ * claim; `name` is null for what no binding may claim (text runs, pastes, focus).
+ */
+export interface NamedKey {
+  key: EditorKey | null
+  name: string | null
+}
+
+/** The name of a control byte, as a keybinding spells it. */
+export function controlName(ch: string): string | null {
+  const c = ch.charCodeAt(0)
+  switch (c) {
+    case 0x00:
+      return 'ctrl-space'
+    case 0x08:
+    case 0x7f:
+      return 'backspace'
+    case 0x09:
+      return 'tab'
+    case 0x0d:
+      return 'enter'
+    case 0x1c:
+      return 'ctrl-\\'
+    case 0x1d:
+      return 'ctrl-]'
+    case 0x1e:
+      return 'ctrl-^'
+    case 0x1f:
+      return 'ctrl-_'
+    default:
+      return c >= 1 && c <= 26 ? `ctrl-${String.fromCharCode(c + 96)}` : null
+  }
+}
+
+/** A modifier parameter (xterm's 1 + bits) as a name prefix: 2 shift, 3 alt, 5 ctrl. */
+function modPrefix(mod: string | undefined): string | null {
+  switch (mod) {
+    case undefined:
+    case '1':
+      return ''
+    case '2':
+      return 'shift-'
+    case '3':
+      return 'alt-'
+    case '5':
+      return 'ctrl-'
+    default:
+      return null
+  }
+}
+
+const TILDE_NAMES: Record<string, string> = {
+  '1': 'home', '3': 'delete', '4': 'end', '5': 'pageup', '6': 'pagedown', '7': 'home', '8': 'end',
+  '11': 'f1', '12': 'f2', '13': 'f3', '14': 'f4', '15': 'f5', '17': 'f6', '18': 'f7', '19': 'f8',
+  '20': 'f9', '21': 'f10', '23': 'f11', '24': 'f12'
+}
+const FINAL_NAMES: Record<string, string> = {
+  A: 'up', B: 'down', C: 'right', D: 'left', H: 'home', F: 'end', P: 'f1', Q: 'f2', R: 'f3', S: 'f4'
+}
+
+/** Enter's modifier in the modifyOtherKeys or CSI-u report, or undefined when it isn't Enter. */
+function enterModifier(params: string, final: string): string | undefined {
+  if (final === '~') return /^27;([0-9]+);13$/.exec(params)?.[1]
+  if (final !== 'u') return undefined
+  const m = /^13(?:;([0-9]+))?$/.exec(params)
+  return m ? (m[1] ?? '1') : undefined
+}
+
+/** The name of a CSI (or SS3, with no params) sequence, or null for one no binding can claim. */
+export function csiName(params: string, final: string): string | null {
+  if (final === 'Z') return 'shift-tab'
+  if ((final === 'I' || final === 'O') && params === '') return null // focus reports
+  const enterMod = enterModifier(params, final)
+  if (enterMod !== undefined) {
+    const pre = modPrefix(enterMod)
+    return pre === null ? null : `${pre}enter`
+  }
+  const undo = modifiedUndoKey(params, final)
+  if (undo) return undo.type === 'undo' ? 'ctrl-_' : 'ctrl-^'
+  if (final === '~') {
+    const [code, mod] = params.split(';')
+    const base = TILDE_NAMES[code]
+    const pre = modPrefix(mod)
+    return base && pre !== null ? pre + base : null
+  }
+  const base = FINAL_NAMES[final]
+  if (!base) return null
+  const mod = params === '' ? undefined : /^1;([0-9]+)$/.exec(params)?.[1]
+  if (params !== '' && mod === undefined) return null
+  const pre = modPrefix(mod)
+  return pre === null ? null : pre + base
+}
+
+/**
  * Decode one raw stdin chunk into editor keys, carrying `state` across calls.
  *
  * `pasted` heuristic: a terminal delivers real keystrokes one at a time, so a
@@ -406,13 +532,22 @@ function controlKey(ch: string, pasted: boolean): EditorKey | null {
  */
 export function decodeInput(
   chunk: string,
-  state: DecoderState
-): { keys: EditorKey[]; state: DecoderState } {
+  state: DecoderState,
+  opts: { named?: boolean } = {}
+): { keys: EditorKey[]; state: DecoderState; named: NamedKey[] } {
   const keys: EditorKey[] = []
+  const named: NamedKey[] = []
   const next: DecoderState = { ...state }
   let buf = next.pending + chunk
   next.pending = ''
   const pasted = chunk.length > 16 && /[\r\n]/.test(chunk)
+  // Naming is only asked for when user keybindings are on. Nothing in an
+  // unbracketed paste burst gets a name, so a paste can never fire a binding.
+  const naming = opts.named === true
+  const emit = (key: EditorKey | null, name: string | null): void => {
+    if (key) keys.push(key)
+    if (naming) named.push({ key, name: pasted ? null : name })
+  }
 
   while (buf.length > 0) {
     if (next.inPaste) {
@@ -425,7 +560,7 @@ export function decodeInput(
         break
       }
       next.pasteBuf += buf.slice(0, end)
-      keys.push({ type: 'paste', value: normalizePaste(next.pasteBuf) })
+      emit({ type: 'paste', value: normalizePaste(next.pasteBuf) }, null)
       next.pasteBuf = ''
       next.inPaste = false
       buf = buf.slice(end + PASTE_END.length)
@@ -459,14 +594,14 @@ export function decodeInput(
       const csi = CSI_RE.exec(buf)
       if (csi) {
         const key = csiKey(csi[1], csi[2])
-        if (key) keys.push(key)
+        if (key || naming) emit(key, csiName(csi[1], csi[2]))
         buf = buf.slice(csi[0].length)
         continue
       }
       const ss3 = SS3_RE.exec(buf)
       if (ss3) {
         const key = csiKey('', ss3[1])
-        if (key) keys.push(key)
+        if (key || naming) emit(key, csiName('', ss3[1]))
         buf = buf.slice(ss3[0].length)
         continue
       }
@@ -478,7 +613,8 @@ export function decodeInput(
       }
       // Two Escapes in one read (a fast double press): both are the Escape key.
       if (buf === ESC + ESC) {
-        keys.push({ type: 'escape' }, { type: 'escape' })
+        emit({ type: 'escape' }, 'escape')
+        emit({ type: 'escape' }, 'escape')
         buf = ''
         continue
       }
@@ -486,25 +622,42 @@ export function decodeInput(
       const alt = buf[1]
       if (alt !== undefined) {
         buf = buf.slice(2)
-        if (alt === 'b' || alt === 'B') keys.push({ type: 'word-left' })
+        const altName =
+          alt === '\x7f' || alt === '\b'
+            ? 'alt-backspace'
+            : alt === '\r' || alt === '\n'
+              ? 'alt-enter'
+              : alt === ' '
+                ? 'alt-space'
+                : alt > ' ' && !isC1(alt)
+                  ? `alt-${alt}`
+                  : null
+        if (alt === 'b' || alt === 'B') emit({ type: 'word-left' }, altName)
         // Alt-V: the image-paste key where the terminal keeps Ctrl-V for itself.
-        else if (alt === 'v' || alt === 'V') keys.push({ type: 'paste-image' })
-        else if (alt === 'f' || alt === 'F') keys.push({ type: 'word-right' })
-        else if (alt === '\x7f' || alt === '\b') keys.push({ type: 'kill-word' })
-        else if (alt === '\r' || alt === '\n') keys.push({ type: 'newline' })
-        else if (alt === 't' || alt === 'T') keys.push({ type: 'cycle-thoughts' })
-        else if (alt === 'p' || alt === 'P') keys.push({ type: 'expand-paste' })
+        else if (alt === 'v' || alt === 'V') emit({ type: 'paste-image' }, altName)
+        else if (alt === 'f' || alt === 'F') emit({ type: 'word-right' }, altName)
+        else if (alt === '\x7f' || alt === '\b') emit({ type: 'kill-word' }, altName)
+        else if (alt === '\r' || alt === '\n') emit({ type: 'newline' }, altName)
+        else if (alt === 't' || alt === 'T') emit({ type: 'cycle-thoughts' }, altName)
+        else if (alt === 'p' || alt === 'P') emit({ type: 'expand-paste' }, altName)
         // Any other Alt-combo is unbound: swallow it rather than inserting the char.
+        else if (naming) emit(null, altName)
         continue
       }
       // A lone ESC in its own chunk is the Escape key.
-      keys.push({ type: 'escape' })
+      emit({ type: 'escape' }, 'escape')
       buf = buf.slice(1)
       continue
     }
 
     if (ch < ' ' || ch === '\x7f') {
       buf = buf.slice(1)
+      // With keybindings on, chords (Ctrl-X Ctrl-E among them) are the keybinding
+      // layer's to resolve, so every control key is reported as itself.
+      if (naming) {
+        emit(controlKey(ch, pasted), controlName(ch))
+        continue
+      }
       // Ctrl-X Ctrl-E hands the draft to $EDITOR (Ctrl-G does too, see controlKey);
       // Ctrl-X alone is a dead prefix.
       if (ch === '\x18') {
@@ -538,9 +691,10 @@ export function decodeInput(
     // A printable run: take everything up to the next control byte in one key.
     let i = 0
     while (i < buf.length && buf[i] >= ' ' && buf[i] !== '\x7f' && buf[i] !== '\x1b' && !isC1(buf[i])) i++
-    keys.push({ type: 'char', value: buf.slice(0, i) })
+    const run = buf.slice(0, i)
+    emit({ type: 'char', value: run }, [...run].length === 1 ? (run === ' ' ? 'space' : run) : null)
     buf = buf.slice(i)
   }
 
-  return { keys, state: next }
+  return { keys, state: next, named }
 }

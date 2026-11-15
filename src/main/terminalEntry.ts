@@ -107,7 +107,16 @@ import { ReadStateStore } from './readState'
 import { log, logFilePath } from './logger'
 import { takeTerminalWhatsNew } from './update-state'
 import {
+  createKeybindingStore,
+  describeBindings,
+  ensureKeybindingsFile,
+  keybindingsPath,
+  BINDING_CONTEXTS
+} from './tui-keybindings'
+import { keysSection, shortcutLines } from './tui-shortcuts'
+import {
   runTui,
+  HELP_TEXT,
   makePainter,
   resolveTheme,
   mediaTypeForImagePath,
@@ -383,6 +392,22 @@ async function editInEditor(initial: string, filename = 'PLAN.md'): Promise<stri
     return null
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Open a file itself (not a copy) in the user's `$VISUAL`/`$EDITOR`, for
+ * `/keybindings`. False when no editor is set or it could not run.
+ */
+async function editFileInEditor(path: string): Promise<boolean> {
+  const editor = process.env.VISUAL || process.env.EDITOR
+  if (!editor) return false
+  try {
+    const [cmd, ...args] = editor.split(/\s+/)
+    const res = spawnSync(cmd, [...args, path], { stdio: 'inherit' })
+    return !res.error && res.status === 0
+  } catch {
+    return false
   }
 }
 
@@ -767,7 +792,21 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // Typing `@` lists matching files under the composer, as `/` lists commands.
   const mentionMenu = makeMentionMenuView((q) => findFiles(tui.cwd, q), paint as never)
 
+  // ~/.houston/keybindings.json: read now, and again whenever it changes. What is
+  // wrong with it is kept for the driver to say once the banner is up.
+  let keybindingProblems: string[] = []
+  let onKeybindingProblems: (() => void) | null = null
+  const keybindings = createKeybindingStore({
+    path: keybindingsPath(homedir()),
+    report: (problems) => {
+      keybindingProblems = problems
+      onKeybindingProblems?.()
+    }
+  })
+
   const terminalIo = createTerminalIo({
+    keybindings: () => keybindings.get(),
+    shortcutHelp: () => shortcutLines(keysSection(HELP_TEXT), describeBindings(keybindings.get())),
     // Painted with the composer's painter, so the menus follow /theme.
     menuFor: (line, redraw, menuPaint) => {
       if (line.startsWith('/mcp')) refreshMcpMenu(redraw)
@@ -997,6 +1036,22 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       drafts: createDraftStore(join(getUserDataDir(), 'tui-drafts'), { warn: (m) => log.warn(m) }),
       backgroundShells: (runId) => backgroundForegroundShells(runId),
       editText: (initial) => editInEditor(initial),
+      editFile: editFileInEditor,
+      keybindings: {
+        path: keybindingsPath(homedir()),
+        ensureFile: () => ensureKeybindingsFile(keybindingsPath(homedir())),
+        reload: () => keybindings.reload(),
+        problems: () => keybindings.problems(),
+        takeProblems: () => {
+          const out = keybindingProblems
+          keybindingProblems = []
+          return out
+        },
+        onProblems: (cb) => {
+          onKeybindingProblems = cb
+        },
+        count: () => BINDING_CONTEXTS.reduce((n, ctx) => n + keybindings.get()[ctx].size, 0)
+      },
       persistHistory,
       // /copy: the platform's clipboard helper when this is a local session (never
       // over SSH, where OSC 52 is the way to the user's own clipboard).

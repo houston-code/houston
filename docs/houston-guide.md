@@ -853,7 +853,7 @@ In the terminal:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/cd`, `/vim`, `/notify`, `/screen-reader`,
+**Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/cd`, `/vim`, `/keybindings`, `/notify`, `/screen-reader`,
 `/reduce-motion`, `/verbose`, `/focus`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
 `/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/open-in-app`,
 `/permissions`, `/schedule`, and `/exit`. Typed in the
@@ -1139,12 +1139,54 @@ long as it needs to be.
 | `Ctrl-B` | while the agent waits on a shell command: move it to the background. The command keeps running as a background shell (`/tasks` lists it), and the agent gets its shell id at once and carries on, reading its output later. Says so when no command is running. At the prompt, `Ctrl-B` moves the cursor left as before |
 | `Ctrl-D` | leave (on an empty composer) |
 | `Shift-Tab` | switch approval mode (plan → ask → auto-edit → full auto → plan) |
+| `?` | on an empty composer: the keys above and your own keybindings, under the prompt until the next key (in screen-reader mode, printed as plain lines) |
 
 When you send a message, characters that draw nothing are removed first: zero-width
 spaces and joiners, bidirectional override and isolate controls, and Unicode tag
 characters, which can hide text you never saw in something you pasted. A dim note says
 how many were removed. Joiners that belong (inside an emoji like a family, or between
 letters in scripts that need them) stay. The desktop app does the same.
+
+### Keybindings
+
+`/keybindings` opens `~/.houston/keybindings.json` in `$VISUAL`/`$EDITOR`, creating
+it the first time with every option commented out. Houston reads it at startup and
+again whenever it is saved. Without the file the keys are exactly the defaults.
+
+```json
+{
+  "composer": {
+    "ctrl-t": "transcript",
+    "ctrl-x ctrl-k": "kill-line",
+    "ctrl-g": null,
+    "alt-r": "command:review"
+  },
+  "picker": { "ctrl-j": "down", "ctrl-k": "up" },
+  "transcript": { "d": "page-down", "u": "page-up" }
+}
+```
+
+- **Contexts:** `composer` (the prompt), `picker` (arrow-key lists such as `/resume`
+  and approvals) and `transcript` (the `Ctrl-O` viewer).
+- **Keys:** `ctrl-k`, `alt-b`, `shift-tab`, `shift-enter`, `enter`, `escape`, `tab`,
+  `backspace`, `up`, `ctrl-left`, `pageup`, `home`, `f1` to `f12`, and so on
+  (`C-x` and `M-x` work too). Plain characters can be bound only in the transcript
+  viewer; in the composer and pickers they type. Keys a terminal can't tell apart
+  (`ctrl-shift-k`) are refused.
+- **Chords:** keys separated by spaces, pressed one after another within a second.
+  The built-in `ctrl-x ctrl-e` is one; bind it to `null` to free `Ctrl-X`.
+- **Actions:** `null` takes a key away. `command:<name>` sends that slash command from
+  the composer (a draft you were writing is stashed; `Ctrl-S` brings it back). The
+  other actions are named in the file's template: in the composer `submit`,
+  `newline`, `kill-line`, `history-search`, `external-edit`, `undo`, `stash`,
+  `transcript`, `cycle-mode`, `shortcuts` and the rest; in pickers `up`, `down`,
+  `select`, `toggle`, `cancel`; in the viewer `scroll-up`, `scroll-down`, `page-up`,
+  `page-down`, `top`, `bottom`, `search`, `next-match`, `prev-match`,
+  `prev-message`, `next-message`, `editor`, `close`.
+- **Mistakes** are listed once when Houston starts (and again if a later save has
+  different ones), then skipped: the rest of the file still applies. `//` comments and
+  trailing commas are fine.
+- A paste never triggers a binding, whatever it contains.
 
 ### Vim keys
 
@@ -1159,14 +1201,31 @@ letters in scripts that need them) stay. The desktop app does the same.
 
 **Supported in normal mode:**
 
-- **Motions:** `h j k l w W b B e E 0 ^ $ gg G`, with counts (`3w`, `d2j`)
+- **Motions:** `h j k l w W b B e E 0 ^ $ gg G`, with counts (`3w`, `d2j`); `f F t T`
+  to a character on the line, `;` and `,` to repeat the last one forward and back;
+  `%` to the matching bracket
 - **Insert:** `i a I A o O s`
 - **Edits:** `x X D C r`
-- **Operators:** `d c y` over any motion, plus `dd cc yy`
+- **Operators:** `d c y > <` over any motion or text object, plus `dd cc yy >> <<`.
+  `>` indents by two spaces, `<` takes up to two away
+- **Text objects:** `iw aw iW aW`, `i" a" i' a'`, `i( a( i[ a[ i{ a{` (the closing
+  bracket works too, as in `di)`). `ciw` changes the word under the cursor, `da"` a
+  quoted string with its quotes
+- **Repeat:** `.` repeats the last change, with what you typed if it went into
+  insert mode (`ce` then a word, then `.` elsewhere). A count replaces the old one
+  (`3.`)
 - **Paste and undo:** `p`/`P`, `u`
 
-**Not supported:** visual mode, text objects (`ciw`), registers beyond the unnamed
-one, marks, macros, and `.` repeat.
+**Visual modes:** `v` selects characters, `V` whole lines. Motions, arrows and text
+objects (`viw`, `vi(`) stretch the selection, shown in reverse video, and `o` jumps
+to its other end. Then `d` or `x` deletes it, `y` copies it, `c` or `s` replaces it
+with what you type, and `>` or `<` shifts its lines (with a count, that many times).
+`Esc`, or the same `v`/`V` again, leaves without changing anything. `.` repeats a
+visual change over the same amount of text from the cursor. The marker shows `v` or
+`V`.
+
+**Not supported:** registers beyond the unnamed one, marks, macros, `:` commands,
+`/` search, and blockwise visual mode.
 
 Everything else in the composer (Enter to send, `Ctrl-R` history search,
 `Ctrl-X Ctrl-E`, pasting) works the same in both modes.

@@ -16,6 +16,7 @@ import {
   type ReadlineLike
 } from './tui-io'
 import type { PagerSource } from './tui-pager'
+import { parseKeybindings, EMPTY_BINDINGS } from './tui-keybindings'
 import { osc52Copy, visibleWidth } from './tui-wrap'
 import { makePainter } from './tui'
 import { commandMenuView, renderCommandMenu, type CommandSpec } from './tui-complete'
@@ -2596,6 +2597,26 @@ describe('composer: drafts, images, rewind and suspend', () => {
     expect(rewinds).toBe(1)
   })
 
+  it('in vim mode, a visual selection is drawn in reverse video with a block cursor', async () => {
+    const t = harness({ editorMode: () => 'vim' })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('hello world')
+    t.tick()
+    t.stdin.push('\x1b')
+    t.tick()
+    t.stdin.push('0')
+    const before = t.written.length
+    t.stdin.push('v')
+    t.stdin.push('e')
+    const drawn = t.written.slice(before).join('')
+    expect(drawn).toContain('\x1b[7mhello\x1b[27m')
+    expect(drawn).toContain('\x1b[2 q')
+    t.stdin.push('d')
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe(' world')
+  })
+
   it('in vim mode, Esc Esc never clears text', async () => {
     const t = harness({ editorMode: () => 'vim' })
     t.io.onRewindKey!(() => {})
@@ -3287,5 +3308,226 @@ describe('defaultSuspend', () => {
     process.emit('SIGCONT', 'SIGCONT')
     expect(continued).toBe(1)
     expect(process.listenerCount('SIGCONT')).toBe(before)
+  })
+})
+
+describe('user keybindings and the ? overlay', () => {
+  const bindingsOf = (json: object) => parseKeybindings(JSON.stringify(json)).bindings
+
+  function harness(over: Parameters<typeof createTerminalIo>[0] = {}) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    const remembered: string[] = []
+    let clock = 1000
+    const timers: Array<{ fn: () => void; ms: number }> = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      rows: () => 40,
+      now: () => clock,
+      remember: (t) => remembered.push(t),
+      timeout: (fn, ms) => {
+        const t = { fn, ms }
+        timers.push(t)
+        return () => {
+          const i = timers.indexOf(t)
+          if (i >= 0) timers.splice(i, 1)
+        }
+      },
+      shortcutHelp: () => ['Keys:', '  Enter                 send the message', '  Ctrl-R                search earlier messages'],
+      ...over
+    })
+    return {
+      io,
+      stdin,
+      written,
+      remembered,
+      text: () => written.join(''),
+      tick: (ms = 500) => {
+        clock += ms
+      },
+      /** Let every pending chord timer run out. */
+      expire: () => {
+        for (const t of timers.splice(0)) t.fn()
+      },
+      timers
+    }
+  }
+
+  it('without bindings, Ctrl-X Ctrl-E still opens the editor and Ctrl-X alone is dead', async () => {
+    let edited = ''
+    const t = harness({
+      keybindings: () => EMPTY_BINDINGS,
+      editText: async (s) => {
+        edited = s
+        return `${s}!`
+      }
+    })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('draft')
+    t.tick()
+    t.stdin.push('\x18\x05')
+    await new Promise((r) => setImmediate(r))
+    expect(edited).toBe('draft')
+    expect(t.timers).toEqual([])
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('draft!')
+  })
+
+  it('a bound key runs its action and a key bound to null does nothing', async () => {
+    const t = harness({ keybindings: () => bindingsOf({ composer: { 'ctrl-t': 'kill-line', 'ctrl-u': null } }) })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('hello world')
+    t.tick()
+    t.stdin.push('\x01') // Ctrl-A: home (unbound, so as before)
+    t.stdin.push('\x15') // Ctrl-U: unbound by the file, so the line survives
+    t.stdin.push('\x06\x06\x06\x06\x06') // Ctrl-F x5
+    t.stdin.push('\x14') // Ctrl-T: kill to the end
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('hello')
+  })
+
+  it('a chord fires its action, and a broken chord lets its keys through', async () => {
+    const t = harness({ keybindings: () => bindingsOf({ composer: { 'ctrl-x ctrl-k': 'kill-to-start' } }) })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('abc')
+    t.tick()
+    t.stdin.push('\x18')
+    expect(t.timers).toHaveLength(1)
+    t.stdin.push('\x0b') // completes the chord: kill to start
+    expect(t.timers).toHaveLength(0)
+    t.stdin.push('xyz')
+    t.stdin.push('\x18')
+    t.stdin.push('\x02') // Ctrl-B does not continue it: Ctrl-X is dropped, Ctrl-B moves left
+    t.stdin.push('-')
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('xy-z')
+  })
+
+  it('a chord that times out counts as the keys typed so far', async () => {
+    const t = harness({ keybindings: () => bindingsOf({ composer: { 'ctrl-k': 'transcript', 'ctrl-k ctrl-k': 'kill-line' } }) })
+    let opened = 0
+    t.io.onTranscript!(async () => {
+      opened++
+    })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x0b')
+    expect(opened).toBe(0)
+    t.expire()
+    expect(opened).toBe(1)
+    await new Promise((r) => setImmediate(r))
+    t.tick()
+    t.stdin.push('ok\r')
+    await expect(read).resolves.toBe('ok')
+  })
+
+  it('a key bound to a command sends it, stashing the draft', async () => {
+    const t = harness({ keybindings: () => bindingsOf({ composer: { 'alt-r': 'command:review' } }) })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('half a thought')
+    t.tick()
+    t.stdin.push('\x1br')
+    await expect(read).resolves.toBe('/review')
+    // The next prompt offers the stashed draft back.
+    const next = t.io.readComposer!('> ')
+    expect(t.text()).toContain('stashed draft: Ctrl-S brings it back')
+    t.tick()
+    t.stdin.push('\x13')
+    t.tick()
+    t.stdin.push('\r')
+    await expect(next).resolves.toBe('half a thought')
+  })
+
+  it('a paste can never fire a binding', async () => {
+    const t = harness({ keybindings: () => bindingsOf({ composer: { 'alt-r': 'command:review' } }) })
+    const read = t.io.readComposer!('> ')
+    // The body ends paste mode early, then carries Alt-R and Enter.
+    t.stdin.push(`\x1b[200~text\x1b[201~\x1br\r`)
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('text\n')
+  })
+
+  it('? on an empty prompt shows the keys until the next key, which does nothing else', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    const before = t.written.length
+    t.stdin.push('?')
+    const shown = t.written.slice(before).join('')
+    expect(shown).toContain('Ctrl-R                search earlier messages')
+    expect(shown).toContain('any key closes this')
+    const mid = t.written.length
+    t.stdin.push('x')
+    expect(t.written.slice(mid).join('')).not.toContain('Ctrl-R')
+    t.stdin.push('hi?')
+    t.tick()
+    t.stdin.push('\r')
+    // The x only closed the overlay; a ? inside a message is just a character.
+    await expect(read).resolves.toBe('hi?')
+  })
+
+  it('a key bound to shortcuts opens the overlay with a draft too', async () => {
+    const t = harness({ keybindings: () => bindingsOf({ composer: { f1: 'shortcuts' } }) })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('draft')
+    t.tick()
+    const before = t.written.length
+    t.stdin.push('\x1bOP')
+    expect(t.written.slice(before).join('')).toContain('any key closes this')
+    t.stdin.push(' ')
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('draft')
+  })
+
+  it('in screen-reader mode ? prints the keys as plain lines and the prompt again', async () => {
+    const t = harness()
+    t.io.setAccessibility!({ screenReader: true })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('?')
+    const text = t.text()
+    expect(text).toContain('  Ctrl-R                search earlier messages\n')
+    expect(text).toContain('end of keys\n')
+    expect(text).not.toMatch(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[ABCDJK]`))
+    expect(text.lastIndexOf('you: ')).toBeGreaterThan(text.indexOf('end of keys'))
+    t.tick()
+    t.stdin.push('ok\r')
+    await expect(read).resolves.toBe('ok')
+  })
+
+  it('picker bindings map keys to picker actions', async () => {
+    const t = harness({ keybindings: () => bindingsOf({ picker: { 'ctrl-j': 'down', 'ctrl-g': 'select' } }) })
+    const picked = t.io.select!({
+      title: 'Pick',
+      options: [
+        { label: 'One', value: 'a' },
+        { label: 'Two', value: 'b' }
+      ]
+    })
+    t.stdin.push('\n') // Ctrl-J
+    t.stdin.push('\x07') // Ctrl-G
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: 'b' })
+  })
+
+  it('transcript bindings map keys, plain characters included, to viewer actions', async () => {
+    const t = harness({ rows: () => 10, keybindings: () => bindingsOf({ transcript: { x: 'close', t: 'top' } }) })
+    const open = t.io.pager!({
+      title: 'chat',
+      render: () => ({ lines: Array.from({ length: 50 }, (_, i) => `doc line ${i}`), prompts: [] }),
+      plain: () => ''
+    })
+    expect(t.text()).not.toContain('doc line 0')
+    t.stdin.push('t')
+    expect(t.text()).toContain('doc line 0')
+    // A search being typed is text, not bindings: the x lands in the query.
+    t.stdin.push('/x')
+    t.stdin.push('\x1b')
+    t.stdin.push('x')
+    await expect(open).resolves.toBe(true)
   })
 })

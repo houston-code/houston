@@ -2404,6 +2404,7 @@ export type SlashResult =
   | { kind: 'screen-reader'; on?: boolean }
   /** Show or set which attention signals fire (/notify [auto|osc|bell|off]). */
   | { kind: 'notify'; mode?: NotifyMode; invalid?: string }
+  | { kind: 'keybindings' }
   /** Revert (or restore) the files the last turn changed (/undo, /redo). */
   | { kind: 'undo'; redo: boolean }
   /**
@@ -2589,6 +2590,8 @@ export function parseSlashCommand(
       if (a === 'off') return { kind: 'vim', on: false }
       return { kind: 'vim' } // bare /vim toggles
     }
+    case 'keybindings':
+      return { kind: 'keybindings' }
     case 'notify': {
       const a = arg.trim().toLowerCase()
       if (!a) return { kind: 'notify' }
@@ -2808,6 +2811,7 @@ export const HELP_TEXT = [
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
+  '  /keybindings          open ~/.houston/keybindings.json to change keys (creates it the first time)',
   '  /add-dir [path]       let the agent work in another folder this session (alone: list them)',
   '  /cd <path>            move this session to another folder (Tab completes it); the chat moves with it',
   '  /notify [mode]        bell and notification when it needs you: auto | osc | bell | off',
@@ -2871,6 +2875,7 @@ export const HELP_TEXT = [
   '  Ctrl-B                while a command runs: move it to the background (/tasks lists it)',
   '  Ctrl-C                clear the message (twice to exit; Up brings it back); Ctrl-D exits',
   '  ultrathink            a word in the message: think harder for that turn',
+  '  ?                     on an empty prompt: these keys, and your own keybindings',
   '',
   'While a turn runs: type, then Enter steers it or Tab queues for after it.',
   'Up on an empty line takes the last waiting message back. Esc or Ctrl-C stops it.',
@@ -2886,6 +2891,12 @@ export const HELP_TEXT = [
   '  any other key         start a reason to deny with, sent to the agent',
   '  Esc, Ctrl-C           deny; Ctrl-C also stops the turn'
 ].join('\n')
+
+/** Keybinding-file problems as lines to print: what was skipped and why. */
+export function formatKeybindingProblems(problems: string[], paint: Painter): string {
+  const head = `· ~/.houston/keybindings.json: ${problems.length === 1 ? 'one entry was' : `${problems.length} problems were`} skipped (/keybindings to fix)`
+  return `${paint(head, 'yellow')}\n${problems.map((p) => `${paint(`  ${stripControlChars(p)}`, 'dim')}\n`).join('')}`
+}
 
 /** Short tips for keys and prefixes a new user would not find on their own. */
 export const STARTUP_TIPS = [
@@ -2911,7 +2922,8 @@ export const STARTUP_TIPS = [
   '/copy puts the last reply, or one of its code blocks, on your clipboard',
   '/cd <path> moves the session to another folder; Tab completes the path',
   'using a screen reader? /screen-reader on keeps the output to plain lines',
-  '/config lists the terminal settings; Enter changes the highlighted one'
+  '/config lists the terminal settings; Enter changes the highlighted one',
+  '? on an empty prompt lists the keys; /keybindings changes them'
 ]
 
 /**
@@ -4196,6 +4208,31 @@ export interface TuiDeps {
    * this install's stored secret values. Absent: the redacter's patterns alone.
    */
   secretRedactor?: () => (text: string) => string
+  /**
+   * The user's keybindings file, for `/keybindings` and for reporting its mistakes.
+   * Absent ⇒ the command says keybindings are unavailable here.
+   */
+  keybindings?: {
+    /** Where the file is. */
+    path: string
+    /** Create the file with a commented template when it is missing. */
+    ensureFile: () => { created: boolean }
+    /** Read it again now (it is also read whenever it changes). */
+    reload: () => void
+    /** Problems found since the last call, each a line; cleared by the call. */
+    takeProblems: () => string[]
+    /** What is wrong with the file as last read, each a line. */
+    problems: () => string[]
+    /** Called when a later read of the file found problems to report. */
+    onProblems: (cb: () => void) => void
+    /** How many bindings are in force, for the line after a reload. */
+    count: () => number
+  }
+  /**
+   * Open a file in the user's `$VISUAL`/`$EDITOR` (for `/keybindings`). Resolves
+   * false when no editor is set or it failed.
+   */
+  editFile?: (path: string) => Promise<boolean>
   /**
    * Spend and tokens per day and per project over the chats saved on this computer,
    * for `/usage` (the desktop usage view's report). Absent ⇒ the command says so.
@@ -5856,6 +5893,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         .map((t) => `${paint(`  tip: ${t}`, 'dim')}\n`)
         .join('')
   )
+  // Mistakes in ~/.houston/keybindings.json: said once at startup, and again only when
+  // a later save of the file has different ones. Never fatal: the rest of it applies.
+  const reportKeybindingProblems = (): void => {
+    const problems = deps.keybindings?.takeProblems() ?? []
+    if (problems.length) deps.io.out(formatKeybindingProblems(problems, paint))
+  }
+  reportKeybindingProblems()
+  deps.keybindings?.onProblems(reportKeybindingProblems)
 
   // After the chat you're in is deleted (/delete, or from the /resume picker): what
   // was this chat's is dropped, and the next turn starts a fresh one.
@@ -6659,6 +6704,38 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'vim') {
         applyTerminalSetting({ kind: 'vim', on: result.on ?? deps.getSettings().tuiEditor !== 'vim' })
+        continue
+      }
+      if (result.kind === 'keybindings') {
+        const kb = deps.keybindings
+        if (!kb) {
+          deps.io.out(paint('· keybindings are unavailable here\n', 'dim'))
+          continue
+        }
+        let created: boolean
+        try {
+          created = kb.ensureFile().created
+        } catch (e) {
+          deps.io.out(paint(`· could not create ${homeRelative(kb.path)}: ${stripControlChars(String(e))}\n`, 'dim'))
+          continue
+        }
+        if (created) deps.io.out(paint(`· created ${homeRelative(kb.path)} with every key commented out\n`, 'dim'))
+        const opened = (await deps.editFile?.(kb.path)) ?? false
+        if (!opened) {
+          deps.io.out(
+            paint(
+              `· edit ${homeRelative(kb.path)} in any editor (or set $VISUAL or $EDITOR); Houston reads it again when it changes\n`,
+              'dim'
+            )
+          )
+        }
+        kb.reload()
+        // Said here in full, whether or not they are new: this is where you look.
+        kb.takeProblems()
+        const problems = kb.problems()
+        if (problems.length) deps.io.out(formatKeybindingProblems(problems, paint))
+        const n = kb.count()
+        deps.io.out(paint(`· keybindings: ${n === 0 ? 'none set, the default keys apply' : `${n} in force`} (? on an empty prompt lists them)\n`, 'dim'))
         continue
       }
       if (result.kind === 'thoughts') {
