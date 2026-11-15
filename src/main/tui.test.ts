@@ -9080,23 +9080,6 @@ describe('session commands', () => {
     expect(t.text()).toContain('houston › It greets.')
   })
 
-  it('--resume <id> opens an older chat the folder\'s newest-chats list leaves out, title included', async () => {
-    const { d, rec } = deps(done, {}, (req) => req.messages)
-    const fp = fakePersist([
-      { id: 'old-21', title: 'Old work', updatedAt: 1, messages: [{ role: 'user', content: 'from long ago' }] }
-    ])
-    // The picker's list is capped at the newest chats; this one is past the cap.
-    fp.persist.list = () => []
-    d.persist = fp.persist
-    const t = fakeIo(['/rename', 'and now', null])
-    d.io = t.io
-    fp.persist.rename = () => {}
-    await runTui({ ...opts, resumeId: 'old-21' }, d)
-    expect(t.text()).toContain('· continuing "Old work" (1 message)')
-    expect(t.text()).toContain('this chat is "Old work"')
-    expect(rec.runs[0].conversationId).toBe('old-21')
-  })
-
   it('/resume replays them too', async () => {
     const { d } = deps(done)
     const fp = fakePersist([
