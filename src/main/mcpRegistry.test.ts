@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { REGISTRY_CACHE_TTL_MS, createRegistryClient } from './mcpRegistry'
+import { configureOutboundProxy } from './outbound-proxy'
 
 // Every request goes to a mocked fetch: no test reaches the real registry.
 
@@ -107,5 +108,20 @@ describe('createRegistryClient.get', () => {
     expect((await c.get('two words')).ok).toBe(false)
     expect((await c.get('')).ok).toBe(false)
     expect(fetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('createRegistryClient network path', () => {
+  it('sends its requests through the outbound proxy when no fetch is injected', async () => {
+    configureOutboundProxy(() => 'http://127.0.0.1:9')
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse(pageBody))
+    try {
+      expect((await createRegistryClient().search('weather')).ok).toBe(true)
+      const init = spy.mock.calls[0][1] as RequestInit & { dispatcher?: unknown }
+      expect(init.dispatcher).toBeDefined()
+    } finally {
+      spy.mockRestore()
+      configureOutboundProxy(() => undefined)
+    }
   })
 })

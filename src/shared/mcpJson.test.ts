@@ -43,6 +43,19 @@ describe('mcpServersFromJson', () => {
     ])
   })
 
+  it('keeps number and boolean args as text, and reports any other non-string arg', () => {
+    const { servers, problems } = mcpServersFromJson({
+      mcpServers: {
+        x: { command: 'node', args: ['server.js', '--port', 3000, '--verbose', true] },
+        y: { command: 'node', args: ['server.js', { port: 1 }] }
+      }
+    })
+    expect(servers).toEqual([
+      { id: 'x', transport: 'stdio', command: 'node', args: ['server.js', '--port', '3000', '--verbose', 'true'], enabled: true }
+    ])
+    expect(problems).toEqual(['y: "args" must be a list of strings'])
+  })
+
   it('keeps the first of two servers with the same sanitized name', () => {
     const r = mcpServersFromJson({ mcpServers: { 'a b': { command: 'one' }, 'a-b': { command: 'two' } } })
     expect(r.servers).toHaveLength(1)
