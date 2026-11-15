@@ -114,6 +114,27 @@ describe('allowed-tools', () => {
     expect(toolMatchesAllowed(['mcp__github__*'], 'mcp__slack__post')).toBe(false)
   })
 
+  it('reads a comma-separated list without the commas', () => {
+    const parsed = parseSkillFields(fields('description: d\nallowed-tools: Read, Grep, Glob'), 'x', true)
+    expect(parsed?.allowedTools).toEqual(['Read', 'Grep', 'Glob'])
+    const r = { skill: 'x', allowedTools: parsed?.allowedTools ?? [] }
+    for (const t of ['read_file', 'search_files', 'glob']) expect(blockingRestriction([r], t)).toBeNull()
+  })
+
+  it('keeps an argument scope with spaces or commas as one entry', () => {
+    const parsed = parseSkillFields(fields('description: d\nallowed-tools: Bash(git add:*), Bash(git status:*), Read'), 'x', true)
+    expect(parsed?.allowedTools).toEqual(['Bash(git add:*)', 'Bash(git status:*)', 'Read'])
+    const r = { skill: 'x', allowedTools: parsed?.allowedTools ?? [] }
+    expect(blockingRestriction([r], 'run_shell')).toBeNull()
+    expect(blockingRestriction([r], 'read_file')).toBeNull()
+    expect(blockingRestriction([r], 'write_file')).toBe(r)
+  })
+
+  it('matches nothing for an Object.prototype key, without throwing', () => {
+    expect(toolMatchesAllowed(['constructor'], 'read_file')).toBe(false)
+    expect(toolMatchesAllowed(['toString', '__proto__'], 'read_file')).toBe(false)
+  })
+
   it('never stops the tools that only steer the turn', () => {
     for (const t of ['skill', 'ask_user', 'todo_write', 'present_plan']) expect(toolMatchesAllowed(['Read'], t)).toBe(true)
   })

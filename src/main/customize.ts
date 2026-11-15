@@ -2,6 +2,8 @@ import { promises as fs, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { isDisabledFlag, parseFrontmatter, parseStructuredFrontmatter } from '@shared/frontmatter'
+import { isReservedCommandName } from '@shared/commands'
+import { BUILTIN_SKILLS } from './agent/skills'
 import { parseSkillFields } from './agent/skillSpec'
 import { COMMAND_NAMESPACE_SEPARATOR, listCommandFiles } from './agent/commands'
 import {
@@ -260,22 +262,32 @@ function existingFile(p: { kind: Loc; scope: CustomScope; root: string; name: st
   }
 }
 
-/** Front matter text with `disabled: true` added, or with any `disabled:` line removed. */
+/**
+ * Front matter text with `disabled: true` added, or with the top-level `disabled:`
+ * line removed. Every other line (a nested `disabled:` key, blank lines in a block
+ * scalar) is kept, and the file keeps its CRLF line endings.
+ */
 export function withDisabledFlag(text: string, disabled: boolean): string {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n'
   const src = text.replace(/\r\n/g, '\n')
-  if (src.startsWith('---\n')) {
-    const end = src.indexOf('\n---', 3)
-    if (end !== -1) {
-      const lines = src
-        .slice(4, end)
-        .split('\n')
-        .filter((l) => !/^\s*disabled\s*:/i.test(l) && l !== '')
-      if (disabled) lines.push('disabled: true')
-      const rest = src.slice(end + 1) // starts at the closing `---`
-      return lines.length ? `---\n${lines.join('\n')}\n${rest}` : rest.replace(/^---\n?/, '').replace(/^\n+/, '')
+  const out = ((): string => {
+    if (src.startsWith('---\n')) {
+      const end = src.indexOf('\n---', 3)
+      if (end !== -1) {
+        const lines = src
+          .slice(4, end)
+          .split('\n')
+          .filter((l) => !/^disabled\s*:/i.test(l))
+        if (disabled) lines.push('disabled: true')
+        const rest = src.slice(end + 1) // starts at the closing `---`
+        return lines.some((l) => l.trim() !== '')
+          ? `---\n${lines.join('\n')}\n${rest}`
+          : rest.replace(/^---\n?/, '').replace(/^\n+/, '')
+      }
     }
-  }
-  return disabled ? `---\ndisabled: true\n---\n\n${src}` : src
+    return disabled ? `---\ndisabled: true\n---\n\n${src}` : src
+  })()
+  return eol === '\n' ? out : out.replace(/\n/g, eol)
 }
 
 /** Switch an item on or off by rewriting its front matter. */
@@ -287,7 +299,8 @@ export async function setItemEnabled(id: unknown, enabled: unknown, deps: Custom
   const text = await readText(realpathSync(file))
   if (text === null) return { ok: false, error: "Couldn't read the file." }
   const next = withDisabledFlag(text, !enabled)
-  if (next !== text) writeFileAtomicSync(realpathSync(file), next)
+  // Compared line-ending blind, so a file with mixed endings isn't rewritten for nothing.
+  if (next.replace(/\r\n/g, '\n') !== text.replace(/\r\n/g, '\n')) writeFileAtomicSync(realpathSync(file), next)
   return { ok: true }
 }
 
@@ -348,6 +361,13 @@ export async function createItem(
     return { ok: false, error: 'Use letters, digits, - or _ (up to 64).' }
   }
   const clean = name.trim()
+  // A built-in wins its name in every client, so an item made under one never runs.
+  if (kind === 'command' && isReservedCommandName(clean)) {
+    return { ok: false, error: `/${clean} is a built-in command, so a custom one with that name would never run. Pick another name.` }
+  }
+  if (kind === 'skill' && BUILTIN_SKILLS.some((s) => s.name.toLowerCase() === clean.toLowerCase())) {
+    return { ok: false, error: `${clean} is a built-in skill, so a custom one with that name would never load. Pick another name.` }
+  }
   const root = rootFor(scope, deps)
   if (!root) return { ok: false, error: 'Open a project first.' }
   const dir = kindDir(kind, root)

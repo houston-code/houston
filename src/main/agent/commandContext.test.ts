@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join, sep } from 'node:path'
 import { contextCommands, findContext, hasContext } from '@shared/commandContext'
 import type { ShellCapture } from '../userShell'
 import { captureUserShell } from '../userShell'
@@ -69,12 +69,25 @@ describe('expandCommandContext', () => {
     expect(r).toEqual({ ok: true, text: 'Install @types/node' })
   })
 
+  it('keeps a folder, an @/alias import path, or an outside path that names nothing as text', async () => {
+    for (const t of [
+      'Create it next to @/components/ui/button.tsx using the @/lib/utils helper',
+      'Summarize the @src/ folder',
+      'Use @../shared/types.ts as reference'
+    ]) {
+      expect(await expandCommandContext(t, '', opts())).toEqual({ ok: true, text: t })
+    }
+  })
+
   it('refuses a path outside the workspace, directly or through a symlink', async () => {
+    // Forward slashes: a mention is a path only when it holds a `.` or `/`, and a bare
+    // Windows folder path (`C:\\...\\dir`) holds neither.
+    expect(await expandCommandContext(`Read @${outside.split(sep).join('/')}`, '', opts())).toMatchObject({ ok: false })
     expect(await expandCommandContext(`Read @${join(outside, 'secret.txt')}`, '', opts())).toEqual({
       ok: false,
       error: expect.stringContaining('is outside this project')
     })
-    expect(await expandCommandContext('Read @../x/secret.txt', '', opts())).toMatchObject({ ok: false })
+    expect(await expandCommandContext(`Read @../${basename(outside)}/secret.txt`, '', opts())).toMatchObject({ ok: false })
     symlinkSync(join(outside, 'secret.txt'), join(ws, 'link.txt'))
     expect(await expandCommandContext('Read @link.txt', '', opts())).toMatchObject({
       ok: false,
@@ -106,7 +119,8 @@ describe('expandCommandContext', () => {
     expect(r.ok && r.text).toContain(`[truncated: big.txt is ${MAX_CONTEXT_FILE_BYTES + 10} bytes; only the first ${MAX_CONTEXT_FILE_BYTES} are shown]`)
     writeFileSync(join(ws, 'bin.dat'), Buffer.from([1, 0, 2]))
     expect(await expandCommandContext('@bin.dat', '', opts())).toEqual({ ok: false, error: '@bin.dat is not a text file' })
-    expect(await expandCommandContext('@src/.', '', opts())).toMatchObject({ ok: false, error: expect.stringContaining('not a file') })
+    // A folder is a mention, not a file to read: it stays text.
+    expect(await expandCommandContext('@src/.', '', opts())).toEqual({ ok: true, text: '@src/.' })
   })
 
   it('shows the exact commands and runs nothing when the user says no', async () => {

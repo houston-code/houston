@@ -117,6 +117,16 @@ describe('withDisabledFlag', () => {
     expect(withDisabledFlag('Body', false)).toBe('Body')
   })
 
+  it('keeps CRLF endings, nested disabled keys and blank lines', () => {
+    const on = '---\r\nname: s\r\ndescription: |\r\n  one\r\n\r\n  two\r\nmetadata:\r\n  disabled: false\r\n---\r\nBody\r\n'
+    const off = withDisabledFlag(on, true)
+    expect(off).toBe('---\r\nname: s\r\ndescription: |\r\n  one\r\n\r\n  two\r\nmetadata:\r\n  disabled: false\r\ndisabled: true\r\n---\r\nBody\r\n')
+    expect(withDisabledFlag(off, false)).toBe(on)
+    expect(withDisabledFlag(on, false)).toBe(on)
+    expect(withDisabledFlag('Body\r\nmore', true)).toBe('---\r\ndisabled: true\r\n---\r\n\r\nBody\r\nmore')
+    expect(withDisabledFlag(withDisabledFlag('Body\r\nmore', true), false)).toBe('Body\r\nmore')
+  })
+
   it('replaces any spelling of an existing flag', () => {
     expect(withDisabledFlag('---\nDisabled: yes\nname: x\n---\nB', true)).toBe('---\nname: x\ndisabled: true\n---\nB')
   })
@@ -130,6 +140,15 @@ describe('setItemEnabled', () => {
     expect(await setItemEnabled('command:project:review', true, deps())).toEqual({ ok: true })
     expect((await loadCommands(ws, home)).map((c) => c.name)).toEqual(['review'])
     expect(readFileSync(join(ws, '.houston/commands/review.md'), 'utf8')).toBe('Review it')
+  })
+
+  it('round-trips a CRLF file byte for byte', async () => {
+    const text = '---\r\nname: s\r\ndescription: d\r\n---\r\nSteps\r\n'
+    const file = put(ws, '.houston/skills/s/SKILL.md', text)
+    await setItemEnabled('skill:project:s', false, deps())
+    expect(await loadSkills(ws, home)).toEqual([])
+    await setItemEnabled('skill:project:s', true, deps())
+    expect(readFileSync(file, 'utf8')).toBe(text)
   })
 
   it('switches skills and user agents off for the loaders', async () => {
@@ -177,22 +196,37 @@ describe('setItemEnabled', () => {
 describe('createItem', () => {
   it('writes each template where its loader looks, then opens it', async () => {
     expect(await createItem('skill', 'project', 'deploy', deps())).toEqual({ ok: true, id: 'skill:project:deploy' })
-    expect(await createItem('command', 'user', 'review', deps())).toEqual({ ok: true, id: 'command:user:review' })
+    expect(await createItem('command', 'user', 'triage', deps())).toEqual({ ok: true, id: 'command:user:triage' })
     expect(await createItem('agent', 'user', 'helper', deps())).toEqual({ ok: true, id: 'agent:user:helper' })
     expect(readFileSync(join(ws, '.houston/skills/deploy/SKILL.md'), 'utf8')).toBe(templateFor('skill', 'deploy'))
-    expect(open).toHaveBeenCalledWith(join(home, '.houston/commands/review.md'))
+    expect(open).toHaveBeenCalledWith(join(home, '.houston/commands/triage.md'))
     expect((await loadSkills(ws, home)).map((s) => s.name)).toEqual(['deploy'])
-    expect((await loadCommands(ws, home)).map((c) => c.name)).toEqual(['review'])
+    expect((await loadCommands(ws, home)).map((c) => c.name)).toEqual(['triage'])
     expect((await loadAgents(ws, home)).map((a) => a.name)).toEqual(['helper'])
   })
 
   it('never overwrites, and refuses bad names, kinds and a missing project', async () => {
-    put(ws, '.houston/commands/review.md', 'mine')
-    expect(await createItem('command', 'project', 'review', deps())).toEqual({ ok: false, error: 'There is already one named review.' })
-    expect(readFileSync(join(ws, '.houston/commands/review.md'), 'utf8')).toBe('mine')
+    put(ws, '.houston/commands/triage.md', 'mine')
+    expect(await createItem('command', 'project', 'triage', deps())).toEqual({ ok: false, error: 'There is already one named triage.' })
+    expect(readFileSync(join(ws, '.houston/commands/triage.md'), 'utf8')).toBe('mine')
     expect((await createItem('command', 'project', '../x', deps())).ok).toBe(false)
     expect((await createItem('hook', 'project', 'x', deps())).ok).toBe(false)
     expect((await createItem('command', 'project', 'x', deps({ workspace: null }))).error).toBe('Open a project first.')
+  })
+
+  it('refuses a name a built-in command or skill holds, writing nothing', async () => {
+    for (const n of ['review', 'model', 'q', 'Help']) {
+      const res = await createItem('command', 'user', n, deps())
+      expect(res).toEqual({ ok: false, error: expect.stringContaining('is a built-in command') })
+    }
+    expect(existsSync(join(home, '.houston/commands/review.md'))).toBe(false)
+    expect(await createItem('skill', 'project', 'houston-guide', deps())).toEqual({
+      ok: false,
+      error: expect.stringContaining('is a built-in skill')
+    })
+    expect(existsSync(join(ws, '.houston/skills/houston-guide'))).toBe(false)
+    // A name a custom command may take over is still fine.
+    expect((await createItem('command', 'user', 'commit', deps())).ok).toBe(true)
   })
 
   it('refuses to create inside a project .houston that links out of the project', async () => {

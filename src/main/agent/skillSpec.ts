@@ -50,11 +50,34 @@ function scalar(v: FrontmatterValue | undefined): string | undefined {
   return t ? t : undefined
 }
 
-/** A list field: a YAML list, or one string split on whitespace (and commas, when `commas`). */
-function list(v: FrontmatterValue | undefined, commas: boolean): string[] | undefined {
+/**
+ * Split a tool list on whitespace and commas outside parentheses, so
+ * `Read, Grep` and `Bash(git add:*) Read` both give whole entries.
+ */
+function splitToolList(v: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const c of v) {
+    if (c === '(') depth++
+    else if (c === ')') depth = Math.max(0, depth - 1)
+    if (depth === 0 && (c === ',' || /\s/.test(c))) {
+      out.push(cur)
+      cur = ''
+    } else cur += c
+  }
+  out.push(cur)
+  return out
+}
+
+/**
+ * A list field: a YAML list, or one string split on whitespace and commas. With
+ * `tools`, a separator inside `(...)` (an argument scope) doesn't split.
+ */
+function list(v: FrontmatterValue | undefined, tools: boolean): string[] | undefined {
   let items: string[]
   if (Array.isArray(v)) items = v
-  else if (typeof v === 'string') items = v.split(commas ? /[\s,]+/ : /\s+/)
+  else if (typeof v === 'string') items = tools ? splitToolList(v) : v.split(/[\s,]+/)
   else return undefined
   const out = items
     .map((s) => s.trim())
@@ -113,8 +136,8 @@ export function parseSkillFields(
       problems.push('metadata should be a map of keys to text.')
     }
   }
-  const allowedTools = list(fields['allowed-tools'], false)
-  const paths = list(fields.paths, true)
+  const allowedTools = list(fields['allowed-tools'], true)
+  const paths = list(fields.paths, false)
   return {
     name,
     description: description ?? 'No description.',
@@ -169,7 +192,9 @@ export function toolMatchesAllowed(patterns: readonly string[], tool: string): b
   for (const raw of patterns) {
     const entry = raw.replace(/\(.*$/, '').trim()
     if (!entry) continue
-    const alias = TOOL_ALIASES[entry.toLowerCase().replace(/[_-]/g, '')]
+    const key = entry.toLowerCase().replace(/[_-]/g, '')
+    // Own keys only: `constructor` must not find Object.prototype's.
+    const alias = Object.hasOwn(TOOL_ALIASES, key) ? TOOL_ALIASES[key] : undefined
     if (alias?.includes(tool)) return true
     if (wildcard(entry).test(tool)) return true
   }

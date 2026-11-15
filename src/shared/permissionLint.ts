@@ -10,7 +10,8 @@ import type { PermissionRule } from './types'
  *
  * - `empty`: a blank pattern matches nothing, so the rule never applies.
  * - `shadowed`: another rule for the same (or every) tool already matches every call
- *   this one could, because its pattern is `*` or the identical pattern, and wins: a
+ *   this one could, because its pattern is `*` or the identical pattern (or, for a
+ *   deny, a broader one, like `git push*` over `git push origin*`), and wins: a
  *   deny anywhere in the list (over an allow or ask, or an earlier deny over a later
  *   one), or an earlier allow or ask over a later allow or ask. An earlier allow or ask
  *   never shadows a later deny. The shadowed rule never decides anything. When the two
@@ -44,6 +45,19 @@ function winsOver(a: PermissionRule, i: number, b: PermissionRule, j: number): b
   return b.action !== 'deny' && i < j
 }
 
+/**
+ * Whether glob `pattern` (as matchRule reads one: `*` spans anything, and a pattern
+ * with no `*` also covers what follows it at a space or `/`) matches `text` taken
+ * literally.
+ */
+function denyCoversText(pattern: string, text: string): boolean {
+  if (!pattern || !text) return false
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  if (new RegExp(`^${pattern.split('*').map(esc).join('.*')}$`).test(text)) return true
+  if (pattern.includes('*')) return false
+  return text.startsWith(`${pattern} `) || text.startsWith(`${pattern}/`)
+}
+
 /** Whether rule `a` matches every subject rule `b` matches (for a covered tool). */
 function coversPattern(a: PermissionRule, b: PermissionRule): boolean {
   const am = a.match ?? ''
@@ -51,6 +65,11 @@ function coversPattern(a: PermissionRule, b: PermissionRule): boolean {
   if (am === '') return false
   // A glob `*` matches anything for its tool; an exact `*` is the literal subject.
   if (!a.exact && am === '*') return true
+  // A broader deny over a narrower rule (`git push*` over `git push origin*`, `docs`
+  // over `docs/README.md`): the deny matches the other's pattern read as a subject.
+  // Sound for the `*`-only language: the deny's literals can only meet the other's
+  // literals, so each `*` of the other falls inside one of the deny's.
+  if (a.action === 'deny' && !a.exact && am !== bm && denyCoversText(am.trim(), bm.trim())) return true
   if (am !== bm) return false
   // The same text: an exact rule covers only an exact one (a glob of the same text
   // can match more), while a glob covers both (the literal is one of its matches).
