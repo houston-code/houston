@@ -27,8 +27,9 @@ import { getUserDataDir } from '../userData'
  * tied to the user message that started it (see {@link ChainEntry}), which is what
  * lets a rewind put back every turn from an earlier message on; it also still maps
  * each conversation to its latest run, the shape older builds read. Memory remains
- * the in-session source of truth — disk is written through on every mutation and
- * read only on a miss (e.g. after a restart). A host with no user-data directory
+ * the in-session source of truth — disk is written through on every mutation (a
+ * write's redo snapshot shortly after the write: see unsavedRuns) and read only on a
+ * miss (e.g. after a restart). A host with no user-data directory
  * wired (unit tests, embedders) silently keeps the in-memory behavior.
  */
 
@@ -518,6 +519,32 @@ const persistingRuns = new Set<string>()
  */
 const busyRuns = new Map<string, number>()
 let indexDirty = false
+/**
+ * Runs whose latest state is in memory but not yet in their file: what a write left
+ * for a redo (its post-write content). Rewriting the whole run file after every write
+ * made each edit wait for it, a wait that grew with every file the turn had touched.
+ * The pre-write snapshot is still saved, and awaited, before each new file is written
+ * (that is the undo guarantee), and that save carries this state too; the rest is
+ * written in the background shortly after ({@link UNSAVED_SAVE_DELAY_MS}), at the end
+ * of the turn or its abort ({@link saveRunCheckpoint}), and by {@link flushCheckpoints}.
+ * Such a run is never evicted from memory or pruned from disk until then.
+ */
+const unsavedRuns = new Set<string>()
+/** How long after a write its redo snapshot waits for a save that would carry it anyway. */
+export const UNSAVED_SAVE_DELAY_MS = 500
+let unsavedSaveDelay = UNSAVED_SAVE_DELAY_MS
+let unsavedTimer: ReturnType<typeof setTimeout> | null = null
+
+/** For tests: a different background-save delay (null restores the default). */
+export function _setUnsavedSaveDelay(ms: number | null): void {
+  unsavedSaveDelay = ms ?? UNSAVED_SAVE_DELAY_MS
+  stopUnsavedTimer()
+}
+
+function stopUnsavedTimer(): void {
+  if (unsavedTimer) clearTimeout(unsavedTimer)
+  unsavedTimer = null
+}
 
 function queueDiskTask(task: () => Promise<void>): Promise<void> {
   const next = flushChain.then(task).catch(() => {})
@@ -525,9 +552,44 @@ function queueDiskTask(task: () => Promise<void>): Promise<void> {
   return next
 }
 
-/** Await all queued disk writes (tests, or anyone needing a durability barrier). */
+/**
+ * Await every checkpoint write, the deferred ones included (tests, quitting, or anyone
+ * needing a durability barrier).
+ */
 export function flushCheckpoints(): Promise<void> {
+  for (const runId of [...unsavedRuns]) void schedulePersistRun(runId)
   return flushChain
+}
+
+/** Whether some run's latest state is still waiting to be written (see {@link unsavedRuns}). */
+export function hasUnsavedCheckpoints(): boolean {
+  return unsavedRuns.size > 0
+}
+
+/**
+ * Put a run's checkpoint on disk as it stands, for the end of its turn (finished,
+ * failed, or stopped): what its writes left for a redo was kept in memory as each one
+ * finished. Resolves once its file is written (with every disk write queued before
+ * it), at once for a run with nothing waiting, so a turn that wrote nothing never
+ * waits on another's writes.
+ */
+export function saveRunCheckpoint(runId: string): Promise<void> {
+  if (unsavedRuns.has(runId)) return schedulePersistRun(runId)
+  if (dirtyRuns.has(runId) || persistingRuns.has(runId)) return flushChain
+  return Promise.resolve()
+}
+
+/** Note that `runId` has state the next save must carry, and make sure one comes soon. */
+function deferPersistRun(runId: string): void {
+  if (checkpointsDirOrNull() === null || !RUN_ID_RE.test(runId)) return
+  unsavedRuns.add(runId)
+  if (unsavedTimer) return
+  unsavedTimer = setTimeout(() => {
+    unsavedTimer = null
+    for (const id of [...unsavedRuns]) void schedulePersistRun(id)
+  }, unsavedSaveDelay)
+  // A one-shot client saves at the end of the turn; this alone must not keep it alive.
+  unsavedTimer.unref?.()
 }
 
 async function ensureDir(dir: string): Promise<void> {
@@ -572,6 +634,10 @@ function schedulePersistRun(runId: string): Promise<void> {
   dirtyRuns.add(runId)
   return queueDiskTask(async () => {
     if (!dirtyRuns.delete(runId)) return // an earlier task already wrote the latest state
+    // This write takes the run as it stands, deferred state and all. A change made
+    // while it is underway marks the run again.
+    unsavedRuns.delete(runId)
+    if (unsavedRuns.size === 0) stopUnsavedTimer()
     persistingRuns.add(runId)
     try {
       await writeRunFile(runId)
@@ -650,6 +716,7 @@ function protectedRuns(): Set<string> {
   return new Set([
     ...lastRunByConversation.values(),
     ...dirtyRuns,
+    ...unsavedRuns,
     ...persistingRuns,
     ...busyRuns.keys(),
     ...opening.keys()
@@ -879,7 +946,9 @@ function evictForNewCheckpoint(): void {
   for (const cp of checkpoints.values()) chars += checkpointChars(cp)
   for (const [runId, cp] of [...checkpoints]) {
     if (checkpoints.size < MAX_CHECKPOINTS && chars <= memoryBudgetChars) break
-    if (dirtyRuns.has(runId) || persistingRuns.has(runId) || busyRuns.has(runId)) continue
+    if (dirtyRuns.has(runId) || unsavedRuns.has(runId) || persistingRuns.has(runId) || busyRuns.has(runId)) {
+      continue
+    }
     checkpoints.delete(runId)
     chars -= checkpointChars(cp)
   }
@@ -975,6 +1044,8 @@ async function recordOriginalPinned(runId: string, roots: string[], abs: string)
 /**
  * Record a file's content after a successful write, so the change can be redone.
  * No-op if the file wasn't snapshotted before the write (escaped / oversized).
+ * Recorded in memory at once and on disk with the run's next save (see unsavedRuns),
+ * so the write tool doesn't wait for the whole run's file to be rewritten.
  * Pass `expectAbsent` when the tool deliberately removed the file (apply_patch's
  * Delete File / a move's source): its absence then IS the post-turn state, so
  * redo re-deletes it rather than skipping it.
@@ -1017,7 +1088,9 @@ async function recordResultPinned(runId: string, abs: string, opts?: { expectAbs
     snap.after = content
     snap.afterCaptured = true
   }
-  await schedulePersistRun(runId)
+  // Not awaited: the write is done and its undo snapshot is already on disk. This state
+  // (the redo) goes with the run's next save, which comes soon (see unsavedRuns).
+  deferPersistRun(runId)
 }
 
 /** Number of files snapshotted for a run (0 if none / unknown). */
@@ -1308,6 +1381,8 @@ export function clearCheckpoints(): void {
   chains.clear()
   runConversation.clear()
   dirtyRuns.clear()
+  unsavedRuns.clear()
+  stopUnsavedTimer()
   indexDirty = false
 }
 

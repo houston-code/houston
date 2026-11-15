@@ -1002,6 +1002,77 @@ export function peekConversation(id: string): Conversation | null {
   return read(id)
 }
 
+/**
+ * The fields {@link peekConversationHeader} answers: small ones, none of which holds
+ * an attachment, plus the length of the message log.
+ */
+export type ConversationHeader = Pick<
+  Conversation,
+  | 'id'
+  | 'title'
+  | 'workspace'
+  | 'providerId'
+  | 'model'
+  | 'titleCustom'
+  | 'titleGenerated'
+  | 'worktree'
+  | 'promptSnapshot'
+  | 'announcedPolicy'
+  | 'compaction'
+> & { messageCount: number }
+
+function headerOf(src: ConversationShell, messageCount: number): ConversationHeader {
+  const header: ConversationHeader = {
+    id: src.id,
+    title: src.title,
+    workspace: src.workspace,
+    providerId: src.providerId,
+    model: src.model,
+    messageCount
+  }
+  if (src.titleCustom !== undefined) header.titleCustom = src.titleCustom
+  if (src.titleGenerated !== undefined) header.titleGenerated = src.titleGenerated
+  if (src.worktree !== undefined) header.worktree = src.worktree
+  if (src.promptSnapshot !== undefined) header.promptSnapshot = src.promptSnapshot
+  // As read() would leave it: a mode off the list is dropped (dropUnknownChatSettings).
+  if (src.announcedPolicy !== undefined && isApprovalPolicy(src.announcedPolicy)) {
+    header.announcedPolicy = src.announcedPolicy
+  }
+  if (src.compaction !== undefined) header.compaction = src.compaction
+  // The caller's own copy: never the remembered write it came from.
+  return structuredClone(header)
+}
+
+/**
+ * A chat's small fields and the length of its log (see {@link ConversationHeader}),
+ * without reading the chat when the files on disk are still this process's last write
+ * of it. A turn reads several of these before its first request, and each one read and
+ * parsed the base and replayed its log. A chat another process has written since (the
+ * terminal client and the app share chats) is read in full, as before.
+ */
+export function peekConversationHeader(id: string): ConversationHeader | null {
+  if (!isConversationId(id)) return null
+  const ours = stillWritten(id)
+  if (ours?.msgs) return headerOf(ours.shell, ours.msgs.snaps.length)
+  const conv = read(id)
+  return conv ? headerOf(conv, conv.messages.length) : null
+}
+
+/**
+ * Whether the chat is known to have its final title already (one the user gave it, or
+ * one a model generated), from what this process last wrote or listed of it, so no
+ * file is read. False means "titled" isn't known that way (or it isn't titled): the
+ * caller reads the chat and decides with {@link needsGeneratedTitle}, as before.
+ */
+export function conversationTitleSettled(id: string): boolean {
+  if (!isConversationId(id)) return false
+  const ours = stillWritten(id)
+  if (ours) return !!(ours.shell.titleCustom || ours.shell.titleGenerated)
+  const listed = metaCache.get(id)
+  if (!listed || listed.stamp !== chatStamp(id)) return false
+  return !!(listed.meta.titleCustom || listed.meta.titleGenerated)
+}
+
 /** Whether a conversation's file exists, without reading it. */
 export function conversationExists(id: string): boolean {
   return isConversationId(id) && existsSync(filePath(id))

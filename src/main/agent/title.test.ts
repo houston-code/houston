@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   getProvider: vi.fn(),
   createProvider: vi.fn(),
   peekConversation: vi.fn(),
+  conversationTitleSettled: vi.fn(),
   needsGeneratedTitle: vi.fn(),
   setGeneratedTitle: vi.fn()
 }))
@@ -22,6 +23,7 @@ vi.mock('../agentHost', () => ({ getProvider: h.getProvider }))
 vi.mock('../providers', () => ({ createProvider: h.createProvider }))
 vi.mock('../conversations', () => ({
   peekConversation: h.peekConversation,
+  conversationTitleSettled: h.conversationTitleSettled,
   needsGeneratedTitle: h.needsGeneratedTitle,
   setGeneratedTitle: h.setGeneratedTitle
 }))
@@ -264,6 +266,8 @@ describe('maybeGenerateTitle', () => {
     // A chat at turn start: only the user message is persisted so far.
     h.peekConversation.mockReturnValue({ id: 'c1', messages: [{ role: 'user', content: 'Add dark mode' }] })
     h.needsGeneratedTitle.mockReturnValue(true)
+    // Not known to be titled from the store's cache: the chat is read, as before.
+    h.conversationTitleSettled.mockReturnValue(false)
     h.getProvider.mockReturnValue({ id: 'p', kind: 'openai-compatible', models: [] })
     h.setGeneratedTitle.mockReturnValue(true)
   })
@@ -376,6 +380,14 @@ describe('maybeGenerateTitle', () => {
   it('skips the provider entirely for an already-titled chat', async () => {
     h.needsGeneratedTitle.mockReturnValue(false)
     await maybeGenerateTitle(opts())
+    expect(h.createProvider).not.toHaveBeenCalled()
+  })
+
+  it('does not read the chat when the store already knows it is titled', async () => {
+    h.conversationTitleSettled.mockReturnValue(true)
+    await maybeGenerateTitle(opts())
+    expect(h.conversationTitleSettled).toHaveBeenCalledWith('c1')
+    expect(h.peekConversation).not.toHaveBeenCalled()
     expect(h.createProvider).not.toHaveBeenCalled()
   })
 })

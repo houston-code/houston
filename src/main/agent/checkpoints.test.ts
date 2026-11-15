@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   mkdtempSync,
   rmSync,
@@ -30,6 +30,9 @@ import {
   _setCheckpointMemoryBudget,
   _setCheckpointDiskBudget,
   _setRunSnapshotBudget,
+  _setUnsavedSaveDelay,
+  hasUnsavedCheckpoints,
+  saveRunCheckpoint,
   revertRunsGuarded
 } from './checkpoints'
 import { setUserDataDir, resetUserDataDir } from '../userData'
@@ -872,5 +875,110 @@ describe('checkpoint storage byte caps', () => {
     expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('a'.repeat(100))
     expect(await reapplyCheckpoint('run-a')).toBe(0)
     expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('a'.repeat(100))
+  })
+})
+
+describe('a write\'s redo snapshot, saved after the write', () => {
+  let dataDir: string
+  const runFile = (runId: string) =>
+    JSON.parse(readFileSync(join(dataDir, 'checkpoints', `${runId}.json`), 'utf8')) as {
+      files: { path: string; before: string | null; after: string | null; afterCaptured: boolean }[]
+    }
+  const entry = (runId: string, name: string) => runFile(runId).files.find((f) => f.path.endsWith(name))
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'houston-cp-data-'))
+    setUserDataDir(dataDir)
+    // Only the saves under test write it: never the background timer.
+    _setUnsavedSaveDelay(60_000)
+  })
+  afterEach(async () => {
+    await flushCheckpoints()
+    _setUnsavedSaveDelay(null)
+    _setCheckpointMemoryBudget(null)
+    clearCheckpoints()
+    resetUserDataDir()
+    rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  /** Snapshot `name` before a write and after it, as the loop does around a write tool. */
+  async function edit(runId: string, name: string, before: string, after: string): Promise<void> {
+    writeFileSync(join(ws, name), before)
+    await recordOriginal(runId, [ws], name)
+    writeFileSync(join(ws, name), after)
+    await recordResult(runId, [ws], name)
+  }
+
+  it('has the undo on disk before the write and the redo only in memory after it', async () => {
+    await edit('run-a', 'a.txt', 'original', 'edited')
+    expect(entry('run-a', 'a.txt')).toMatchObject({ before: 'original', afterCaptured: false })
+    expect(hasUnsavedCheckpoints()).toBe(true)
+    // In memory the redo is there all along.
+    expect(await restoreCheckpoint('run-a')).toBe(1)
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('original')
+    expect(await reapplyCheckpoint('run-a')).toBe(1)
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('edited')
+  })
+
+  it('goes to disk with the next file\'s undo snapshot', async () => {
+    await edit('run-a', 'a.txt', 'a0', 'a1')
+    writeFileSync(join(ws, 'b.txt'), 'b0')
+    await recordOriginal('run-a', [ws], 'b.txt')
+    expect(entry('run-a', 'a.txt')).toMatchObject({ before: 'a0', after: 'a1', afterCaptured: true })
+    expect(entry('run-a', 'b.txt')).toMatchObject({ before: 'b0', afterCaptured: false })
+  })
+
+  it('is written by the end-of-turn save, and the turn then undoes and redoes after a restart', async () => {
+    await edit('run-a', 'a.txt', 'a0', 'a1')
+    await edit('run-a', 'b.txt', 'b0', 'b1')
+    writeFileSync(join(ws, 'a.txt'), 'a2')
+    await recordResult('run-a', [ws], 'a.txt') // a second edit of a file already snapshotted
+    await saveRunCheckpoint('run-a')
+    expect(hasUnsavedCheckpoints()).toBe(false)
+    expect(entry('run-a', 'a.txt')).toMatchObject({ before: 'a0', after: 'a2', afterCaptured: true })
+    expect(entry('run-a', 'b.txt')).toMatchObject({ before: 'b0', after: 'b1', afterCaptured: true })
+    clearCheckpoints()
+    expect(await restoreCheckpoint('run-a')).toBe(2)
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('a0')
+    expect(readFileSync(join(ws, 'b.txt'), 'utf8')).toBe('b0')
+    clearCheckpoints()
+    expect(await reapplyCheckpoint('run-a')).toBe(2)
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('a2')
+    expect(readFileSync(join(ws, 'b.txt'), 'utf8')).toBe('b1')
+  })
+
+  it('is written in the background shortly after, with no save to carry it', { timeout: 30_000 }, async () => {
+    _setUnsavedSaveDelay(5)
+    await edit('run-a', 'a.txt', 'original', 'edited')
+    // Generous bounds: a loaded machine slows the write, it doesn't skip it.
+    const WAIT = { timeout: 10_000 }
+    await vi.waitFor(() => expect(entry('run-a', 'a.txt')).toMatchObject({ after: 'edited', afterCaptured: true }), WAIT)
+    await vi.waitFor(() => expect(hasUnsavedCheckpoints()).toBe(false), WAIT)
+  })
+
+  it('keeps a run with an unsaved redo in memory past the budget until it is saved', async () => {
+    _setCheckpointMemoryBudget(1)
+    await edit('run-a', 'a.txt', 'a'.repeat(20), 'A'.repeat(20))
+    // Another run's checkpoint is admitted while run-a's redo exists only in memory.
+    writeFileSync(join(ws, 'b.txt'), 'b')
+    await recordOriginal('run-b', [ws], 'b.txt')
+    expect(checkpointFileCount('run-a')).toBe(1)
+    await saveRunCheckpoint('run-a')
+    writeFileSync(join(ws, 'c.txt'), 'c')
+    await recordOriginal('run-c', [ws], 'c.txt')
+    // Saved, it can go: what a revert needs is read back from disk.
+    expect(checkpointFileCount('run-a')).toBe(0)
+    expect(await revertRunsGuarded([{ runId: 'run-a', turn: 0, at: 0, files: true }])).toMatchObject({
+      restored: 1,
+      conflicts: []
+    })
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('a'.repeat(20))
+  })
+
+  it('stays memory-only, with nothing pending, when no user-data directory is wired', async () => {
+    resetUserDataDir()
+    await edit('run-x', 'x.txt', 'original', 'edited')
+    expect(hasUnsavedCheckpoints()).toBe(false)
+    expect(await restoreCheckpoint('run-x')).toBe(1)
+    expect(readFileSync(join(ws, 'x.txt'), 'utf8')).toBe('original')
   })
 })
