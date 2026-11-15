@@ -4,7 +4,8 @@ import { resolvePricing } from './usage'
 
 /**
  * Which model a provider's side requests run on (chat titles, compaction summaries,
- * next-message suggestions, the isolated reader for flagged web content). They need
+ * next-message suggestions, the provider's own web search, the isolated reader for
+ * flagged web content). They need
  * far less than the chat's model, and on a flagship model they were most of a short
  * chat's cost. Pure, so the settings control and the main process agree.
  */

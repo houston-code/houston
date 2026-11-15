@@ -1,8 +1,9 @@
 /**
  * Web search through the model provider's own server-side search tool. The
- * provider runs the search during a short side request on the run's model and
- * bills it to the model key it already holds, so a user on a supporting provider
- * gets web_search without a separate search-provider key.
+ * provider runs the search during a short side request (on the provider's small
+ * model when it has one, else the run's model) and bills it to the model key it
+ * already holds, so a user on a supporting provider gets web_search without a
+ * separate search-provider key.
  *
  * Supported hosts (each checked against the provider's API docs):
  * - Claude API: the `web_search_20250305` server tool on the Messages API. Its
@@ -22,6 +23,7 @@
  */
 
 import type { ProviderWebSearchRequest, ProviderWebSearchResult, ProviderWebSearchUsage } from '@shared/agent'
+import { anthropicThinking } from './reasoning'
 
 /** The instructions for the side request: search once, then summarize briefly. */
 export const NATIVE_SEARCH_INSTRUCTIONS =
@@ -31,6 +33,12 @@ export const NATIVE_SEARCH_INSTRUCTIONS =
 
 /** Reply cap for the side request; the summary is short, the hits come from the results. */
 const NATIVE_SEARCH_MAX_TOKENS = 1024
+/**
+ * The cap when the model thinks regardless (see `anthropicThinking`): its thinking counts
+ * against it, and 1024 could leave nothing for the summary. Well under the SDK's ceiling
+ * for a non-streamed request.
+ */
+const NATIVE_SEARCH_THINKING_MAX_TOKENS = 4096
 /** OpenAI counts reasoning against the output cap, so give reasoning models room. */
 const RESPONSES_MAX_OUTPUT_TOKENS = 4096
 
@@ -150,6 +158,10 @@ export async function anthropicWebSearch(
   client: AnthropicCreateClient,
   req: ProviderWebSearchRequest
 ): Promise<ProviderWebSearchResult> {
+  // Reasoning off, as the isolated reader runs: a model that thinks even unprompted would
+  // otherwise think at its default effort on the critical path of every search, so it runs
+  // at the lowest effort with its thinking text left out. Other models are sent no thinking.
+  const thinking = anthropicThinking(req.model, 'off')
   const messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = [
     { role: 'user', content: nativeSearchPrompt(req.query) }
   ]
@@ -158,10 +170,16 @@ export async function anthropicWebSearch(
     const res = await client.messages.create(
       {
         model: req.model,
-        max_tokens: NATIVE_SEARCH_MAX_TOKENS,
+        max_tokens: thinking ? NATIVE_SEARCH_THINKING_MAX_TOKENS : NATIVE_SEARCH_MAX_TOKENS,
         system: NATIVE_SEARCH_INSTRUCTIONS,
         messages: [...messages],
-        tools: [ANTHROPIC_WEB_SEARCH_TOOL]
+        tools: [ANTHROPIC_WEB_SEARCH_TOOL],
+        ...(thinking?.kind === 'adaptive'
+          ? {
+              thinking: { type: 'adaptive', display: thinking.display },
+              output_config: { effort: thinking.effort }
+            }
+          : {})
       },
       { signal: req.signal }
     )

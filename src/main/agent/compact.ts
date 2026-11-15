@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { ChatMessage } from '@shared/agent'
+import { smallModelFor, withSmallModel } from '@shared/smallModel'
 import { resolveContextWindow } from '@shared/usage'
 import { createProvider } from '../providers'
 import { getProvider } from '../agentHost'
@@ -18,6 +19,7 @@ import {
   findCompactionCutByBudget,
   findSummaryChunkCut,
   summarizationSystemPrompt,
+  summaryFits,
   summaryMaxTokens
 } from './compaction'
 
@@ -234,6 +236,12 @@ async function compactUnderSignal(
 
   const budget = window ? Math.floor(window * SUMMARY_CHUNK_FRACTION) : DEFAULT_SUMMARY_CHUNK_BUDGET
 
+  // The summaries are written the way the loop's automatic compaction writes them: by
+  // the provider's small model when a chunk's request fits its window, with the chat's
+  // own model taking over when it doesn't, or when the small model fails.
+  const small = smallModelFor(cfg, model)
+  const smallWindow = small ? resolveContextWindow(small, cfg.models?.find((m) => m.id === small)?.caps) : null
+
   // Summarize the head [0, target) in budget-bounded chunks, folding each result
   // into a running summary. Chunking keeps any single summarization request from
   // itself overflowing the window — essential when the conversation is already
@@ -243,35 +251,40 @@ async function compactUnderSignal(
   try {
     while (cut < target) {
       const next = findSummaryChunkCut(conv.messages, cut, target, budget)
+      const request = buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next), focus)
       // Each chunk is retried on its own: they fold into a running summary, so losing
       // the whole compaction to a transient blip on the last of them would throw away
       // every chunk before it. Safe to retry in full — the text is accumulated here,
       // not streamed to anyone. A summary cut off at the output cap is an error, not
       // a result: it would replace the head with a summary missing its end.
-      const text = await withProviderRetry(async () => {
-        let acc = ''
-        let truncated = false
-        for await (const ev of provider.streamChat({
-          model,
-          system: summarizationSystemPrompt,
-          messages: buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next), focus),
-          maxTokens: summaryMaxTokens(window),
-          signal
-        })) {
-          if (ev.type === 'text') acc += ev.text
-          else if (ev.type === 'done') truncated = ev.stopReason === 'max_tokens'
-          else if (ev.type === 'error') throw providerStreamError(ev)
-        }
-        if (truncated) throw new Error(SUMMARY_TRUNCATED_MESSAGE)
-        return acc
-      }, {
-        signal,
-        onRetry: (attempt, err, max) => {
-          const error = describeProviderError(err)
-          log.warn(`compact: retrying summary request (attempt ${attempt}${max ? ` of ${max}` : ''}): ${error}`)
-          if (!signal.aborted) onRetry?.({ attempt, max, error })
-        }
-      })
+      const summarizeOn = (summaryModel: string): Promise<string> =>
+        withProviderRetry(async () => {
+          let acc = ''
+          let truncated = false
+          for await (const ev of provider.streamChat({
+            model: summaryModel,
+            system: summarizationSystemPrompt,
+            messages: request,
+            maxTokens: summaryMaxTokens(summaryModel === model ? window : smallWindow),
+            signal
+          })) {
+            if (ev.type === 'text') acc += ev.text
+            else if (ev.type === 'done') truncated = ev.stopReason === 'max_tokens'
+            else if (ev.type === 'error') throw providerStreamError(ev)
+          }
+          if (truncated) throw new Error(SUMMARY_TRUNCATED_MESSAGE)
+          return acc
+        }, {
+          signal,
+          onRetry: (attempt, err, max) => {
+            const error = describeProviderError(err)
+            log.warn(`compact: retrying summary request (attempt ${attempt}${max ? ` of ${max}` : ''}): ${error}`)
+            if (!signal.aborted) onRetry?.({ attempt, max, error })
+          }
+        })
+      const smallFits =
+        small !== null && summaryFits(estimateTokens(summarizationSystemPrompt, request), smallWindow)
+      const text = await withSmallModel(smallFits ? small : null, model, summarizeOn, signal)
       if (signal.aborted) return { ok: false, summarized: 0, error: COMPACT_ERR_CANCELLED }
       const summary = text.trim()
       if (!summary) return { ok: false, summarized: 0, error: 'The model returned an empty summary.' }

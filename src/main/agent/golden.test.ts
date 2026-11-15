@@ -170,6 +170,7 @@ interface CapturedRequest {
   reasoningSummary?: string
   verbosity?: string
   explicitCacheControl?: boolean
+  promptCacheKey?: string
 }
 
 /** A provider that records every request and replays one scripted turn per call. */
@@ -186,7 +187,8 @@ function capturingProvider(turns: ProviderStreamEvent[][], captured: CapturedReq
         reasoningCapable: req.reasoningCapable,
         reasoningSummary: req.reasoningSummary,
         verbosity: req.verbosity,
-        explicitCacheControl: req.explicitCacheControl
+        explicitCacheControl: req.explicitCacheControl,
+        promptCacheKey: req.promptCacheKey
       })
       const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' as const }]
       for (const ev of turn) yield ev
@@ -375,6 +377,7 @@ function fmtRequest(r: CapturedRequest, i: number): string {
     `model: ${r.model}`,
     `reasoning: effort=${r.reasoningEffort ?? '-'} capable=${r.reasoningCapable ?? '-'} summary=${r.reasoningSummary ?? '-'} verbosity=${r.verbosity ?? '-'}`,
     `explicitCacheControl: ${r.explicitCacheControl ?? '-'}`,
+    `promptCacheKey: ${r.promptCacheKey ?? '-'}`,
     `system: sha256:${sha(system)} (${system.length} chars)`,
     `tools (${r.tools.length}): ${r.tools.map((t) => t.name).join(', ')}`,
     `messages (${r.messages.length}):`,
@@ -657,6 +660,7 @@ describe('agent behavior goldens', () => {
           `host caps: ${f.caps ? stable(f.caps) : '-'}`,
           `reasoning: effort=${req.reasoningEffort ?? '-'} capable=${req.reasoningCapable ?? '-'} summary=${req.reasoningSummary ?? '-'} verbosity=${req.verbosity ?? '-'}`,
           `explicitCacheControl: ${req.explicitCacheControl ?? '-'}`,
+          `promptCacheKey: ${req.promptCacheKey ?? '-'}`,
           `tools: ${req.tools.length}`,
           `usage event: ${usage ? fmtEvent(usage) : '(none)'}`,
           `system prompt vs ${families[0].model} baseline:`,

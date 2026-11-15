@@ -651,8 +651,9 @@ Anything else reads "The last turn failed" with Retry and Run the doctor.
 ### A smaller model for side tasks
 
 Some requests Houston makes for you need far less than your chat's model: naming a
-chat, summarizing older turns when it compacts, suggesting your next message, and
-reading a web page flagged as possible prompt injection. Each provider sends these to
+chat, summarizing older turns when it compacts (on its own or with `/compact`),
+suggesting your next message, running a web search with the provider's own search
+tool, and reading a web page flagged as possible prompt injection. Each provider sends these to
 a cheaper sibling of the same family: Claude Haiku 5.5 on Anthropic, Bedrock, Vertex
 and Foundry, GPT-6 Luna on OpenAI, and Gemini 3.5 Flash-Lite on Gemini.
 
@@ -663,8 +664,8 @@ and Foundry, GPT-6 Luna on OpenAI, and Gemini 3.5 Flash-Lite on Gemini.
 - Change it per provider in Settings, *Models*, **Model for side tasks**: pick any
   model in the list, or **The chat's model** to turn this off. In settings.json it is
   the provider's `smallModel` (`""` for the chat's model).
-- `/cost` and the usage panel list what the summaries and web-page reads spent under
-  the model that ran them.
+- `/cost` and the usage panel list what the summaries, web searches and web-page reads
+  spent under the model that ran them.
 
 ### Fallback models
 
@@ -703,8 +704,9 @@ back to the model provider's own web search where the provider offers one:
 - **Claude API** (the Anthropic provider without a custom base URL).
 - **OpenAI** (the built-in OpenAI provider without a custom base URL).
 
-The search runs as a short extra request on the chat's current model, so it is billed
-to the model key you already set: the provider's per-search fee plus the tokens of the
+The search runs as a short extra request on the provider's model for side tasks (see
+*A smaller model for side tasks*), or on the chat's current model when there is none or
+it fails, so it is billed to the model key you already set: the provider's per-search fee plus the tokens of the
 results. Each call runs one search. Its tokens count toward the chat's usage and cost
 display and toward a cost limit (`--max-cost`), along with the per-search fee (about
 $0.01 a search on both, an estimate like the token prices). Other providers (Gemini, Bedrock, Vertex, Azure,

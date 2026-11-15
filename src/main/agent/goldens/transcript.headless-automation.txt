@@ -4,6 +4,7 @@
 model: claude-sonnet-5
 reasoning: effort=off capable=- summary=- verbosity=-
 explicitCacheControl: false
+promptCacheKey: 8c6bdfe91f6e2a325108478f728f0ccc
 system: sha256:0e1748efdccf (12404 chars)
 tools (4): read_file, glob, search_files, run_shell
 messages (1):

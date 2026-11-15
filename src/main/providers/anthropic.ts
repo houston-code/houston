@@ -199,22 +199,41 @@ function mapStopReason(reason: string | null | undefined): StopReason {
 
 const EPHEMERAL = { type: 'ephemeral' as const }
 
+/** Put a prompt-cache breakpoint on a message's last content block. */
+function markLastBlock(message: Anthropic.MessageParam): void {
+  if (typeof message.content === 'string') {
+    message.content = [{ type: 'text', text: message.content, cache_control: EPHEMERAL }]
+  } else if (Array.isArray(message.content) && message.content.length > 0) {
+    const block = message.content[message.content.length - 1] as { cache_control?: typeof EPHEMERAL }
+    block.cache_control = EPHEMERAL
+  }
+}
+
 /**
- * Add a prompt-cache breakpoint to the last content block of the last message.
- * Combined with caching the (static) system prompt + tools, this lets Anthropic
- * reuse the whole conversation prefix across the loop's iterations — each turn
- * only the newest content is uncached. Mutates in place; the message array is
- * freshly built per request so that's safe. Exported for testing.
+ * Add the conversation's prompt-cache breakpoints: one on the last content block of
+ * the last message (the moving edge), and one on the last block of the user turn
+ * before the newest assistant reply, which is where the previous request of the loop
+ * ended and so where it wrote its cache entry. With the system prompt and tools
+ * breakpoints that makes the 4 a request may carry.
+ *
+ * The second one is what keeps a big iteration from missing the cache: a breakpoint
+ * looks back only about 20 blocks for an earlier entry, so when one reply plus its
+ * results adds more than that (many parallel calls on a host that counts each block,
+ * or many text and image blocks), the moving edge alone finds nothing and the whole
+ * conversation is prefilled again. A breakpoint sitting exactly on the previous
+ * entry always finds it. Markers cost nothing and are not part of what the cache
+ * compares, so the extra one changes no bytes of the prefix and no price. Mutates in
+ * place; the message array is freshly built per request so that's safe. Exported for
+ * testing.
  */
 export function markMessagesCacheBreakpoint(messages: Anthropic.MessageParam[]): void {
   const last = messages[messages.length - 1]
   if (!last) return
-  if (typeof last.content === 'string') {
-    last.content = [{ type: 'text', text: last.content, cache_control: EPHEMERAL }]
-  } else if (Array.isArray(last.content) && last.content.length > 0) {
-    const block = last.content[last.content.length - 1] as { cache_control?: typeof EPHEMERAL }
-    block.cache_control = EPHEMERAL
-  }
+  markLastBlock(last)
+  let reply = messages.length - 1
+  while (reply > 0 && messages[reply].role !== 'assistant') reply--
+  const previousTail = reply > 0 ? messages[reply - 1] : undefined
+  if (previousTail?.role === 'user') markLastBlock(previousTail)
 }
 
 /**
@@ -290,6 +309,7 @@ export function createMessagesProvider(
         input_schema: t.parameters as Anthropic.Tool.InputSchema
       }))
       // Cache the (static) tool schemas: a breakpoint on the last tool covers them all.
+      // With the system prompt's and the two in the messages, that is the API's limit of 4.
       if (tools && tools.length) tools[tools.length - 1].cache_control = EPHEMERAL
 
       // Cache the (static) system prompt.

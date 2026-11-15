@@ -330,6 +330,8 @@ export interface SubAgentOptions {
    * way the main loop does.
    */
   explicitCacheControl?: boolean
+  /** The subagent's own `ChatRequest.promptCacheKey`, the same on every one of its requests. */
+  promptCacheKey?: string
   /**
    * Called with a short line per step (turn counter + what the tool is doing) so
    * the caller can surface live progress — without it, a long dispatch is silent
@@ -827,6 +829,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
               tools,
               ...(outputCapRaised ? raisedOutputCap(model) : {}),
               ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
+              ...(opts.promptCacheKey ? { promptCacheKey: opts.promptCacheKey } : {}),
               signal
             })) {
               if (ev.type !== 'error') reached = true

@@ -446,13 +446,15 @@ describe('openai adapter: explicit cache_control breakpoints', () => {
 
   const EPHEMERAL = { type: 'ephemeral' }
 
-  it('marks the system message and the last user message when opted in', async () => {
+  it('marks the system message, the previous request\'s tail and the last user message when opted in', async () => {
     const body = await createBody({
       system: 'be terse',
       messages: [
         { role: 'user', content: 'first' },
         { role: 'assistant', content: 'ok' },
-        { role: 'user', content: 'second' }
+        { role: 'user', content: 'second' },
+        { role: 'assistant', content: 'ok again' },
+        { role: 'user', content: 'third' }
       ],
       explicitCacheControl: true
     })
@@ -461,12 +463,43 @@ describe('openai adapter: explicit cache_control breakpoints', () => {
       role: 'system',
       content: [{ type: 'text', text: 'be terse', cache_control: EPHEMERAL }]
     })
-    // Only the LAST message carries the moving breakpoint.
+    // Older history and the replies carry no breakpoint.
     expect(messages[1]).toEqual({ role: 'user', content: 'first' })
-    expect(messages[messages.length - 1]).toEqual({
+    expect(messages[2]).toEqual({ role: 'assistant', content: 'ok' })
+    expect(messages[4]).toEqual({ role: 'assistant', content: 'ok again' })
+    // Where the previous request ended, so its entry is read back however much this one adds...
+    expect(messages[3]).toEqual({
       role: 'user',
       content: [{ type: 'text', text: 'second', cache_control: EPHEMERAL }]
     })
+    // ...and the moving edge.
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'third', cache_control: EPHEMERAL }]
+    })
+    expect(JSON.stringify(body).match(/cache_control/g)).toHaveLength(3)
+  })
+
+  it('anchors on the last tool result of the previous request across a parallel batch', async () => {
+    const batch = Array.from({ length: 12 }, (_, i) => ({ id: `b${i}`, name: 'read_file', arguments: {} }))
+    const body = await createBody({
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'a1', name: 'read_file', arguments: {} }, { id: 'a2', name: 'read_file', arguments: {} }] },
+        { role: 'tool', content: 'A1', toolCallId: 'a1', toolName: 'read_file' },
+        { role: 'tool', content: 'A2', toolCallId: 'a2', toolName: 'read_file' },
+        { role: 'assistant', content: '', toolCalls: batch },
+        ...batch.map((c) => ({ role: 'tool' as const, content: `R${c.id}`, toolCallId: c.id, toolName: 'read_file' }))
+      ],
+      explicitCacheControl: true
+    })
+    const messages = body.messages as Array<Record<string, unknown>>
+    const marked = messages.flatMap((m) =>
+      Array.isArray(m.content) && (m.content as Array<Record<string, unknown>>).some((p) => p.cache_control)
+        ? [m.tool_call_id]
+        : []
+    )
+    expect(marked).toEqual(['a2', 'b11'])
   })
 
   it('marks the last content part when the last message already has parts', async () => {
@@ -496,6 +529,12 @@ describe('openai adapter: explicit cache_control breakpoints', () => {
       tool_call_id: 'c1',
       content: [{ type: 'text', text: 'file body', cache_control: EPHEMERAL }]
     })
+  })
+
+  it('never sends a prompt cache key to a Chat Completions host', async () => {
+    const body = await createBody({ promptCacheKey: 'abc123', explicitCacheControl: true })
+    expect(JSON.stringify(body)).not.toContain('prompt_cache_key')
+    expect(JSON.stringify(body)).not.toContain('abc123')
   })
 
   it('sends a completely standard request when not opted in', async () => {
