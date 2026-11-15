@@ -85,9 +85,11 @@ import { readHeadBranch } from './headBranch'
 import { writeExportFile } from './tui-sessions'
 import {
   canPersistHeaderSecrets,
+  canRemoveKey,
   canSetKey,
   folderTrustFor,
   getSettings,
+  removeProviderKey,
   setProviderKey,
   updateSettings
 } from './store'
@@ -526,6 +528,9 @@ export function wireTerminalSessionBackends(opts: {
 
 /** How long the setup menu waits for a host to list its models. */
 const HOST_PROBE_MS = 2500
+
+/** How long `/model refresh` waits for a provider to list its models. */
+const MODEL_FETCH_MS = 30_000
 
 /** Reject with a timeout when `p` takes longer than `ms`; a late result is dropped. */
 /**
@@ -989,6 +994,10 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // /schedule: the same scheduler service (and schedules.json) the agent's
       // schedule tools and the desktop's Scheduled runs page use.
       schedules: sessions.scheduler,
+      ...(canRemoveKey() ? { removeKey: (id: string) => removeProviderKey(id) } : {}),
+      // /model refresh: a cloud provider's listing can take a while, so it gets far
+      // longer than the setup menu's quick probe above.
+      fetchModels: (provider) => withTimeout(listModels(provider), MODEL_FETCH_MS),
       isMac: process.platform === 'darwin',
       settingsPath: () => join(getUserDataDir(), 'settings.json'),
       // /status: what only the host knows. The network state is this chat's own

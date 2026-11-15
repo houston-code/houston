@@ -29,6 +29,7 @@ import {
   configureHasKey,
   configureHeaderSecrets,
   configureMcpOAuthPresence,
+  configureRemoveKey,
   configureSetKey,
   getProvider,
   getSettings,
@@ -104,6 +105,7 @@ export function wireCliHost(): { trustCertificatesNow: () => void } {
   // In-session key writes (the TUI's /login flow) land in cli-credentials.json,
   // the same store `houston providers set-key` uses.
   configureSetKey((id, key) => cliSetKey(id, key))
+  configureRemoveKey((id) => cliRemoveKey(id))
   // Scrub stored secrets (and token-shaped strings) from every log line.
   configureLogRedactor((message) => redactSecrets(message, cliCollectSecrets()))
   // Known-value source for redacting derived conversation titles.

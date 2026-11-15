@@ -180,6 +180,22 @@ the terminal. Only three kinds do anything:
   first, so the list says which are running; picking a running one starts on it
   and remembers it. For an added endpoint that lists no models, you can type a
   model id instead. `/login` shows the same list later.
+- **Managing providers.** The terminal does what Settings, Providers & models does:
+  - `/login edit <provider>` changes a provider's base URL, region, project, Azure
+    endpoint and API version, or Foundry resource, with today's value as the Enter
+    answer (`-` clears an optional one), then its custom headers. A header value is
+    read hidden, kept in the same encrypted store the desktop app uses, and never
+    shown. The standalone CLI can't store header values; it names the
+    `cli-headers.json` scope to put them under instead.
+  - `/login remove <provider>` removes a provider you added (asks first, then offers
+    to forget its key). Built-in providers stay; the one this chat runs on is refused
+    until you switch with `/model`.
+  - `/login forget-key <provider>` forgets a stored API key, and says when an
+    environment variable still supplies one.
+  - `/model refresh [provider]` asks a provider for its models (by default this
+    chat's) and adopts the list, keeping labels you set, as Fetch models does. It
+    says which models are new and which are no longer listed; an empty answer
+    leaves the list alone.
 - **A typo is an error.** An unknown flag, a flag missing its value, or a stray word
   (`houston "fix the bug"`) stops with a message and the usage, instead of opening
   an empty session. To run a prompt once, use `-p`. `houston --help` lists every flag.
