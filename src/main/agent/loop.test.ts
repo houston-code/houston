@@ -2101,6 +2101,8 @@ describe('startRun', () => {
       const r = await run({
         runId: 'run-move',
         policy: 'full-auto',
+        // Shell commands prompt on hosts without a sandbox (Linux CI); answer it.
+        onApproval: (_id, decide) => decide('allow'),
         turns: [
           [
             { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'npm run build' } } },
