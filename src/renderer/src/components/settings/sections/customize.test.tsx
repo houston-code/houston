@@ -141,6 +141,29 @@ describe('CustomizeSection', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Open /review (This project)' }))
     expect((await screen.findByRole('alert')).textContent).toBe('No app to open it')
   })
+
+  it('puts the switch back when main could not switch the item off', async () => {
+    const api = installApi({ items: [item()], instructions: [] })
+    api.customizeSetEnabled.mockResolvedValueOnce({ ok: false, error: 'That file is missing or outside its folder.' } as never)
+    render(<CustomizeSection ctx={ctx()} />)
+    const box = (await screen.findByRole('checkbox', { name: '/review (This project) on' })) as HTMLInputElement
+    fireEvent.click(box)
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    await waitFor(() => expect(box.disabled).toBe(false))
+    expect(box.checked).toBe(true)
+    expect(screen.queryByText('Off')).toBeNull()
+  })
+
+  it('puts the switch back when the call to main fails', async () => {
+    const api = installApi({ items: [item()], instructions: [] })
+    api.customizeSetEnabled.mockRejectedValueOnce(new Error('read-only file') as never)
+    render(<CustomizeSection ctx={ctx()} />)
+    const box = (await screen.findByRole('checkbox', { name: '/review (This project) on' })) as HTMLInputElement
+    fireEvent.click(box)
+    expect((await screen.findByRole('alert')).textContent).toBe('read-only file')
+    await waitFor(() => expect(box.disabled).toBe(false))
+    expect(box.checked).toBe(true)
+  })
 })
 
 describe('InstructionFilesSection', () => {

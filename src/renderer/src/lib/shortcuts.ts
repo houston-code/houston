@@ -278,11 +278,16 @@ function chordMatches(e: Keyish, c: KeyChord, strict = false): boolean {
 export function matchShortcut(e: Keyish, defs: ShortcutDef[] = SHORTCUTS): ShortcutId | null {
   // Exact matches first, so ⇧⌘N reaches a chord bound to ⇧⌘N rather than ⌘N's
   // shift-ignoring chord, even when that one is listed earlier or was re-recorded.
+  // Likewise a raw-Control chord wins over a command-key chord on the same key, which
+  // accepts Control as a stand-in: on macOS ⌃B bound to one action and ⌘B to another
+  // must each reach their own.
   for (const strict of [true, false]) {
-    for (const def of defs) {
-      if ((def.scope ?? 'global') !== 'global') continue
-      for (const c of def.chords) {
-        if (chordMatches(e, c, strict)) return def.id
+    for (const rawCtrl of [true, false]) {
+      for (const def of defs) {
+        if ((def.scope ?? 'global') !== 'global') continue
+        for (const c of def.chords) {
+          if ((c.ctrl !== undefined) === rawCtrl && chordMatches(e, c, strict)) return def.id
+        }
       }
     }
   }

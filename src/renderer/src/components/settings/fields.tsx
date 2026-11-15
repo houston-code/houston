@@ -177,7 +177,8 @@ export function HeadersField({
           focused.current = false
           const { values, invalid } = parseKeyValueLines(text, { env })
           committed.current = JSON.stringify(values)
-          onChange(values)
+          // Tabbing through without a change is not an edit (an empty box would store `{}`).
+          if (committed.current !== JSON.stringify(headers ?? {})) onChange(values)
           setText([headersToText(values, env), ...invalid].filter(Boolean).join('\n'))
           setUnread(invalid.length)
         }}

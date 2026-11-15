@@ -36,7 +36,13 @@ export function UsagePanel({
   const [loading, setLoading] = useState(false)
   const [ceiling, setCeiling] = useState(String(costCeilingUsd || 0))
   const panelRef = useRef<HTMLElement>(null)
-  useFocusTrap(panelRef, onClose)
+  // Esc closes the panel before the cost box loses focus (an unmounting field gets no
+  // blur), so blur it first to commit what was typed.
+  useFocusTrap(panelRef, () => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement && panelRef.current?.contains(active)) active.blur()
+    onClose()
+  })
   const rateLimits = useRateLimits()
 
   const reload = useCallback(async () => {

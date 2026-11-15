@@ -6,6 +6,7 @@ function comparable(s: AppSettings): AppSettings {
   return {
     ...s,
     providers: s.providers.map((p) => ({ ...p, hasKey: false })),
+    ...(s.mcpServers ? { mcpServers: s.mcpServers.map((sv) => ({ ...sv, hasOAuth: undefined })) } : {}),
     searchKeyStatus: undefined
   }
 }
@@ -56,9 +57,21 @@ export function withDerivedFlags(target: AppSettings, current: AppSettings): App
   }
 }
 
-/** An entry's identity for {@link mergeList}, ignoring the derived key flag. */
+/**
+ * An entry's identity for {@link mergeList}. An entry with a string `id` (a provider,
+ * an MCP server, an LSP server, a chat group) is that id: main stores such an entry in
+ * its own form (an MCP server gains its sign-in flag, header and env values come back
+ * masked, empty maps are dropped), so its whole value never matches the copy this panel
+ * edited. Anything else (a permission rule, a folder path) is its whole value, ignoring
+ * the derived key flag.
+ */
 function entryId(v: unknown): string {
-  return JSON.stringify(v && typeof v === 'object' && !Array.isArray(v) ? { ...v, hasKey: undefined } : v)
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const id = (v as { id?: unknown }).id
+    if (typeof id === 'string') return `id:${id}`
+    return JSON.stringify({ ...v, hasKey: undefined })
+  }
+  return JSON.stringify(v)
 }
 
 /**
@@ -67,8 +80,9 @@ function entryId(v: unknown): string {
  * changed it meanwhile: an "Always allow" rule saved from an approval prompt, a server
  * added elsewhere). The user's list wins, in the user's order, except that entries
  * added elsewhere since `base` are kept (appended) and entries removed elsewhere stay
- * removed. An entry is matched by its whole value, so an edit is a removal plus an
- * addition.
+ * removed. An entry with an id is matched by that id, so editing one replaces it (the
+ * user's copy wins) and the result never holds a second entry with that id; any other
+ * entry is matched by its whole value, so an edit is a removal plus an addition.
  */
 export function mergeList<T>(base: readonly T[] | undefined, next: readonly T[], current: readonly T[] | undefined): T[] {
   const baseIds = new Set((base ?? []).map(entryId))
@@ -217,8 +231,10 @@ export function useAutosave({
   const undo = undoTo
     ? (): void => {
         setUndoTo(null)
-        undoing.current = true
-        setSettings(withDerivedFlags(undoTo, working.current))
+        const target = withDerivedFlags(undoTo, working.current)
+        // Only a save clears this, so set it only when the undo has something to save.
+        if (settingsPatch(baseline.current, target)) undoing.current = true
+        setSettings(target)
       }
     : null
   return { status, error, flush, undo }

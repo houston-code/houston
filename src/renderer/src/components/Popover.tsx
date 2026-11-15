@@ -143,12 +143,17 @@ export function Popover({
     }
   }, [anchorRef, positioned])
 
+  // A menu opened at a point (right-click) has the whole element it was opened on as
+  // its "trigger", so the trigger rules below are relaxed for it.
+  const atPoint = at !== undefined
   useEffect(() => {
     const onDoc = (e: MouseEvent): void => {
       if (
         ref.current &&
         !ref.current.contains(e.target as Node) &&
-        !anchorRef.current?.contains(e.target as Node)
+        // A click on a trigger button is left to toggle the menu; a click anywhere on
+        // the element a right-click menu was opened on is just a click outside it.
+        (atPoint || !anchorRef.current?.contains(e.target as Node))
       ) {
         onCloseRef.current()
       }
@@ -197,18 +202,31 @@ export function Popover({
       const target = e.target as Node | null
       if (anchor && target?.contains?.(anchor)) onCloseRef.current()
     }
+    // A right-click menu sits where the pointer was, not on the element, so a scroll
+    // the user didn't make (the transcript following a streaming reply) leaves it be;
+    // the user scrolling outside it closes it, as a native context menu does.
+    const onUserScroll = (e: Event): void => {
+      if (!ref.current?.contains(e.target as Node)) onCloseRef.current()
+    }
     const onResize = (): void => onCloseRef.current()
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('keydown', onKey, true)
-    document.addEventListener('scroll', onScroll, true)
+    if (atPoint) {
+      document.addEventListener('wheel', onUserScroll, true)
+      document.addEventListener('touchmove', onUserScroll, true)
+    } else {
+      document.addEventListener('scroll', onScroll, true)
+    }
     window.addEventListener('resize', onResize)
     return () => {
       document.removeEventListener('mousedown', onDoc)
       document.removeEventListener('keydown', onKey, true)
       document.removeEventListener('scroll', onScroll, true)
+      document.removeEventListener('wheel', onUserScroll, true)
+      document.removeEventListener('touchmove', onUserScroll, true)
       window.removeEventListener('resize', onResize)
     }
-  }, [anchorRef])
+  }, [anchorRef, atPoint])
 
   if (!style) return null
   return createPortal(

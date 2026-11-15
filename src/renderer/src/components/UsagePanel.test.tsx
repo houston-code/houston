@@ -53,6 +53,19 @@ describe('UsagePanel', () => {
     expect(onChange).toHaveBeenLastCalledWith(0)
   })
 
+  it('saves a cost reminder still being typed when Escape closes the panel', () => {
+    installApi()
+    const onChange = vi.fn()
+    const onClose = vi.fn()
+    render(<UsagePanel costCeilingUsd={0} onChangeCostCeiling={onChange} onClose={onClose} />)
+    const input = screen.getByRole('spinbutton', { name: 'Cost reminder, US dollars per turn' })
+    input.focus()
+    fireEvent.change(input, { target: { value: '4' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(onChange).toHaveBeenCalledWith(4)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('lists the last rate-limit state of each provider, and leaves the section out without one', async () => {
     installApi()
     const { unmount } = render(<UsagePanel costCeilingUsd={0} onChangeCostCeiling={vi.fn()} onClose={vi.fn()} />)
