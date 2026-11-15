@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, sep } from 'node:path'
 import { contextCommands, findContext, hasContext } from '@shared/commandContext'
 import type { ShellCapture } from '../userShell'
 import { captureUserShell } from '../userShell'
@@ -80,7 +80,9 @@ describe('expandCommandContext', () => {
   })
 
   it('refuses a path outside the workspace, directly or through a symlink', async () => {
-    expect(await expandCommandContext(`Read @${outside}`, '', opts())).toMatchObject({ ok: false })
+    // Forward slashes: a mention is a path only when it holds a `.` or `/`, and a bare
+    // Windows folder path (`C:\\...\\dir`) holds neither.
+    expect(await expandCommandContext(`Read @${outside.split(sep).join('/')}`, '', opts())).toMatchObject({ ok: false })
     expect(await expandCommandContext(`Read @${join(outside, 'secret.txt')}`, '', opts())).toEqual({
       ok: false,
       error: expect.stringContaining('is outside this project')
