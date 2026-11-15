@@ -43,6 +43,14 @@ export interface EvalConfig {
    * registry with {@link selectTasks}.
    */
   tasks?: string
+  /**
+   * Hash-only mode (HOUSTON_EVAL_HASH_OUT=<file>): write the prompt hash the live
+   * provider and model would get, then stop. It drives one run against a fake
+   * provider configured like the live one, so it needs no key and makes no network
+   * call. The eval-ab workflow uses it to skip an A/B when the pull request leaves
+   * the eval prompt unchanged.
+   */
+  hashOut?: string
 }
 
 export type Env = Record<string, string | undefined>
@@ -91,9 +99,16 @@ export function resolveEvalConfig(env: Env, providers: ProviderConfig[]): EvalCo
   if (record && tasks) {
     throw new Error('HOUSTON_EVAL_RECORD=1 records every task; unset HOUSTON_EVAL_TASKS to record a baseline.')
   }
-  const optional = { ...(out ? { out } : {}), ...(tasks ? { tasks } : {}) }
+  const hashOut = envOr(env, 'HOUSTON_EVAL_HASH_OUT', '') || undefined
+  // Hash-only stops before any model call, so it can neither score nor record.
+  if (hashOut && (live || record)) {
+    throw new Error('HOUSTON_EVAL_HASH_OUT only hashes the prompt; unset HOUSTON_EVAL_LIVE and HOUSTON_EVAL_RECORD.')
+  }
+  const optional = { ...(out ? { out } : {}), ...(tasks ? { tasks } : {}), ...(hashOut ? { hashOut } : {}) }
 
-  if (!live) {
+  // Hash-only resolves the provider and model exactly as a live run would: the
+  // prompt depends on both (the model family picks per-model prompt notes).
+  if (!live && !hashOut) {
     return { live, record, providerId, model: SCRIPTED_MODEL, attempts, trace, ...optional }
   }
 

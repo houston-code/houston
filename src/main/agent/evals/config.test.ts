@@ -153,6 +153,46 @@ describe('resolveEvalConfig', () => {
       true
     )
   })
+
+  describe('hash-only mode', () => {
+    // The prompt depends on the model (per-model notes), so hashing must resolve the
+    // model a live run would use, not the scripted stand-in.
+    it('resolves the live provider and model without going live', () => {
+      expect(resolveEvalConfig({ HOUSTON_EVAL_HASH_OUT: 'h.txt' }, providers)).toMatchObject({
+        live: false,
+        hashOut: 'h.txt',
+        providerId: 'anthropic',
+        model: 'claude-opus-4-8'
+      })
+      expect(
+        resolveEvalConfig({ HOUSTON_EVAL_HASH_OUT: 'h.txt', HOUSTON_EVAL_MODEL: 'claude-haiku-5-5' }, providers).model
+      ).toBe('claude-haiku-5-5')
+    })
+
+    it('rejects an unknown provider and a missing model, as a live run would', () => {
+      expect(() => resolveEvalConfig({ HOUSTON_EVAL_HASH_OUT: 'h.txt', HOUSTON_EVAL_PROVIDER: 'nope' }, providers)).toThrow(
+        /not a known provider/
+      )
+      expect(() =>
+        resolveEvalConfig({ HOUSTON_EVAL_HASH_OUT: 'h.txt', HOUSTON_EVAL_PROVIDER: 'nodefault' }, providers)
+      ).toThrow(/No model to evaluate/)
+    })
+
+    // It stops before any model call, so it can't score a run or record a baseline.
+    it('refuses to combine with a live run or a recording', () => {
+      expect(() => resolveEvalConfig(live({ HOUSTON_EVAL_HASH_OUT: 'h.txt' }), providers)).toThrow(/only hashes/)
+      expect(() => resolveEvalConfig({ HOUSTON_EVAL_HASH_OUT: 'h.txt', HOUSTON_EVAL_RECORD: '1' }, providers)).toThrow(
+        /only hashes/
+      )
+    })
+
+    // A workflow passes an unset input through as ''; that must not switch the mode on.
+    it('stays off when the path is empty', () => {
+      const cfg = resolveEvalConfig({ HOUSTON_EVAL_HASH_OUT: ' ' }, providers)
+      expect('hashOut' in cfg).toBe(false)
+      expect(cfg.model).toBe(SCRIPTED_MODEL)
+    })
+  })
 })
 
 describe('selectTasks', () => {

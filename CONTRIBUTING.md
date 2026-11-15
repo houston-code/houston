@@ -264,13 +264,30 @@ an id that isn't registered stops the run. `HOUSTON_EVAL_COMPARE_OUT=<file>` als
 the comparison to a file.
 
 The **Prompt A/B (live)** workflow (`eval-ab.yml`) does this for a pull request. It
-starts on its own when a pull request from a branch in this repository changes
-`src/main/agent/prompt.ts`, `tools.ts`, `memoryTools.ts`, `docs/houston-guide.md` or the
-agent goldens, and on any pull request when the `eval-ab` label is added (add it again
-to re-run). It scores the harder tasks on `claude-haiku-5-5`, two attempts each, on the
-base commit and on the pull request's merge commit, and posts the `eval:compare`
-scorecard as a comment. It is not a required check and never fails on a lower score;
-it fails only when a side produced no run record.
+scores the harder tasks on `claude-haiku-5-5`, two attempts each, on the base commit and
+on the pull request's merge commit, and posts the `eval:compare` scorecard as a comment,
+editing its earlier one on a re-run. It is not a required check and never fails on a
+lower score; it fails only when a side produced no run record.
+
+A live A/B costs about $0.80, and one that compares identical prompts measures only
+noise, so it runs only when what the model is told actually changed. A pull request
+from a branch in this repository that touches the agent, sandbox or shared sources
+(tests aside) or the agent goldens first gets a gate hash computed on both sides, and
+the live run starts only when the two differ. The gate hash folds the first request's
+system prompt and tools (the eval prompt hash) together with the loop's `promptId`,
+which also covers the deferred tools' schemas. It needs no key and makes no model call,
+so you can check a change the same way locally:
+
+```bash
+HOUSTON_EVAL_MODEL=claude-haiku-5-5 HOUSTON_EVAL_HASH_OUT=hash.txt npm run eval
+```
+
+The hash covers the lines for the host's OS, so compare hashes from the same kind of
+machine. The product guide is not part of it: the model reads `docs/houston-guide.md`
+only on demand, through the houston-guide skill. Neither is text the model reads later
+in a run, such as a tool's results or error messages. To run the A/B on any pull request
+regardless, add the `eval-ab` label; to run it again after a push, remove the label and
+add it back.
 
 #### Writing a task
 

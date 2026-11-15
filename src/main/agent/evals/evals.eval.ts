@@ -33,6 +33,12 @@
  *   HOUSTON_EVAL_TASKS       `hard` (the harder subset) or comma-separated task ids;
  *                            default every task. Never with HOUSTON_EVAL_RECORD.
  *
+ * Hash-only mode needs no key and makes no model call:
+ *   HOUSTON_EVAL_HASH_OUT=<file>  write the gate hash for what HOUSTON_EVAL_PROVIDER
+ *                                 and HOUSTON_EVAL_MODEL would be told (abGateHash in
+ *                                 stamp.ts), then stop. eval-ab.yml compares it across
+ *                                 a pull request.
+ *
  * WHY THIS FILE OWNS EVERYTHING. `startRun` takes no provider parameter — it
  * reaches for `createProvider`/`agentHost` as module singletons — so the only
  * injection seam is `vi.mock` + a deferred `await import('../loop')`. `vi.mock`
@@ -55,7 +61,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentEvent, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
+import type { AgentEvent, ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import { formatReceiptLines } from '@shared/evidence'
 import type { ProviderConfig } from '@shared/types'
 import { DEFAULT_REASONING_EFFORT, defaultProviders } from '@shared/defaults'
@@ -86,7 +92,7 @@ import {
 import { failureCauses, formatReport, pickSample, slowestOf, type TaskReport } from './report'
 import { gradeHonesty } from './honesty'
 import { currentCommit, gitIn, toRunRecord } from './runRecord'
-import { promptHash, sharedHash } from './stamp'
+import { abGateHash, promptHash, sharedHash } from './stamp'
 import { HARD_TASKS, TASKS } from './tasks'
 import { callTool, say, turn, type EvalResult, type EvalTask, type TimedCall } from './types'
 
@@ -103,8 +109,12 @@ const {
   attempts: ATTEMPTS,
   out: OUT,
   trace: TRACE,
-  tasks: TASK_SPEC
+  tasks: TASK_SPEC,
+  hashOut: HASH_OUT
 } = resolveEvalConfig(process.env, defaultProviders())
+
+/** Hash-only mode: configure the run like the live provider and model, but never call it. */
+const HASH_ONLY = HASH_OUT !== undefined
 
 /** The tasks this run scores (HOUSTON_EVAL_TASKS); every one unless a subset is named. */
 const RUN_TASKS = selectTasks(TASKS, HARD_TASKS, TASK_SPEC)
@@ -203,6 +213,8 @@ const h = vi.hoisted(() => {
   const live = process.env.HOUSTON_EVAL_LIVE === '1'
   return {
     live,
+    /** Hash-only mode (config.ts): the live provider's kind and models, the scripted fake. */
+    hashOnly: (process.env.HOUSTON_EVAL_HASH_OUT ?? '').trim() !== '',
     /** The scripted fake, swapped in per task. Unused in live mode. */
     provider: null as Provider | null,
     /** The run's first model request, kept for its prompt hash. Reset per run. */
@@ -233,7 +245,8 @@ vi.mock('../../agentHost', () => ({
   getProvider: (id: string) => ({
     id,
     // Scripted mode never reaches a real adapter, so the id doubles as the kind.
-    kind: h.live ? h.kind : id,
+    // Hash-only takes the live kind: the route it builds, and so the prompt, depend on it.
+    kind: h.live || h.hashOnly ? h.kind : id,
     label: id,
     models: h.models,
     requiresKey: false,
@@ -307,15 +320,20 @@ function scriptedProvider(turns: ProviderStreamEvent[][]): Provider {
   }
 }
 
+/** The whole script of a hash-only run: one reply, no tool call. */
+const HASH_ONLY_SCRIPT = [turn(say('Hash only: nothing to do.'))]
+
 // ---- run ----
 
 let tmpRoot: string
 
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'houston-eval-'))
-  h.kind = LIVE ? liveProviderConfig().kind : 'anthropic'
+  // Hash-only mode configures the run exactly like the live one, minus the key: the
+  // prompt is built from the provider kind and model list, never from the adapter.
+  h.kind = LIVE || HASH_ONLY ? liveProviderConfig().kind : 'anthropic'
   h.key = LIVE ? liveKey() : null
-  h.models = LIVE ? liveProviderConfig().models : []
+  h.models = LIVE || HASH_ONLY ? liveProviderConfig().models : []
   h.settings = {
     // 0 disables compaction — a fixture task never fills a window, and a
     // mid-eval compaction would grade the summarizer, not the task.
@@ -380,6 +398,12 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
     }
   }
 
+  // The loop stamps its promptId on each reply it saves; keep the first one seen.
+  let runPromptId: string | undefined
+  const onMessages = (messages: ChatMessage[]): void => {
+    runPromptId ??= messages.find((m) => m.role === 'assistant' && m.promptId)?.promptId
+  }
+
   const started = Date.now()
   await startRun(
     {
@@ -390,7 +414,8 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
       approvalPolicy: task.policy ?? 'full-auto',
       messages: [{ role: 'user', content: task.prompt }]
     },
-    send
+    send,
+    onMessages
   )
   const durationMs = Date.now() - started
 
@@ -433,6 +458,7 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
     costUsd: events.reduce((n, e) => n + (e.type === 'usage' ? e.cost : 0), 0),
     honesty,
     promptHash: hash,
+    ...(runPromptId ? { promptId: runPromptId } : {}),
     ...(receipt ? { receipt } : {}),
     ...(calls.length ? { slowestCall: slowestOf(calls) } : {})
   }
@@ -450,7 +476,7 @@ function trace(taskId: string, text: string): void {
 
 // ---- suites ----
 
-describe('eval fixtures', () => {
+describe.skipIf(HASH_ONLY)('eval fixtures', () => {
   it('registers every task directory exactly once', () => {
     expect(TASKS.map((t) => t.id).sort()).toEqual(taskDirNames())
   })
@@ -553,7 +579,7 @@ describe('eval fixtures', () => {
  * Scripted only: in live mode this would spend a real model on a task designed
  * to fail.
  */
-describe.skipIf(LIVE)('grading integrity', () => {
+describe.skipIf(LIVE || HASH_ONLY)('grading integrity', () => {
   it('fails a run whose only work was rewriting the test', async () => {
     const cheat: EvalTask = {
       ...TASKS[0],
@@ -651,9 +677,46 @@ describe.skipIf(LIVE)('grading integrity', () => {
     expect(a.promptHash).toMatch(/^[0-9a-f]{12}$/)
     expect(b.promptHash).toBe(a.promptHash)
   }, 60_000)
+
+  /**
+   * Hash-only mode stops after one reply and calls no tool, yet must report the hash
+   * a full run gets: the hash is taken from the first request, before the script
+   * matters. If something ever made the first request depend on how a run goes, the
+   * eval-ab workflow would compare the wrong prompts and skip A/Bs it should run.
+   */
+  it('hashes the same prompt whether the run stops at once or does the task', async () => {
+    const full = await runTask(TASKS[0])
+    const hashOnly = await runTask({ ...TASKS[0], script: HASH_ONLY_SCRIPT })
+    expect(hashOnly.toolsUsed).toEqual([])
+    expect(hashOnly.promptHash).toMatch(/^[0-9a-f]{12}$/)
+    expect(hashOnly.promptHash).toBe(full.promptHash)
+    // The other half of eval-ab's gate (abGateHash): the loop's id for the run.
+    expect(hashOnly.promptId).toMatch(/^[0-9a-f]{12}$/)
+    expect(hashOnly.promptId).toBe(full.promptId)
+  }, 60_000)
 })
 
-describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
+/**
+ * HOUSTON_EVAL_HASH_OUT: write the prompt hash the configured live model would get,
+ * with no key and no model call (the scripted fake answers, configured with the live
+ * provider's kind and models). Any task will do: the suite above pins that every task
+ * in a run gets the same hash.
+ */
+describe.runIf(HASH_ONLY)('prompt hash only', () => {
+  it(`hashes the prompt ${PROVIDER_ID}/${MODEL} would get`, async () => {
+    const r = await runTask({ ...RUN_TASKS[0], script: HASH_ONLY_SCRIPT })
+    expect(r.promptHash, 'the run made no model request to hash').toMatch(/^[0-9a-f]{12}$/)
+    expect(r.promptId, 'the run saved no reply carrying a promptId').toMatch(/^[0-9a-f]{12}$/)
+    const gate = abGateHash(r.promptHash!, r.promptId!)
+    writeFileSync(resolve(HASH_OUT!), `${gate}\n`)
+    console.log(
+      `Prompt hash for ${PROVIDER_ID}/${MODEL}: ${gate} (first request ${r.promptHash}, promptId ${r.promptId})` +
+        ` → ${resolve(HASH_OUT!)}`
+    )
+  }, 60_000)
+})
+
+describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
   const reports: TaskReport[] = []
   /** Every attempt's prompt hash; the run is stamped only when they all agree. */
   const hashes: (string | undefined)[] = []

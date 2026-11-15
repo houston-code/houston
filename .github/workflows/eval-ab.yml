@@ -1,16 +1,35 @@
 name: Prompt A/B (live)
 
 # A paired live A/B of the task evals for a pull request that changes what the model is
-# told: the system prompt (src/main/agent/prompt.ts), the tool descriptions and schemas
-# (src/main/agent/tools.ts, memoryTools.ts), the product guide compiled into the prompt
-# (docs/houston-guide.md), or anything else that moves the agent goldens. Add the
-# `eval-ab` label to run it on any other pull request, or to run it again after a push.
+# told: the system prompt and the tool descriptions and schemas a live run sends. Add the
+# `eval-ab` label to run it on any pull request regardless (remove and re-add it to run it
+# again after a push).
 #
 # WHAT IT ANSWERS. The goldens show that the prompt changed, not whether the agent got
-# better or worse at real work. This runs the harder task subset on the base commit (A)
-# and on the pull request's merge commit (B), two attempts per task on claude-haiku-5-5,
+# better or worse at real work. This runs the harder task subset on the base commit (A,
+# the merge commit's first parent, so the base the merge was actually built on) and on
+# the pull request's merge commit (B), two attempts per task on claude-haiku-5-5,
 # and posts `npm run eval:compare`'s scorecard as a comment: per-task deltas, the sign
 # test, and the stamps (model, prompt hash, commit) that say what each side ran.
+#
+# WHEN IT SPENDS. A live A/B costs about $0.80, and one that compares two identical
+# prompts can only measure noise. So two free checks run first:
+#   1. The plan job skips pull requests that touch none of the code that can shape the
+#      prompt: the agent, sandbox and shared sources (tests aside), the agent goldens,
+#      and the eval driver the hash comes from, so a pull request that breaks hash-only
+#      mode shows it here. That only saves runner time; the hash decides. The product
+#      guide is not on the list: it reaches the model only on demand, through the
+#      houston-guide skill, so editing it leaves the eval prompt as it was. Anything
+#      outside these paths that does reach the prompt needs the label.
+#   2. The hash jobs then compute, on each side, the gate hash for what claude-haiku-5-5
+#      would be told (HOUSTON_EVAL_HASH_OUT; abGateHash in src/main/agent/evals/stamp.ts:
+#      the first request's system prompt and tools, plus the loop's promptId, which also
+#      covers the deferred tools' schemas). It needs no key and makes no model call. The
+#      live A/B runs only when the two differ. Most golden changes never reach it:
+#      desktop-only and CLI-only lines, or lines another OS gets. Text the model reads
+#      later in a run, such as a tool's result or error messages, is not part of it.
+# The label skips both checks. A base commit from before hash-only mode existed has no
+# hash to compare, so its pull request is A/B'd as before.
 #
 # IT NEVER GATES. The result is non-deterministic and billed, so it is not a required
 # check and its scorecard is information for the reviewer. Each side's eval run exits
@@ -21,14 +40,18 @@ name: Prompt A/B (live)
 # runs the pull request's own code, so the model key reaches only pull requests from
 # branches in this repository (GitHub withholds secrets from forks, and the plan job
 # skips them so they don't fail at the key check). The key is step-scoped in the `ab`
-# job, which holds a read-only token. The job that runs the comparison holds no secret,
-# and the job that comments runs none of the pull request's code. As in eval-live.yml,
-# the eval driver auto-approves every tool call, so a live model really can run shell
-# commands here; the ephemeral runner and the read-only token contain it. Do not add a
-# publish credential.
+# job, which holds a read-only token. The hash jobs run the pull request's code with no
+# secret at all. The job that runs the comparison holds no secret, and the job that
+# comments runs none of the pull request's code. As in eval-live.yml, the eval driver
+# auto-approves every tool call, so a live model really can run shell commands here; the
+# ephemeral runner and the read-only token contain it. Do not add a publish credential.
 #
-# CONCURRENCY. Its own group per pull request, not eval-live's: that group cancels in
-# progress, and sharing it would let a PR's A/B kill the weekly scored run.
+# CONCURRENCY. No workflow-level group. One would cancel a running A/B the moment any
+# later event created a run, including adding an unrelated label such as full-ci, before
+# the plan job could ignore that event. Instead each job that does work has its own group
+# per pull request (and side), so only a newer run doing the same work replaces it. None
+# of them is eval-live's group: that one cancels in progress, and sharing it would let a
+# PR's A/B kill the weekly scored run.
 
 on:
   pull_request:
@@ -37,18 +60,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: eval-ab-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 env:
   # No Electron runtime and no packaged browser are exercised here.
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
 jobs:
-  # Decides whether this event should spend a live run: the `eval-ab` label is on the
-  # pull request, or its diff touches the prompt surface. A label other than `eval-ab`
-  # being added never starts one, so labelling a PR for something else costs nothing.
+  # Decides whether this event may spend anything: the `eval-ab` label is on the pull
+  # request, or its diff touches the prompt surface. A label other than `eval-ab` being
+  # added never starts one, so labelling a PR for something else costs nothing.
   plan:
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository
@@ -61,6 +80,7 @@ jobs:
       pull-requests: read
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      labelled: ${{ steps.decide.outputs.labelled }}
     steps:
       - id: decide
         env:
@@ -69,10 +89,24 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           DRAFT: ${{ github.event.pull_request.draft }}
           LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'eval-ab') }}
+          # Files that may change what the model is told: the agent, sandbox and shared
+          # sources (the prompt names the host's shell and sandbox, and lists the
+          # provider's models from shared/defaults.ts), the goldens, and the eval driver
+          # the hash comes from. Tests never do. A heuristic that only saves the hash
+          # jobs' runner time: the hash decides.
+          PROMPT_SURFACE: '^(src/(main/agent|main/sandbox|shared)/.+\.ts|src/main/agent/goldens/.+)$'
+          NOT_PROMPT: '\.test\.ts$'
         run: |
           set -euo pipefail
+          # `gh pr create --label` opens the pull request and adds the label in a second
+          # call, so the `opened` event carries no label. Read the labels as they are now,
+          # or that run would hash, start its A/B late, and cancel the labelled run's.
+          if [ "$LABELLED" != "true" ]; then
+            LABELLED="$(gh api "repos/$REPO/pulls/$PR" --jq '[.labels[].name] | index("eval-ab") != null')"
+          fi
+          echo "labelled=$LABELLED" >> "$GITHUB_OUTPUT"
           if [ "$LABELLED" = "true" ]; then
-            echo "The eval-ab label is set."
+            echo "The eval-ab label is set: running the A/B without the prompt-hash check."
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -82,24 +116,172 @@ jobs:
             exit 0
           fi
           files="$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')"
-          if printf '%s\n' "$files" | grep -Eq '^(src/main/agent/(prompt|tools|memoryTools)\.ts|src/main/agent/goldens/.+|docs/houston-guide\.md)$'; then
-            echo "The diff touches the prompt surface."
+          if printf '%s\n' "$files" | grep -vE "$NOT_PROMPT" | grep -Eq "$PROMPT_SURFACE"; then
+            echo "The diff touches code that can shape the prompt: checking whether the eval prompt changed."
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No prompt, tool description or guide change, and no eval-ab label: skipped."
+            echo "No agent, sandbox, shared or golden change, and no eval-ab label: skipped."
             echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The eval prompt hash on each side, with no key and no model call. Two jobs rather
+  # than a matrix, because a matrix job keeps only one leg's outputs.
+  hash-base:
+    needs: [plan]
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.labelled != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    concurrency:
+      group: eval-ab-${{ github.event.pull_request.number }}-hash-base
+      cancel-in-progress: true
+    outputs:
+      supported: ${{ steps.support.outputs.supported }}
+      hash: ${{ steps.hash.outputs.hash }}
+    steps:
+      # The merge commit's first parent is the base the merge was built on.
+      # pull_request.base.sha is a snapshot from the pull request's last push, so on a
+      # later labeled or reopened event it can be behind, and main's own changes since
+      # would read as this pull request's.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - run: git checkout --quiet --detach HEAD^1
+      # A base from before hash-only mode would run the whole scripted suite and hash
+      # nothing. Detect it up front and leave the hash empty, which runs the A/B.
+      - id: support
+        run: |
+          set -euo pipefail
+          if grep -q 'HOUSTON_EVAL_HASH_OUT' src/main/agent/evals/config.ts 2>/dev/null; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The base commit predates hash-only mode, so there is no hash to compare."
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.support.outputs.supported == 'true'
+        uses: ./.github/actions/setup-node
+        with:
+          install: full
+      - id: hash
+        if: steps.support.outputs.supported == 'true'
+        env:
+          HOUSTON_EVAL_PROVIDER: anthropic
+          HOUSTON_EVAL_MODEL: claude-haiku-5-5
+        run: |
+          set -euo pipefail
+          export HOUSTON_EVAL_HASH_OUT="$RUNNER_TEMP/prompt-hash.txt"
+          npm run eval
+          hash="$(tr -d '[:space:]' < "$HOUSTON_EVAL_HASH_OUT")"
+          if ! printf '%s' "$hash" | grep -Eq '^[0-9a-f]{12}$'; then
+            echo "::error::Hash-only mode wrote '$hash', not a prompt hash."
+            exit 1
+          fi
+          echo "Base prompt hash: $hash"
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
+  hash-head:
+    needs: [plan]
+    if: needs.plan.outputs.run == 'true' && needs.plan.outputs.labelled != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    concurrency:
+      group: eval-ab-${{ github.event.pull_request.number }}-hash-head
+      cancel-in-progress: true
+    outputs:
+      hash: ${{ steps.hash.outputs.hash }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node
+        with:
+          install: full
+      - id: hash
+        env:
+          HOUSTON_EVAL_PROVIDER: anthropic
+          HOUSTON_EVAL_MODEL: claude-haiku-5-5
+        run: |
+          set -euo pipefail
+          export HOUSTON_EVAL_HASH_OUT="$RUNNER_TEMP/prompt-hash.txt"
+          npm run eval
+          hash="$(tr -d '[:space:]' < "$HOUSTON_EVAL_HASH_OUT")"
+          if ! printf '%s' "$hash" | grep -Eq '^[0-9a-f]{12}$'; then
+            echo "::error::Hash-only mode wrote '$hash', not a prompt hash."
+            exit 1
+          fi
+          echo "Merge-commit prompt hash: $hash"
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
+  # Whether to spend a live run: the label asked for one, or the eval prompt changed.
+  # No base hash because the base predates hash-only mode counts as changed; an empty
+  # one from a base that supports it is a failure, never a reason to spend. A failed
+  # head hash spends nothing: that job is red, and the merge commit it couldn't hash is
+  # the one the A/B would run. A hash job cancelled by a newer run's group means that
+  # run decides instead.
+  decide:
+    needs: [plan, hash-base, hash-head]
+    if: ${{ !cancelled() && needs.plan.outputs.run == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      run: ${{ steps.compare.outputs.run }}
+    steps:
+      - id: compare
+        env:
+          LABELLED: ${{ needs.plan.outputs.labelled }}
+          BASE_RESULT: ${{ needs.hash-base.result }}
+          HEAD_RESULT: ${{ needs.hash-head.result }}
+          BASE_SUPPORTED: ${{ needs.hash-base.outputs.supported }}
+          BASE_HASH: ${{ needs.hash-base.outputs.hash }}
+          HEAD_HASH: ${{ needs.hash-head.outputs.hash }}
+        run: |
+          set -euo pipefail
+          if [ "$LABELLED" = "true" ]; then
+            echo "The eval-ab label is set: running the A/B."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$BASE_RESULT" = "cancelled" ] || [ "$HEAD_RESULT" = "cancelled" ]; then
+            echo "A newer run for this pull request took over the hashing, so this one stops here."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [ "$BASE_RESULT" != "success" ] || [ "$HEAD_RESULT" != "success" ] || [ -z "$HEAD_HASH" ] \
+            || { [ "$BASE_SUPPORTED" != "false" ] && [ -z "$BASE_HASH" ]; }; then
+            echo "::error::Could not hash the eval prompt (base: $BASE_RESULT, head: $HEAD_RESULT), so no A/B was run."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          elif [ -z "$BASE_HASH" ]; then
+            echo "The base commit has no prompt hash to compare (it predates hash-only mode): running the A/B."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$BASE_HASH" = "$HEAD_HASH" ]; then
+            echo "The eval prompt is unchanged ($HEAD_HASH on both sides): skipped, since an A/B of identical prompts measures only noise. Add the eval-ab label to run it anyway."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "The eval prompt changed ($BASE_HASH to $HEAD_HASH): running the A/B."
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
   # One live run per side. A is the base commit, B the merge commit GitHub built for
   # this pull request, so the only difference between them is the pull request itself.
+  #
+  # Every job from here on states its own condition with !cancelled(). Without one, a job
+  # inherits a skip from anywhere above it, and the label path skips the hash jobs: the
+  # A/B the label asked for would be skipped with them.
   ab:
-    needs: [plan]
-    if: needs.plan.outputs.run == 'true'
+    needs: [decide]
+    if: ${{ !cancelled() && needs.decide.result == 'success' && needs.decide.outputs.run == 'true' }}
     runs-on: ubuntu-24.04
     # The harder tasks at two attempts each, on Haiku: well under an hour per side.
     timeout-minutes: 120
     permissions:
       contents: read
+    concurrency:
+      group: eval-ab-${{ github.event.pull_request.number }}-${{ matrix.side }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:
@@ -107,8 +289,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ matrix.side == 'base' && github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.sha }}
+          fetch-depth: 2
           persist-credentials: false
+      # A is the merge commit's first parent, the base the merge was built on (see hash-base).
+      - if: matrix.side == 'base'
+        run: git checkout --quiet --detach HEAD^1
       - uses: ./.github/actions/setup-node
         with:
           install: full
@@ -146,6 +332,7 @@ jobs:
   # Builds the scorecard from the two records. Holds no secret.
   compare:
     needs: [ab]
+    if: ${{ !cancelled() && needs.ab.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -153,6 +340,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 2
           persist-credentials: false
       - uses: ./.github/actions/setup-node
         with:
@@ -163,15 +351,17 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/eval-ab
       - name: Compare B against A
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          MERGE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # The commits the ab job ran: the merge commit and its first parent.
+          MERGE_SHA="$(git rev-parse HEAD)"
+          BASE_SHA="$(git rev-parse HEAD^1)"
           dir="$RUNNER_TEMP/eval-ab"
           HOUSTON_EVAL_A="$dir/base.json" HOUSTON_EVAL_B="$dir/head.json" \
             HOUSTON_EVAL_COMPARE_OUT="$dir/scorecard.txt" npm run eval:compare
           {
+            # Marks the comment so the next run edits it instead of adding another.
+            echo '<!-- houston:eval-ab -->'
             echo '### Prompt A/B (live)'
             echo
             echo "Harder eval tasks on claude-haiku-5-5, 2 attempts each. A is the base commit (\`${BASE_SHA:0:12}\`), B this pull request merged onto it (\`${MERGE_SHA:0:12}\`)."
@@ -180,7 +370,7 @@ jobs:
             cat "$dir/scorecard.txt"
             echo '```'
             echo
-            echo "Live results vary from run to run, so this is information for review, not a gate. Add the \`eval-ab\` label again to re-run it."
+            echo "Live results vary from run to run, so this is information for review, not a gate. To run it again, remove the \`eval-ab\` label and add it back."
           } > "$dir/comment.md"
           cat "$dir/comment.md" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -190,9 +380,12 @@ jobs:
           path: ${{ runner.temp }}/eval-ab/comment.md
           if-no-files-found: error
 
-  # Posts the scorecard. Checks out and runs nothing from the pull request.
+  # Posts the scorecard, editing this workflow's earlier comment when there is one so a
+  # pull request carries one current scorecard. Checks out and runs nothing from the
+  # pull request.
   comment:
     needs: [compare]
+    if: ${{ !cancelled() && needs.compare.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -206,4 +399,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
-        run: gh pr comment "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/scorecard/comment.md"
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/scorecard/comment.md"
+          id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- houston:eval-ab -->"))) | .id' | tail -n 1)"
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$id" -F "body=@$body" > /dev/null
+            echo "Updated the scorecard comment $id."
+          else
+            gh pr comment "$PR" --repo "$REPO" --body-file "$body"
+          fi

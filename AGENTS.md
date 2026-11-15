@@ -106,9 +106,15 @@ of `npm test`) uses the scripted driver and gates every PR;
 `eval-live.yml`, which `baselines.test.ts` reads to require its baseline). Changing a
 provider's `defaultModel` breaks nothing in CI; scoring the new default, on demand or in a
 local live run with no `HOUSTON_EVAL_MODEL`, needs a baseline recorded for it first. A pull
-request that changes the prompt, tool descriptions, guide or goldens (or carries the
-`eval-ab` label) also gets a non-gating live A/B of the harder tasks from `eval-ab.yml`,
-posted as a comment; it has its own concurrency group so it never cancels `eval-live.yml`.
+request whose change reaches what the model is told (its gate hash, the eval prompt hash
+folded with the loop's `promptId` and computed keylessly with `HOUSTON_EVAL_HASH_OUT`,
+differs between the merge commit and its first parent), or that carries the `eval-ab`
+label, also gets a non-gating live A/B of the harder tasks from `eval-ab.yml`, posted as a
+comment. Its concurrency groups are per job and per pull request, never workflow-level
+(that cancelled a running A/B whenever another label was added) and never
+`eval-live.yml`'s. Every job below its `decide` job states its own `!cancelled()`
+condition: the label path skips the hash jobs, and without one that skip would carry down
+and skip the A/B too.
 
 [CONTRIBUTING.md](CONTRIBUTING.md#task-level-evals) covers what each guard catches and
 how to author a task. The invariants to preserve when changing this code:
@@ -254,8 +260,10 @@ provide. If a change alters one, update them in the same PR.
 
 ## User-facing text
 
-`docs/houston-guide.md` is compiled into the agent's prompt and pinned by the goldens: a
-copy edit there is a behavior change, not a doc tweak. Renderer and TUI strings are
+`docs/houston-guide.md` is compiled into the built-in houston-guide skill, which the agent
+loads on demand to answer questions about Houston: a copy edit there changes what the agent
+tells users, so treat it as a behavior change, not a doc tweak. It is not in the system
+prompt, so it moves no golden and no eval prompt hash. Renderer and TUI strings are
 ordinary source. Keep both in sync with the feature in the same PR.
 
 ## Avoiding silent-clobber merges

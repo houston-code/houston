@@ -61,6 +61,19 @@ export function promptHash(req: Pick<ChatRequest, 'system' | 'tools'>, workspace
 }
 
 /**
+ * What eval-ab.yml compares across a pull request to decide whether a live A/B can
+ * show anything: the first request's {@link promptHash} folded with the loop's
+ * `promptId`. Each misses something the other sees. The first request carries the
+ * full system prompt but names deferred tools (memory_save, wait_for and the rest)
+ * only by a catalog line, so a change to one of their schemas leaves its hash alone;
+ * `promptId` covers every built-in schema but leaves out the parts of the prompt the
+ * project supplies, built-in skills' index lines among them.
+ */
+export function abGateHash(firstRequestHash: string, runPromptId: string): string {
+  return createHash('sha256').update(`${firstRequestHash}\0${runPromptId}`).digest('hex').slice(0, 12)
+}
+
+/**
  * The one hash a set of attempts shares, or undefined when there is none.
  *
  * More than one distinct hash inside a single run means the normalization above
