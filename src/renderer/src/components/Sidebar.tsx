@@ -96,6 +96,8 @@ export interface SidebarProps {
   onOpenInNewWindow?: (id: string) => void
   onExport: (id: string) => void
   onExportHtml: (id: string) => void
+  /** Export the chat as Markdown. Absent: the menu has no Markdown item. */
+  onExportMarkdown?: (id: string) => void
   onImport: () => void
   onOpenSettings: () => void
   onRename: (id: string, title: string) => void
@@ -1023,6 +1025,18 @@ function ConvRow({
             >
               <Icon name="export" /> Export as HTML
             </button>
+            {props.onExportMarkdown && (
+              <button
+                role="menuitem"
+                className="menu__item"
+                onClick={() => {
+                  props.onExportMarkdown?.(conv.id)
+                  close()
+                }}
+              >
+                <Icon name="export" /> Export as Markdown
+              </button>
+            )}
             <button
               role="menuitem"
               className="menu__item menu__item--danger"

@@ -1305,6 +1305,14 @@ export default function App(): JSX.Element {
     }
   }, [])
 
+  const onExportConversationMarkdown = useCallback(async (id: string) => {
+    try {
+      await window.api.exportConversationMarkdown(id)
+    } catch (e) {
+      alert(`Could not export conversation: ${(e as Error).message}`)
+    }
+  }, [])
+
   const onImportConversation = useCallback(async () => {
     try {
       const res = await window.api.importConversation()
@@ -3512,6 +3520,7 @@ export default function App(): JSX.Element {
         else if (cmd.type === 'report-issue') setIssueOpen(true)
         else if (cmd.type === 'export-chat' && currentId) {
           if (cmd.format === 'html') void onExportConversationHtml(currentId)
+          else if (cmd.format === 'md') void onExportConversationMarkdown(currentId)
           else void onExportConversation(currentId)
         } else if (cmd.type === 'new-side-chat' && currentId) {
           setSideChatOpen(true)
@@ -3548,6 +3557,7 @@ export default function App(): JSX.Element {
       onImportConversation,
       onExportConversation,
       onExportConversationHtml,
+      onExportConversationMarkdown,
       currentId,
       workspace,
       startTour,
@@ -3789,6 +3799,7 @@ export default function App(): JSX.Element {
         onOpenInNewWindow={(id) => void window.api.openChatInNewWindow(id)}
         onExport={onExportConversation}
         onExportHtml={onExportConversationHtml}
+        onExportMarkdown={onExportConversationMarkdown}
         onImport={onImportConversation}
         onOpenSettings={() => setSettingsOpen(true)}
         onRename={onRenameConversation}

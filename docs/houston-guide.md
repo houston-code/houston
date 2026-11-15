@@ -869,7 +869,7 @@ In the terminal:
 
 **Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/cd`, `/vim`, `/keybindings`, `/notify`, `/statusline`, `/screen-reader`,
 `/reduce-motion`, `/verbose`, `/focus`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/todos`, `/spawned`,
-`/tasks`, `/queue`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/open-in-app`,
+`/tasks`, `/queue`, `/proposals`, `/image`, `/rename`, `/export`, `/import`, `/delete`, `/open-in-app`,
 `/permissions`, `/schedule`, `/scorecard`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
@@ -879,14 +879,19 @@ the model.
 - A terminal chat gets a model-written title after its first message, as in the desktop
   app, unless you named it (`/rename`, `--name`).
 - `/rename <title>` gives the chat a title (the desktop sidebar shows it too).
-- `/export [md|json] [path]` writes the chat to a file in the working folder: Markdown
-  by default (your messages, the replies with the reasoning before them folded, each
-  tool call, and tool output cut to 40 lines), or JSON with every message as saved.
+- `/export [md|json|html] [path]` writes the chat to a file in the working folder:
+  Markdown by default (your messages, the replies with the reasoning before them folded,
+  each tool call, and tool output cut to 40 lines), JSON with every message as saved,
+  or the desktop app's self-contained HTML page.
   Without a path it is named after the chat and the time. It never overwrites a file.
   Secrets are masked by default, the same way tool output is (`--no-redact` keeps
   them). `--copy` puts the export on the clipboard instead (with a path too, it does
   both), `--no-reasoning` leaves the model's reasoning out, and `--no-tools` leaves the
-  tool calls and their output out: `/export --copy --no-tools`.
+  tool calls and their output out (Markdown and JSON; the HTML page always has both):
+  `/export --copy --no-tools`.
+- `/import <file>` opens a chat exported as JSON or HTML (from the desktop app or
+  `/export`) as a new chat in this folder, whatever folder the file names, and carries
+  on in it. Files over 50 MB are refused.
 - `/delete` deletes the chat after asking, then starts a new one. Like the desktop app's
   delete, it stops the chat's run and background shells. When the chat has its own git
   worktree you choose: `k` deletes the chat and keeps the worktree, `r` also removes it
@@ -4382,8 +4387,9 @@ checkout.
   On one of your messages (in its rewind menu), the new chat holds what came before it,
   with that message waiting in the box to send or change. Both are also in the
   message's right-click menu. The original is untouched.
-- **Export** as JSON or self-contained HTML, and **import** from either. An HTML export
-  from an older version brings back only the chat text.
+- **Export** as JSON, self-contained HTML, or Markdown (the same Markdown as the
+  terminal's `/export`), and **import** from JSON or HTML. An HTML export from an older
+  version brings back only the chat text.
 - **The File menu** starts a new chat (⌘N), a new chat in another folder (⇧⌘N), or one
   in a recent folder (**Open Recent**), starts a fresh side chat for the open chat
   (**New Side Chat**), and imports or exports chats.

@@ -319,6 +319,10 @@ function fileMenu(isMac: boolean, ctx: MenuContext): MenuItemConstructorOptions 
           {
             label: 'As HTML…',
             click: () => sendMenuCommand({ type: 'export-chat', format: 'html' })
+          },
+          {
+            label: 'As Markdown…',
+            click: () => sendMenuCommand({ type: 'export-chat', format: 'md' })
           }
         ]
       },

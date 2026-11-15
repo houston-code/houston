@@ -622,7 +622,7 @@ export type MenuCommand =
   | { type: 'new-chat-in-folder' }
   | { type: 'new-chat-in-workspace'; workspace: string }
   | { type: 'import-chat' }
-  | { type: 'export-chat'; format: 'json' | 'html' }
+  | { type: 'export-chat'; format: 'json' | 'html' | 'md' }
   /** Help → Take the Tour…: replay the getting-started tips. */
   | { type: 'take-tour' }
   /** File → New Side Chat: open the side chat on a fresh, empty thread. */

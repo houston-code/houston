@@ -430,6 +430,8 @@ const api = {
     ipcRenderer.invoke(IPC.conversationExport, id),
   exportConversationHtml: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.conversationExportHtml, id),
+  exportConversationMarkdown: (id: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.conversationExportMarkdown, id),
   importConversation: (): Promise<ImportConversationResult | null> =>
     ipcRenderer.invoke(IPC.conversationImport),
   organizeConversation: (
