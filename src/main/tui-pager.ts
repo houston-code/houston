@@ -1,6 +1,8 @@
 import type { ChatMessage } from '@shared/agent'
 import { COMPACTION_SUMMARY_PREFIX, SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import { formatReceiptLines, receiptHasFailure } from '@shared/evidence'
 import { runEndNoticeText, runEndRecords } from '@shared/runEnd'
+import { recordHeadline, statusLabel, stepLine, subagentTree, type SubagentNode } from '@shared/subagents'
 import type { Painter } from './tui'
 import type { EditorKey } from './tui-keys'
 import { stripAnsi, stripControlCharsKeepLines, truncateVisible, visibleWidth, wrapAnsi } from './tui-wrap'
@@ -125,6 +127,13 @@ function transcriptBlocks(messages: ChatMessage[]): Block[] {
         out.push({ text: `▸ ${call.name}`, styles: ['magenta', 'bold'], indent: 2 })
         out.push({ text: argsText(call.arguments), styles: ['dim'], indent: 4 })
       }
+      // What Houston recorded running the turn, as the desktop's receipt under it.
+      if (m.receipt) {
+        gap()
+        const [summary, ...rest] = formatReceiptLines(m.receipt)
+        out.push({ text: summary, styles: [receiptHasFailure(m.receipt) ? 'yellow' : 'dim'], indent: 2 })
+        if (rest.length) out.push({ text: rest.join('\n'), styles: ['dim'], indent: 2 })
+      }
       for (const r of runEndRecords(m)) {
         gap()
         out.push({ text: header(`run ended: ${runEndNoticeText(r)}`, r.at), styles: ['yellow'], indent: 2 })
@@ -137,12 +146,26 @@ function transcriptBlocks(messages: ChatMessage[]): Block[] {
       out.push({ text: m.content.length ? m.content : '(no output)', indent: 4 })
       const attached = (m.images?.length ?? 0) + (m.documents?.length ?? 0)
       if (attached) out.push({ text: `(${attached} attachment${attached === 1 ? '' : 's'})`, styles: ['dim'], indent: 4 })
+      // The subagents this call ran, each with every step it took, as the desktop's
+      // subagent view opens them.
+      for (const node of subagentTree(m.subagents ?? [])) subagentBlocks(node, 4, out)
       for (const r of runEndRecords(m)) {
         out.push({ text: header(`run ended: ${runEndNoticeText(r)}`, r.at), styles: ['yellow'], indent: 2 })
       }
     }
   }
   return out
+}
+
+/** A subagent's headline, status, task and steps, then its nested agents below it. */
+function subagentBlocks(node: SubagentNode, indent: number, out: Block[]): void {
+  const r = node.record
+  out.push({ text: `▸ subagent ${recordHeadline(r)}: ${statusLabel(r)}`, styles: ['magenta'], indent })
+  if (r.prompt.trim()) out.push({ text: `task: ${r.prompt.trim()}`, styles: ['dim'], indent: indent + 2 })
+  const steps = r.steps.filter((st) => st.kind !== 'text' || st.summary.trim())
+  if (steps.length) out.push({ text: steps.map(stepLine).join('\n'), indent: indent + 2 })
+  if (r.stepsOmitted) out.push({ text: `(${r.stepsOmitted} steps omitted)`, styles: ['dim'], indent: indent + 2 })
+  for (const c of node.children) subagentBlocks(c, indent + 2, out)
 }
 
 /**

@@ -866,7 +866,7 @@ In the terminal:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
 **Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/cd`, `/vim`, `/keybindings`, `/notify`, `/statusline`, `/screen-reader`,
-`/reduce-motion`, `/verbose`, `/focus`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
+`/reduce-motion`, `/verbose`, `/focus`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/todos`, `/spawned`,
 `/tasks`, `/queue`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/open-in-app`,
 `/permissions`, `/schedule`, `/scorecard`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
@@ -1373,8 +1373,10 @@ see more, or less:
 - **Failures show themselves.** A failed tool prints its first lines without you
   asking, so you can see why.
 - **`/verbose`** shows every call (each read on its own, and directory listings) with
-  each tool's full output as it runs. `/verbose off` stops it, and plain `/verbose`
-  toggles. The choice is remembered for later sessions.
+  each tool's full output as it runs: a shell command's output prints line by line
+  while it runs (each line once), and its result then shows only its summary line.
+  `/verbose off` stops it, and plain `/verbose` toggles. The choice is remembered for
+  later sessions.
 - **`/focus`** shows only your messages, one line per tool call (an edit with its
   `+`/`−` counts, a failure marked `✗` with its exit code), and each turn's final reply.
   The model's reasoning, what it says between tool calls, progress lines and subagents'
@@ -1388,14 +1390,18 @@ see more, or less:
 - **`Ctrl-O`** (or `/transcript`) opens the transcript viewer: the whole session full
   screen, on the terminal's alternate screen so your scrollback is left as it was. It
   shows your messages, the replies, the model's reasoning, every tool call with its
-  full arguments and full output, compaction summaries, and when each message was
-  written. It opens at the latest message. Keys: `j`/`k` or the arrows scroll a line,
+  full arguments and full output, each subagent a call ran with its task and every
+  step, the receipt of what each turn ran, how runs that ended short ended, compaction
+  summaries, and when each message was written. A reopened chat shows its whole
+  history here. It opens at the latest message. Keys: `j`/`k` or the arrows scroll a line,
   `Space`/`b` or `PgDn`/`PgUp` a page, `g`/`G` jump to the start or end, `/` searches
   (then `n`/`N` for the next or previous hit), `{`/`}` jump to your previous or next
   message, `v` opens the transcript in `$VISUAL`/`$EDITOR` (as an owner-only temporary
   file, removed when the editor closes), and `q`, `Esc` or `Ctrl-C` close it, putting
   your draft back exactly as it was. It follows the terminal when you resize it. While
   a turn runs, `Ctrl-O` says it will open once the turn ends rather than opening.
+- **`/todos`** reprints the agent's current todo list (the latest one it wrote) and
+  how many items are done, since the list printed when it changed has scrolled away.
 - **`/copy`** copies the last reply to the clipboard, as the model wrote it (Markdown
   and all). `/copy 2` copies the reply before it. When the reply has fenced code
   blocks, a list offers the whole reply or one block (each shown by its first line).

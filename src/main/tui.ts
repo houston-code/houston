@@ -147,6 +147,8 @@ import { meterOnEvent, meterTokens, startMeter } from '@shared/runMeter'
 import { comeBackHint, parseForkArg, reconcileChatModel } from './tui-chat-handoff'
 import type { ForkPoint } from '@shared/conversation-io'
 import { redactSecrets } from './agent/redact'
+import { LiveTail } from './tui-livetail'
+import { latestTodos, todoProgress } from './tui-todos'
 import { htmlToAnsi } from './syntax'
 import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
 import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
@@ -2556,6 +2558,8 @@ export type SlashResult =
   | { kind: 'thoughts'; mode?: ReasoningDisplay; bad?: string }
   /** Open the transcript viewer (/transcript, Ctrl-O). */
   | { kind: 'transcript' }
+  /** Reprint the agent's current todo list (/todos). */
+  | { kind: 'todos' }
   /** Reprint a past tool result in full (/output [n]). */
   | { kind: 'output'; index: number }
   /** Copy the n-th latest reply, or one of its code blocks, to the clipboard (/copy [n]). */
@@ -2793,6 +2797,8 @@ export function parseSlashCommand(
     }
     case 'transcript':
       return { kind: 'transcript' }
+    case 'todos':
+      return { kind: 'todos' }
     case 'output': {
       // `/output` means "what just happened"; a number counts back from there.
       const n = Number.parseInt(arg.trim(), 10)
@@ -2981,6 +2987,7 @@ export const HELP_TEXT = [
   '  /focus [on|off]       show only your messages, one line per tool call, and the final reply (wins over /verbose)',
   '  /thoughts [mode]      how reasoning shows as it streams: show | summary | hide (Alt-T)',
   '  /transcript           the whole session full screen, with reasoning and full tool output (Ctrl-O)',
+  "  /todos                the agent's current todo list, and how much of it is done",
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /copy [n]             copy a reply (n back; default the last) or one of its code blocks',
   '  /hooks [verb n]       lifecycle hooks (yours, then the project\'s): add, edit <n>, remove <n>',
@@ -7119,6 +7126,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         await openTranscript()
         continue
       }
+      if (result.kind === 'todos') {
+        const todos = latestTodos(messages)
+        if (todos === null) deps.io.out(paint('· no todo list in this chat yet\n', 'dim'))
+        else {
+          deps.io.out(`${renderTodoList(todos, paint)}\n`)
+          if (todos.length) deps.io.out(paint(`  ${todoProgress(todos)}\n`, 'dim'))
+        }
+        continue
+      }
       if (result.kind === 'reduce-motion') {
         applyTerminalSetting({ kind: 'reduce-motion', on: result.on ?? !reduceMotion })
         continue
@@ -8047,6 +8063,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       messages,
       // show_images results print as clickable file links (see renderImageLinks).
       imageLinks: true,
+      // Under /verbose a running command's output prints as it arrives (see LiveTail);
+      // /focus leaves progress out, so it wins here too.
+      ...(verbose && !focusView ? { liveShellOutput: true } : {}),
       ...(sessionAddDirs.length ? { addDirs: [...sessionAddDirs] } : {}),
       ...(wakeTurn ? { wake: true } : {}),
       ...sessionRunFields
@@ -8114,6 +8133,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     let meter = startMeter(nowFn())
     // A stop that didn't come from this keyboard (a hook, another client) is said once.
     let stopSaid = false
+    // Running commands' live output under /verbose: only the lines not printed yet.
+    const liveTail = new LiveTail()
     // A subagent's start, finished steps and end (reviewers' steps only under /verbose).
     const subagentLines = new SubagentTermLines({
       get verbose() {
@@ -8532,7 +8553,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               break
             }
           }
-          const rendered = renderToolResult(e.name, e.ok, e.output, paint, { verbose, width: columns() })
+          // Output already shown line by line as it ran isn't printed again in full.
+          const rendered = renderToolResult(e.name, e.ok, e.output, paint, {
+            verbose: verbose && !liveTail.streamed(e.callId),
+            width: columns()
+          })
+          liveTail.forget(e.callId)
           const line = tag ? tagResultLines(rendered, tag, paint) : rendered
           if (line) deps.io.out(`${line}\n`)
           // Images the desktop shows under the row (a screenshot): at least say so.
@@ -8554,8 +8580,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
         case 'tool_progress': {
-          if (!e.message.trim() || focusView) break
+          if (focusView) break
           const tag = callTag(e.callId)
+          if (e.output !== undefined && verbose) {
+            const room = Math.max(20, columns() - 8)
+            for (const l of liveTail.next(e.callId, e.output)) {
+              const shown = truncate(terminalText(l, { lines: false }).trimEnd(), room)
+              deps.io.out(paint(`    ${tag ? `${tag}: ` : ''}│ ${shown}\n`, 'dim'))
+            }
+          }
+          if (!e.message.trim()) break
           deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(terminalText(e.message, { lines: false }).trim(), 80)}\n`, 'dim'))
           break
         }

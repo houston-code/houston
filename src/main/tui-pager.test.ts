@@ -254,3 +254,65 @@ describe('rewrapTop', () => {
     expect(rewrapTop(5, 0, 50)).toBe(0)
   })
 })
+
+describe('renderTranscript: receipts and subagents', () => {
+  it('shows a turn’s receipt and each subagent a call ran, with its steps', () => {
+    const doc = renderTranscript(
+      [
+        { role: 'user', content: 'look into it' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'd1', name: 'dispatch_agent', arguments: { description: 'Trace' } }] },
+        {
+          role: 'tool',
+          content: 'It reads twice.',
+          toolCallId: 'd1',
+          toolName: 'dispatch_agent',
+          subagents: [
+            {
+              id: 'ag1',
+              kind: 'research',
+              label: 'Trace the loader',
+              model: 'small-model',
+              modelSource: 'run',
+              prompt: 'Find where the config is read',
+              tools: ['read_file'],
+              status: 'done',
+              startedAt: 0,
+              endedAt: 2000,
+              steps: [
+                { index: 0, turn: 1, kind: 'tool', tool: 'read_file', summary: 'Read src/loader.ts', ok: true, hint: '40 lines' },
+                { index: 1, turn: 2, kind: 'text', summary: '' }
+              ]
+            },
+            {
+              id: 'ag1.1',
+              parentId: 'ag1',
+              kind: 'research',
+              label: 'Nested',
+              model: 'small-model',
+              modelSource: 'run',
+              prompt: '',
+              tools: [],
+              status: 'error',
+              startedAt: 0,
+              steps: []
+            }
+          ]
+        } as ChatMessage,
+        {
+          role: 'assistant',
+          content: 'Fixed.',
+          receipt: { v: 1, checks: [{ kind: 'test', label: 'npm test', ok: false, exitCode: 1 }], otherCommands: 2, filesChanged: ['src/loader.ts'] }
+        } as ChatMessage
+      ],
+      plain,
+      { width: 100 }
+    )
+    const out = text(doc)
+    expect(out).toContain('▸ subagent Trace the loader (small-model, 1 step, 2s')
+    expect(out).toContain('task: Find where the config is read')
+    expect(out).toContain('✓ Read src/loader.ts · 40 lines')
+    expect(out).toMatch(/ {6}▸ subagent Nested/)
+    expect(out).toMatch(/What ran: /)
+    expect(out).toContain('npm test')
+  })
+})
