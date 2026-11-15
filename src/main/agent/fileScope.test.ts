@@ -214,6 +214,29 @@ describe('tracked hidden paths', () => {
     expect(await searchedFiles(repo, rg, '.', '.github/**')).toEqual(['.github/workflows/ci.yml'])
   }, SLOW)
 
+  it.skipIf(!rg)('ripgrep names the file when one tracked hidden file is left to search', async () => {
+    const lines = (glob?: string, pattern = 'needle'): Promise<string> =>
+      searchContents({ pattern, workspace: repo, searchRel: '.', startAbs: repo, rgPath: rg, max: 100, glob })
+    // The glob narrows the tracked hidden files to one explicit ripgrep path.
+    expect((await lines('*.yml')).replace(/\\/g, '/')).toMatch(/^\.github\/workflows\/ci\.yml:1:/)
+    // A lone tracked dotfile at the root, beside an ordinary hit.
+    git(['add', '-f', '.gitignore'], repo)
+    write(repo, 'src/a.ts', 'export const target = 1\n')
+    const out = (await lines(undefined, 'target')).replace(/\\/g, '/').split('\n').sort()
+    expect(out).toEqual(['.gitignore:2:target/', 'src/a.ts:1:export const target = 1'])
+  }, SLOW)
+
+  it('search_files skips tracked hidden binary files on both backends', async () => {
+    write(repo, '.yarn/cache/react.zip', 'PK\u0003\u0004\u0000\u0000needle\u0000\u0000')
+    git(['add', '-f', '.yarn/cache/react.zip'], repo)
+    expect(await searchedFiles(repo, null)).toEqual(HIDDEN_EXPECTED)
+    if (rg) {
+      expect(await searchedFiles(repo, rg)).toEqual(HIDDEN_EXPECTED)
+      const out = await searchContents({ pattern: 'needle', workspace: repo, searchRel: '.', startAbs: repo, rgPath: rg, max: 100 })
+      expect(out).not.toMatch(/binary file/)
+    }
+  }, SLOW)
+
   it('search_files searches a hidden directory named explicitly', async () => {
     expect(await searchedFiles(repo, null, '.github')).toEqual(['.github/workflows/ci.yml'])
     if (rg) expect(await searchedFiles(repo, rg, '.github')).toEqual(['.github/workflows/ci.yml'])

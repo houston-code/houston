@@ -1079,6 +1079,8 @@ export function isElisionPlaceholder(line: string): boolean {
   t = t.replace(ELISION_CLOSE, '').trim()
   const dotted = ELLIPSIS_EDGE.test(t)
   if (!open && !dotted) return false
+  // A spread or rest element (`...rest`, `...remainder`) alone on a line is code.
+  if (!open && /^\.\.\.[\w$]+$/.test(t)) return false
   t = t
     .replace(/^[.…\s([]+|[.…\s)\]]+$/g, '')
     .trim()

@@ -329,7 +329,7 @@ import {
   takeChildReport,
   takeChildReports
 } from '../conversations'
-import { waitForBackground } from './waitFor'
+import { WAIT_FOR_NAME, waitForBackground } from './waitFor'
 import { BackgroundAgents, backgroundAgentsNote, backgroundReportText, backgroundStartedText } from './backgroundAgents'
 import {
   buildPinnedMessages,
@@ -390,6 +390,13 @@ import {
   resolveVerifyMaxPasses
 } from './verify-gate'
 import { MAX_UNATTENDED_STOP_CONTINUATIONS, UNATTENDED_STOP_NOTE, endsOnUndoneWork } from './unattended-stop'
+
+/**
+ * Read-kind tools that report on background work (a shell or agent that kept writing
+ * after the call that started it returned), so the run's search and read caches are
+ * dropped after them.
+ */
+const OBSERVES_BACKGROUND_WORK: ReadonlySet<string> = new Set([WAIT_FOR_NAME, 'read_shell_output', 'kill_shell'])
 
 /** Max times a Stop hook may force another turn, so a blocking hook can't spin forever. */
 const MAX_STOP_CONTINUATIONS = 3
@@ -1627,6 +1634,10 @@ export async function startRun(
   // Hoisted above the try so the `finally` can backfill results for any tool call
   // left dangling by an interruption (see the repair calls below).
   const messages: ChatMessage[] = [...req.messages]
+  // Background work (a shell, an agent, a spawned session) changes files after the
+  // call that started it returned, so its news is when the run's caches go stale.
+  // Set once those caches exist (below).
+  let onBackgroundNews = (): void => {}
   // Hand the model news from background work held for this chat (backgroundEvents.ts):
   // before the user's new message at turn start, or appended at an iteration boundary.
   const deliverBackgroundEvents = (beforeLast: boolean): void => {
@@ -1634,6 +1645,7 @@ export async function startRun(
     const events = takeBackgroundEvents(conversationId)
     const note = backgroundEventsNote(events)
     if (!note) return
+    onBackgroundNews()
     if (beforeLast) messages.splice(messages.length - 1, 0, note)
     else messages.push(note)
     persist(messages)
@@ -1645,6 +1657,7 @@ export async function startRun(
     const finished = backgroundAgents.takeFinished()
     const note = backgroundAgentsNote(finished)
     if (!note) return false
+    onBackgroundNews()
     messages.push(note)
     persist(messages)
     emit({
@@ -3903,6 +3916,13 @@ export async function startRun(
         readCache.invalidateAll()
       }
     }
+    // Background work and the calls that observe it: what they report changed after
+    // any earlier search or read, so both are planned and read afresh.
+    onBackgroundNews = (): void => {
+      branchStale = true
+      scopeCache.invalidate()
+      readCache.invalidateAll()
+    }
 
     // Adaptive turn budget. The hard iteration cap is still enforced, but as the
     // run nears it (or crosses a cumulative-cost ceiling) we inject a one-time
@@ -4347,6 +4367,7 @@ export async function startRun(
           clearChildReportFlag(conversationId)
           const reports = takeChildReports(conversationId)
           if (reports.length > 0) {
+            onBackgroundNews()
             messages.push(childReportsNote(reports))
             persist(messages)
             emit({
@@ -5466,6 +5487,7 @@ export async function startRun(
             return
           }
           await runReadBatch(segment.calls)
+          if (segment.calls.some(({ call }) => OBSERVES_BACKGROUND_WORK.has(call.name))) onBackgroundNews()
           continue
         }
 
@@ -6055,6 +6077,8 @@ export async function startRun(
               // side effects — so we never serve a stale read afterwards.
               if (tool.kind !== 'read') {
                 invalidateForMutation(call.name, tool.kind, execArgs)
+              } else if (OBSERVES_BACKGROUND_WORK.has(call.name)) {
+                onBackgroundNews()
               }
             }
           }

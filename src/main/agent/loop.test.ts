@@ -5641,6 +5641,98 @@ describe('search scope memo (per run)', () => {
     expect(searches(first)).toEqual([['app.ts', 'lib/kept.ts', 'lib/loose.ts']])
     expect(searches(second)).toEqual([['.github/ci.yml', 'app.ts', 'lib/kept.ts', 'lib/loose.ts']])
   })
+
+  const globCall = (id: string, pattern: string): ProviderStreamEvent => ({
+    type: 'tool_call',
+    call: { id, name: 'glob', arguments: { pattern } }
+  })
+  const globs = (r: RunResult): string[] =>
+    r.events
+      .filter((e) => e.type === 'tool_result' && e.name === 'glob')
+      .map((e) => (e as { output: string }).output.replace(/\\/g, '/'))
+
+  it('lists afresh after wait_for reports that a background shell finished', async () => {
+    let n = 0
+    let shellId = ''
+    const provider: Provider = {
+      async *streamChat(req) {
+        n++
+        if (n === 1) {
+          // Writes gen/api.ts once the glob below has listed the tree.
+          const command = `node -e "setTimeout(() => { require('fs').mkdirSync('gen'); require('fs').writeFileSync('gen/api.ts', 'x') }, 300)"`
+          yield { type: 'tool_call', call: { id: 'r1', name: 'run_shell', arguments: { command, background: true } } }
+          yield step
+          return
+        }
+        if (n === 2) {
+          yield globCall('g1', '*.ts')
+          yield step
+          return
+        }
+        if (n === 3) {
+          const started = String(req.messages.find((m) => m.role === 'tool' && m.toolCallId === 'r1')?.content ?? '')
+          shellId = /Started background shell (\S+)\./.exec(started)?.[1] ?? ''
+          yield { type: 'tool_call', call: { id: 'w1', name: 'wait_for', arguments: { id: shellId, timeout_seconds: 30 } } }
+          yield step
+          return
+        }
+        if (n === 4) {
+          yield globCall('g2', 'gen/**')
+          yield step
+          return
+        }
+        yield end
+      }
+    }
+    const r = await run({
+      conversationId: 'conv-scope-wait',
+      provider,
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(shellId).not.toBe('')
+    expect(globs(r)).toEqual(['app.ts', 'gen/api.ts'])
+  }, 30_000)
+
+  it('lists afresh when news from background work is delivered at a step', async () => {
+    let n = 0
+    const provider: Provider = {
+      async *streamChat() {
+        n++
+        if (n === 1) {
+          yield globCall('g1', '*.ts')
+          yield step
+          return
+        }
+        if (n === 2) {
+          // Background work wrote a file and its exit arrives while this request streams.
+          mkdirSync(join(ws, 'gen'))
+          writeFileSync(join(ws, 'gen', 'api.ts'), 'x')
+          pushBackgroundEvent(
+            'conv-scope-news',
+            { kind: 'shell_exit', shellId: 'cc33', command: 'npm run codegen', exitCode: 0, tail: '', at: Date.now() },
+            { wake: true }
+          )
+          yield { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'app.ts' } } }
+          yield step
+          return
+        }
+        if (n === 3) {
+          yield globCall('g2', 'gen/**')
+          yield step
+          return
+        }
+        yield end
+      }
+    }
+    resetBackgroundEventsForTest()
+    try {
+      const r = await run({ conversationId: 'conv-scope-news', provider, policy: 'full-auto' })
+      expect(globs(r)).toEqual(['app.ts', 'gen/api.ts'])
+    } finally {
+      resetBackgroundEventsForTest()
+    }
+  })
 })
 
 describe('dispatch_writable_agent', () => {

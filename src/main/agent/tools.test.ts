@@ -699,6 +699,13 @@ describe('write/read/edit', () => {
     expect(fileText('mod.ts')).toBe(original) // untouched
   })
 
+  it('writes a rewrite that adds a destructured ...rest line', async () => {
+    writeFileSync(join(workspace, 'Button.tsx'), 'export function Button({ variant, size }: Props) {\n  return null\n}\n')
+    const next = 'export function Button({\n  variant,\n  size,\n  ...rest\n}: Props) {\n  return null\n}\n'
+    await run('write_file', { path: 'Button.tsx', content: next })
+    expect(fileText('Button.tsx')).toBe(next)
+  })
+
   it('allows placeholders the file already had, in new files, and when every line is kept', async () => {
     const tpl = 'function f() {\n  // ... rest unchanged\n}\nconst a = 1\nconst b = 2\n'
     writeFileSync(join(workspace, 'tpl.ts'), tpl)
@@ -742,6 +749,8 @@ describe('write_file rewrite helpers', () => {
     'const rest = args.slice(1) // rest unchanged by design, see #12',
     'existing code',
     '...args',
+    '  ...rest',
+    '...remainder',
     ''
   ])('does not flag %j', (line) => {
     expect(isElisionPlaceholder(line)).toBe(false)

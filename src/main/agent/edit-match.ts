@@ -264,7 +264,10 @@ function reindentFor(span: Span, oldLines: string[], newLines: string[], oldBase
     oldLines.length < 2 ||
     first.trim() === '' ||
     leadingIndent(first) !== '' ||
-    !span.firstIndent
+    !span.firstIndent ||
+    // Only a mid-line copy has its later lines at their absolute indent. A block
+    // dedented as a whole (later lines shallower than the window's) is re-based as one.
+    commonIndent(oldLines.slice(1)) !== (span.restIndent ?? '')
   ) {
     return reindent(newLines, oldBase, fileBase)
   }

@@ -99,9 +99,30 @@ describe('revertHunkText', () => {
     expect(revertHunkText('a\nnew\nb\n', ins)).toBe('a\nb\n')
     const del = hunksFromLines(diffLines('a\nold\nb\n', 'a\nb\n'))[0]
     expect(revertHunkText('a\nb\n', del)).toBe('a\nold\nb\n')
-    // Deleting everything a file held, put back.
+    // Deleting everything a file held, put back with its final newline.
     const all = hunksFromLines(diffLines('x\n', ''))[0]
-    expect(revertHunkText('', all)).toBe('x')
+    expect(revertHunkText('', all)).toBe('x\n')
+    const emptied = fileDiffFromTexts('f', 'a\nb\n', '')
+    expect(revertHunkText('', emptied.hunks[0])).toBe('a\nb\n')
+  })
+
+  it('reverts a hunk that added a final newline to a file without one', () => {
+    const d = fileDiffFromTexts('f', 'a\nb', 'a\nb\nc\n')
+    expect(d.hunks).toHaveLength(1)
+    expect(revertHunkText('a\nb\nc\n', d.hunks[0])).toBe('a\nb')
+    // Only the newline added.
+    const nl = fileDiffFromTexts('f', 'a\nb', 'a\nb\n')
+    expect(revertHunkText('a\nb\n', nl.hunks[0])).toBe('a\nb')
+    // And the other way: a final newline removed comes back.
+    const gone = fileDiffFromTexts('f', 'a\nb\n', 'a\nb')
+    expect(revertHunkText('a\nb', gone.hunks[0])).toBe('a\nb\n')
+  })
+
+  it('keeps the bytes of context lines in a file with mixed line endings', () => {
+    const before = 'a\nb\nc\nd\r\ne\n'
+    const after = 'a\nB\nc\nd\r\ne\n'
+    const d = fileDiffFromTexts('f', before, after)
+    expect(revertHunkText(after, d.hunks[0])).toBe(before)
   })
 
   it('keeps CRLF line endings and a missing final newline', () => {

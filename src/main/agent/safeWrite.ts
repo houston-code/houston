@@ -77,6 +77,13 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 
 /** O_NOFOLLOW where the platform has it (not Windows, where it is undefined). */
 const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0
+/**
+ * POSIX only. Opening a FIFO for writing blocks until a reader shows up, and the open
+ * here is synchronous (on the main process): with this flag it fails at once instead
+ * (ENXIO), or opens and is then refused by the fd's own regular-file check. Regular
+ * files ignore it.
+ */
+const O_NONBLOCK = fsConstants.O_NONBLOCK ?? 0
 
 /** How many symlinks a final component may chain through before we give up (as ELOOP). */
 const MAX_LINK_HOPS = 40
@@ -328,13 +335,17 @@ export function writeFileContained(
   if (target.existing?.isDirectory()) {
     throw errnoError('EISDIR', `illegal operation on a directory, open '${display}'`)
   }
+  // A FIFO, socket, or device is never written (opening a FIFO would wait for a reader).
+  if (target.existing && !target.existing.isFile()) {
+    throw errnoError('EISDIR', `not a regular file: ${display}`)
+  }
   const bytes = typeof data === 'string' ? Buffer.from(data, 'utf8') : data
   // Existing file: open it WITHOUT O_TRUNC, so a redirected open damages nothing; it is
   // truncated through the fd only once verified. A missing one is created with O_EXCL,
   // which also refuses to follow anything that appeared at the name since.
   const flags = target.existing
-    ? fsConstants.O_WRONLY | O_NOFOLLOW
-    : fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW
+    ? fsConstants.O_WRONLY | O_NOFOLLOW | O_NONBLOCK
+    : fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW | O_NONBLOCK
   let fd: number
   raceHook?.('open', target.path)
   try {

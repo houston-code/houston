@@ -159,32 +159,61 @@ export function canRevertHunks(f: FileDiff): boolean {
  * Undo one hunk in a file's current text: the hunk's new side (context and added
  * lines) must sit at its stated position exactly, and is replaced by its old side
  * (context and removed lines). Null when the text there no longer matches, so a
- * stale view can never rewrite lines it did not show. Keeps the file's line endings
- * (CRLF stays CRLF) and whether it ends in a newline.
+ * stale view can never rewrite lines it did not show. Context lines keep their
+ * bytes; restored lines take the file's dominant line ending (a stray CRLF line in
+ * an LF file does not turn the hunk into CRLF). The final newline follows the old
+ * side where the hunk shows it changing, and is otherwise kept as it is.
  */
 export function revertHunkText(content: string, hunk: DiffHunk): string | null {
   const head = parseHunkHeader(hunk.header)
   if (!head) return null
-  const crlf = content.includes('\r\n')
   const endsWithNewline = content.endsWith('\n')
   const lines = content === '' ? [] : content.split('\n')
   if (endsWithNewline) lines.pop()
+  // Dominant ending: strictly more CRLF than bare-LF terminators.
+  const crlfCount = content.split('\r\n').length - 1
+  const terminators = endsWithNewline ? lines.length : Math.max(0, lines.length - 1)
+  const eol = crlfCount > terminators - crlfCount ? '\r' : ''
   const strip = (s: string): string => (s.endsWith('\r') ? s.slice(0, -1) : s)
-  const newSide = hunk.lines.filter((l) => l.type === 'ctx' || l.type === 'add').map((l) => strip(l.text))
-  const oldSide = hunk.lines.filter((l) => l.type === 'ctx' || l.type === 'del').map((l) => strip(l.text))
+  const newSide = hunk.lines.filter((l) => l.type === 'ctx' || l.type === 'add')
   if (newSide.length !== head.newCount) return null
   const at = head.newCount === 0 ? head.newStart : head.newStart - 1
-  if (at < 0 || at + newSide.length > lines.length) return null
-  for (let k = 0; k < newSide.length; k++) {
-    if (strip(lines[at + k]) !== newSide[k]) return null
+  // A newline added at the end of a file shows as a last, empty added line (see
+  // diffLines): it is the file's final "\n", not a line of its own.
+  let n = newSide.length
+  const last = newSide[n - 1]
+  const eofNewlineAdded =
+    endsWithNewline && n > 0 && at + n === lines.length + 1 && last.type === 'add' && strip(last.text) === ''
+  if (eofNewlineAdded) n--
+  if (at < 0 || at + n > lines.length) return null
+  for (let k = 0; k < n; k++) {
+    if (strip(lines[at + k]) !== strip(newSide[k].text)) return null
   }
-  // Lines outside the hunk keep their bytes; restored lines take the file's ending.
-  const restored = oldSide.map((t) => (crlf ? `${t}\r` : t))
-  const out = [...lines.slice(0, at), ...restored, ...lines.slice(at + newSide.length)]
+  // Lines outside the hunk, and its context lines, keep their bytes.
+  const restored: string[] = []
+  let k = 0
+  for (const l of hunk.lines) {
+    if (l.type === 'add') {
+      k++
+    } else if (l.type === 'del') {
+      restored.push(strip(l.text) + eol)
+    } else {
+      const raw = lines[at + k]
+      // The file's unterminated last line has no ending to keep, and may not stay last.
+      const unterminated = !endsWithNewline && at + k === lines.length - 1
+      restored.push(unterminated ? strip(raw) + eol : raw)
+      k++
+    }
+  }
+  const out = [...lines.slice(0, at), ...restored, ...lines.slice(at + n)]
   if (out.length === 0) return ''
+  // The final newline: gone with the added one the hunk shows; put back when the file
+  // was emptied (the diff of an emptied file cannot say, and text files end in one);
+  // otherwise kept as it is.
+  const finalNewline = eofNewlineAdded ? false : content === '' ? true : endsWithNewline
   // A last line with no newline after it has no line ending at all.
-  if (!endsWithNewline) out[out.length - 1] = strip(out[out.length - 1])
-  return out.join('\n') + (endsWithNewline ? '\n' : '')
+  if (!finalNewline) out[out.length - 1] = strip(out[out.length - 1])
+  return out.join('\n') + (finalNewline ? '\n' : '')
 }
 
 /** What a revert would do, in words, for the confirmation (the Changes view and `/changes revert`). */

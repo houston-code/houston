@@ -245,6 +245,23 @@ function relativeToInnermostRoot(abs: string, roots: string[]): string | null {
 }
 
 /**
+ * realpath, with Windows 8.3 short names expanded. The JS realpath only resolves
+ * links, so `HOUSTO~1` (a second name for `.houston`) would come back as written and
+ * slip past the segment match; the native one returns the long name. A native failure
+ * other than a missing path falls back to the JS walk.
+ */
+function realpathLong(p: string): string {
+  if (process.platform !== 'win32') return realpathSync(p)
+  try {
+    return realpathSync.native(p)
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') throw e
+    return realpathSync(p)
+  }
+}
+
+/**
  * The real location of `abs`: its deepest existing ancestor realpath'd with the
  * not-yet-existing rest re-attached (a write may create the file). Null when it
  * can't be resolved for another reason (a symlink loop).
@@ -254,7 +271,7 @@ function realLocation(abs: string): string | null {
   const tail: string[] = []
   for (;;) {
     try {
-      return join(realpathSync(dir), ...tail.reverse())
+      return join(realpathLong(dir), ...tail.reverse())
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code
       if (code !== 'ENOENT' && code !== 'ENOTDIR') return null
