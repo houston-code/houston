@@ -140,7 +140,7 @@ function PastePanel({
                 setRead(null)
                 onAdd(
                   servers.slice(current.length),
-                  `Added ${added.join(', ')}, switched off. Tick a box in the list to switch one on.${skipped.length ? ` Skipped ${skipped.join(', ')} (already configured).` : ''}`
+                  `Added ${added.join(', ')}, switched off. Tick a server’s On box in the list to switch it on.${skipped.length ? ` Skipped ${skipped.join(', ')} (already configured).` : ''}`
                 )
               }}
             >

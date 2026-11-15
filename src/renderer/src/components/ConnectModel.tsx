@@ -154,7 +154,9 @@ export function ConnectModel({ settings, onConnected, onBack, onMoreProviders }:
   const local = provider ? !provider.requiresKey : false
   const showReady = provider !== undefined && isReady(provider) && !replacing
   // The model a first key on this provider will start on, named before connecting.
-  const startDefault = provider && !local ? pickDefaultModel(provider) : undefined
+  // Only a first key does: replacing the key of a provider that already works keeps
+  // the picked model (see storeKey), so no default is named then.
+  const startDefault = provider && !local && !isReady(provider) ? pickDefaultModel(provider) : undefined
   const startModel =
     provider && startDefault
       ? (provider.models.find((m) => m.id === startDefault)?.label ?? modelDisplayName(provider.kind, startDefault))

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { matchesTerms, normalizeForSearch, queryTerms, searchHaystack } from './search'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { highlightTerms, matchesTerms, normalizeForSearch, queryTerms, searchHaystack } from './search'
 
 describe('settings search matching', () => {
   it('normalizes case, accents, and punctuation', () => {
@@ -22,5 +22,33 @@ describe('settings search matching', () => {
 
   it('matches nothing on an empty query', () => {
     expect(matchesTerms([], 'anything')).toBe(false)
+  })
+})
+
+describe('highlightTerms', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('highlights the words the matcher used, for a query with punctuation', () => {
+    const registry = new Map<string, { ranges: Range[] }>()
+    vi.stubGlobal('CSS', { highlights: registry })
+    vi.stubGlobal(
+      'Highlight',
+      class {
+        ranges: Range[]
+        constructor(...ranges: Range[]) {
+          this.ranges = ranges
+        }
+      }
+    )
+    const root = document.createElement('div')
+    root.innerHTML = '<p>Web search API key</p><p hidden>api key</p>'
+    document.body.appendChild(root)
+    const clear = highlightTerms(root, 'api-key')
+    const found = registry.get('settings-search')?.ranges.map((r) => r.toString())
+    expect(found).toEqual(['API', 'key'])
+    highlightTerms(root, 'web_search')
+    expect(registry.get('settings-search')?.ranges.map((r) => r.toString())).toEqual(['Web', 'search'])
+    clear()
+    root.remove()
   })
 })

@@ -131,7 +131,8 @@ export function HeadersField({
   env = false,
   className,
   rows = 2,
-  placeholder
+  placeholder,
+  label
 }: {
   headers: Record<string, string> | undefined
   onChange: (headers: Record<string, string>) => void
@@ -140,6 +141,8 @@ export function HeadersField({
   className?: string
   rows?: number
   placeholder?: string
+  /** Accessible name, where no visible label wraps the field. */
+  label?: string
 }): JSX.Element {
   const [text, setText] = useState(() => headersToText(headers, env))
   const [unread, setUnread] = useState(0)
@@ -160,6 +163,7 @@ export function HeadersField({
     <>
       <textarea
         className={className}
+        aria-label={label}
         rows={rows}
         placeholder={placeholder}
         value={text}
@@ -394,7 +398,8 @@ export function SettingsSection({
               Modified
             </span>
             <button className="link set-section__reset" onClick={meta.onReset} aria-label={`Reset ${title} to defaults`}>
-              Reset
+              {/* With the heading hidden (it repeats the page title), say what resets. */}
+              {repeatsPage ? `Reset ${title.charAt(0).toLowerCase()}${title.slice(1)}` : 'Reset'}
             </button>
           </>
         )}

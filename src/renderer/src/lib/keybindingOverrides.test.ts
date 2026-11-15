@@ -34,13 +34,26 @@ describe('chord serialization', () => {
 })
 
 describe('chordFromEvent', () => {
-  it('builds a chord, normalizing Ctrl/Cmd to mod', () => {
+  it('builds a chord, normalizing Ctrl/Cmd to mod off macOS', () => {
     expect(
-      chordFromEvent({ key: 'k', metaKey: true, ctrlKey: false, shiftKey: false, altKey: false })
+      chordFromEvent({ key: 'k', metaKey: true, ctrlKey: false, shiftKey: false, altKey: false }, false)
     ).toEqual({ key: 'k', mod: true })
     expect(
-      chordFromEvent({ key: 'k', metaKey: false, ctrlKey: true, shiftKey: false, altKey: false })
+      chordFromEvent({ key: 'k', metaKey: false, ctrlKey: true, shiftKey: false, altKey: false }, false)
     ).toEqual({ key: 'k', mod: true })
+  })
+
+  it('records Control on macOS as ⌃, apart from ⌘', () => {
+    const ctrl = chordFromEvent({ key: 'j', metaKey: false, ctrlKey: true, shiftKey: false, altKey: false }, true)
+    expect(ctrl).toEqual({ key: 'j', ctrl: true })
+    expect(chordToString(ctrl!)).toBe('ctrl+j')
+    expect(
+      chordFromEvent({ key: 'k', metaKey: true, ctrlKey: false, shiftKey: false, altKey: false }, true)
+    ).toEqual({ key: 'k', mod: true })
+    // The recorded ⌃ chord fires on Control, not on ⌘.
+    const defs = resolveShortcuts({ 'toggle-sidebar': chordToString(ctrl!) })
+    expect(matchShortcut({ key: 'j', metaKey: false, ctrlKey: true }, defs)).toBe('toggle-sidebar')
+    expect(matchShortcut({ key: 'j', metaKey: true, ctrlKey: false }, defs)).not.toBe('toggle-sidebar')
   })
 
   it('returns null for a bare modifier press', () => {

@@ -8529,6 +8529,20 @@ body:has(.coachmark) .get-started {
   border-color: var(--accent, #6ea8fe);
   color: var(--accent, #6ea8fe);
 }
+.keybind-row {
+  flex-wrap: wrap;
+}
+/* "Already used by …", on its own line under the row. */
+.keybind-row__conflict {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--warn);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
 
 /* ---- Find in conversation (⌘F) ---- */
 /* A zero-height strip after the titlebar and the update banner: the find bar hangs
@@ -8626,11 +8640,21 @@ body:has(.coachmark) .get-started {
   display: block;
   margin-bottom: 9px;
 }
-.field > span {
+.field > span,
+.field > label {
   display: block;
   font-size: 12px;
   color: var(--text-dim);
   margin-bottom: 4px;
+}
+/* "Remove <provider>?" under a provider's head. */
+.provider__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
 }
 .field input,
 .field textarea,
@@ -9231,9 +9255,10 @@ body:has(.coachmark) .get-started {
 .ro-rule__match {
   min-width: 0;
   font-family: var(--mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Wrapped, never cut off: a project's hook command or server target is what the
+     user reads before trusting the folder. */
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 /* Segmented control: a small exclusive button group. */
@@ -9536,6 +9561,9 @@ body:has(.coachmark) .get-started {
 .mcp-server__enabled {
   display: flex;
   align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
 }
 .mcp-server__args {
   background: var(--bg-input);
@@ -9549,9 +9577,9 @@ body:has(.coachmark) .get-started {
 .mcp-server__status {
   font-size: 12px;
   color: var(--text-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Wrapped so a connection error is readable in full. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .mcp-server__status--ok {
   color: var(--ok, #3fb950);

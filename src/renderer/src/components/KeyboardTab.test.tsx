@@ -35,6 +35,51 @@ describe('KeyboardTab', () => {
     expect(onSet).toHaveBeenCalledWith('new-chat', 'mod+j')
   })
 
+  it('names each capture button by its shortcut and binding, and marks it while recording', () => {
+    render(<KeyboardTab overrides={undefined} onSet={noop} onReset={noop} onResetAll={noop} />)
+    const button = screen.getByRole('button', { name: /^New chat: (⌘N|Ctrl\+N)\. Click to change$/ })
+    expect(button).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(button)
+    expect(capture('New chat')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('stops recording when the button loses focus, so a later key is not bound', () => {
+    const onSet = vi.fn()
+    render(<KeyboardTab overrides={undefined} onSet={onSet} onReset={noop} onResetAll={noop} />)
+    fireEvent.click(capture('New chat'))
+    fireEvent.blur(capture('New chat'))
+    expect(capture('New chat')).not.toHaveTextContent('Press keys…')
+    fireEvent.keyDown(document.body, { key: 'j', metaKey: true })
+    expect(onSet).not.toHaveBeenCalled()
+  })
+
+  it('records one row at a time: starting another ends the first', () => {
+    render(<KeyboardTab overrides={undefined} onSet={noop} onReset={noop} onResetAll={noop} />)
+    fireEvent.click(capture('New chat'))
+    fireEvent.click(capture('Command palette'))
+    expect(capture('New chat')).not.toHaveTextContent('Press keys…')
+    expect(capture('Command palette')).toHaveTextContent('Press keys…')
+  })
+
+  it('warns when the keys are already used, replacing the other binding only when asked', () => {
+    const onSet = vi.fn()
+    render(<KeyboardTab overrides={undefined} onSet={onSet} onReset={noop} onResetAll={noop} />)
+    fireEvent.click(capture('Toggle sidebar'))
+    fireEvent.keyDown(capture('Toggle sidebar'), { key: 'k', metaKey: true, ctrlKey: true })
+    const alert = within(row('Toggle sidebar')).getByRole('alert')
+    expect(alert).toHaveTextContent(/is already used by Command palette/)
+    expect(onSet).not.toHaveBeenCalled()
+    fireEvent.click(within(alert).getByRole('button', { name: 'Cancel' }))
+    expect(within(row('Toggle sidebar')).queryByRole('alert')).toBeNull()
+    expect(onSet).not.toHaveBeenCalled()
+
+    fireEvent.click(capture('Toggle sidebar'))
+    fireEvent.keyDown(capture('Toggle sidebar'), { key: 'k', metaKey: true, ctrlKey: true })
+    fireEvent.click(within(row('Toggle sidebar')).getByRole('button', { name: 'Replace' }))
+    expect(onSet).toHaveBeenCalledWith('command-palette', null)
+    expect(onSet).toHaveBeenCalledWith('toggle-sidebar', 'mod+k')
+  })
+
   it('ignores a bare modifier press while recording', () => {
     const onSet = vi.fn()
     render(<KeyboardTab overrides={undefined} onSet={onSet} onReset={noop} onResetAll={noop} />)
@@ -57,9 +102,9 @@ describe('KeyboardTab', () => {
     )
     expect(capture('New chat')).toHaveTextContent(/⌘J|Ctrl\+J/)
     const controls = row('New chat')
-    fireEvent.click(within(controls).getByRole('button', { name: 'Disable' }))
+    fireEvent.click(within(controls).getByRole('button', { name: 'Disable New chat' }))
     expect(onSet).toHaveBeenCalledWith('new-chat', null)
-    fireEvent.click(within(controls).getByRole('button', { name: 'Reset' }))
+    fireEvent.click(within(controls).getByRole('button', { name: 'Reset New chat' }))
     expect(onReset).toHaveBeenCalledWith('new-chat')
   })
 
@@ -73,7 +118,7 @@ describe('KeyboardTab', () => {
       />
     )
     expect(capture('Toggle sidebar')).toHaveTextContent('Unbound')
-    expect(within(row('Toggle sidebar')).queryByRole('button', { name: 'Disable' })).toBeNull()
+    expect(within(row('Toggle sidebar')).queryByRole('button', { name: 'Disable Toggle sidebar' })).toBeNull()
   })
 
   it('offers Reset all only when there are overrides', () => {

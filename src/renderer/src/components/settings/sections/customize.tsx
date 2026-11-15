@@ -311,7 +311,7 @@ export function CustomizeSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
 }
 
 const SCOPE_NAMES: Record<InstructionFile['scope'], string> = {
-  global: 'Every project',
+  global: 'All projects',
   project: 'Project root',
   nested: 'Subfolder'
 }

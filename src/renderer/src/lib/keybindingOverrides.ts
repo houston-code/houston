@@ -4,7 +4,7 @@
  * "record a shortcut" UI), and resolving the default registry against a user's
  * overrides so the rest of the app matches/display against the effective bindings.
  */
-import { SHORTCUTS, type KeyChord, type ShortcutDef, type ShortcutId } from './shortcuts'
+import { SHORTCUTS, isMacPlatform, type KeyChord, type ShortcutDef, type ShortcutId } from './shortcuts'
 
 /** Overrides keyed by shortcut id: a chord string rebinds, `null` disables, absent = default. */
 export type KeybindingOverrides = Record<string, string | null>
@@ -40,18 +40,26 @@ export function chordFromString(s: string): KeyChord | null {
   return chord
 }
 
-/** Build a chord from a live key event, or null for a bare modifier press. */
-export function chordFromEvent(e: {
-  key: string
-  metaKey: boolean
-  ctrlKey: boolean
-  shiftKey: boolean
-  altKey: boolean
-}): KeyChord | null {
+/**
+ * Build a chord from a live key event, or null for a bare modifier press. On macOS
+ * ⌘ is `mod` and Control on its own is the separate `ctrl` (⌃), so a ⌃ chord is
+ * recorded as ⌃ and doesn't also fire on ⌘; elsewhere Ctrl is the command key.
+ */
+export function chordFromEvent(
+  e: {
+    key: string
+    metaKey: boolean
+    ctrlKey: boolean
+    shiftKey: boolean
+    altKey: boolean
+  },
+  mac: boolean = isMacPlatform()
+): KeyChord | null {
   if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') return null
   const chord: KeyChord = { key: e.key }
   // Normalize the platform command key to `mod` so a binding works on both OSes.
-  if (e.metaKey || e.ctrlKey) chord.mod = true
+  if (mac && e.ctrlKey && !e.metaKey) chord.ctrl = true
+  else if (e.metaKey || e.ctrlKey) chord.mod = true
   if (e.shiftKey) chord.shift = true
   if (e.altKey) chord.alt = true
   return chord

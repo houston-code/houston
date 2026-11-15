@@ -336,6 +336,11 @@ export default function App(): JSX.Element {
   // A settings search to open on (`/settings <words>`).
   const [settingsQuery, setSettingsQuery] = useState('')
   const [doctorOpen, setDoctorOpen] = useState(false)
+  // Diagnostics opened from Settings > About goes back there when it closes.
+  const doctorFromSettings = useRef(false)
+  useEffect(() => {
+    if (!doctorOpen) doctorFromSettings.current = false
+  }, [doctorOpen])
   // Bumped by `/context` to open the usage chip's panel.
   const [usageOpenSignal, setUsageOpenSignal] = useState(0)
   const [issueOpen, setIssueOpen] = useState(false)
@@ -4273,6 +4278,7 @@ export default function App(): JSX.Element {
             }}
             onShowDoctor={() => {
               setSettingsOpen(false)
+              doctorFromSettings.current = true
               setDoctorOpen(true)
             }}
             onTypeInTerminal={(command) => {
@@ -4282,7 +4288,21 @@ export default function App(): JSX.Element {
           />
         )}
 
-        {doctorOpen && <DoctorModal workspace={workspace} onClose={() => setDoctorOpen(false)} />}
+        {doctorOpen && (
+          <DoctorModal
+            workspace={workspace}
+            onClose={() => {
+              const backToSettings = doctorFromSettings.current
+              doctorFromSettings.current = false
+              setDoctorOpen(false)
+              if (backToSettings) {
+                setSettingsSection('about')
+                setSettingsQuery('')
+                setSettingsOpen(true)
+              }
+            }}
+          />
+        )}
         {issueOpen && <IssueReportModal onClose={() => setIssueOpen(false)} />}
 
 

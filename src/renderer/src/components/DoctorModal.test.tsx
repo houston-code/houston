@@ -65,12 +65,28 @@ describe('DoctorModal', () => {
     expect(screen.queryByText(/ANTHROPIC_API_KEY/)).toBeNull()
   })
 
+  it('names each check’s status in words, not only by its mark and colour', async () => {
+    installApi(facts({ providers: [{ id: 'openai', requiresKey: true, hasKey: false }], active: null }))
+    render(<DoctorModal workspace={null} onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText(/problem/)).toBeInTheDocument())
+    expect(screen.getAllByText('OK:').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Problem:').length).toBeGreaterThan(0)
+    expect(screen.getByRole('heading', { name: 'Diagnostics' })).toBeInTheDocument()
+  })
+
+  it('says so when the checks could not be gathered, instead of checking forever', async () => {
+    window.api = { getDoctorFacts: vi.fn(() => Promise.reject(new Error('main process busy'))) } as unknown as typeof window.api
+    render(<DoctorModal workspace={null} onClose={vi.fn()} />)
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't check your setup: main process busy")
+    expect(screen.queryByText('Checking your setup…')).toBeNull()
+  })
+
   it('closes on the button and the backdrop', async () => {
     installApi(facts())
     const onClose = vi.fn()
     const { container } = render(<DoctorModal workspace={null} onClose={onClose} />)
     await waitFor(() => expect(screen.getByText('Everything looks healthy.')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: 'Close doctor' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close diagnostics' }))
     expect(onClose).toHaveBeenCalledTimes(1)
     fireEvent.click(container.querySelector('.modal-backdrop')!)
     expect(onClose).toHaveBeenCalledTimes(2)
