@@ -367,6 +367,32 @@ describe('McpSseClient', () => {
     expect(client.isClosed).toBe(true)
     client.close()
   })
+
+  it('fails the connect when an optional list gets a 401, instead of resolving closed', async () => {
+    let emit: ((e: SseEvent) => void) | null = null
+    const connect: SseConnectFn = (_url, _headers, handlers) => {
+      emit = handlers.onEvent
+      queueMicrotask(() => emit?.({ event: 'endpoint', data: '/messages' }))
+      return { close: () => {} }
+    }
+    const fetch: FetchFn = async (_url, init) => {
+      const req = JSON.parse(init.body as string) as { id?: number; method: string }
+      if (req.method === 'prompts/list') return new Response('', { status: 401 })
+      if (req.id !== undefined) {
+        const result =
+          req.method === 'initialize'
+            ? { protocolVersion: '2025-06-18', capabilities: { prompts: {} } }
+            : req.method === 'tools/list'
+              ? { tools: [{ name: 'echo' }] }
+              : {}
+        queueMicrotask(() => emit?.({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) }))
+      }
+      return new Response('', { status: 202 })
+    }
+    const client = new McpSseClient(connect, fetch)
+    await expect(client.connect({ url: 'https://x/sse' })).rejects.toBeInstanceOf(McpUnauthorizedError)
+    client.close()
+  })
 })
 
 describe('McpSseClient protocol-version negotiation', () => {

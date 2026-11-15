@@ -5,6 +5,7 @@ import {
   type RegistryGetResult,
   type RegistrySearchResult
 } from '@shared/mcpRegistry'
+import { outboundFetch } from './outbound-proxy'
 
 /**
  * Read-only client for the official MCP Registry, used by Settings > MCP Servers
@@ -66,7 +67,8 @@ export function createRegistryClient(deps: RegistryClientDeps = {}): {
   get: (name: string) => Promise<RegistryGetResult>
   clear: () => void
 } {
-  const doFetch = deps.fetch ?? globalThis.fetch
+  // Through the network proxy when one is set, like every other request Houston makes.
+  const doFetch = deps.fetch ?? outboundFetch
   const now = deps.now ?? Date.now
   const max = deps.maxBytes ?? REGISTRY_MAX_BYTES
   const cache = new Map<string, { at: number; value: unknown }>()

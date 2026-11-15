@@ -330,12 +330,14 @@ describe('mcp manager', () => {
 
   it('reconnects when a stored header value changes (the masked config is unchanged)', async () => {
     useFactory(okSpawn())
-    await getMcpToolDefs([cfg()])
+    // Settings keep each header's key, with the value blanked (the value is in the secret store).
+    const masked = cfg({ headers: { Authorization: '' } })
+    await getMcpToolDefs([masked])
     expect(created).toHaveLength(1)
     // Rotate the secret behind the same (masked) config — the manager must notice via
     // the resolved headers, not the config object, and reconnect.
     host.headers[mcpHeaderScope('srv')] = { Authorization: 'Bearer rotated' }
-    await getMcpToolDefs([cfg()])
+    await getMcpToolDefs([masked])
     expect(created).toHaveLength(2)
     expect(created[0].isClosed).toBe(true)
   })
@@ -613,6 +615,74 @@ describe('mcp manager: servers shared between live runs', () => {
     await getMcpToolDefs([])
     expect(created[0].isClosed).toBe(true)
   })
+
+  it("never sends a run's call to another folder's server that has the same id", async () => {
+    // Every spawned server records the calls it receives, by the args it was started with.
+    const calls: Record<string, string[]> = {}
+    _setMcpClientFactory(
+      () =>
+        new McpClient(((_command: string, args: string[]) => {
+          const who = args.join(' ')
+          calls[who] = []
+          const stdout = new EventEmitter()
+          const stdin = Object.assign(new EventEmitter(), {
+            write(line: string): boolean {
+              const msg = JSON.parse(line.trim()) as { id?: number; method: string }
+              if (msg.id === undefined) return true
+              if (msg.method === 'tools/call') calls[who].push(msg.method)
+              const result =
+                msg.method === 'tools/list'
+                  ? { tools: [{ name: 'query' }] }
+                  : msg.method === 'tools/call'
+                    ? { content: [{ type: 'text', text: `ran on ${who}` }] }
+                    : {}
+              queueMicrotask(() =>
+                stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+              )
+              return true
+            }
+          })
+          return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+        }) as unknown as SpawnFn)
+    )
+    // Two trusted folders, each with a project server called "db".
+    const a = cfg({ id: 'proj-db', command: 'db', args: ['A'], origin: 'project' })
+    const b = cfg({ id: 'proj-db', command: 'db', args: ['B'], origin: 'project' })
+    const runA = await getMcpToolDefs([a], 'run-a')
+    const runB = await getMcpToolDefs([b], 'run-b')
+    const toolA = runA.find((d) => d.schema.name === mcpToolName('proj-db', 'query'))!
+    const toolB = runB.find((d) => d.schema.name === mcpToolName('proj-db', 'query'))!
+    expect(await toolA.execute({}, noCtx)).toContain('ran on A')
+    expect(await toolB.execute({}, noCtx)).toContain('ran on B')
+    expect(calls).toEqual({ A: ['tools/call'], B: ['tools/call'] })
+    // Run A starting its next turn does not take run B's server either.
+    await getMcpToolDefs([a], 'run-a')
+    expect(await toolB.execute({}, noCtx)).toContain('ran on B')
+    expect(calls.B).toHaveLength(2)
+  })
+
+  it("reconnects a run's own server mid-run though a run with other servers started later", async () => {
+    const children: EventEmitter[] = []
+    const spawn = okSpawn()
+    _setMcpClientFactory(
+      () =>
+        new McpClient(((...args: Parameters<SpawnFn>) => {
+          const child = (spawn as unknown as (...a: Parameters<SpawnFn>) => EventEmitter)(...args)
+          children.push(child)
+          return child
+        }) as unknown as SpawnFn)
+    )
+    const first = await getMcpToolDefs([server('proj-a')], 'run-1')
+    await getMcpToolDefs([server('proj-b')], 'run-2')
+    expect(children).toHaveLength(2)
+    // proj-a's process dies mid-run.
+    children[0].emit('exit', 1, null)
+    const call = first.find((d) => d.schema.name === mcpToolName('proj-a', 'echo'))!
+    const out = await call.execute({}, noCtx)
+    expect(out).toContain('The server has been reconnected; retry the call.')
+    expect(children).toHaveLength(3)
+    expect(await call.execute({}, noCtx)).not.toContain('connection was lost')
+  })
 })
 
 /**
@@ -759,7 +829,7 @@ describe('mcp manager OAuth', () => {
     host.oauth.web = tok()
     const { fetch, auths } = authHttpFetch('static-token')
     _setMcpHttpClientFactory(() => new McpHttpClient(fetch))
-    const defs = await getMcpToolDefs([webCfg()])
+    const defs = await getMcpToolDefs([{ ...webCfg(), headers: { Authorization: '' } }])
     expect(defs).toHaveLength(1)
     expect(auths.every((a) => a === 'Bearer static-token')).toBe(true)
     expect(oauthSeam.refreshCalls).toBe(0)
@@ -828,6 +898,77 @@ describe('mcp manager OAuth', () => {
     expect(out).toContain('connection was lost mid-call')
     expect(out).not.toContain('retry the call')
     expect(getMcpStatuses()[0].state).toBe('needs-auth')
+  })
+
+  it('does not loop on a 401 that no refresh can fix: no retry hint, needs-auth, no new handshakes', async () => {
+    // The server lets anyone connect and list tools, but rejects tools/call without
+    // credentials; nothing is stored, so there is nothing to refresh.
+    let initializes = 0
+    const fetch: FetchFn = async (_url, init) => {
+      if (init.method === 'GET') return new Response('', { status: 405 })
+      const req = JSON.parse(init.body as string) as { id?: number; method: string }
+      if (req.method === 'initialize') initializes += 1
+      if (req.method === 'tools/call') return new Response('', { status: 401 })
+      const result = req.method === 'tools/list' ? { tools: [{ name: 'remote' }] } : {}
+      const body = req.id === undefined ? '' : JSON.stringify({ jsonrpc: '2.0', id: req.id, result })
+      return new Response(body, { status: 200, headers: new Headers({ 'content-type': 'application/json' }) })
+    }
+    _setMcpHttpClientFactory(() => new McpHttpClient(fetch))
+    const defs = await getMcpToolDefs([webCfg()], 'run')
+    const call = defs.find((d) => d.schema.name === mcpToolName('web', 'remote'))!
+    expect(initializes).toBe(1)
+    const first = await call.execute({}, noCtx)
+    expect(first).toContain('401')
+    expect(first).toContain('sign in')
+    expect(first).not.toContain('retry the call')
+    expect(getMcpStatuses()[0].state).toBe('needs-auth')
+    // Later calls in the run do not reconnect and retry either.
+    for (let i = 0; i < 2; i++) expect(await call.execute({}, noCtx)).not.toContain('retry the call')
+    expect(initializes).toBe(1)
+    expect(oauthSeam.refreshCalls).toBe(0)
+  })
+
+  it('does not keep a connection whose optional list got a 401 during connect', async () => {
+    const fetch: FetchFn = async (_url, init) => {
+      if (init.method === 'GET') return new Response('', { status: 405 })
+      const req = JSON.parse(init.body as string) as { id?: number; method: string }
+      if (req.method === 'resources/list') return new Response('', { status: 401 })
+      const result =
+        req.method === 'initialize'
+          ? { protocolVersion: '2025-06-18', capabilities: { resources: {} } }
+          : req.method === 'tools/list'
+            ? { tools: [{ name: 'remote' }] }
+            : {}
+      const body = req.id === undefined ? '' : JSON.stringify({ jsonrpc: '2.0', id: req.id, result })
+      return new Response(body, { status: 200, headers: new Headers({ 'content-type': 'application/json' }) })
+    }
+    _setMcpHttpClientFactory(() => new McpHttpClient(fetch))
+    expect(await getMcpToolDefs([webCfg()])).toEqual([])
+    expect(getMcpStatuses()[0].state).toBe('needs-auth')
+  })
+
+  it('sends no stored header or env value to a server whose config lists none (a later server with the same id)', async () => {
+    // Left behind by servers that were removed: the new configs list no headers or env.
+    host.headers[mcpHeaderScope('web')] = { Authorization: 'Bearer OLD-PAT' }
+    host.headers[mcpEnvScope('db')] = { DB_PASSWORD: 'old-secret' }
+    const { fetch, auths } = authHttpFetch('never-matches')
+    _setMcpHttpClientFactory(() => new McpHttpClient(fetch))
+    await getMcpToolDefs([webCfg()])
+    expect(auths.length).toBeGreaterThan(0)
+    expect(auths.every((a) => a === undefined)).toBe(true)
+
+    const envs: Array<NodeJS.ProcessEnv | undefined> = []
+    const spawn = okSpawn()
+    _setMcpClientFactory(
+      () =>
+        new McpClient(((command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+          envs.push(options.env)
+          return (spawn as unknown as (...a: unknown[]) => unknown)(command, args, options)
+        }) as unknown as SpawnFn)
+    )
+    await getMcpToolDefs([cfg({ id: 'db' })])
+    expect(envs).toHaveLength(1)
+    expect(envs[0]?.DB_PASSWORD).toBeUndefined()
   })
 
   it('refuses to send tokens bound to a different resource (URL repoint)', async () => {
@@ -978,13 +1119,13 @@ describe('mcp manager statuses and hardening', () => {
       return c
     })
     host.headers[mcpEnvScope('srv')] = { MY_TOKEN: 'tok-1' }
-    await getMcpToolDefs([cfg({ cwd: '/srv/dir' })])
+    await getMcpToolDefs([cfg({ cwd: '/srv/dir', env: { MY_TOKEN: '' } })])
     expect(captured[0].cwd).toBe('/srv/dir')
     expect(captured[0].env?.MY_TOKEN).toBe('tok-1')
 
     // Rotating the stored env value must trigger a reconnect (like headers).
     host.headers[mcpEnvScope('srv')] = { MY_TOKEN: 'tok-2' }
-    await getMcpToolDefs([cfg({ cwd: '/srv/dir' })])
+    await getMcpToolDefs([cfg({ cwd: '/srv/dir', env: { MY_TOKEN: '' } })])
     expect(captured).toHaveLength(2)
     expect(captured[1].env?.MY_TOKEN).toBe('tok-2')
   })
@@ -1258,6 +1399,23 @@ describe('mcp manager: a server that lists malformed tools', () => {
     const status = getMcpStatuses().find((s) => s.id === 'bad')
     expect(status?.state).toBe('connected')
     expect(status?.toolNames).not.toContain(null)
+  })
+
+  it('still offers the healthy tool when another has a schema that cannot be lowered', async () => {
+    let deep: unknown = { type: 'string' }
+    for (let i = 0; i < 2000; i++) deep = [deep]
+    const tools = [
+      {
+        name: 'bad_ref',
+        inputSchema: { type: 'object', properties: { a: { $ref: '#/$defs/50%_off' } }, $defs: { '50%_off': { type: 'string' } } }
+      },
+      { name: 'deep', inputSchema: { type: 'object', properties: { a: { type: 'array', items: deep } } } },
+      { name: 'ok', inputSchema: { type: 'object', properties: { q: { type: 'string' } } } }
+    ]
+    _setMcpClientFactory(() => new McpClient(listingSpawn(tools, [])))
+    const defs = await getMcpToolDefs([cfg({ id: 'odd' })])
+    expect(defs.map((d) => d.schema.name)).toEqual(['mcp__odd__bad_ref', 'mcp__odd__deep', 'mcp__odd__ok'])
+    for (const d of defs) expect((d.schema.parameters as { type?: unknown }).type).toBe('object')
   })
 
   it('sends the original MCP tool name when the sanitized or shortened name is called', async () => {

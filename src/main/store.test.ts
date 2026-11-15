@@ -16,7 +16,7 @@ import {
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { McpServerConfig, PermissionRule } from '@shared/types'
-import { REDACTED_HEADER_VALUE, mcpHeaderScope, providerHeaderScope } from '@shared/types'
+import { REDACTED_HEADER_VALUE, mcpEnvScope, mcpHeaderScope, providerHeaderScope } from '@shared/types'
 import { DEFAULT_REASONING_EFFORT, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
 
 /**
@@ -1092,6 +1092,30 @@ describe('custom-header secrets', () => {
     expect(server.headers).toEqual({ Authorization: REDACTED_HEADER_VALUE })
     expect(headerStore.map[mcpHeaderScope('remote')]).toEqual({ Authorization: 'Bearer mcp-tok' })
     expect(JSON.stringify(settings)).not.toContain('mcp-tok')
+  })
+
+  it("forgets a removed MCP server's header and env values, so a later server with its id gets none", async () => {
+    writeSettings({
+      schemaVersion: 2,
+      providers: [openaiProvider(['gpt-5'])],
+      mcpServers: [
+        httpServer({ Authorization: 'Bearer old-pat' }),
+        { id: 'db', transport: 'stdio', command: 'db-server', env: { DB_PASSWORD: 'old-secret' }, enabled: true },
+        { id: 'keep', transport: 'stdio', command: 'k', env: { K: 'kept' }, enabled: true }
+      ]
+    })
+    const { getSettings, saveSettings } = await loadStore()
+    const loaded = getSettings()
+    expect(headerStore.map[mcpHeaderScope('remote')]).toEqual({ Authorization: 'Bearer old-pat' })
+    // Remove two servers.
+    saveSettings({ ...loaded, mcpServers: loaded.mcpServers!.filter((s) => s.id === 'keep') })
+    expect(headerStore.map[mcpHeaderScope('remote')]).toBeUndefined()
+    expect(headerStore.map[mcpEnvScope('db')]).toBeUndefined()
+    expect(headerStore.map[mcpEnvScope('keep')]).toEqual({ K: 'kept' })
+    // A new server under an old name, with no headers, starts with nothing stored.
+    const again = getSettings()
+    saveSettings({ ...again, mcpServers: [...again.mcpServers!, { id: 'remote', transport: 'http', command: '', url: 'https://other.example/mcp', enabled: true }] })
+    expect(headerStore.map[mcpHeaderScope('remote')]).toBeUndefined()
   })
 
   it('preserves a stored value when the renderer saves back the mask, and stores a newly entered one', async () => {

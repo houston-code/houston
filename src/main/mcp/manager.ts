@@ -31,10 +31,19 @@ import { log } from '../logger'
  */
 
 interface Connection {
+  /** The server id the user (or project config) gave it. */
+  id: string
+  /** Its full config key (credentials included): a change reconnects it. */
   key: string
   client: McpConnection
 }
 
+/**
+ * Live connections by {@link connectionKey}: the server's id plus what the server is.
+ * Two trusted folders can each define a project server with the same id; keyed by id
+ * alone, the later run's reconcile replaced the earlier run's server and that run's
+ * calls went to the other project's server.
+ */
 const connections = new Map<string, Connection>()
 
 const statuses = new Map<string, McpServerStatus>()
@@ -44,9 +53,6 @@ export function getMcpStatuses(): McpServerStatus[] {
   return [...statuses.values()]
 }
 
-/** The configs of the last reconcile, so a mid-run reconnect can re-resolve them. */
-let lastConfigs: McpServerConfig[] = []
-
 /**
  * The elicitation responder of the tool call currently in flight per server —
  * set by callLive from the run's ToolContext and cleared when the call settles.
@@ -55,16 +61,16 @@ let lastConfigs: McpServerConfig[] = []
  * call in flight (or from a context that can't ask, e.g. a subagent) gets a
  * decline, never a hang.
  */
-const elicitors = new Map<string, NonNullable<ToolContext['elicitMcp']>>()
+const elicitors = new Map<string, NonNullable<ToolContext['elicitMcp']>>() // by connection key
 
 /**
  * The `onElicit` responder wired into a server's connection: parse the request
  * defensively (it crosses a trust boundary), route it to the in-flight call's
  * responder, and map the answer to the wire shape. Always resolves.
  */
-function serverElicit(serverId: string): (params: unknown) => Promise<ElicitationWireResult> {
+function serverElicit(serverId: string, connKey: string): (params: unknown) => Promise<ElicitationWireResult> {
   return async (params) => {
-    const elicit = elicitors.get(serverId)
+    const elicit = elicitors.get(connKey)
     if (!elicit) return { action: 'decline' }
     const p = params && typeof params === 'object' ? (params as Record<string, unknown>) : {}
     const message = typeof p.message === 'string' ? p.message.trim() : ''
@@ -116,14 +122,42 @@ function transportOf(c: McpServerConfig): Transport {
   return !c.command && c.url ? 'http' : 'stdio'
 }
 
+/**
+ * Which connection a config is: its id plus everything that says what the server is
+ * (how it is reached and, for a project server, its whole config). A user server's
+ * stored secrets are left out, so a refreshed token reconnects the same connection
+ * rather than opening a second one; settings hold one server per id anyway.
+ */
+function connectionKey(c: McpServerConfig): string {
+  const project = c.origin === 'project' ? [c.env ?? {}, c.headers ?? {}] : null
+  return `${c.id}\u0000${JSON.stringify([transportOf(c), c.command ?? '', c.args ?? [], c.cwd ?? '', c.url ?? '', c.origin ?? '', project])}`
+}
+
+/** Whether a config names a server that can be connected at all. */
+function connectable(c: McpServerConfig): boolean {
+  return !!(c.enabled && c.id && (c.command || c.url))
+}
+
 // The real header values live in the encrypted secrets store, not on the config
 // (which carries masked values). Resolve them for both the change-detection signature
 // and the actual connect, so editing a header value still triggers a reconnect.
+// Only the keys the config lists are taken: a scope can outlive its server (removed by
+// a process whose store cannot delete it), and a later server given the same id must
+// not inherit its credentials.
 // A trusted folder's project server is the exception: its config IS the source of
 // truth (the values are plaintext in the repo by its author's choice), and its id
 // must never read the user's secret scopes.
 function resolveHeaders(c: McpServerConfig): Record<string, string> {
-  return c.origin === 'project' ? { ...(c.headers ?? {}) } : getSecretHeaders(mcpHeaderScope(c.id))
+  return c.origin === 'project' ? { ...(c.headers ?? {}) } : listedSecrets(mcpHeaderScope(c.id), c.headers)
+}
+
+/** The stored values of a scope whose key the config still lists. */
+function listedSecrets(scope: string, listed: Record<string, string> | undefined): Record<string, string> {
+  if (!listed) return {}
+  const stored = getSecretHeaders(scope)
+  const out: Record<string, string> = {}
+  for (const k of Object.keys(listed)) if (Object.hasOwn(stored, k)) out[k] = stored[k]
+  return out
 }
 
 /** Whether the user configured an explicit Authorization header (any casing). */
@@ -148,11 +182,18 @@ function boundResourceMatches(url: string | undefined, resource: string | undefi
   }
 }
 
-/** Force an OAuth refresh for a server whose live call just got a 401 (no-op without stored tokens). */
-async function refreshAfterUnauthorized(serverId: string): Promise<void> {
-  const c = lastConfigs.find((x) => x.id === serverId)
-  if (!c || transportOf(c) === 'stdio' || hasAuthorizationHeader(resolveHeaders(c))) return
+/**
+ * Force an OAuth refresh for a server whose live call just got a 401. True only when a
+ * new access token was stored, so a reconnect can send something the server has not
+ * already rejected.
+ */
+async function refreshAfterUnauthorized(c: McpServerConfig | undefined): Promise<boolean> {
+  if (!c || transportOf(c) === 'stdio' || hasAuthorizationHeader(resolveHeaders(c))) return false
+  const before = getMcpOAuth(c.id)?.access
+  if (!before) return false
   await oauthBearer(c, true).catch(() => {})
+  const after = getMcpOAuth(c.id)?.access
+  return !!after && after !== before
 }
 
 /**
@@ -187,7 +228,7 @@ async function oauthBearer(c: McpServerConfig, force = false): Promise<Record<st
 // Like headers, stdio env VALUES live in the secrets store (scope mcp-env:<id>) —
 // except for a project server, whose config carries them verbatim (see above).
 function resolveEnv(c: McpServerConfig): Record<string, string> {
-  return c.origin === 'project' ? { ...(c.env ?? {}) } : getSecretHeaders(mcpEnvScope(c.id))
+  return c.origin === 'project' ? { ...(c.env ?? {}) } : listedSecrets(mcpEnvScope(c.id), c.env)
 }
 
 function configKey(
@@ -213,7 +254,7 @@ function ensureConnections(configs: McpServerConfig[]): Promise<void> {
  * servers a run in another folder was still calling, mid-turn. A server is now closed
  * only when no live run wants it.
  */
-const liveRuns = new Map<string, Set<string>>()
+const liveRuns = new Map<string, McpServerConfig[]>()
 
 /** A run has ended: its servers no longer count as wanted (they close at the next reconcile). */
 export function releaseMcpRun(owner: string): void {
@@ -228,7 +269,7 @@ export function releaseMcpRun(owner: string): void {
  * different key and is tried at once.
  */
 export const MCP_RETRY_BACKOFF_MS = 30_000
-const recentFailures = new Map<string, { key: string; at: number; outcome: Outcome }>()
+const recentFailures = new Map<string, { key: string; at: number; outcome: Outcome }>() // by connection key
 
 /** What became of one server in a reconcile, applied to the shared maps in config order. */
 type Outcome =
@@ -238,7 +279,8 @@ type Outcome =
 
 /** Bring one server's connection up to date. Touches no shared state but its own old client. */
 async function connectServer(c: McpServerConfig): Promise<Outcome> {
-  const existing = connections.get(c.id)
+  const connKey = connectionKey(c)
+  const existing = connections.get(connKey)
   const transport = transportOf(c)
   const staticHeaders = resolveHeaders(c)
   const env = resolveEnv(c)
@@ -262,15 +304,15 @@ async function connectServer(c: McpServerConfig): Promise<Outcome> {
     }
   }
   if (existing) existing.client.close()
-  const failed = recentFailures.get(c.id)
+  const failed = recentFailures.get(connKey)
   if (failed && failed.key === key && Date.now() - failed.at < MCP_RETRY_BACKOFF_MS) return failed.outcome
-  recentFailures.delete(c.id)
+  recentFailures.delete(connKey)
   const attemptedKey = key
 
   const connectOnce = async (): Promise<McpConnection> => {
     const client: McpConnection =
       transport === 'http' ? createHttpClient() : transport === 'sse' ? createSseClient() : createClient()
-    const onElicit = serverElicit(c.id)
+    const onElicit = serverElicit(c.id, connKey)
     try {
       if (transport === 'http') await (client as McpHttpClient).connect({ url: c.url ?? '', headers, onElicit })
       else if (transport === 'sse') await (client as McpSseClient).connect({ url: c.url ?? '', headers, onElicit })
@@ -309,28 +351,32 @@ async function connectServer(c: McpServerConfig): Promise<Outcome> {
             status: { id: c.id, state: 'error', error: message },
             warn: `MCP server "${c.id}" failed to connect: ${message}`
           }
-    recentFailures.set(c.id, { key: attemptedKey, at: Date.now(), outcome })
+    recentFailures.set(connKey, { key: attemptedKey, at: Date.now(), outcome })
     return outcome
   }
 }
 
 async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
-  lastConfigs = configs
-  const enabled = configs.filter((c) => c.enabled && c.id && (c.command || c.url))
-  const wanted = new Set(enabled.map((c) => c.id))
+  const enabled = configs.filter(connectable)
   // Servers another live run is using stay open even though this run did not ask for them.
-  const inUse = new Set(wanted)
-  for (const ids of liveRuns.values()) for (const id of ids) inUse.add(id)
+  const inUse = new Set(enabled.map(connectionKey))
+  const inUseIds = new Set(enabled.map((c) => c.id))
+  for (const run of liveRuns.values()) {
+    for (const c of run) {
+      inUse.add(connectionKey(c))
+      inUseIds.add(c.id)
+    }
+  }
 
   // Close connections for servers that are gone or disabled.
-  for (const [id, conn] of connections) {
-    if (!inUse.has(id)) {
+  for (const [k, conn] of connections) {
+    if (!inUse.has(k)) {
       conn.client.close()
-      connections.delete(id)
+      connections.delete(k)
     }
   }
   for (const id of statuses.keys()) {
-    if (!inUse.has(id)) statuses.delete(id)
+    if (!inUseIds.has(id)) statuses.delete(id)
   }
 
   // Connect every server at once: a run waits for its slowest server, not for the sum
@@ -349,7 +395,7 @@ function applyOutcomes(configs: McpServerConfig[], outcomes: Outcome[]): void {
     if (o.kind === 'reused') {
       statuses.set(c.id, o.status)
     } else if (o.kind === 'connected') {
-      connections.set(c.id, { key: o.key, client: o.client })
+      connections.set(connectionKey(c), { id: c.id, key: o.key, client: o.client })
       statuses.set(c.id, {
         id: c.id,
         state: 'connected',
@@ -357,7 +403,7 @@ function applyOutcomes(configs: McpServerConfig[], outcomes: Outcome[]): void {
         toolNames: o.client.tools.map((t) => t.name)
       })
     } else {
-      connections.delete(c.id)
+      connections.delete(connectionKey(c))
       // Warn once per failure, not again each time the backoff answers for it.
       if (statuses.get(c.id)?.state !== o.status.state || statuses.get(c.id)?.error !== o.status.error) log.warn(o.warn)
       statuses.set(c.id, o.status)
@@ -376,13 +422,15 @@ function applyOutcomes(configs: McpServerConfig[], outcomes: Outcome[]): void {
 export function reconnectMcpServers(configs: McpServerConfig[], ids: readonly string[]): Promise<McpServerStatus[]> {
   const want = new Set(ids)
   const run = async (): Promise<McpServerStatus[]> => {
-    for (const id of want) {
-      connections.get(id)?.client.close()
-      connections.delete(id)
-      recentFailures.delete(id)
-      statuses.delete(id)
+    for (const c of configs) {
+      if (!want.has(c.id)) continue
+      const k = connectionKey(c)
+      connections.get(k)?.client.close()
+      connections.delete(k)
+      recentFailures.delete(k)
+      statuses.delete(c.id)
     }
-    const targets = configs.filter((c) => want.has(c.id) && c.enabled && c.id && (c.command || c.url))
+    const targets = configs.filter((c) => want.has(c.id) && connectable(c))
     applyOutcomes(targets, await Promise.all(targets.map((c) => connectServer(c))))
     return targets.flatMap((c) => statuses.get(c.id) ?? [])
   }
@@ -491,15 +539,17 @@ export async function getMcpToolDefs(
   owner?: string,
   opts: McpRunOptions = {}
 ): Promise<ToolDef[]> {
-  const mine = new Set((configs ?? []).filter((c) => c.enabled && c.id && (c.command || c.url)).map((c) => c.id))
-  if (owner !== undefined) liveRuns.set(owner, mine)
+  const runConfigs = (configs ?? []).filter(connectable)
+  // This run's servers: id to connection key.
+  const mine = new Map(runConfigs.map((c) => [c.id, connectionKey(c)] as const))
+  if (owner !== undefined) liveRuns.set(owner, runConfigs)
   // Reconcile even with no configs when connections are still open, so removing
   // (or disabling) every server actually closes them instead of leaking to quit.
   if (!configs?.length && connections.size === 0) return []
   if (await untilAborted(ensureConnections(configs ?? []), opts.signal)) return []
   const noticeKey = opts.noticeKey ?? owner
   if (opts.onNotice && noticeKey !== undefined) {
-    for (const message of noticesFor(mine, noticeKey)) opts.onNotice(message)
+    for (const message of noticesFor(mine.keys(), noticeKey)) opts.onNotice(message)
   }
 
   const defs: ToolDef[] = []
@@ -507,7 +557,7 @@ export async function getMcpToolDefs(
   // this run's to call. Sorted, with each server's tools sorted below, so the tool
   // list is the same on every request whatever order servers connected in or listed
   // their tools: a reordered list would miss the provider's prompt cache.
-  const own = [...connections].filter(([id]) => mine.has(id)).sort(([a], [b]) => byCodeUnit(a, b))
+  const own = ownConnections(mine).sort(([a], [b]) => byCodeUnit(a, b))
   const exposed = exposeMcpTools(
     own.map(([serverId, conn]) => ({ serverId, tools: conn.client.tools })),
     warnOnce
@@ -533,7 +583,7 @@ export async function getMcpToolDefs(
         // Resolve the live connection at call time so a reconnect (or removal)
         // between building the tool list and the call doesn't hit a stale client.
         execute: (args, ctx) =>
-          callLive(serverId, ctx, (client) => client.callTool(original, args, ctx?.signal, mcpImageOptions(ctx)), {
+          callLive(serverId, mine, runConfigs, ctx, (client) => client.callTool(original, args, ctx?.signal, mcpImageOptions(ctx)), {
             envelope: `Result from MCP server "${serverId}":`,
             source: `MCP tool ${fullName}`
           })
@@ -550,10 +600,10 @@ export async function getMcpToolDefs(
   // while this chat sits in an untrusted folder), and its resources and prompts are
   // no more this run's to read than its tools are to call.
   if (own.some(([, c]) => c.client.resources.length > 0)) {
-    defs.push(...resourceMetaTools(mine))
+    defs.push(...resourceMetaTools(mine, runConfigs))
   }
   if (own.some(([, c]) => c.client.prompts.length > 0)) {
-    defs.push(...promptMetaTools(mine))
+    defs.push(...promptMetaTools(mine, runConfigs))
   }
   return defs
 }
@@ -575,33 +625,48 @@ export async function getMcpToolDefs(
  */
 async function callLive(
   serverId: string,
+  /** The calling run's servers (id to connection key): only its own server is reached. */
+  mine: ReadonlyMap<string, string>,
+  /** The calling run's configs, to reconnect its server from. */
+  runConfigs: readonly McpServerConfig[],
   ctx: ToolContext | undefined,
   fn: (client: McpConnection) => Promise<string>,
   untrusted?: { envelope: string; source: string }
 ): Promise<string> {
-  const live = connections.get(serverId)
-  if (!live) return `[MCP server "${serverId}" is no longer connected]`
+  const connKey = mine.get(serverId)
+  const live = connKey === undefined ? undefined : connections.get(connKey)
+  if (connKey === undefined || !live) return `[MCP server "${serverId}" is no longer connected]`
   const elicit = ctx?.elicitMcp
-  if (elicit) elicitors.set(serverId, elicit)
+  if (elicit) elicitors.set(connKey, elicit)
   let out: string
   try {
     out = capMcpOutput(await fn(live.client))
   } catch (e) {
     // A stopped call is not a lost connection: no reconnect, no retry hint.
     if (!live.client.isClosed || ctx?.signal?.aborted) throw e
+    const message = (e as Error).message
     // A 401 mid-session means the access token went bad without the manager seeing
     // it expire (revoked, or issued with no expiry): re-mint it before reconnecting,
-    // since the reconnect would otherwise send the same token.
-    if (e instanceof McpUnauthorizedError) await refreshAfterUnauthorized(serverId)
-    await ensureConnections(lastConfigs).catch(() => {})
-    const revived = connections.get(serverId)
+    // since the reconnect would otherwise send the same token. With nothing new to
+    // send, a reconnect and retry would only be rejected again: say sign-in is needed.
+    if (e instanceof McpUnauthorizedError) {
+      const own = runConfigs.find((c) => connectionKey(c) === connKey)
+      if (!(await refreshAfterUnauthorized(own))) {
+        if (connections.get(connKey) === live) connections.delete(connKey)
+        statuses.set(serverId, { id: serverId, state: 'needs-auth', error: message })
+        return `[MCP server "${serverId}" connection was lost mid-call: ${message}. It needs you to sign in: from Settings > MCP servers (desktop) or with /mcp login (terminal).]`
+      }
+    }
+    // Reconnect from the calling run's own configs: another run's list may not have it.
+    await ensureConnections([...runConfigs]).catch(() => {})
+    const revived = connections.get(connKey)
     const hint =
       revived && !revived.client.isClosed
         ? ' The server has been reconnected; retry the call.'
         : ''
-    return `[MCP server "${serverId}" connection was lost mid-call: ${(e as Error).message}.${hint}]`
+    return `[MCP server "${serverId}" connection was lost mid-call: ${message}.${hint}]`
   } finally {
-    if (elicit && elicitors.get(serverId) === elicit) elicitors.delete(serverId)
+    if (elicit && elicitors.get(connKey) === elicit) elicitors.delete(connKey)
   }
   return untrusted ? presentMcpResult(out, untrusted, ctx) : out
 }
@@ -655,7 +720,7 @@ function presentMcpResult(
  * the warning outside the fence, so only names shaped like identifiers are used.
  */
 function liveMcpToolNames(): string[] {
-  const exposed = exposeMcpTools([...connections].map(([serverId, conn]) => ({ serverId, tools: conn.client.tools })))
+  const exposed = exposeMcpTools([...connections.values()].map((conn) => ({ serverId: conn.id, tools: conn.client.tools })))
   return exposed.flatMap((s) => s.tools.map((t) => t.name))
 }
 
@@ -682,8 +747,11 @@ function warnOnce(serverId: string, problem: string): void {
  * order. Resolved at call time, so a server that reconnected or went away since the
  * tool list was built is read as it is now.
  */
-function ownConnections(mine: ReadonlySet<string>): [string, Connection][] {
-  return [...connections].filter(([id]) => mine.has(id))
+function ownConnections(mine: ReadonlyMap<string, string>): [string, Connection][] {
+  return [...mine].flatMap(([id, k]): [string, Connection][] => {
+    const conn = connections.get(k)
+    return conn ? [[id, conn]] : []
+  })
 }
 
 /**
@@ -692,7 +760,7 @@ function ownConnections(mine: ReadonlySet<string>): [string, Connection][] {
  * connected for some other run, so the refusal doesn't reveal which servers other
  * chats have open.
  */
-function foreignServer(server: string, mine: ReadonlySet<string>, lister: string): string | null {
+function foreignServer(server: string, mine: ReadonlyMap<string, string>, lister: string): string | null {
   if (mine.has(server)) return null
   return `[MCP server "${server}" is not one of this chat's servers. Call ${lister} to see what is available here.]`
 }
@@ -726,7 +794,7 @@ function presentListing(what: 'resources' | 'prompts', perServer: { id: string; 
  * the run's servers has resources). Both see only `mine`, the run's own servers: the
  * listing skips every other connection and a read naming another server is refused.
  */
-function resourceMetaTools(mine: ReadonlySet<string>): ToolDef[] {
+function resourceMetaTools(mine: ReadonlyMap<string, string>, runConfigs: readonly McpServerConfig[]): ToolDef[] {
   return [
     {
       kind: 'read',
@@ -775,7 +843,7 @@ function resourceMetaTools(mine: ReadonlySet<string>): ToolDef[] {
         if (!server || !uri) return Promise.resolve('Both "server" and "uri" are required.')
         const refused = foreignServer(server, mine, 'mcp_list_resources')
         if (refused) return Promise.resolve(refused)
-        return callLive(server, ctx, (client) => client.readResource(uri, ctx?.signal), {
+        return callLive(server, mine, runConfigs, ctx, (client) => client.readResource(uri, ctx?.signal), {
           envelope: `Resource from MCP server "${server}":`,
           source: `MCP resource ${uri}`
         })
@@ -793,7 +861,7 @@ function metaArg(v: unknown): string {
  * The `mcp_list_prompts` / `mcp_get_prompt` meta-tools (added only when one of the
  * run's servers has prompts), bound to `mine` as the resource tools are.
  */
-function promptMetaTools(mine: ReadonlySet<string>): ToolDef[] {
+function promptMetaTools(mine: ReadonlyMap<string, string>, runConfigs: readonly McpServerConfig[]): ToolDef[] {
   return [
     {
       kind: 'read',
@@ -857,7 +925,7 @@ function promptMetaTools(mine: ReadonlySet<string>): ToolDef[] {
         // Not fenced, unlike tool results and resources: a prompt template is the
         // server's own authored instructions, which the user opted into by configuring
         // the server, not third-party text it relays.
-        return callLive(server, ctx, (client) => client.getPrompt(name, promptArgs, ctx?.signal))
+        return callLive(server, mine, runConfigs, ctx, (client) => client.getPrompt(name, promptArgs, ctx?.signal))
       }
     }
   ]

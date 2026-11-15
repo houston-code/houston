@@ -214,6 +214,8 @@ function removeServer(rest: string[], deps: McpCliDeps): number {
   const server = oneServer(rest, 'remove', deps)
   if (typeof server === 'number') return server
   deps.save(deps.servers().filter((s) => s.id !== server.id))
+  // Its sign-in goes with it, so a server added later under the same name starts signed out.
+  if (server.hasOAuth) deps.logout?.(server.id)
   deps.out(`Removed MCP server "${server.id}".\n`)
   return 0
 }

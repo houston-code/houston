@@ -50,7 +50,13 @@ export function mcpServerFromJson(name: string, raw: unknown): McpServerConfig |
   if (url && !command && !/^https?:\/\//i.test(url)) return 'the url must start with http:// or https://'
   const type = str(v.type ?? v.transport).toLowerCase()
   const transport: McpServerConfig['transport'] = command ? 'stdio' : type === 'sse' ? 'sse' : 'http'
-  const args = Array.isArray(v.args) ? v.args.filter((a): a is string => typeof a === 'string') : []
+  // Numbers and booleans are written as text (`"--port", 3000`), as `env` values are;
+  // dropping one would start the server with a flag and no value.
+  const rawArgs: unknown[] = command && Array.isArray(v.args) ? v.args : []
+  if (rawArgs.some((a) => typeof a !== 'string' && typeof a !== 'number' && typeof a !== 'boolean')) {
+    return '"args" must be a list of strings'
+  }
+  const args = rawArgs.map((a) => String(a))
   const env = command ? stringMap(v.env) : undefined
   const headers = command ? undefined : stringMap(v.headers)
   const cwd = command ? str(v.cwd) : ''

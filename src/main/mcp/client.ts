@@ -284,8 +284,13 @@ export function killLiveMcpGroups(): void {
  * then SIGKILL the group if anything in it is still running after the grace. Windows
  * has no process groups here: the tree is killed by parent pid (`taskkill /T /F`),
  * which is already forceful, so nothing is escalated.
+ *
+ * Once the server is known to have exited (`exited`), its pid is no longer its own: the
+ * system may have handed it to any other process. Windows then gets no `taskkill`, and
+ * POSIX signals the group only while it is still listed as having live members (a
+ * group that still has members keeps its id).
  */
-function stopServerTree(child: ChildProcessWithoutNullStreams, grouped: boolean): void {
+function stopServerTree(child: ChildProcessWithoutNullStreams, grouped: boolean, exited: boolean): void {
   const pid = child.pid
   if (pid === undefined || !grouped) {
     try {
@@ -296,10 +301,10 @@ function stopServerTree(child: ChildProcessWithoutNullStreams, grouped: boolean)
     return
   }
   if (process.platform === 'win32') {
-    signalProcessTree(child, 'SIGTERM')
+    if (!exited) signalProcessTree(child, 'SIGTERM')
     return
   }
-  if (!groupAlive(pid)) {
+  if ((exited && !liveGroups.has(pid)) || !groupAlive(pid)) {
     liveGroups.delete(pid)
     return
   }
@@ -327,6 +332,8 @@ export class McpClient {
   private grouped = false
   /** Set once close() has signalled the server, so a second close() is a no-op. */
   private stopped = false
+  /** Set when the server process exited: its pid may belong to another process now. */
+  private exited = false
   /** Capabilities the server declared at initialize (gates list re-fetches). */
   private capable: Record<McpListKind, boolean> = { tools: true, resources: false, prompts: false }
   private readonly refresher = new ListRefresher({
@@ -409,6 +416,7 @@ export class McpClient {
     let stderrEnded = false
     child.stderr?.once('end', () => (stderrEnded = true))
     child.on('exit', () => {
+      this.exited = true
       // A server that exited on its own and left nothing behind needs no stop at quit.
       if (detached && child.pid !== undefined && !groupAlive(child.pid)) liveGroups.delete(child.pid)
       // Closed at once, so a new request fails fast; in-flight ones settle with the reason.
@@ -503,7 +511,7 @@ export class McpClient {
     this.failAll('MCP client closed')
     if (!this.child || this.stopped) return
     this.stopped = true
-    stopServerTree(this.child, this.grouped)
+    stopServerTree(this.child, this.grouped, this.exited)
   }
 
   // ---- transport internals ----

@@ -587,6 +587,26 @@ function adopt(loaded: ReturnType<typeof loadFromDisk>, stamp: string): AppSetti
   return settings
 }
 
+/**
+ * Drop the stored header and env values of every MCP server a save removes, so a
+ * server added later under the same id does not inherit them.
+ */
+function forgetRemovedMcpSecrets(before: McpServerConfig[] | undefined, after: McpServerConfig[] | undefined): void {
+  if (!before?.length || !after) return
+  const kept = new Set(after.map((s) => s.id))
+  for (const s of before) {
+    if (kept.has(s.id)) continue
+    for (const scope of [mcpHeaderScope(s.id), mcpEnvScope(s.id)]) {
+      try {
+        requireHeaderSecrets().remove(scope)
+      } catch {
+        // Secret store unavailable: nothing more to do here (the manager only sends the
+        // keys a config lists, so a left-over value still reaches no other server).
+      }
+    }
+  }
+}
+
 const settingsListeners = new Set<(settings: AppSettings) => void>()
 
 export function saveSettings(next: AppSettings): AppSettings {
@@ -600,6 +620,7 @@ export function saveSettings(next: AppSettings): AppSettings {
     // (the renderer's settings from before the last run) must not roll that back.
     ...(cache?.recentModels ? { recentModels: cache.recentModels } : {})
   }
+  forgetRemovedMcpSecrets(cache?.mcpServers, next.mcpServers)
   const { settings } = extractHeaderSecrets({
     ...reconciled,
     schemaVersion: stampedVersion(next.schemaVersion, cache?.schemaVersion)

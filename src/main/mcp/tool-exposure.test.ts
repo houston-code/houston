@@ -61,6 +61,45 @@ describe('lowerJsonSchema (JSON Schema 2020-12 to what every provider accepts)',
     })
   })
 
+  it('turns a draft-07 tuple (items as a list) into one items schema', () => {
+    const { schema } = lowerJsonSchema({
+      type: 'object',
+      properties: {
+        pt: { type: 'array', items: [{ type: 'number' }, { type: 'number' }], minItems: 2, maxItems: 2 },
+        head: { type: 'array', items: [{ type: 'string' }], additionalItems: { type: 'boolean' } },
+        closed: { type: 'array', items: [{ type: 'string' }], additionalItems: false },
+        none: { type: 'array', items: [] }
+      }
+    })
+    expect(schema?.properties).toEqual({
+      pt: { type: 'array', items: { anyOf: [{ type: 'number' }, { type: 'number' }] }, minItems: 2, maxItems: 2 },
+      head: { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'boolean' }] } },
+      closed: { type: 'array', items: { type: 'string' } },
+      none: { type: 'array' }
+    })
+  })
+
+  it('treats a $ref with a malformed percent escape as unresolvable instead of throwing', () => {
+    const { schema, note } = lowerJsonSchema({
+      type: 'object',
+      properties: { a: { $ref: '#/$defs/50%_off' } },
+      $defs: { '50%_off': { type: 'string' } }
+    })
+    expect(schema).toEqual({ type: 'object', properties: { a: {} } })
+    expect(note).toMatch(/could not be resolved/)
+  })
+
+  it('gives up on deeply nested arrays instead of overflowing the stack', () => {
+    let items: unknown = { type: 'string' }
+    for (let i = 0; i < 2000; i++) items = [items]
+    const schema = { type: 'object', properties: { a: { type: 'array', items } } }
+    expect(lowerJsonSchema(schema).schema).toBeNull()
+    expect(normalizeMcpInputSchema(schema)).toEqual({
+      parameters: { type: 'object', properties: {}, additionalProperties: true },
+      note: 'its input schema was too complex to send, so any arguments are accepted'
+    })
+  })
+
   it('drops identifiers, annotations and conditionals, noting when constraints were lost', () => {
     const { schema, note } = lowerJsonSchema({
       $id: 'urn:x',
