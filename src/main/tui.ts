@@ -7953,6 +7953,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             flushGroup()
             toolLineLast = false
             deps.io.out(`\n${renderToolStart(held.name, held.args, paint, { sentence: screenReader })}\n`)
+          } else {
+            // A result for a call nothing is holding (its row already printed, or never
+            // came): whatever is held prints first, so the transcript keeps its order.
+            releaseHeld()
           }
           // A proposal is a card in the desktop app; here it's a line pointing at
           // the command that starts it.

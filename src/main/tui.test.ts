@@ -11855,6 +11855,63 @@ describe('folded tool lines', () => {
     { runId: 'x', type: 'tool_result', callId: id, name: 'read_file', ok: true, output }
   ]
 
+  it('prints a read still in flight as its start line alone, after the finished ones, and never loses it', async () => {
+    const start = (id: string, path: string): AgentEvent => ({ runId: 'x', type: 'tool_start', callId: id, name: 'read_file', args: { path }, kind: 'read' })
+    const result = (id: string, output: string): AgentEvent => ({ runId: 'x', type: 'tool_result', callId: id, name: 'read_file', ok: true, output })
+    // Something else prints while b is still being read; b's result lands after it.
+    const { d } = deps([
+      start('a', 'a.ts'),
+      start('b', 'b.ts'),
+      start('c', 'c.ts'),
+      result('a', 'A'),
+      result('c', 'C'),
+      { runId: 'x', type: 'notice', message: 'a note in between' } as AgentEvent,
+      result('b', 'B first line'),
+      done
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    const fold = text.indexOf('· Read 2 files  a.ts, c.ts')
+    const row = text.indexOf('· Read  b.ts')
+    expect(fold).toBeGreaterThan(-1)
+    expect(row).toBeGreaterThan(fold)
+    expect(text.indexOf('a note in between')).toBeGreaterThan(row)
+    expect(text.indexOf('↳ B first line')).toBeGreaterThan(text.indexOf('a note in between'))
+    // The turn ends with a read that never returned: its row still prints, once.
+    const cut = deps([start('a', 'a.ts'), start('b', 'b.ts'), result('a', 'A'), done])
+    const t2 = fakeIo(['go', null])
+    cut.d.io = t2.io
+    await runTui(opts, cut.d)
+    const text2 = t2.text()
+    expect(text2.match(/· Read {2}b\.ts/g)).toHaveLength(1)
+    expect(text2.indexOf('· Read  a.ts')).toBeLessThan(text2.indexOf('· Read  b.ts'))
+    expect(text2).toContain('↳ A')
+  })
+
+  it('prints a result for a call it does not hold as normal, without disturbing held reads', async () => {
+    const { d } = deps([
+      ...read('a', 'a.ts', 'A'),
+      ...read('b', 'b.ts', 'B'),
+      // A result no fold is holding (its start never came): printed as it always was.
+      { runId: 'x', type: 'tool_result', callId: 'zz', name: 'run_shell', ok: false, output: 'stray failure\n[exit code: 1]' },
+      ...read('c', 'c.ts', 'C'),
+      ...read('e', 'e.ts', 'E'),
+      done
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    const first = text.indexOf('· Read 2 files  a.ts, b.ts')
+    const stray = text.indexOf('stray failure')
+    expect(first).toBeGreaterThan(-1)
+    expect(stray).toBeGreaterThan(first)
+    expect(text.indexOf('· Read 2 files  c.ts, e.ts')).toBeGreaterThan(stray)
+    expect(text.match(/Read 2 files/g)).toHaveLength(2)
+  })
+
   it('/focus wins over /verbose: one line a call, reads included, and no directory listings', async () => {
     const { d } = deps(
       [
