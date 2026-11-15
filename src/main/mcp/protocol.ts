@@ -25,7 +25,23 @@ export interface JsonRpcIncoming {
   method?: string
   params?: unknown
   result?: unknown
-  error?: { code?: number; message?: string }
+  error?: { code?: number; message?: string; data?: unknown }
+}
+
+/**
+ * A JSON-RPC error a server answered with. The message is the server's (as before);
+ * `code` and `data` are kept so a caller can tell one error from another (for example
+ * a 2026-07-28 server's UnsupportedProtocolVersion, see stateless.ts).
+ */
+export class McpRpcError extends Error {
+  readonly code?: number
+  readonly data?: unknown
+  constructor(error: { code?: number; message?: string; data?: unknown }) {
+    super(typeof error.message === 'string' ? error.message : 'MCP error')
+    this.name = 'McpRpcError'
+    if (typeof error.code === 'number') this.code = error.code
+    if (error.data !== undefined) this.data = error.data
+  }
 }
 
 export type IncomingKind = 'response' | 'request' | 'notification' | 'other'
@@ -272,7 +288,7 @@ export class PendingRequests {
   settle(id: number | string, msg: JsonRpcIncoming): void {
     const entry = this.entries.get(id)
     if (!entry) return
-    if (msg.error) entry.settle({ error: new Error(msg.error.message ?? 'MCP error') })
+    if (msg.error) entry.settle({ error: new McpRpcError(msg.error) })
     else entry.settle({ value: msg.result })
   }
 

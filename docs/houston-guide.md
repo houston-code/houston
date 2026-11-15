@@ -3757,17 +3757,29 @@ name, or a confirmation.
 
 ### Protocol versions
 
-Houston speaks MCP protocol versions 2025-11-25, 2025-06-18, 2025-03-26, and 2024-11-05,
-and asks for the newest when it connects.
+Houston speaks MCP protocol versions 2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26, and
+2024-11-05. When it connects to a stdio or streamable HTTP server, it first asks which
+versions the server speaks (`server/discover`):
 
+- A server that speaks 2026-07-28 needs no handshake: each request carries the
+  protocol version and what Houston supports. Questions it asks during a call come
+  back as part of the call's answer and are shown the same way as before; Houston
+  answers them and sends the call again. Over HTTP, change notifications come on a
+  `subscriptions/listen` stream, and Stop closes the call's stream.
+- Any other server gets the older `initialize` handshake, asking for the newest
+  version it accepts. Over stdio both questions go out together, since an older
+  server may never answer the first. The legacy HTTP+SSE transport always uses the
+  handshake.
 - A server that answers with an older supported version still works, but server
   questions need 2025-06-18 or later: an older server's requests for input are declined.
 - Server questions are answered as forms. A request to open a web page instead (URL
   mode) is refused, since Houston does not offer it.
-- Over streamable HTTP, a stream the server closes early is resumed where it left off
-  (the server sends event ids), so a server that polls this way loses no replies.
+- Before 2026-07-28, over streamable HTTP, a stream the server closes early is resumed
+  where it left off (the server sends event ids), so a server that polls this way loses
+  no replies. 2026-07-28 streams are not resumable.
 - A server that only speaks a version outside that list fails to connect, and its
-  status names the version it asked for.
+  status names the version it asked for. A 2026-07-28-era server that wants another
+  stateless version fails the same way, without falling back to the handshake.
 
 ## Shell sandbox and network
 
