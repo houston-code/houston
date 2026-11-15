@@ -119,6 +119,8 @@ import { MarkdownStream, renderMarkdownAnsi } from './markdown-ansi'
 import { describeToolCall } from '@shared/toolLabel'
 import { approvalAskReasons } from '@shared/approvalReasons'
 import { capAnswer, capPlanDecision, QUESTION_DISMISSED_ANSWER } from '@shared/answerCaps'
+import { ruleActionOf, waitForSavedRules } from '@shared/savedRules'
+import { renderSavedRules } from './tui-saved-rules'
 import { renderPreviewView } from './tui-diff'
 import {
   chatToJson,
@@ -3947,10 +3949,23 @@ export function elevatedSource(c: {
  * leaves it off and asks again next session. No-op when nothing elevates, the
  * decision already stands, or this host can't persist settings.
  */
-export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Painter): Promise<void> {
+export async function promptFolderTrust(
+  cwd: string,
+  deps: TuiDeps,
+  paint: Painter,
+  opts: {
+    /**
+     * Fingerprints already asked about this session. Re-checked after every turn (the
+     * agent or the user may have changed the project's config), the question is asked
+     * once per configuration: an unchanged one that was declined isn't asked again.
+     */
+    asked?: Set<string>
+  } = {}
+): Promise<void> {
   if (!deps.updateSettings) return
   const cfg = await loadProjectConfig(cwd)
   if (!cfg.elevatedHash) return
+  if (opts.asked?.has(cfg.elevatedHash)) return
   let path = cwd
   try {
     path = realpathSync(cwd)
@@ -3960,6 +3975,7 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
   const settings = deps.getSettings()
   const state = folderTrustState(settings.trustedFolders, path, cfg.elevatedHash)
   if (state === 'trusted' || state === 'untrusted') return
+  opts.asked?.add(cfg.elevatedHash)
 
   deps.io.out(
     `\n${paint(state === 'changed' ? 'This project’s trusted configuration changed.' : 'This project asks for extra permissions.', 'cyan')}\n` +
@@ -3976,7 +3992,7 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
   const answer = (await deps.io.readLine('Trust this folder? [y/N/never] ', { discardPending: true }))?.trim().toLowerCase()
   const decision = answer === 'y' || answer === 'yes' ? 'trusted' : answer === 'never' ? 'never' : null
   if (!decision) {
-    deps.io.out(paint('· leaving the extra permissions off (will ask again next session)\n', 'dim'))
+    deps.io.out(paint('· leaving the extra permissions off (will ask again next session, or sooner if they change)\n', 'dim'))
     return
   }
   deps.updateSettings({
@@ -4107,7 +4123,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // elevating config changed since it was trusted), ask now — this is the
   // terminal counterpart of the desktop's trust banner. Declining just leaves
   // the elevation off; the session proceeds either way.
-  await promptFolderTrust(opts.cwd, deps, paint)
+  // Fingerprints asked about this session: the check runs again after every turn.
+  const trustAsked = new Set<string>()
+  await promptFolderTrust(opts.cwd, deps, paint, { asked: trustAsked })
 
   // The launch flags that shape every turn of this session: tool scope, appended
   // system prompt text, extra MCP servers, extra folders. Said once, up front.
@@ -6943,7 +6961,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               note
             })
             deps.io.out(paint(`  ↳ ${stripControlChars(outcome)}\n`, decision === 'deny' || decision === 'rule-deny' ? 'yellow' : 'dim'))
+            const ruleSince = Date.now()
             deps.resolveApproval(e.runId, e.callId, decision, note)
+            // After "Always allow / deny", name the rule(s) the run actually saved and
+            // how to take them back, as the desktop's toast does.
+            const ruleAction = ruleActionOf(decision)
+            if (ruleAction) {
+              const { saved, settings: fresh } = await waitForSavedRules(
+                async () => deps.getSettings(),
+                ruleAction,
+                ruleSince
+              )
+              deps.io.out(`${renderSavedRules(saved, fresh?.permissionRules ?? [], ruleAction, paint)}\n`)
+            }
           })
           break
         case 'tool_question':
@@ -7256,6 +7286,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Drain any approval/question prompts still in flight before the next composer read.
     await prompts
     activeRunId = null
+    // The turn may have added or changed the project's elevating config (an allow rule,
+    // a hook, an MCP server): ask about it now, as the desktop's trust banner does after
+    // each run, rather than only at the next launch.
+    await promptFolderTrust(opts.cwd, deps, paint, { asked: trustAsked })
     // The spinner's end, said once (an interrupt already said "interrupted").
     if (screenReader && interruptedQueued === null) {
       deps.io.out(`done in ${formatElapsed(nowFn() - turnStartedAt)}\n`)
