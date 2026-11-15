@@ -137,6 +137,20 @@ describe('configPatch', () => {
     expect(configPatch('memory', 'off', s)?.patch).toEqual({ memoryEnabled: false })
   })
 
+  it('saves usage-limit-wait, which is on by default and cycles on and off', () => {
+    const spec = findConfigKey('usageLimitWait')!
+    expect(spec.key).toBe('usage-limit-wait')
+    expect(spec.current(settings(), live)).toBe('on')
+    expect(spec.current(settings({ usageLimitWait: false }), live)).toBe('off')
+    expect(nextConfigValue(spec, 'on', ctx())).toBe('off')
+    expect(nextConfigValue(spec, 'off', ctx())).toBe('on')
+    expect(parseConfigArgs('usage-limit-wait=no', ctx())).toEqual({ op: 'set', key: 'usage-limit-wait', value: 'off' })
+    expect(parseConfigArgs('usage-limit-wait maybe', ctx())).toEqual({ op: 'error', message: expect.stringContaining('on | off') })
+    expect(configPatch('usage-limit-wait', 'off', s)?.patch).toEqual({ usageLimitWait: false })
+    expect(configPatch('usage-limit-wait', 'on', s)?.patch).toEqual({ usageLimitWait: true })
+    expect(configPatch('usage-limit-wait', 'on', s)?.note).not.toContain('—')
+  })
+
   it('leaves the terminal keys to their own commands, and refuses bad values', () => {
     expect(configPatch('theme', 'light', s)).toBeNull()
     expect(configPatch('vim', 'on', s)).toBeNull()

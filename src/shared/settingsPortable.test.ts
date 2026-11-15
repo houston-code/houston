@@ -130,6 +130,7 @@ describe('import checks per preference', () => {
     ['costCeilingUsd', 2.5, Number.NaN],
     ['maxCostUsd', 4, -1],
     ['stallDetection', true, 1],
+    ['usageLimitWait', false, 'no'],
     ['doneEvidenceNote', false, 'no'],
     ['verifyOnStop', true, 'yes'],
     ['verifyCommand', 'npm test', ['npm']],

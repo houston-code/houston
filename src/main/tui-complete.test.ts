@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { folderArgQuery, folderCompletions, type FolderEntry } from './tui-complete'
 import { mentionQuery, commandQuery, inlineCommandQuery, completeInput, makeCompleter, COMMANDS, commandMenu, renderCommandMenu, renderMentionMenu, makeMentionMenu, makeMentionMenuView, commandMenuView, markMenuRow, MENU_LIMIT, type CommandSpec } from './tui-complete'
 
 describe('mentionQuery', () => {
@@ -308,5 +309,56 @@ describe('the menu as pickable options', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(view('see @gr', () => {})!.options).toEqual([{ replace: '@gr', insert: '@src/greet.ts ' }])
     expect(view('no mention', () => {})).toBeNull()
+  })
+})
+
+describe('folder completion for /cd and /add-dir', () => {
+  const tree: Record<string, FolderEntry[]> = {
+    '/proj': [
+      { name: 'src', isDir: true },
+      { name: 'scripts', isDir: true },
+      { name: 'setup.sh', isDir: false },
+      { name: '.git', isDir: true },
+      { name: 'my dir', isDir: true },
+      { name: 'evil\u001b[2J', isDir: true }
+    ],
+    '/home/me': [{ name: 'work', isDir: true }],
+    '/': [{ name: 'tmp', isDir: true }]
+  }
+  const readDir = async (dir: string): Promise<FolderEntry[]> => {
+    // join() writes backslashes on Windows; the fake tree is keyed in POSIX form.
+    const hit = tree[dir.replace(/\\/g, '/').replace(/\/$/, '') || '/']
+    if (!hit) throw new Error('ENOENT')
+    return hit
+  }
+
+  it('finds the folder argument after /cd and /add-dir only', () => {
+    expect(folderArgQuery('/cd sr')).toBe('sr')
+    expect(folderArgQuery('/cd ')).toBe('')
+    expect(folderArgQuery('/add-dir ../x')).toBe('../x')
+    expect(folderArgQuery('/cd')).toBeNull()
+    expect(folderArgQuery('/copy 2')).toBeNull()
+    expect(folderArgQuery('cd src')).toBeNull()
+  })
+
+  it('offers matching folders as typed, plus a slash, and skips files, hidden folders, and unsafe names', async () => {
+    expect(await folderCompletions('s', '/proj', '/home/me', readDir)).toEqual(['scripts/', 'src/'])
+    expect(await folderCompletions('', '/proj', '/home/me', readDir)).toEqual(['scripts/', 'src/'])
+    expect(await folderCompletions('.g', '/proj', '/home/me', readDir)).toEqual(['.git/'])
+    expect(await folderCompletions('~/w', '/proj', '/home/me', readDir)).toEqual(['~/work/'])
+    expect(await folderCompletions('~', '/proj', '/home/me', readDir)).toEqual(['~/'])
+    expect(await folderCompletions('/t', '/proj', '/home/me', readDir)).toEqual(['/tmp/'])
+    expect(await folderCompletions('nope/x', '/proj', '/home/me', readDir)).toEqual([])
+  })
+
+  it('completes the folder through the composer completer', async () => {
+    const complete = makeCompleter(async () => [], COMMANDS, (partial) =>
+      folderCompletions(partial, '/proj', '/home/me', readDir)
+    )
+    const result = await new Promise<[string[], string]>((res) => complete('/cd sr', (_e, r) => res(r)))
+    expect(result).toEqual([['src/'], 'sr'])
+    // Without a lister, /cd completes nothing rather than a command name.
+    const plain = makeCompleter(async () => [], COMMANDS)
+    expect(await new Promise<[string[], string]>((res) => plain('/cd sr', (_e, r) => res(r)))).toEqual([[], '/cd sr'])
   })
 })

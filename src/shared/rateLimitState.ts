@@ -23,7 +23,7 @@ export interface RateLimitState {
 
 /** The state a throttled retry reports, or null when it carried nothing to keep. */
 export function stateFromThrottle(providerId: string, t: ThrottleInfo, now: number): RateLimitState | null {
-  const resetAt = t.retryAfterMs !== undefined ? now + t.retryAfterMs : undefined
+  const resetAt = t.resetAt ?? (t.retryAfterMs !== undefined ? now + t.retryAfterMs : undefined)
   if (t.remainingRequests === undefined && t.remainingTokens === undefined && resetAt === undefined) return null
   return {
     providerId,

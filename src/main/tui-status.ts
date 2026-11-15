@@ -40,6 +40,8 @@ export interface StatusView {
   /** This folder's `.houston/settings.json`: absent, or present with its trust state. */
   project: { exists: boolean; elevates: boolean; trust: FolderTrustState } | null
   cost: string
+  /** settings.usageLimitWait: whether a turn stopped at a usage limit waits for the reset. */
+  usageLimitWait: boolean
 }
 
 /** What a chat's shell commands can reach right now, in a phrase. */
@@ -104,6 +106,7 @@ export function renderStatus(v: StatusView, paint: Painter): string {
     ...(h?.network && (h.network.hosts || h.network.shellHosts)
       ? [row('allowed hosts', `${h.network.hosts} for network tools, ${h.network.shellHosts} for shell commands, this chat`)]
       : []),
+    row('usage limits', v.usageLimitWait ? 'wait for the reset, then continue (/config usage-limit-wait)' : 'stop the turn (/config usage-limit-wait)'),
     row('MCP servers', summarizeMcp(v.mcp)),
     row('user settings', v.settingsPath ?? 'unknown'),
     row('project settings', projectLine(v.project)),

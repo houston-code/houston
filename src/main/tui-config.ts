@@ -30,6 +30,7 @@ export type ConfigKeyName =
   | 'desktop-notifications'
   | 'background-wake'
   | 'memory'
+  | 'usage-limit-wait'
 
 /** What this session holds live (a launch flag can differ from the saved setting). */
 export interface ConfigLive {
@@ -152,6 +153,13 @@ export const CONFIG_KEYS: readonly ConfigKeySpec[] = [
     description: 'saved memories ride along with each message',
     values: () => ON_OFF,
     current: (s) => onOff(s.memoryEnabled !== false)
+  },
+  {
+    key: 'usage-limit-wait',
+    aliases: ['usageLimitWait'],
+    description: 'at a usage limit with a reset time, wait for the reset and continue the turn',
+    values: () => ON_OFF,
+    current: (s) => onOff(s.usageLimitWait !== false)
   }
 ]
 
@@ -288,6 +296,14 @@ export function configPatch(
           value === 'on'
             ? 'memory on: the agent sees and saves memories from your next message'
             : 'memory off: the agent runs without memories from your next message (nothing is deleted)'
+      }
+    case 'usage-limit-wait':
+      return {
+        patch: { usageLimitWait: value === 'on' },
+        note:
+          value === 'on'
+            ? 'usage limit wait on: a turn stopped at a usage limit waits for the reset, then continues'
+            : 'usage limit wait off: a turn stopped at a usage limit fails with the limit\'s error'
       }
     default:
       return null

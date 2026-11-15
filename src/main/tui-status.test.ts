@@ -21,6 +21,7 @@ const view = (over: Partial<StatusView> = {}): StatusView => ({
   settingsPath: '/profile/settings.json',
   project: { exists: false, elevates: false, trust: 'undecided' },
   cost: '10+20 tok · $0.01',
+  usageLimitWait: true,
   ...over
 })
 
@@ -81,6 +82,8 @@ describe('renderStatus', () => {
     expect(text).toMatch(/shell network:\s+on for this chat/)
     expect(text).toMatch(/allowed hosts:\s+2 for network tools, 1 for shell commands/)
     expect(text).toMatch(/MCP servers:\s+1 connected, 1 failed/)
+    expect(text).toMatch(/usage limits:\s+wait for the reset/)
+    expect(renderStatus(view({ usageLimitWait: false }), plain)).toMatch(/usage limits:\s+stop the turn/)
     expect(text).toMatch(/user settings:\s+\/profile\/settings\.json/)
     expect(text).toMatch(/project settings:\s+present, trusted/)
     expect(text).toMatch(/managed policy:\s+.*managed-settings\.json \(3 rules\)/)

@@ -9,6 +9,7 @@ import {
   isQuotaExhaustedError,
   isRetryableError,
   isToolsUnsupportedError,
+  limitResetAt,
   MAX_EXTENDED_IDLE_RETRIES,
   MAX_PROVIDER_RETRIES,
   NETWORK_OUTAGE_BUDGET_MS,
@@ -726,5 +727,49 @@ describe('throttleInfo', () => {
   it('ignores a header that is not a count', () => {
     const err = apiError(429, 'slow down', { 'x-ratelimit-remaining-requests': 'lots' })
     expect(throttleInfo(err, 1000)).toEqual({ waitMs: 1000 })
+  })
+})
+
+describe('limitResetAt', () => {
+  const now = Date.parse('2026-11-15T10:00:00Z')
+
+  it('reads the wait the server asked for, uncapped', () => {
+    expect(limitResetAt(apiError(429, 'limit', { 'retry-after': '7200' }), now)).toBe(now + 7_200_000)
+    expect(limitResetAt(apiError(429, 'limit', { 'retry-after-ms': '90000' }), now)).toBe(now + 90_000)
+    expect(limitResetAt(apiError(429, 'limit', { 'retry-after': 'Sun, 15 Nov 2026 12:30:00 GMT' }), now)).toBe(
+      Date.parse('2026-11-15T12:30:00Z')
+    )
+    expect(limitResetAt(new ProviderError('limit', { status: 429, retryAfterMs: 3_600_000 }), now)).toBe(now + 3_600_000)
+  })
+
+  it('reads the reset a usage-limit body names', () => {
+    const body = (o: object): Error =>
+      Object.assign(new Error(`429 ${JSON.stringify({ error: { type: 'usage_limit_reached', ...o } })}`), { status: 429 })
+    expect(limitResetAt(body({ resets_in_seconds: 1800 }), now)).toBe(now + 1_800_000)
+    expect(limitResetAt(body({ resets_at: now / 1000 + 600 }), now)).toBe(now + 600_000)
+    const parsed = Object.assign(new Error('limit'), { status: 429, error: { error: { resets_in_seconds: 60 } } })
+    expect(limitResetAt(parsed, now)).toBe(now + 60_000)
+  })
+
+  it('takes the latest reset the rate-limit headers report', () => {
+    const anthropic = apiError(429, 'limit', {
+      'anthropic-ratelimit-requests-reset': '2026-11-15T10:05:00Z',
+      'anthropic-ratelimit-tokens-reset': '2026-11-15T11:00:00Z'
+    })
+    expect(limitResetAt(anthropic, now)).toBe(Date.parse('2026-11-15T11:00:00Z'))
+    expect(limitResetAt(apiError(429, 'limit', { 'anthropic-ratelimit-unified-reset': String(now / 1000 + 900) }), now)).toBe(
+      now + 900_000
+    )
+    const openai = apiError(429, 'limit', { 'x-ratelimit-reset-requests': '1h2m3s', 'x-ratelimit-reset-tokens': '20ms' })
+    expect(limitResetAt(openai, now)).toBe(now + 3_723_000)
+    expect(limitResetAt(apiError(429, 'limit', { 'x-ratelimit-reset-tokens': '6m0s' }), now)).toBe(now + 360_000)
+  })
+
+  it('is undefined for anything that is not a rate or usage limit with a reset', () => {
+    expect(limitResetAt(apiError(500, 'down', { 'retry-after': '60' }), now)).toBeUndefined()
+    expect(limitResetAt(apiError(429, 'slow down'), now)).toBeUndefined()
+    expect(limitResetAt(apiError(429, 'limit', { 'x-ratelimit-reset-tokens': 'soon' }), now)).toBeUndefined()
+    const quota = Object.assign(new Error('You exceeded your current quota'), { status: 429, code: 'insufficient_quota' })
+    expect(limitResetAt(Object.assign(quota, { headers: { 'retry-after': '60' } }), now)).toBeUndefined()
   })
 })

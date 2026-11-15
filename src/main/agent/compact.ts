@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
-import type { ChatMessage } from '@shared/agent'
+import type { ChatMessage, RewindBackup } from '@shared/agent'
+import { compactionAfterTruncate, rewindableTurnIndices, turnText } from '@shared/rewind'
 import { smallModelFor, withSmallModel } from '@shared/smallModel'
 import { resolveContextWindow } from '@shared/usage'
 import { createProvider } from '../providers'
 import { getProvider } from '../agentHost'
-import { getConversation, peekConversation, setCompaction, setMessages } from '../conversations'
+import { getConversation, peekConversation, setCompaction, setMessages, writeRewind } from '../conversations'
+import { withRewindLock } from './rewindLock'
 import { log } from '../logger'
 import { activeRunForConversation } from './loop'
 import { memoryTaintSource } from './memoryTools'
@@ -136,12 +138,12 @@ export function applyCompaction(messages: ChatMessage[], cut: number, summary: s
 }
 
 /**
- * The taint of the messages a rewrite drops (`messages[0..cut)`), to carry onto the
+ * The taint of the messages a rewrite drops (`messages[from..cut)`), to carry onto the
  * summary that replaces them (see buildSummaryMessages). A prior summary at the head
  * carries its own, so the taint survives any number of compactions.
  */
-function headTaint(messages: ChatMessage[], cut: number): string | null {
-  return memoryTaintSource(messages.slice(0, cut), (n) => getTool(n)?.kind)
+function headTaint(messages: ChatMessage[], cut: number, from = 0): string | null {
+  return memoryTaintSource(messages.slice(from, cut), (n) => getTool(n)?.kind)
 }
 
 /**
@@ -149,11 +151,26 @@ function headTaint(messages: ChatMessage[], cut: number): string | null {
  * turns into a dense synthetic exchange and keep the recent ones, then persist.
  * Mirrors the loop's automatic compaction but runs outside a turn.
  */
-export async function compactConversationNow(
+export function compactConversationNow(
   id: string,
   providerId: string,
   model: string,
   opts: CompactOptions = {}
+): Promise<CompactResult> {
+  return underCompactionGuard(id, opts, (signal) =>
+    compactUnderSignal(id, providerId, model, signal, opts.onRetry, opts.focus)
+  )
+}
+
+/**
+ * Run a summarizing rewrite of chat `id` the way `/compact` runs: one per chat at a
+ * time, cancelled by `opts.signal`, abandoned past the deadline, and settled the
+ * moment either fires even when a provider stream ignores the abort.
+ */
+async function underCompactionGuard(
+  id: string,
+  opts: CompactOptions,
+  work: (signal: AbortSignal) => Promise<CompactResult>
 ): Promise<CompactResult> {
   if (inFlight.has(id)) return { ok: false, summarized: 0, reason: 'busy', error: COMPACT_ERR_BUSY }
   if (opts.signal?.aborted) return { ok: false, summarized: 0, reason: 'cancelled', error: COMPACT_ERR_CANCELLED }
@@ -181,7 +198,7 @@ export async function compactConversationNow(
     release = () => ctl.signal.removeEventListener('abort', done)
   })
   try {
-    return await Promise.race([stopped, compactUnderSignal(id, providerId, model, ctl.signal, opts.onRetry, opts.focus)])
+    return await Promise.race([stopped, work(ctl.signal)])
   } finally {
     release()
     clearTimeout(timer)
@@ -227,72 +244,17 @@ async function compactUnderSignal(
     return { ok: true, summarized: 0, reason: userTurns === 0 ? 'empty' : 'single-turn' }
   }
 
-  let provider
+  let summaryMsgs: ChatMessage[]
   try {
-    provider = createProvider(cfg)
-  } catch (e) {
-    return { ok: false, summarized: 0, error: (e as Error).message }
-  }
-
-  const budget = window ? Math.floor(window * SUMMARY_CHUNK_FRACTION) : DEFAULT_SUMMARY_CHUNK_BUDGET
-
-  // The summaries are written the way the loop's automatic compaction writes them: by
-  // the provider's small model when a chunk's request fits its window, with the chat's
-  // own model taking over when it doesn't, or when the small model fails.
-  const small = smallModelFor(cfg, model)
-  const smallWindow = small ? resolveContextWindow(small, cfg.models?.find((m) => m.id === small)?.caps) : null
-
-  // Summarize the head [0, target) in budget-bounded chunks, folding each result
-  // into a running summary. Chunking keeps any single summarization request from
-  // itself overflowing the window — essential when the conversation is already
-  // over the limit, where a one-shot summary of the whole head would just fail.
-  let summaryMsgs: ChatMessage[] = []
-  let cut = 0
-  try {
-    while (cut < target) {
-      const next = findSummaryChunkCut(conv.messages, cut, target, budget)
-      const request = buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next), focus)
-      // Each chunk is retried on its own: they fold into a running summary, so losing
-      // the whole compaction to a transient blip on the last of them would throw away
-      // every chunk before it. Safe to retry in full — the text is accumulated here,
-      // not streamed to anyone. A summary cut off at the output cap is an error, not
-      // a result: it would replace the head with a summary missing its end.
-      const summarizeOn = (summaryModel: string): Promise<string> =>
-        withProviderRetry(async () => {
-          let acc = ''
-          let truncated = false
-          for await (const ev of provider.streamChat({
-            model: summaryModel,
-            system: summarizationSystemPrompt,
-            messages: request,
-            maxTokens: summaryMaxTokens(summaryModel === model ? window : smallWindow),
-            signal
-          })) {
-            if (ev.type === 'text') acc += ev.text
-            else if (ev.type === 'done') truncated = ev.stopReason === 'max_tokens'
-            else if (ev.type === 'error') throw providerStreamError(ev)
-          }
-          if (truncated) throw new Error(SUMMARY_TRUNCATED_MESSAGE)
-          return acc
-        }, {
-          signal,
-          onRetry: (attempt, err, max) => {
-            const error = describeProviderError(err)
-            log.warn(`compact: retrying summary request (attempt ${attempt}${max ? ` of ${max}` : ''}): ${error}`)
-            if (!signal.aborted) onRetry?.({ attempt, max, error })
-          }
-        })
-      const smallFits =
-        small !== null && summaryFits(estimateTokens(summarizationSystemPrompt, request), smallWindow)
-      const text = await withSmallModel(smallFits ? small : null, model, summarizeOn, signal)
-      if (signal.aborted) return { ok: false, summarized: 0, error: COMPACT_ERR_CANCELLED }
-      const summary = text.trim()
-      if (!summary) return { ok: false, summarized: 0, error: 'The model returned an empty summary.' }
-      // Everything up to `next` is now stood in for by this summary, so it carries
-      // the taint of all of it.
-      summaryMsgs = buildSummaryMessages(summary, headTaint(conv.messages, next))
-      cut = next
-    }
+    summaryMsgs = await summarizeSpan(conv.messages, 0, target, {
+      cfg,
+      provider: createProvider(cfg),
+      model,
+      window,
+      signal,
+      onRetry,
+      focus
+    })
   } catch (e) {
     return { ok: false, summarized: 0, error: (e as Error).message }
   }
@@ -315,4 +277,194 @@ async function compactUnderSignal(
   // fresh state the next time it compacts.
   setCompaction(id, null)
   return { ok: true, summarized: target, messages }
+}
+
+/** What summarizing a span needs: the provider and model, and how to stop or report. */
+interface SpanSummarizer {
+  cfg: NonNullable<ReturnType<typeof getProvider>>
+  provider: ReturnType<typeof createProvider>
+  model: string
+  window: number | null | undefined
+  signal: AbortSignal
+  onRetry: CompactOptions['onRetry']
+  focus: string | undefined
+}
+
+/**
+ * Summarize `messages[from..to)` into the synthetic summary exchange that stands in for
+ * it (see buildSummaryMessages). Throws with the reason when it can't.
+ *
+ * The span goes in budget-bounded chunks, each result folded into a running summary.
+ * Chunking keeps any single summarization request from itself overflowing the window,
+ * essential when the conversation is already over the limit, where a one-shot summary
+ * of the whole span would just fail.
+ */
+async function summarizeSpan(
+  messages: ChatMessage[],
+  from: number,
+  to: number,
+  s: SpanSummarizer
+): Promise<ChatMessage[]> {
+  const { cfg, provider, model, window, signal, onRetry, focus } = s
+  const budget = window ? Math.floor(window * SUMMARY_CHUNK_FRACTION) : DEFAULT_SUMMARY_CHUNK_BUDGET
+  // The summaries are written the way the loop's automatic compaction writes them: by
+  // the provider's small model when a chunk's request fits its window, with the chat's
+  // own model taking over when it doesn't, or when the small model fails.
+  const small = smallModelFor(cfg, model)
+  const smallWindow = small ? resolveContextWindow(small, cfg.models?.find((m) => m.id === small)?.caps) : null
+  let summaryMsgs: ChatMessage[] = []
+  let cut = from
+  while (cut < to) {
+    const next = findSummaryChunkCut(messages, cut, to, budget)
+    const request = buildSummaryRequestMessages(summaryMsgs, messages.slice(cut, next), focus)
+    // Each chunk is retried on its own: they fold into a running summary, so losing
+    // the whole compaction to a transient blip on the last of them would throw away
+    // every chunk before it. Safe to retry in full — the text is accumulated here,
+    // not streamed to anyone. A summary cut off at the output cap is an error, not
+    // a result: it would replace the head with a summary missing its end.
+    const summarizeOn = (summaryModel: string): Promise<string> =>
+      withProviderRetry(async () => {
+        let acc = ''
+        let truncated = false
+        for await (const ev of provider.streamChat({
+          model: summaryModel,
+          system: summarizationSystemPrompt,
+          messages: request,
+          maxTokens: summaryMaxTokens(summaryModel === model ? window : smallWindow),
+          signal
+        })) {
+          if (ev.type === 'text') acc += ev.text
+          else if (ev.type === 'done') truncated = ev.stopReason === 'max_tokens'
+          else if (ev.type === 'error') throw providerStreamError(ev)
+        }
+        if (truncated) throw new Error(SUMMARY_TRUNCATED_MESSAGE)
+        return acc
+      }, {
+        signal,
+        onRetry: (attempt, err, max) => {
+          const error = describeProviderError(err)
+          log.warn(`compact: retrying summary request (attempt ${attempt}${max ? ` of ${max}` : ''}): ${error}`)
+          if (!signal.aborted) onRetry?.({ attempt, max, error })
+        }
+      })
+    const smallFits = small !== null && summaryFits(estimateTokens(summarizationSystemPrompt, request), smallWindow)
+    const text = await withSmallModel(smallFits ? small : null, model, summarizeOn, signal)
+    if (signal.aborted) throw new Error(COMPACT_ERR_CANCELLED)
+    const summary = text.trim()
+    if (!summary) throw new Error('The model returned an empty summary.')
+    // Everything from `from` up to `next` is now stood in for by this summary, so it
+    // carries the taint of all of it.
+    summaryMsgs = buildSummaryMessages(summary, headTaint(messages, next, from))
+    cut = next
+  }
+  return summaryMsgs
+}
+
+/**
+ * Which part of a chat {@link summarizeConversationPart} replaces, around one of the
+ * user's messages (its `turn`, numbered as rewind numbers them): `from` replaces that
+ * message and everything after it, `before` everything before it.
+ */
+export interface SummaryPart {
+  turn: number
+  /** The message as the client showed it, so a log that moved on is refused. */
+  text: string
+  side: 'from' | 'before'
+}
+
+export const SUMMARIZE_ERR_STALE =
+  'That message is no longer in this conversation. Reopen the chat and try again.'
+const SUMMARIZE_ERR_BUSY = 'A rewind is already in progress for this conversation.'
+
+/**
+ * Rewind's "Summarize from here" and "Summarize up to here": replace part of a chat
+ * with a summary written by the same summarizer as `/compact` (with its optional
+ * focus), leaving files alone. Saved as a rewind, so `/rewind undo` brings the
+ * original messages back until the chat moves on.
+ */
+export function summarizeConversationPart(
+  id: string,
+  providerId: string,
+  model: string,
+  part: SummaryPart,
+  opts: CompactOptions = {}
+): Promise<CompactResult> {
+  return underCompactionGuard(id, opts, (signal) => summarizePartUnderSignal(id, providerId, model, part, signal, opts))
+}
+
+async function summarizePartUnderSignal(
+  id: string,
+  providerId: string,
+  model: string,
+  part: SummaryPart,
+  signal: AbortSignal,
+  opts: CompactOptions
+): Promise<CompactResult> {
+  if (activeRunForConversation(id)) {
+    return { ok: false, summarized: 0, reason: 'running', error: COMPACT_ERR_RUNNING }
+  }
+  const stamp = logStamp(id)
+  const conv = getConversation(id)
+  if (!conv) return { ok: false, summarized: 0, error: 'Conversation not found.' }
+  const at = rewindableTurnIndices(conv.messages)[part.turn]
+  if (at === undefined || turnText(conv.messages[at]) !== part.text) {
+    return { ok: false, summarized: 0, reason: 'changed', error: SUMMARIZE_ERR_STALE }
+  }
+  const [from, to] = part.side === 'from' ? [at, conv.messages.length] : [0, at]
+  if (to <= from) return { ok: true, summarized: 0, reason: 'empty' }
+
+  const cfg = getProvider(providerId)
+  if (!cfg) return { ok: false, summarized: 0, error: `Unknown provider: ${providerId}` }
+  const window = resolveContextWindow(model, cfg.models?.find((m) => m.id === model)?.caps)
+  let summaryMsgs: ChatMessage[]
+  try {
+    summaryMsgs = await summarizeSpan(conv.messages, from, to, {
+      cfg,
+      provider: createProvider(cfg),
+      model,
+      window,
+      signal,
+      onRetry: opts.onRetry,
+      focus: opts.focus
+    })
+  } catch (e) {
+    return { ok: false, summarized: 0, error: (e as Error).message }
+  }
+  if (signal.aborted) return { ok: false, summarized: 0, error: COMPACT_ERR_CANCELLED }
+  if (activeRunForConversation(id)) {
+    return { ok: false, summarized: 0, reason: 'running', error: COMPACT_ERR_RUNNING }
+  }
+  const busy: CompactResult = { ok: false, summarized: 0, reason: 'busy', error: SUMMARIZE_ERR_BUSY }
+  return withRewindLock(id, busy, async () => {
+    if (logStamp(id) !== stamp) {
+      return { ok: false, summarized: 0, reason: 'changed', error: COMPACT_ERR_CHANGED }
+    }
+    // Peeked, as a rewind writes: attachments stay as stored references.
+    const stored = peekConversation(id)
+    if (!stored) return { ok: false, summarized: 0, error: 'Conversation not found.' }
+    const before = part.side === 'before'
+    const messages = before
+      ? [...summaryMsgs, ...stored.messages.slice(at)]
+      : [...stored.messages.slice(0, at), ...summaryMsgs]
+    const backup: RewindBackup = {
+      mode: 'conversation',
+      at: Date.now(),
+      messages: stored.messages,
+      ...(stored.compaction ? { compaction: stored.compaction } : {}),
+      ...(stored.lastError ? { lastError: stored.lastError } : {}),
+      afterLength: messages.length,
+      code: [],
+      detached: []
+    }
+    writeRewind(id, {
+      messages,
+      // A summary at the head indexes nothing the loop recorded; one at the tail keeps
+      // whatever still holds for the messages before it.
+      compaction: before ? null : compactionAfterTruncate(stored.compaction, at),
+      // A failed turn summarized away leaves nothing to retry.
+      lastError: before ? (stored.lastError ?? null) : null,
+      backup
+    })
+    return { ok: true, summarized: to - from, messages: getConversation(id)?.messages ?? messages }
+  })
 }

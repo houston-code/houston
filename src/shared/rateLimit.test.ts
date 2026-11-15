@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { quotaIsLow, quotaStatusText, throttleNotice } from './rateLimit'
+import { quotaIsLow, quotaStatusText, resetClock, throttleNotice } from './rateLimit'
 
 describe('throttleNotice', () => {
   it('says it was throttled, how long Houston waits, and the attempt', () => {
@@ -38,5 +38,17 @@ describe('quotaStatusText / quotaIsLow', () => {
     expect(quotaIsLow({ remainingRequests: 1, at })).toBe(false)
     expect(quotaIsLow({ throttled: true, at })).toBe(true)
     expect(quotaIsLow(undefined)).toBe(false)
+  })
+})
+
+describe('a usage-limit wait', () => {
+  it('says when the limit resets, how long that is, and that the turn continues then', () => {
+    const resetAt = new Date(2026, 10, 15, 9, 7).getTime()
+    expect(resetClock(resetAt)).toBe('09:07')
+    expect(throttleNotice({ waitMs: 2 * 3_600_000 + 15 * 60_000, resetAt }, '1/3')).toBe(
+      'Usage limit reached. It resets at 09:07 (in 2h 15m); continuing then (1/3).'
+    )
+    expect(throttleNotice({ waitMs: 3_600_000, resetAt }, '2/3')).toContain('(in 1h)')
+    expect(throttleNotice({ waitMs: 3_599_900, resetAt }, '2/3')).toContain('(in 1h)')
   })
 })

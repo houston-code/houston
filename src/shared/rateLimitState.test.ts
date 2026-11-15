@@ -31,3 +31,10 @@ describe('rateLimitState', () => {
     expect(rateLimitLine(resetOnly, now + 5000)).toBe(`Rate limited (as of ${clock(now)})`)
   })
 })
+
+describe('a usage-limit wait', () => {
+  it('keeps the reset time the wait named', () => {
+    const resetAt = now + 3 * 3_600_000
+    expect(stateFromThrottle('p', { waitMs: 60_000, retryAfterMs: 60_000, resetAt }, now)?.resetAt).toBe(resetAt)
+  })
+})
