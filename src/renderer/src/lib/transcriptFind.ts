@@ -67,10 +67,17 @@ export function collectMatchRanges(root: HTMLElement, query: string, limit = Inf
   const ranges: Range[] = []
   const needle = query.toLowerCase()
   if (!needle || limit <= 0) return ranges
+  // A root inside a `hidden` element (the plan review behind another side-panel tab)
+  // shows nothing to find.
+  if (root.closest('[hidden]')) return ranges
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    // Skip text hidden inside a collapsed <details> so it can't produce a match the
-    // user can't see or scroll to (e.g. the plan panel's collapsed file list).
-    acceptNode: (n) => (isInCollapsedDetails(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT)
+    // Skip text hidden inside a collapsed <details> or a `hidden` element so it can't
+    // produce a match the user can't see or scroll to (e.g. the plan panel's collapsed
+    // file list).
+    acceptNode: (n) =>
+      isInCollapsedDetails(n) || n.parentElement?.closest('[hidden]')
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT
   })
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const hay = (node.nodeValue ?? '').toLowerCase()

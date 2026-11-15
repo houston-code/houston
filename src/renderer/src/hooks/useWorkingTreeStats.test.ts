@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkingTreeStats as StatsPayload } from '@shared/workingTree'
-import { sameStats, useWorkingTreeStats } from './useWorkingTreeStats'
+import { notifyWorkingTreeChanged, sameStats, useWorkingTreeStats } from './useWorkingTreeStats'
 
 function stats(over: Partial<StatsPayload> = {}): StatsPayload {
   return { isRepo: true, branch: 'main', fileCount: 0, added: 0, removed: 0, ...over }
@@ -89,6 +89,18 @@ describe('useWorkingTreeStats', () => {
       window.dispatchEvent(new Event('focus'))
     })
     await waitFor(() => expect(result.current.fileCount).toBe(0))
+  })
+
+  it('refetches once when the app itself changed the working tree (commit, revert)', async () => {
+    const api = installApi(stats({ fileCount: 3, added: 5, removed: 1 }))
+    const { result } = renderHook(() => useWorkingTreeStats('/repo', false))
+    await waitFor(() => expect(result.current.fileCount).toBe(3))
+    const before = api.getWorkingTreeStats.mock.calls.length
+
+    api.set(stats({ fileCount: 0, added: 0, removed: 0 }))
+    act(() => notifyWorkingTreeChanged())
+    await waitFor(() => expect(result.current.fileCount).toBe(0))
+    expect(api.getWorkingTreeStats.mock.calls.length).toBe(before + 1)
   })
 
   it('keeps the same object (no re-render) when a refresh finds the same numbers', async () => {

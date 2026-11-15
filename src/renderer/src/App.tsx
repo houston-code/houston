@@ -143,7 +143,7 @@ import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { chatSettingsFor, defaultChatSettings, differsFromDefaults, withChatSettings, type ChatSettings } from './lib/chatSettings'
 import { Transcript, type RewindHandlers } from './components/Transcript'
 import { FileLinkContext, type FileLinks } from './components/FileLink'
-import { filesPanelKey } from './lib/fileLinks'
+import { filesPanelKey, revealFor, type FilesReveal } from './lib/fileLinks'
 import { RewindDialog } from './components/RewindDialog'
 import { RewindPicker } from './components/RewindPicker'
 import { PastEditDialog, pastEdits, type PastEdit } from './components/PastEditDialog'
@@ -345,10 +345,9 @@ export default function App(): JSX.Element {
   // Bumped by `/context` to open the usage chip's panel.
   const [usageOpenSignal, setUsageOpenSignal] = useState(0)
   const [issueOpen, setIssueOpen] = useState(false)
-  // A file for the Files panel to reveal when it opens (the image viewer's "Show in Files").
-  const [filesTarget, setFilesTarget] = useState<string | undefined>(undefined)
-  // The line to show in the previewed file, when a link named one.
-  const [filesLine, setFilesLine] = useState<number | undefined>(undefined)
+  // A file for the Files panel to reveal when it opens (a file link, the image viewer's
+  // "Show in Files"), at a line when one was named, in the project it was asked in.
+  const [filesReveal, setFilesReveal] = useState<FilesReveal | undefined>(undefined)
   // Bumped on every reveal, so opening the same file again (after picking another one
   // in the tree) remounts the panel onto it instead of being a no-op state update.
   const [filesOpenSeq, setFilesOpenSeq] = useState(0)
@@ -764,6 +763,8 @@ export default function App(): JSX.Element {
     document.title = windowTitle(currentTitle)
   }, [currentTitle])
   const workspace = currentConv?.workspace ?? lastWorkspace
+  // The Files reveal for this project only: one asked for in another project is dropped.
+  const filesShown = workspace ? revealFor(filesReveal, workspace) : undefined
   // File paths in the transcript (tool rows, the receipt, relative links in replies)
   // open in the Files tab's preview, at the line when one is known. The tab is opened
   // through a ref because showFiles is defined further down.
@@ -774,8 +775,7 @@ export default function App(): JSX.Element {
         ? {
             workspace,
             open: ({ path, line }) => {
-              setFilesTarget(path)
-              setFilesLine(line)
+              setFilesReveal({ workspace, path, line })
               setFilesOpenSeq((n) => n + 1)
               showFilesRef.current()
             }
@@ -4258,11 +4258,12 @@ export default function App(): JSX.Element {
               workspace ? (
                 <ItemBoundary>
                 <FilesPanel
-                  // A new "Show in Files" target (or line) remounts the tree to reveal it.
-                  key={filesPanelKey(workspace, filesTarget, filesLine, filesOpenSeq)}
+                  // A new "Show in Files" target (or line) remounts the tree to reveal it;
+                  // a target from another project is not replayed here.
+                  key={filesPanelKey(workspace, filesShown?.path, filesShown?.line, filesOpenSeq)}
                   workspace={workspace}
-                  initialPath={filesTarget}
-                  initialLine={filesLine}
+                  initialPath={filesShown?.path}
+                  initialLine={filesShown?.line}
                   onClose={closeDock}
                   docked
                   running={chat.running}
@@ -4444,10 +4445,9 @@ export default function App(): JSX.Element {
           }}
           onShowInFiles={(path) => {
             const rel = workspace ? workspaceRelativePath(path, workspace) : null
-            if (!rel) return 'That file is outside the project folder.'
+            if (!rel || !workspace) return 'That file is outside the project folder.'
             setViewer(null)
-            setFilesTarget(rel)
-            setFilesLine(undefined)
+            setFilesReveal({ workspace, path: rel })
             setFilesOpenSeq((n) => n + 1)
             showFiles()
             return null

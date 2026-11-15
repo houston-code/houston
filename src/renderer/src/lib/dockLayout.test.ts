@@ -27,4 +27,10 @@ describe('dockLayout', () => {
     const elsewhere = { open: true, tab: 'tasks' as const }
     expect(afterPlan(elsewhere, { open: false, tab: 'preview' })).toBe(elsewhere)
   })
+
+  it('keeps the panel hidden when it was closed during the plan review', () => {
+    const hidden = { open: false, tab: 'plan' as const }
+    expect(afterPlan(hidden, { open: true, tab: 'files' })).toEqual({ open: false, tab: 'files' })
+    expect(afterPlan(hidden, null)).toEqual({ open: false, tab: 'preview' })
+  })
 })

@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { CommitForm } from './CommitForm'
+import { CommitForm, forgetCommitDrafts } from './CommitForm'
 
 let api: Record<string, ReturnType<typeof vi.fn>>
 beforeEach(() => {
+  forgetCommitDrafts()
   api = {
     gitBranchSync: vi.fn().mockResolvedValue({ branch: 'feat', upstream: 'origin/feat', ahead: 0, remote: 'origin' }),
     gitSuggestMessage: vi.fn().mockResolvedValue({ ok: true, detail: 'Add the thing' }),
@@ -26,6 +27,27 @@ describe('CommitForm', () => {
     expect(api.gitCommit).toHaveBeenCalledWith('/ws', 'Add the thing')
     expect(onChanged).toHaveBeenCalled()
     expect(screen.getByLabelText('Commit message')).toHaveValue('')
+  })
+
+  it('keeps text typed while a suggestion is pending', async () => {
+    let answer: (v: { ok: true; detail: string }) => void = () => undefined
+    api.gitSuggestMessage.mockReturnValue(new Promise((r) => (answer = r)))
+    render(<CommitForm workspace="/ws" hasChanges onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Suggest message' }))
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'My own words' } })
+    await act(async () => answer({ ok: true, detail: 'Add the thing' }))
+    expect(screen.getByLabelText('Commit message')).toHaveValue('My own words')
+  })
+
+  it('keeps a typed message across the form unmounting, per folder', () => {
+    const { unmount } = render(<CommitForm workspace="/ws" hasChanges onChanged={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'Half written' } })
+    unmount()
+    const other = render(<CommitForm workspace="/other" hasChanges onChanged={vi.fn()} />)
+    expect(screen.getByLabelText('Commit message')).toHaveValue('')
+    other.unmount()
+    render(<CommitForm workspace="/ws" hasChanges onChanged={vi.fn()} />)
+    expect(screen.getByLabelText('Commit message')).toHaveValue('Half written')
   })
 
   it('commits with Cmd+Enter and shows git’s error', async () => {

@@ -25,6 +25,26 @@ describe('MenuExpander', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
+  it('stays open while a text field in the card has focus, whatever the pointer does', () => {
+    render(
+      <div className="menu">
+        <MenuExpander label="Labels">
+          <input aria-label="New label name" />
+        </MenuExpander>
+        <button className="menu__item">Export</button>
+      </div>
+    )
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Labels' }))
+    const input = screen.getByRole('textbox', { name: 'New label name' })
+    input.focus()
+    fireEvent.change(input, { target: { value: 'docs' } })
+    const flyout = input.closest('.menu--flyout') as HTMLElement
+    fireEvent.mouseLeave(flyout)
+    act(() => vi.advanceTimersByTime(200))
+    fireEvent.mouseOver(screen.getByRole('button', { name: 'Export' }))
+    expect(screen.getByRole('textbox', { name: 'New label name' })).toHaveValue('docs')
+  })
+
   it('keeps the nested options hidden until highlighted', () => {
     const { trigger } = setup()
     expect(card()).not.toBeInTheDocument()

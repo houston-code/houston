@@ -31,15 +31,28 @@ export function sameStats(a: WorkingTreeStats, b: WorkingTreeStats): boolean {
   return x.remote.name === y.remote.name && x.remote.host === y.remote.host
 }
 
+/** Window event the Changes view fires after it changed the working tree itself. */
+export const TREE_CHANGED = 'houston:working-tree-changed'
+
+/**
+ * Say that the app just changed the working tree (a commit, push, revert or `git init`
+ * from the Changes view), so the counts re-read now rather than on the next focus.
+ */
+export function notifyWorkingTreeChanged(): void {
+  window.dispatchEvent(new Event(TREE_CHANGED))
+}
+
 /**
  * Lightweight working-tree change stats for the titlebar Changes badge. Asks main
  * for the counts only (not the full diff the Changes panel loads), and refreshes
  * when it actually matters:
  *  - the workspace changes,
- *  - a run finishes (the agent's edits have just landed), and
- *  - the window regains focus (to catch edits/commits made outside the app).
+ *  - a run finishes (the agent's edits have just landed),
+ *  - the window regains focus (to catch edits/commits made outside the app), and
+ *  - the Changes view commits, pushes, reverts or initializes a repository
+ *    ({@link notifyWorkingTreeChanged}).
  *
- * It does not poll — those three signals cover how the working tree changes in
+ * It does not poll — those signals cover how the working tree changes in
  * practice, and a stale count for a few seconds is harmless. A refresh that finds
  * the same numbers keeps the previous object, so it does not re-render the app.
  */
@@ -93,7 +106,11 @@ export function useWorkingTreeStats(workspace: string | null, running: boolean):
   useEffect(() => {
     const onFocus = (): void => void refresh()
     window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
+    window.addEventListener(TREE_CHANGED, onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener(TREE_CHANGED, onFocus)
+    }
   }, [refresh])
 
   return stats

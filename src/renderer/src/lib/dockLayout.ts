@@ -46,6 +46,8 @@ export interface DockState {
  */
 export function afterPlan(current: DockState, before: DockState | null): DockState {
   if (current.tab !== 'plan') return current
+  // Hidden during the review: it stays hidden, and only the remembered tab comes back.
+  if (!current.open) return { open: false, tab: before && before.tab !== 'plan' ? before.tab : 'preview' }
   if (!before || before.tab === 'plan') return { open: false, tab: 'preview' }
   return before
 }

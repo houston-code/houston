@@ -56,9 +56,19 @@ export function MenuExpander({
     clearClose()
     setOpen(false)
   }
+  // A text field focused in the card (the "New label" name) holds it open: closing on
+  // pointer position would throw away what is being typed.
+  const typingInCard = (): boolean => {
+    const active = document.activeElement
+    return !!active && !!cardRef.current?.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
+  }
   const scheduleClose = (): void => {
     clearClose()
-    closeTimer.current = setTimeout(() => setOpen(false), CLOSE_DELAY)
+    if (typingInCard()) return
+    closeTimer.current = setTimeout(() => {
+      closeTimer.current = null
+      if (!typingInCard()) setOpen(false)
+    }, CLOSE_DELAY)
   }
   useEffect(
     () => () => {
@@ -116,6 +126,7 @@ export function MenuExpander({
       // padding/chrome between this row and the card, so the move from row to card
       // stays continuous.
       if (!target.closest('.menu__item')) return
+      if (typingInCard()) return
       if (openTimer.current) clearTimeout(openTimer.current)
       if (closeTimer.current) clearTimeout(closeTimer.current)
       openTimer.current = null
