@@ -1,6 +1,7 @@
 import { version as APP_VERSION } from '../../../package.json'
 import { McpRpcError, type ElicitationWireResult } from './protocol'
 import { McpUnsupportedProtocolError } from './version'
+import { TASKS_EXTENSION } from './tasks'
 
 /**
  * MCP 2026-07-28, the stateless revision: what the stdio and streamable HTTP clients
@@ -35,11 +36,16 @@ export const UNSUPPORTED_PROTOCOL_VERSION = -32022
 export interface ClientDeclaration {
   /** A responder for elicitation is wired, so form elicitation can be declared. */
   elicitation: boolean
+  /** Long calls may come back as tasks (the Tasks extension, see tasks.ts). */
+  tasks?: boolean
 }
 
 /** The client capabilities a request declares. Only what is wired is declared. */
 export function clientCapabilities(decl: ClientDeclaration): Record<string, unknown> {
-  return decl.elicitation ? { elicitation: { form: {} } } : {}
+  return {
+    ...(decl.elicitation ? { elicitation: { form: {} } } : {}),
+    ...(decl.tasks ? { extensions: { [TASKS_EXTENSION]: {} } } : {})
+  }
 }
 
 /** The per-request `_meta` fields: protocol version, capabilities, and client identity. */
@@ -124,6 +130,8 @@ export async function runWithInputs(
     method: string
     onElicit?: (params: unknown) => Promise<ElicitationWireResult>
     signal?: AbortSignal
+    /** Follows a task the server created instead of answering (see tasks.ts); without it a task is an unknown result. */
+    onTask?: (created: unknown) => Promise<unknown>
   }
 ): Promise<unknown> {
   let current = params
@@ -131,6 +139,7 @@ export async function runWithInputs(
     const result = await send(current)
     const type = resultTypeOf(result)
     if (type === 'complete') return result
+    if (type === 'task' && opts.onTask) return opts.onTask(result)
     if (type !== 'input_required') {
       throw new Error(`MCP ${opts.method} returned a result of an unknown type (${JSON.stringify(type).slice(0, 40)})`)
     }

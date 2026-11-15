@@ -295,6 +295,12 @@ export interface ToolContext {
    * does, and say why not otherwise; absent means unknown, and the image is attached.
    */
   modelSeesImages?: () => boolean
+  /**
+   * Show a short progress line on this call while it runs (injected by the loop). An
+   * MCP tool running as a task reports its status messages here; the text is for the
+   * user only and never reaches the model.
+   */
+  reportProgress?: (message: string) => void
   /** Attach a document (e.g. PDF) read by the agent to the tool result. */
   attachDocument?: (doc: DocumentAttachment) => void
   /** Screenshot + console-capture a loopback URL (injected by the loop; Electron-backed). */

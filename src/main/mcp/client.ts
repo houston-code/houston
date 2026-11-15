@@ -39,6 +39,7 @@ import {
   withRequestMeta,
   type ClientDeclaration
 } from './stateless'
+import { followTask } from './tasks'
 import { withTraceContext } from './trace'
 
 /**
@@ -111,7 +112,14 @@ export interface McpConnection {
    * server `notifications/cancelled`; the same holds for the two calls below. Image blocks in
    * the result go to `images.attachImage` when given (see flattenMcpContent).
    */
-  callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, images?: McpImageOptions): Promise<string>
+  callTool(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+    images?: McpImageOptions,
+    /** Hears a long call's status messages (a 2026-07-28 task), shown as its progress. */
+    onStatus?: (message: string) => void
+  ): Promise<string>
   /** Read a resource's contents by uri (flattened to text). */
   readResource(uri: string, signal?: AbortSignal): Promise<string>
   /** Fetch a prompt template by name (flattened to text). */
@@ -551,7 +559,7 @@ export class McpClient {
 
   /** What each 2026-07-28 request declares about this client. */
   private declaration(): ClientDeclaration {
-    return { elicitation: !!this.onElicit }
+    return { elicitation: !!this.onElicit, tasks: true }
   }
 
   /**
@@ -561,13 +569,27 @@ export class McpClient {
   private requestWithInputs(
     method: string,
     params: Record<string, unknown>,
-    opts: { progress?: boolean; signal?: AbortSignal } = {}
+    opts: { progress?: boolean; signal?: AbortSignal; tasks?: boolean; onStatus?: (message: string) => void } = {}
   ): Promise<unknown> {
-    if (!this.modern) return this.request(method, params, CALL_TIMEOUT_MS, opts)
-    return runWithInputs((p) => this.request(method, p, CALL_TIMEOUT_MS, opts), params, {
+    const { tasks, onStatus, ...sendOpts } = opts
+    if (!this.modern) return this.request(method, params, CALL_TIMEOUT_MS, sendOpts)
+    return runWithInputs((p) => this.request(method, p, CALL_TIMEOUT_MS, sendOpts), params, {
       method,
       onElicit: this.onElicit,
-      signal: opts.signal
+      signal: opts.signal,
+      // A long call may come back as a task (the Tasks extension): follow it to its result.
+      ...(tasks
+        ? {
+            onTask: (created: unknown) =>
+              followTask(created, method, {
+                request: (m, p) =>
+                  this.request(m, p, CALL_TIMEOUT_MS, m === 'tasks/get' ? { signal: opts.signal } : {}),
+                signal: opts.signal,
+                onElicit: this.onElicit,
+                onStatus
+              })
+          }
+        : {})
     })
   }
 
@@ -602,8 +624,14 @@ export class McpClient {
   }
 
   /** Call a tool and return its flattened text result. */
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, images?: McpImageOptions): Promise<string> {
-    const res = (await this.requestWithInputs('tools/call', { name, arguments: args ?? {} }, { progress: true, signal })) as {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+    images?: McpImageOptions,
+    onStatus?: (message: string) => void
+  ): Promise<string> {
+    const res = (await this.requestWithInputs('tools/call', { name, arguments: args ?? {} }, { progress: true, signal, tasks: true, onStatus })) as {
       content?: unknown
       isError?: boolean
     }

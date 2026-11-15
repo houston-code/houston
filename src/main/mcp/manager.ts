@@ -583,7 +583,7 @@ export async function getMcpToolDefs(
         // Resolve the live connection at call time so a reconnect (or removal)
         // between building the tool list and the call doesn't hit a stale client.
         execute: (args, ctx) =>
-          callLive(serverId, mine, runConfigs, ctx, (client) => client.callTool(original, args, ctx?.signal, mcpImageOptions(ctx)), {
+          callLive(serverId, mine, runConfigs, ctx, (client) => client.callTool(original, args, ctx?.signal, mcpImageOptions(ctx), ctx?.reportProgress), {
             envelope: `Result from MCP server "${serverId}":`,
             source: `MCP tool ${fullName}`
           })

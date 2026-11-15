@@ -51,6 +51,7 @@ import {
   type ClientDeclaration,
   type HeaderParam
 } from './stateless'
+import { followTask } from './tasks'
 
 /**
  * A minimal MCP client over the **streamable HTTP** transport (the remote
@@ -284,20 +285,34 @@ export class McpHttpClient implements McpConnection {
 
   /** What each 2026-07-28 request declares about this client. */
   private declaration(): ClientDeclaration {
-    return { elicitation: !!this.onElicit }
+    return { elicitation: !!this.onElicit, tasks: true }
   }
 
   /** A request that may need input on a 2026-07-28 server (see runWithInputs); sent once otherwise. */
   private requestWithInputs(
     method: string,
     params: Record<string, unknown>,
-    opts: { progress?: boolean; signal?: AbortSignal } = {}
+    opts: { progress?: boolean; signal?: AbortSignal; tasks?: boolean; onStatus?: (message: string) => void } = {}
   ): Promise<unknown> {
-    if (!this.modern) return this.rpc(method, params, CALL_TIMEOUT_MS, opts)
-    return runWithInputs((p) => this.rpc(method, p, CALL_TIMEOUT_MS, opts), params, {
+    const { tasks, onStatus, ...sendOpts } = opts
+    if (!this.modern) return this.rpc(method, params, CALL_TIMEOUT_MS, sendOpts)
+    return runWithInputs((p) => this.rpc(method, p, CALL_TIMEOUT_MS, sendOpts), params, {
       method,
       onElicit: this.onElicit,
-      signal: opts.signal
+      signal: opts.signal,
+      // A long call may come back as a task (the Tasks extension): follow it to its result.
+      ...(tasks
+        ? {
+            onTask: (created: unknown) =>
+              followTask(created, method, {
+                request: (m, p) =>
+                  this.rpc(m, p, CALL_TIMEOUT_MS, m === 'tasks/get' ? { signal: opts.signal } : {}),
+                signal: opts.signal,
+                onElicit: this.onElicit,
+                onStatus
+              })
+          }
+        : {})
     })
   }
 
@@ -313,10 +328,18 @@ export class McpHttpClient implements McpConnection {
     return flattenMcpPromptMessages(res) || '[no content]'
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, images?: McpImageOptions): Promise<string> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+    images?: McpImageOptions,
+    onStatus?: (message: string) => void
+  ): Promise<string> {
     const res = (await this.requestWithInputs('tools/call', { name, arguments: args ?? {} }, {
       progress: true,
-      signal
+      signal,
+      tasks: true,
+      onStatus
     })) as {
       content?: unknown
       isError?: boolean
