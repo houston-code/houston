@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent
+} from 'react'
 import { MAX_SIDE_TURNS, type SideChatView } from '@shared/agent'
 import { Icon } from './Icon'
 import { Markdown } from './Markdown'
@@ -72,10 +79,13 @@ export function SideChatPanel({
 
   // Follow the conversation as it grows, unless the user scrolled up to reread: then
   // only a new question (theirs, just asked) brings the list back to the bottom.
+  // A layout effect, so the jump lands with the new content. As a passive effect it
+  // could run after the user had already scrolled the new content, read the first
+  // load as a new question, and pull the list back down.
   const pinnedToBottom = useRef(true)
   const exchanges = view.turns.length + (view.pending ? 1 : 0)
   const seenExchanges = useRef(exchanges)
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = listRef.current
     const started = exchanges > seenExchanges.current
     seenExchanges.current = exchanges

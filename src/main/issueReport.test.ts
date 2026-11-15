@@ -9,6 +9,13 @@ const shell = vi.hoisted(() => ({
   openExternal: vi.fn(async (_url: string) => undefined)
 }))
 vi.mock('electron', () => ({ shell, app: { getVersion: () => '0.0.0-test', getPath: () => '/tmp' } }))
+// The report looks up git, gh and rg on PATH with a process per lookup. Nothing here
+// depends on what is installed, and on a busy Windows runner those lookups alone
+// could outlast the test timeout.
+vi.mock('node:child_process', async (original) => ({
+  ...(await original<typeof import('node:child_process')>()),
+  spawnSync: vi.fn(() => ({ status: 1, stdout: '', stderr: '' }))
+}))
 
 import { setUserDataDir } from './userData'
 import { configureHasKey } from './store'
