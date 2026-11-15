@@ -109,6 +109,22 @@ describe('buffered writes', () => {
     expect(contents()).toMatch(/\[INFO\] before\n.*\[ERROR\] boom\n$/)
   })
 
+  it('never lets an error overtake a batch the timer already took', async () => {
+    log.info('first: the context')
+    // A timer set after the logger's runs right after its flush: the moment an error
+    // that follows the batch is logged.
+    const after = await new Promise<string>((resolve) =>
+      setTimeout(() => {
+        log.error('second: the failure')
+        resolve(contents())
+      }, FLUSH_MS)
+    )
+    const lines = (s: string): string[] => s.trim().split('\n').map((l) => l.replace(/^\S+ /, ''))
+    expect(lines(after)).toEqual(['[INFO] first: the context', '[ERROR] second: the failure'])
+    await new Promise((r) => setTimeout(r, FLUSH_MS * 2))
+    expect(lines(contents())).toEqual(['[INFO] first: the context', '[ERROR] second: the failure'])
+  })
+
   it('drops debug lines unless HOUSTON_LOG_LEVEL=debug, and redacts them when written', () => {
     delete process.env.HOUSTON_LOG_LEVEL
     log.debug('hidden')

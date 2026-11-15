@@ -49,7 +49,7 @@ import type {
 import { forkConversationData, type ForkPoint, type ImportedConversation } from '@shared/conversation-io'
 import { replyMessageIndexes } from '@shared/chatStatus'
 import { sanitizeLabelIds } from '@shared/chatLabels'
-import { rewindableTurnIndices, turnText } from '@shared/rewind'
+import { compactionAfterTruncate, rewindableTurnIndices, turnText } from '@shared/rewind'
 import { repairDanglingToolResults } from './agent/repair'
 import { accumulateModelUsage } from '@shared/usage'
 import { invocationText } from '@shared/promptInvocation'
@@ -61,6 +61,7 @@ import { forgetSubAgentSessions } from './agent/subagentSessions'
 import { redactSecrets } from './agent/redact'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
+import { conversationRunningElsewhere } from './runMarkers'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
 
@@ -554,9 +555,30 @@ const MAX_WRITTEN_CHATS = 4
 function rememberWritten(id: string, entry: WrittenChat): void {
   written.delete(id)
   written.set(id, entry)
+  const evicted: [string, WrittenChat][] = []
   for (const oldest of written.keys()) {
     if (written.size <= MAX_WRITTEN_CHATS) break
+    evicted.push([oldest, written.get(oldest) as WrittenChat])
     written.delete(oldest)
+  }
+  for (const [oldId, old] of evicted) foldEvicted(oldId, old)
+}
+
+/**
+ * A chat dropped from {@link written} with a log this process appended: fold it now,
+ * since nothing remembers to fold it at exit any more (and the schedule daemon never
+ * exits). Only while the files are still this process's write; another process that
+ * wrote since owns the log. Never throws: a log left behind is applied by the next read.
+ */
+function foldEvicted(id: string, entry: WrittenChat): void {
+  if (entry.logStamp === null || !entry.msgs) return
+  if (fileStamp(filePath(id)) !== entry.baseStamp || fileStamp(logPath(id)) !== entry.logStamp) return
+  // A run in another process is about to append to it; that process folds it.
+  if (conversationRunningElsewhere(id) !== null) return
+  try {
+    fold(id, entry.shell, entry.msgs.snaps, { remember: false })
+  } catch (e) {
+    log.warn(`[conversations] could not fold ${logPath(id)}: ${(e as Error)?.message ?? String(e)}`)
   }
 }
 
@@ -706,7 +728,12 @@ function afterWrite(id: string, entry: WrittenChat): void {
  * caller holds them: attachment bytes go to the media folder first, so the JSON never
  * names a file that isn't there yet, and files no longer referenced go after it lands.
  */
-function fold(id: string, shellIn: ConversationShell, messages: readonly unknown[]): WrittenChat {
+function fold(
+  id: string,
+  shellIn: ConversationShell,
+  messages: readonly unknown[],
+  { remember = true }: { remember?: boolean } = {}
+): WrittenChat {
   const media = mediaDir(id)
   const shellExt = externalizeMedia(stampShell(shellIn), media)
   const msgs = externalizeMessages(messages, media)
@@ -733,7 +760,9 @@ function fold(id: string, shellIn: ConversationShell, messages: readonly unknown
     msgs: { snaps: messages.map(snapshot), refs: msgs.refs },
     outdated: false
   }
-  rememberWritten(id, entry)
+  // Not when folding a chat on its way out of the cache: remembering it would evict
+  // another in its place.
+  if (remember) rememberWritten(id, entry)
   afterWrite(id, entry)
   pruneMedia(media, withLiveMedia(id, allRefs(shellExt.refs, msgs.refs)))
   return entry
@@ -864,6 +893,9 @@ export function flushOpenConversations(): void {
  */
 export function flushConversation(id: string): void {
   if (!isConversationId(id) || !existsSync(logPath(id))) return
+  // Not while another process runs the chat: a record it appends between this read and
+  // the log's removal would go with it. That process folds the log when it is done.
+  if (conversationRunningElsewhere(id) !== null) return
   const ours = stillWritten(id)
   if (ours?.msgs) {
     fold(id, ours.shell, ours.msgs.snaps)
@@ -1161,6 +1193,15 @@ export function forkConversationAt(id: string, point: ForkPoint): Conversation |
   // Anything left unbalanced by the cut is closed off, as a hand-off's history is.
   const messages = repairDanglingToolResults(src.messages.slice(0, cut))
   const fork = forkConversationData({ ...src, messages }, randomUUID(), Date.now())
+  // State that describes the source's messages is cut to what the fork kept, as a
+  // rewind's is: a summary of turns past the cut would otherwise stand in for the
+  // fork's own history once it grows past the source's boundary.
+  const compaction = compactionAfterTruncate(src.compaction, cut)
+  if (compaction) fork.compaction = compaction
+  else delete fork.compaction
+  if (fork.spawnedFrom?.historyLength !== undefined && fork.spawnedFrom.historyLength > cut) {
+    fork.spawnedFrom = { ...fork.spawnedFrom, historyLength: cut }
+  }
   fork.titleGenerated = true
   write(fork)
   return fork
@@ -1371,6 +1412,18 @@ export function deleteConversation(id: string): void {
   const path = filePath(id)
   if (existsSync(path)) rmSync(path)
   rmSync(logPath(id), { force: true })
+  // And the log pieces set aside beside it (`<id>.jsonl.orphan-*`, `.corrupt-*`): they
+  // hold the chat's text too, and nothing else ever removes them.
+  const aside = `${id}.jsonl.`
+  let entries: string[] = []
+  try {
+    entries = readdirSync(join(getUserDataDir(), 'conversations'))
+  } catch {
+    // No folder: nothing set aside either.
+  }
+  for (const f of entries) {
+    if (f.startsWith(aside)) rmSync(join(getUserDataDir(), 'conversations', f), { force: true })
+  }
   metaCache.delete(id)
   written.delete(id)
   dropSearchEntry(id)

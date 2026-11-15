@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { appendFileSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatMessage, Conversation } from '@shared/agent'
@@ -10,6 +10,7 @@ import {
   createConversation,
   deleteConversation,
   flushConversation,
+  flushOpenConversations,
   getConversation,
   listConversations,
   resetConversationListCache,
@@ -318,6 +319,50 @@ describe('folding the log into the JSON file', () => {
     expect(stampOf(base(id))).toBe(st)
   })
 
+  it('folds the log of every chat it wrote, not only the few it still remembers', () => {
+    // More chats than the write cache holds, each with a log of its own.
+    const chats = Array.from({ length: 6 }, () => chat(2))
+    for (const c of chats) {
+      c.messages.push({ role: 'assistant', content: `latest of ${c.id}` })
+      setMessages(c.id, [...c.messages])
+    }
+    // A chat pushed out of the cache is folded then, without waiting for an exit the
+    // schedule daemon never makes.
+    const first = JSON.parse(readFileSync(base(chats[0].id), 'utf8')) as Conversation
+    expect(first.messages).toEqual(chats[0].messages)
+    expect(existsSync(log(chats[0].id))).toBe(false)
+    flushOpenConversations()
+    expect(readdirSync(convDir()).filter((f) => f.endsWith('.jsonl'))).toEqual([])
+    for (const c of chats) {
+      expect((JSON.parse(readFileSync(base(c.id), 'utf8')) as Conversation).messages).toEqual(c.messages)
+    }
+  })
+
+  it('leaves the log of a chat pushed out of the cache alone once another process wrote it', () => {
+    const chats = Array.from({ length: 5 }, () => chat(2))
+    const [a] = chats
+    setMessages(a.id, [...a.messages, { role: 'assistant', content: 'mine' }])
+    // Another process appends to the same log before this one lets go of the chat.
+    appendFileSync(log(a.id), `${JSON.stringify({ s: { title: 'Renamed elsewhere' } })}\n`)
+    for (const c of chats.slice(1)) setMessages(c.id, [...c.messages, { role: 'user', content: 'more' }])
+    expect(existsSync(log(a.id))).toBe(true)
+    resetAll()
+    expect(getConversation(a.id)).toMatchObject({ title: 'Renamed elsewhere' })
+    expect(getConversation(a.id)?.messages.at(-1)?.content).toBe('mine')
+  })
+
+  it('leaves the log to another process that is running the chat', () => {
+    const { id, messages } = chat(3)
+    setMessages(id, [...messages, { role: 'assistant', content: 'latest' }])
+    mkdirSync(join(dir, 'runs'), { recursive: true })
+    writeFileSync(join(dir, 'runs', `${process.ppid}.json`), JSON.stringify({ pid: process.ppid, conversations: [id] }))
+    flushConversation(id)
+    expect(existsSync(log(id))).toBe(true)
+    rmSync(join(dir, 'runs'), { recursive: true, force: true })
+    flushConversation(id)
+    expect(existsSync(log(id))).toBe(false)
+  })
+
   it('folds a log this process did not write', () => {
     const { id, messages } = chat(3)
     setMessages(id, [...messages, { role: 'assistant', content: 'latest' }])
@@ -377,6 +422,26 @@ it('deleting a chat removes its log', () => {
   deleteConversation(id)
   expect(existsSync(log(id))).toBe(false)
   expect(existsSync(base(id))).toBe(false)
+})
+
+it('deleting a chat removes the log pieces set aside beside it', () => {
+  const { id, messages } = chat(2)
+  setMessages(id, [...messages, { role: 'assistant', content: 'secret text in the log' }])
+  // An older Houston rewrites the JSON file, so the next save sets the log aside.
+  const old = JSON.parse(readFileSync(base(id), 'utf8')) as Conversation
+  writeFileSync(base(id), JSON.stringify({ ...old, title: 'Written by an older version' }))
+  resetAll()
+  addUsage(id, { inputTokens: 1, outputTokens: 1, cost: 1 })
+  // And a torn record, set aside on the save after it.
+  appendFileSync(log(id), '{"n":2,"m":[{"role":"user","cont')
+  resetAll()
+  addUsage(id, { inputTokens: 1, outputTokens: 1, cost: 1 })
+  expect(aside('orphan')).toHaveLength(1)
+  expect(aside('corrupt')).toHaveLength(1)
+  const other = chat(1)
+  deleteConversation(id)
+  expect(readdirSync(convDir()).filter((f) => f.startsWith(id))).toEqual([])
+  expect(existsSync(base(other.id))).toBe(true)
 })
 
 it('attachments in appended messages go to the media folder, and are pruned when dropped', () => {

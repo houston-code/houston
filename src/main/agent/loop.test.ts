@@ -12584,6 +12584,62 @@ describe('a run that ends without a reply', () => {
     expect(livePersisted.some((m) => m.unanswered || m.runEnds)).toBe(false)
   })
 
+  it('refuses a start while another Houston process runs the conversation, and marks its own runs on disk', async () => {
+    // Another live process (any pid but this one) records it is running the chat.
+    mkdirSync(join(userData, 'runs'), { recursive: true })
+    writeFileSync(
+      join(userData, 'runs', `${process.ppid}.json`),
+      JSON.stringify({ pid: process.ppid, conversations: ['conv-elsewhere'] })
+    )
+    const events: AgentEvent[] = []
+    const persists: ChatMessage[][] = []
+    await startRun(
+      {
+        conversationId: 'conv-elsewhere',
+        runId: 'run-elsewhere',
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: prompt }]
+      },
+      (e) => events.push(e),
+      (m) => persists.push(m)
+    )
+    expect(events).toEqual([{ runId: 'run-elsewhere', type: 'error', message: expect.stringContaining('another Houston session') }])
+    expect(persists).toEqual([])
+    expect(runEndLines()[0]).toContain('class=run-in-progress')
+
+    // A run this process starts is on disk while it runs, and gone once it ends.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    h.provider = {
+      async *streamChat() {
+        await gate
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const mine = join(userData, 'runs', `${process.pid}.json`)
+    const live = startRun(
+      {
+        conversationId: 'conv-here',
+        runId: 'run-here',
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'hi' }]
+      },
+      () => {}
+    )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(JSON.parse(readFileSync(mine, 'utf8')).conversations).toEqual(['conv-here'])
+    release()
+    await live
+    expect(existsSync(mine)).toBe(false)
+  })
+
   it('records nothing on a run that answered', async () => {
     const r = await run({
       conversationId: 'conv-runend-ok',

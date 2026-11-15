@@ -76,6 +76,7 @@ import {
 import { createSecretRedactor } from './redact'
 import { runShellSpill } from './shellSpill'
 import { log } from '../logger'
+import { RUNNING_ELSEWHERE_MESSAGE, conversationRunningElsewhere, recordRunningConversations } from '../runMarkers'
 import { runQuarantineExtraction } from './untrusted'
 import { smallModelFor, withSmallModel } from '@shared/smallModel'
 import { createProvider } from '../providers'
@@ -766,6 +767,8 @@ export function onActiveRunsChanged(fn: (ids: string[]) => void): () => void {
 
 function notifyActiveRunsChanged(): void {
   const ids = runningConversationIds()
+  // On disk too, so another Houston process on this profile refuses a second run.
+  recordRunningConversations(ids)
   for (const fn of runsChangedListeners) fn(ids)
   noteChatStatusChanged()
 }
@@ -1414,6 +1417,13 @@ export async function startRun(
   if (conversationId && runsByConversation.has(conversationId)) {
     logRunEnd({ ...req, runId }, 'run-in-progress')
     send({ runId, type: 'error', message: 'A run is already in progress for this conversation.' })
+    return
+  }
+  // Likewise a run another Houston process on this profile has going (the schedule
+  // daemon, a terminal session): the two would overwrite each other's saves.
+  if (conversationId && conversationRunningElsewhere(conversationId) !== null) {
+    logRunEnd({ ...req, runId }, 'run-in-progress', 'in another process')
+    send({ runId, type: 'error', message: RUNNING_ELSEWHERE_MESSAGE })
     return
   }
   // A rewind rewrites the log and the files under it; a run started mid-rewind would

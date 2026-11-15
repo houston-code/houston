@@ -348,7 +348,11 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
  * outside state (v10 checks whether the desktop app has run) must be decided once, not
  * re-run on a later launch after that state has changed.
  */
-function loadFromDisk(): { settings: AppSettings; upgraded: boolean; unreadable?: boolean } {
+function loadFromDisk({ held = false }: { held?: boolean } = {}): {
+  settings: AppSettings
+  upgraded: boolean
+  unreadable?: boolean
+} {
   const path = settingsPath()
   // Only a missing file is a fresh install. An unreadable one belongs to an existing
   // install, which gets the plain defaults rather than the fresh-install mode.
@@ -357,6 +361,13 @@ function loadFromDisk(): { settings: AppSettings; upgraded: boolean; unreadable?
   try {
     text = readFileSync(path, 'utf8')
   } catch (e) {
+    if (held) {
+      // This process already holds good settings, and keeps serving them: its next save
+      // puts them back. Moving the file aside here would only make the next read look
+      // like a fresh install. (Bytes it can't read it couldn't copy aside either.)
+      log.warn(`settings: could not read ${path} (${(e as Error)?.message ?? e}); keeping the settings already loaded`)
+      return { settings: defaultSettings(), upgraded: false, unreadable: true }
+    }
     const kept = preserveCorruptFile(path)
     log.warn(
       `settings: could not read ${path} (${(e as Error)?.message ?? e}); ` +
@@ -542,11 +553,12 @@ export function getSettings(): AppSettings {
     // Every read-modify-write here goes through this read, so it starts from the file.
     const stamp = fileStamp()
     if (stamp === cacheStamp) return withKeyFlags(cache)
-    const loaded = loadFromDisk()
+    const loaded = loadFromDisk({ held: true })
     if (loaded.unreadable) {
       // A file that no longer parses (a hand edit mid-typo) is not a change to adopt:
       // keep what this process has, rather than the defaults, which its next save
-      // would write over everything. Read again once the file changes.
+      // would write over everything. Read again once the file changes. (Nothing was
+      // moved aside, so the next read sees this same file, not a fresh install.)
       cacheStamp = stamp
       return withKeyFlags(cache)
     }

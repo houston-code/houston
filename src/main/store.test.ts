@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -453,6 +455,37 @@ describe('fresh-install approval mode', () => {
       const copy = join(state.userData, copies[0])
       chmodSync(copy, 0o600)
       expect(readFileSync(copy, 'utf8')).toBe(original)
+    }
+  )
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'keeps the settings it holds when the file turns unreadable while it runs',
+    async () => {
+      const path = join(state.userData, 'settings.json')
+      const rule = { tool: 'shell', action: 'deny' as const }
+      writeFileSync(
+        path,
+        JSON.stringify({ schemaVersion: SETTINGS_SCHEMA_VERSION, approvalPolicy: 'full-auto', permissionRules: [rule] }),
+        'utf8'
+      )
+      const store = await loadStore()
+      store.configureFreshInstallApprovalPolicy(() => 'full-auto')
+      expect(store.getSettings().approvalPolicy).toBe('full-auto')
+      // Another process (a sudo run) replaces the file with one this user can't read.
+      const other = join(state.userData, 'settings.other.json')
+      writeFileSync(other, JSON.stringify({ schemaVersion: SETTINGS_SCHEMA_VERSION }), 'utf8')
+      chmodSync(other, 0o000)
+      renameSync(other, path)
+      for (let i = 0; i < 2; i++) {
+        const got = store.getSettings()
+        expect(got.approvalPolicy).toBe('full-auto')
+        expect(got.permissionRules).toMatchObject([rule])
+      }
+      expect(existsSync(path)).toBe(true)
+      // The next save puts this process's settings back.
+      store.updateSettings({ theme: 'dark' })
+      const onDisk = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+      expect(onDisk).toMatchObject({ approvalPolicy: 'full-auto', permissionRules: [rule], theme: 'dark' })
     }
   )
 

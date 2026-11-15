@@ -456,6 +456,23 @@ describe('pause, resume and run now', () => {
     expect(fired).toHaveLength(1)
   })
 
+  it('runs a one-shot resumed after its time once, then removes it', async () => {
+    const { service, fired } = makeService()
+    const info = service.create(input({ spec: 'once at 2026-07-15 12:30' }))
+    service.start()
+    service.setPaused(info.id, true)
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+    expect(fired).toHaveLength(0)
+    const resumed = service.setPaused(info.id, false)!
+    expect(resumed.nextRunAt).toBe(info.nextRunAt)
+    await vi.advanceTimersByTimeAsync(POLL_MS + 5)
+    expect(fired.map((s) => s.id)).toEqual([info.id])
+    expect(service.list()).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000)
+    expect(fired).toHaveLength(1)
+    service.stop()
+  })
+
   it('reports an unknown id', () => {
     const { service } = makeService()
     expect(service.setPaused('sch-nope', true)).toBeNull()

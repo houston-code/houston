@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, mkdirSync, statSync, renameSync, existsSync, promises as fsp } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync, statSync, renameSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { getUserDataDir } from './userData'
 
@@ -8,10 +8,10 @@ import { getUserDataDir } from './userData'
  * log when something goes wrong, and uncaught errors leave a trace instead of
  * vanishing. Never throws.
  *
- * Lines are buffered and appended asynchronously, a batch every {@link FLUSH_MS}, so a
- * busy run doesn't block the main process on a disk write per line. An ERROR line, a
- * full buffer, and process exit flush synchronously, so a crash still leaves its last
- * lines on disk. `HOUSTON_LOG_LEVEL` (`debug`, `info`, `warn` or `error`; default
+ * Lines are buffered and appended a batch at a time, every {@link FLUSH_MS}, so a busy
+ * run doesn't block the main process on a disk write per line. An ERROR line, a full
+ * buffer, and process exit flush at once, so a crash still leaves its last lines on
+ * disk, in order. `HOUSTON_LOG_LEVEL` (`debug`, `info`, `warn` or `error`; default
  * `info`) sets the lowest level written.
  */
 
@@ -106,8 +106,6 @@ export function logFilePath(): string {
 let pending: { path: string; line: string }[] = []
 let pendingBytes = 0
 let timer: ReturnType<typeof setTimeout> | undefined
-/** The asynchronous append in progress, so a sync flush can't interleave with it. */
-let writing: Promise<void> | undefined
 
 function rotateIfNeeded(path: string): void {
   try {
@@ -155,32 +153,19 @@ export function flushLogSync(): void {
   }
 }
 
-function flushAsync(): void {
+/**
+ * The timer's flush: the whole batch in one synchronous append per file. Synchronous so
+ * no batch is ever in flight: an asynchronous append still queued when an ERROR line
+ * flushed (or the process exited) landed after it, or never.
+ */
+function flushBatch(): void {
   timer = undefined
-  if (writing) {
-    // One append at a time keeps lines in order; try again once this one lands.
-    void writing.then(() => schedule())
-    return
-  }
-  const batch = takePending()
-  writing = (async () => {
-    for (const [path, text] of batch) {
-      try {
-        rotateIfNeeded(path)
-        await fsp.appendFile(path, text, { mode: LOG_FILE_MODE })
-        secureLog(path)
-      } catch {
-        // Never let logging break the app.
-      }
-    }
-  })().finally(() => {
-    writing = undefined
-  })
+  flushLogSync()
 }
 
 function schedule(): void {
   if (timer || pending.length === 0) return
-  timer = setTimeout(flushAsync, FLUSH_MS)
+  timer = setTimeout(flushBatch, FLUSH_MS)
   timer.unref?.()
 }
 
