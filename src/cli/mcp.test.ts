@@ -167,6 +167,14 @@ describe('houston mcp remove / login / logout', () => {
     expect(await h.run('remove')).toBe(2)
   })
 
+  it('forgets the sign-in of a server it removes', async () => {
+    const h = harness([remote, { ...remote, id: 'signed', hasOAuth: true }])
+    expect(await h.run('remove', 'gh')).toBe(0)
+    expect(h.logout).not.toHaveBeenCalled()
+    expect(await h.run('remove', 'signed')).toBe(0)
+    expect(h.logout).toHaveBeenCalledWith('signed')
+  })
+
   it('signs in through the OAuth flow, printing its URL for when no browser opens', async () => {
     const h = harness([remote])
     expect(await h.run('login', 'gh')).toBe(0)

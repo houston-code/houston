@@ -352,14 +352,20 @@ export class McpSseClient implements McpConnection {
     if (this.capable.resources) {
       try {
         this.resources = parseMcpResourceList(await this.fetchList('resources'))
-      } catch {
+      } catch (e) {
+        // An optional list may fail, but not take the connection down with it (a 401
+        // or an expired session closes the client): a closed client is no connection.
+        if (this.closed) throw e
         this.resources = []
       }
     }
     if (this.capable.prompts) {
       try {
         this.prompts = parseMcpPromptList(await this.fetchList('prompts'))
-      } catch {
+      } catch (e) {
+        // An optional list may fail, but not take the connection down with it (a 401
+        // or an expired session closes the client): a closed client is no connection.
+        if (this.closed) throw e
         this.prompts = []
       }
     }
