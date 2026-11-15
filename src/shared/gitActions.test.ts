@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanCommitMessage, MAX_COMMIT_MESSAGE, parsePrView, summarizeChecks } from './gitActions'
+import { cleanCommitMessage, listCheckRuns, MAX_CHECK_RUNS, MAX_COMMIT_MESSAGE, parsePrView, summarizeChecks } from './gitActions'
 
 describe('cleanCommitMessage', () => {
   it('trims, normalizes line endings and drops control characters', () => {
@@ -60,5 +60,28 @@ describe('parsePrView', () => {
     expect(parsePrView(JSON.stringify({ ...view, url: 'http://github.com/o/r/pull/42' }))).toBeNull()
     expect(parsePrView(JSON.stringify({ ...view, number: -1 }))).toBeNull()
     expect(parsePrView(JSON.stringify({ ...view, state: 'WEIRD' }))).toBeNull()
+  })
+
+  it('lists each named check with the outcome the counts gave it', () => {
+    const rollup = [
+      { name: 'build', status: 'COMPLETED', conclusion: 'FAILURE' },
+      { name: 'test', status: 'IN_PROGRESS' },
+      { context: 'ci/legacy', state: 'SUCCESS' },
+      { status: 'COMPLETED', conclusion: 'SUCCESS' }
+    ]
+    const pr = parsePrView(JSON.stringify({ ...view, statusCheckRollup: rollup }))
+    expect(pr?.counts).toEqual({ passing: 2, failing: 1, pending: 1 })
+    expect(pr?.runs).toEqual([
+      { name: 'build', outcome: 'failing' },
+      { name: 'test', outcome: 'pending' },
+      { name: 'ci/legacy', outcome: 'passing' }
+    ])
+  })
+
+  it('caps the check list and the length of a name', () => {
+    const many = Array.from({ length: MAX_CHECK_RUNS + 5 }, (_, i) => ({ name: `c${i}`, state: 'SUCCESS' }))
+    expect(listCheckRuns(many)).toHaveLength(MAX_CHECK_RUNS)
+    expect(listCheckRuns([{ name: 'x'.repeat(500), state: 'SUCCESS' }])[0].name).toHaveLength(200)
+    expect(listCheckRuns('nope')).toEqual([])
   })
 })

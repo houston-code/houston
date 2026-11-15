@@ -73,6 +73,8 @@ import {
 } from './agent/checkpoints'
 import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
+import { branchSyncFor, commitAll, lookupPr, pushBranch, suggestCommitMessage } from './agent/gitActions'
+import { YIELDS_TO_CUSTOM } from './tui-git'
 import { listModels } from './providers'
 import { runGitCapture } from './agent/gitRead'
 import { readHeadBranch } from './headBranch'
@@ -666,10 +668,16 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // ever knew the built-ins, so a project's commands were undiscoverable unless you
   // already knew their names. Loaded once; the menu redraws on every keystroke and
   // must not touch the disk.
+  // The one project the git commands may act on: this session's folder.
+  const gitDeps = { knownWorkspace: (ws: string) => ws === tui.cwd }
   let menuCommands: CommandSpec[] = [...COMMANDS]
   void loadSlashCommands(tui.cwd)
     .then((custom) => {
-      menuCommands = mergeCommands(COMMANDS, custom).map((c) => ({
+      // A project's own /commit (/push, /ship, /pr) runs instead of the built-in, so
+      // the menu lists it rather than the built-in it replaces.
+      const own = new Set(custom.map((c) => c.name.toLowerCase()))
+      const builtins = COMMANDS.filter((c) => !(YIELDS_TO_CUSTOM.has(c.name) && own.has(c.name)))
+      menuCommands = mergeCommands(builtins, custom).map((c) => ({
         name: c.name,
         description: c.description,
         ...(c.args ? { args: c.args } : {})
@@ -798,6 +806,16 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         )
       },
       writeExport: (path, content) => writeExportFile(tui.cwd, path, content),
+      // /commit, /push, /ship, /pr: the Changes view's and the PR chip's own handlers,
+      // with this session's folder as the one project they may touch.
+      git: {
+        tree: () => collectWorkingTreeChanges(tui.cwd),
+        sync: () => branchSyncFor(tui.cwd, gitDeps),
+        suggest: (conversationId) => suggestCommitMessage(tui.cwd, conversationId, gitDeps),
+        commit: (message) => commitAll(tui.cwd, message, gitDeps),
+        push: () => pushBranch(tui.cwd, gitDeps),
+        pr: () => lookupPr(tui.cwd, gitDeps)
+      },
       workingTree: async () => {
         const c = await collectWorkingTreeChanges(tui.cwd)
         return {
