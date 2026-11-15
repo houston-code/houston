@@ -4,6 +4,7 @@ import {
   canRevertHunks,
   fileDiffSignature,
   hunkStart,
+  revertQuestion,
   type ChangesScope,
   type ChatChanges
 } from '@shared/changes'
@@ -28,6 +29,9 @@ import { Icon } from './Icon'
 import { CommitForm } from './CommitForm'
 import { PathLabel } from './PathLabel'
 import { ipcErrorMessage } from '../lib/ipcError'
+
+// Shared with the terminal's `/changes revert`, so both ask the same question.
+export { revertQuestion }
 
 /** Below this many files the list starts fully expanded; above it, collapsed. */
 const AUTO_EXPAND_LIMIT = 8
@@ -69,17 +73,6 @@ function writePref(key: string, value: string): void {
   } catch {
     /* storage unavailable: the choice just isn't remembered */
   }
-}
-
-/** What a revert would do, in words, for the confirmation. */
-export function revertQuestion(file: FileDiff, scope: ChangesScope, hunk?: number): string {
-  if (hunk !== undefined) return `Undo this change in ${file.path}?`
-  if (scope === 'tree') {
-    if (file.status === 'untracked' || file.status === 'added') return `Delete ${file.path}? It is not committed.`
-    return `Discard all uncommitted changes to ${file.path}?`
-  }
-  if (file.status === 'added') return `Delete ${file.path}? The chat created it.`
-  return `Put ${file.path} back as it was before ${scope === 'turn' ? 'this turn' : 'this chat'}?`
 }
 
 /** An inline "are you sure" for a revert, with Cancel focused so Enter doesn't discard. */

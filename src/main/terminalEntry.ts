@@ -24,7 +24,8 @@ import {
   setRunPolicy,
   setRunEffort,
   cancelAllRuns,
-  waitForRunsToEnd
+  waitForRunsToEnd,
+  activeRunForConversation
 } from './agent/loop'
 import { killAllShells, killShell, listShells, shellTail } from './agent/shells'
 import { stopSubagent } from './agent/subagentStops'
@@ -75,6 +76,7 @@ import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
 import { branchSyncFor, commitAll, lookupPr, pushBranch, suggestCommitMessage } from './agent/gitActions'
 import { YIELDS_TO_CUSTOM } from './tui-git'
+import { collectChatChanges, revertChange } from './agent/changes'
 import { listModels } from './providers'
 import { runGitCapture } from './agent/gitRead'
 import { readHeadBranch } from './headBranch'
@@ -816,20 +818,24 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         push: () => pushBranch(tui.cwd, gitDeps),
         pr: () => lookupPr(tui.cwd, gitDeps)
       },
-      workingTree: async () => {
-        const c = await collectWorkingTreeChanges(tui.cwd)
-        return {
-          isRepo: c.isRepo,
-          branch: c.branch,
-          files: c.files.map((f) => ({
-            path: f.path,
-            status: f.status,
-            added: f.added,
-            removed: f.removed
-          })),
-          added: c.added,
-          removed: c.removed
-        }
+      // /changes: the desktop Changes view's loaders and its revert, for this folder.
+      changes: {
+        load: async (scope, conversationId) => {
+          if (scope === 'tree') {
+            const c = await collectWorkingTreeChanges(tui.cwd)
+            return { isRepo: c.isRepo, branch: c.branch, files: c.files, added: c.added, removed: c.removed }
+          }
+          const c = await collectChatChanges(conversationId ?? '', scope)
+          return { isRepo: true, branch: null, files: c.files, added: c.added, removed: c.removed, unavailable: c.unavailable }
+        },
+        revert: (req) =>
+          revertChange(
+            { ...req, workspace: tui.cwd },
+            {
+              runActive: (id) => activeRunForConversation(id) !== null,
+              knownWorkspace: (ws) => ws === tui.cwd
+            }
+          )
       },
       doctor: async () => terminalDoctorFacts(tui.cwd, version, tui.color, latestUpdate),
       runUserShell: (command, onOutput) => runUserShell(tui.cwd, command, onOutput),

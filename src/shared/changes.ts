@@ -186,3 +186,14 @@ export function revertHunkText(content: string, hunk: DiffHunk): string | null {
   if (!endsWithNewline) out[out.length - 1] = strip(out[out.length - 1])
   return out.join('\n') + (endsWithNewline ? '\n' : '')
 }
+
+/** What a revert would do, in words, for the confirmation (the Changes view and `/changes revert`). */
+export function revertQuestion(file: FileDiff, scope: ChangesScope, hunk?: number): string {
+  if (hunk !== undefined) return `Undo this change in ${file.path}?`
+  if (scope === 'tree') {
+    if (file.status === 'untracked' || file.status === 'added') return `Delete ${file.path}? It is not committed.`
+    return `Discard all uncommitted changes to ${file.path}?`
+  }
+  if (file.status === 'added') return `Delete ${file.path}? The chat created it.`
+  return `Put ${file.path} back as it was before ${scope === 'turn' ? 'this turn' : 'this chat'}?`
+}

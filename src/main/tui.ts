@@ -151,6 +151,7 @@ import {
   type TasksOp
 } from './tui-tasks'
 import { parseGitCommand, runGitCommand, YIELDS_TO_CUSTOM, type GitDeps, type GitOp } from './tui-git'
+import { parseChangesArgs, renderChangeSummary, runChangesCommand, type ChangesDeps, type ChangesOp } from './tui-changes'
 import {
   signalFor,
   idleTitle,
@@ -1545,33 +1546,15 @@ export function parseRewindMode(answer: string): RewindMode | null {
 /**
  * `/changes`: everything different in the working tree, as one summary.
  *
- * Answers the question you actually have after a long autonomous run — "what did
- * it do to my repo?" — which was otherwise a shell-out to `git status` (and, before
- * the `!` escape, leaving the session to find out).
+ * Answers the question you actually have after a long autonomous run ("what did
+ * it do to my repo?"), which was otherwise a shell-out. The other scopes, one
+ * file's diff, and revert live in `./tui-changes`.
  */
 export function renderWorkingTree(
   changes: { isRepo: boolean; branch: string | null; files: { path: string; status: string; added: number; removed: number }[]; added: number; removed: number },
   paint: Painter
 ): string {
-  if (!changes.isRepo) return paint('· not a git repository, so there is nothing to compare against', 'dim')
-  if (!changes.files.length) return paint('· no changes in the working tree', 'dim')
-  const head = paint(`Changes${changes.branch ? ` on ${changes.branch}` : ''}:`, 'bold')
-  const width = Math.max(...changes.files.map((f) => f.path.length))
-  const rows = changes.files.map((f) => {
-    const mark =
-      f.status === 'added' ? paint('A', 'green')
-        : f.status === 'deleted' ? paint('D', 'red')
-          : f.status === 'renamed' ? paint('R', 'magenta')
-            : f.status === 'untracked' ? paint('?', 'green')
-              : paint('M', 'yellow')
-    const stat = `${paint(`+${f.added}`, 'green')} ${paint(`-${f.removed}`, 'red')}`
-    return `  ${mark} ${f.path.padEnd(width)}  ${stat}`
-  })
-  const total = paint(
-    `  ${changes.files.length} file${changes.files.length === 1 ? '' : 's'}, +${changes.added} -${changes.removed}`,
-    'dim'
-  )
-  return [head, ...rows, total].join('\n')
+  return renderChangeSummary('tree', changes, paint)
 }
 
 /**
@@ -1984,10 +1967,11 @@ export type SlashResult =
    */
   | { kind: 'rewind'; undo: boolean; turn?: number; mode?: RewindMode }
   /**
-   * Summarize everything different in the working tree (/changes), or with `last`,
-   * show the diff of an edit this session made (`/diff last [n]`, n edits back).
+   * A scope's changed files, one file's diff, or a revert (/changes, see
+   * `./tui-changes`), or with `last`, the diff of an edit this session made
+   * (`/diff last [n]`, n edits back).
    */
-  | { kind: 'changes'; last?: number }
+  | { kind: 'changes'; last?: number; op?: ChangesOp }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
   /** How the model's reasoning shows as it streams (/thoughts); bare steps to the next. */
@@ -2171,7 +2155,7 @@ export function parseSlashCommand(
     case 'changes':
     case 'diff': {
       const m = /^last(?:\s+(\d+))?$/i.exec(arg.trim())
-      if (!m) return { kind: 'changes' }
+      if (!m) return { kind: 'changes', op: parseChangesArgs(arg) }
       return { kind: 'changes', last: Math.max(1, Number(m[2] ?? m[1] ?? 1) || 1) }
     }
     case 'verbose': {
@@ -2334,7 +2318,9 @@ export const HELP_TEXT = [
   '  /reduce-motion [on|off]  a still activity line instead of the spinner',
   '  /undo, /redo          revert (or restore) the files the last turn changed',
   '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
-  '  /changes              what is different in the working tree (also /diff)',
+  '  /changes [scope]      what changed: the working tree, or turn | chat (also /diff)',
+  "  /changes <file>       one changed file's diff (after a scope: in that scope)",
+  '  /changes revert <f>   put one changed file back, after a y/N',
   "  /diff last [n]        show the diff of this session's last edit (n edits back)",
   '  /commit [message]     stage and commit every change, after a y/N (no message: the model suggests one)',
   '  /push                 push this branch, or publish it on a first push',
@@ -3728,14 +3714,8 @@ export interface TuiDeps {
   writeExport?: (path: string, content: string) => string
   /** The desktop's commit, push, and pull-request handlers, for /commit, /push, /ship, /pr. */
   git?: GitDeps
-  /** Everything different in the working tree, for /changes. */
-  workingTree?: () => Promise<{
-    isRepo: boolean
-    branch: string | null
-    files: { path: string; status: string; added: number; removed: number }[]
-    added: number
-    removed: number
-  }>
+  /** The Changes view's scopes and revert, for /changes. */
+  changes?: ChangesDeps
   /**
    * Probe the environment for /doctor (binaries, sandbox backend, MCP state).
    * Absent ⇒ the command reports that diagnostics are unavailable.
@@ -5849,11 +5829,23 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'changes') {
-        if (!deps.workingTree) {
-          deps.io.out(paint('· working-tree changes are unavailable here\n', 'dim'))
-          continue
-        }
-        deps.io.out(`${renderWorkingTree(await deps.workingTree(), paint)}\n`)
+        const html = deps.highlightHtml
+        await runChangesCommand(result.op ?? { op: 'summary', scope: 'tree' }, {
+          deps: deps.changes,
+          conversationId,
+          out: (text) => deps.io.out(text),
+          // discardPending: type-ahead must not answer a question about discarding work.
+          ask: (prompt) => deps.io.readLine(prompt, { discardPending: true }),
+          paint,
+          ...(html && !screenReader
+            ? {
+                highlight: (lang: string, code: string) => {
+                  const h = html(lang, code)
+                  return h ? htmlToAnsi(h, paint) : code
+                }
+              }
+            : {})
+        })
         continue
       }
       if (result.kind === 'doctor') {

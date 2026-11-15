@@ -7298,11 +7298,15 @@ describe('edits that land without a prompt', () => {
   })
 
   it('parses /diff last [n], leaving plain /diff and /changes as the working-tree summary', () => {
-    expect(parseSlashCommand('/diff', settings())).toEqual({ kind: 'changes' })
-    expect(parseSlashCommand('/changes', settings())).toEqual({ kind: 'changes' })
+    expect(parseSlashCommand('/diff', settings())).toEqual({ kind: 'changes', op: { op: 'summary', scope: 'tree' } })
+    expect(parseSlashCommand('/changes', settings())).toEqual({ kind: 'changes', op: { op: 'summary', scope: 'tree' } })
     expect(parseSlashCommand('/diff last', settings())).toEqual({ kind: 'changes', last: 1 })
     expect(parseSlashCommand('/diff last 3', settings())).toEqual({ kind: 'changes', last: 3 })
     expect(parseSlashCommand('/changes last 0', settings())).toEqual({ kind: 'changes', last: 1 })
+    expect(parseSlashCommand('/diff turn revert src/a.ts', settings())).toEqual({
+      kind: 'changes',
+      op: { op: 'revert', scope: 'turn', path: 'src/a.ts' }
+    })
   })
 })
 
@@ -7470,19 +7474,50 @@ describe('/undo, /redo and /changes', () => {
     expect(renderWorkingTree({ ...clean, isRepo: false }, paintNo)).toContain('not a git repository')
   })
 
+  const xFile = {
+    path: 'x.ts',
+    status: 'modified' as const,
+    hunks: [{ header: '@@ -1 +1 @@', lines: [{ type: 'del' as const, text: 'a' }, { type: 'add' as const, text: 'b' }] }],
+    added: 1,
+    removed: 1,
+    binary: false
+  }
+  const xTree = { isRepo: true, branch: 'main', files: [xFile], added: 1, removed: 1 }
+
   it('/changes prints the summary', async () => {
     const { d } = deps(done)
     const t = fakeIo(['/changes', null])
     d.io = t.io
-    d.workingTree = async () => ({
-      isRepo: true,
-      branch: 'main',
-      files: [{ path: 'x.ts', status: 'modified', added: 1, removed: 1 }],
-      added: 1,
-      removed: 1
-    })
+    d.changes = { load: async () => xTree, revert: async () => ({ ok: true }) }
     await runTui(opts, d)
     expect(t.text()).toContain('M x.ts')
+  })
+
+  it('/changes revert asks first, and a declined or cut-off answer reverts nothing', async () => {
+    for (const answer of ['n', '', null]) {
+      const { d } = deps(done)
+      const t = fakeIo(['/changes revert x.ts', answer, null])
+      d.io = t.io
+      const reverts: unknown[] = []
+      d.changes = { load: async () => xTree, revert: async (r) => (reverts.push(r), { ok: true }) }
+      await runTui(opts, d)
+      expect(reverts).toEqual([])
+      expect(t.text()).toContain('nothing was reverted')
+      // Type-ahead can't answer a question about discarding work.
+      expect(t.reads.find((r) => r.prompt.includes('Discard all uncommitted changes to x.ts?'))?.discardPending).toBe(true)
+    }
+  })
+
+  it('/changes revert on a "y" reverts the file it showed', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/changes revert x.ts', 'y', null])
+    d.io = t.io
+    const reverts: Array<{ path: string; scope: string }> = []
+    d.changes = { load: async () => xTree, revert: async (r) => (reverts.push(r), { ok: true }) }
+    await runTui(opts, d)
+    expect(reverts).toHaveLength(1)
+    expect(reverts[0]).toMatchObject({ scope: 'tree', path: 'x.ts' })
+    expect(t.text()).toContain('reverted x.ts')
   })
 })
 
