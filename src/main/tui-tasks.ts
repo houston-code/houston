@@ -10,7 +10,7 @@ import {
 } from '@shared/subagents'
 import type { Painter } from './tui'
 import type { PickerSpec } from './tui-picker'
-import { stripControlChars, truncateVisible } from './tui-wrap'
+import { stripControlChars, truncateVisible, visibleWidth } from './tui-wrap'
 
 /**
  * The terminal's `/tasks` (alias `/bashes`): the background work of this chat, the
@@ -388,4 +388,68 @@ export function shellKillPhrase(n: number, outcome: KillShellOutcome): string {
     case 'not-found':
       return `· task ${n} is no longer tracked`
   }
+}
+
+/** Agents the live panel names before it says how many more there are. */
+const PANEL_AGENTS = 4
+
+/** The step an agent is on, or last finished, as one line. */
+function lastStep(a: TrackedSubagent): string {
+  for (let i = a.steps.length - 1; i >= 0; i--) {
+    const s = a.steps[i]
+    if (s.kind === 'text' && !s.summary.trim()) continue
+    return safeLine(stepLine(s))
+  }
+  return 'starting'
+}
+
+/** Tool calls an agent has finished so far. */
+function stepCount(a: TrackedSubagent): number {
+  return a.steps.filter((s) => s.kind === 'tool' && s.ok !== undefined).length
+}
+
+/**
+ * The live panel under the spinner while subagents run: one row per agent (its name,
+ * step count, elapsed time and the step it is on), then how to watch them. Every row
+ * fits `width`, since the panel is redrawn in place and a wrapped row could not be.
+ * Empty when none is running.
+ */
+export function liveAgentPanel(agents: TrackedSubagent[], now: number, paint: Painter, width = 80): string[] {
+  const running = agents.filter((a) => a.status === 'running')
+  if (!running.length) return []
+  const room = Math.max(20, width - 1)
+  const rows = running.slice(0, PANEL_AGENTS).map((a) => {
+    const name = truncateVisible(taskLabel({ kind: 'subagent', agent: a }), Math.max(12, Math.floor(room * 0.4)))
+    const n = stepCount(a)
+    const facts = `${n} step${n === 1 ? '' : 's'} · ${formatDuration(Math.max(0, now - a.startedAt))}`
+    const used = 4 + visibleWidth(name) + 2 + facts.length + 2
+    const step = truncateVisible(lastStep(a), Math.max(8, room - used))
+    return truncateVisible(`  ${paint(`▸ ${name}`, 'cyan')}${paint(`  ${facts}`, 'dim')}  ${step}`, room)
+  })
+  const more = running.length - PANEL_AGENTS
+  const hint = `${more > 0 ? `+${more} more · ` : ''}Enter watches ${running.length === 1 ? 'it' : 'them'} live`
+  rows.push(paint(truncateVisible(`    ${hint}`, room), 'dim'))
+  return rows
+}
+
+/**
+ * The live view of a turn's subagents (Enter on the panel): each agent's task and
+ * every step it has taken so far, as plain lines, oldest agent first. The viewer
+ * renders it again as steps arrive.
+ */
+export function liveAgentLines(agents: TrackedSubagent[], now: number): string[] {
+  if (!agents.length) return ['No subagents in this turn yet.']
+  const lines: string[] = []
+  for (const a of agents) {
+    if (lines.length) lines.push('')
+    const status = taskStatus({ kind: 'subagent', agent: a })
+    const elapsed = formatDuration(Math.max(0, (a.endedAt ?? now) - a.startedAt))
+    lines.push(`${taskLabel({ kind: 'subagent', agent: a })}  (${status}, ${elapsed}, ${safeLine(a.model)})`)
+    const task = safeLine(a.prompt)
+    if (task) lines.push(`  task: ${task}`)
+    const steps = a.steps.filter((s) => s.kind !== 'text' || s.summary.trim())
+    if (!steps.length) lines.push('  (no steps yet)')
+    for (const s of steps) lines.push(`  ${s.turn}. ${safeLine(stepLine(s))}`)
+  }
+  return lines
 }

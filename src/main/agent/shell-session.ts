@@ -164,6 +164,8 @@ export async function runInSession(opts: {
   signal?: AbortSignal
   /** Watches the command's output as it arrives (see SandboxRunOptions.onOutput). */
   onOutput?: (chunk: string) => void
+  /** Hands the running command back instead of waiting (see SandboxRunOptions.detach). */
+  detach?: AbortSignal
   run: SandboxRunner
   fileOps?: Pick<typeof fs, 'readFile' | 'writeFile' | 'rm'>
   /** Whether a path is an existing directory (default: a real stat). */
@@ -208,8 +210,27 @@ export async function runInSession(opts: {
     egressProxy: opts.egressProxy,
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
-    ...(opts.onOutput ? { onOutput: opts.onOutput } : {})
+    ...(opts.onOutput ? { onOutput: opts.onOutput } : {}),
+    ...(opts.detach ? { detach: opts.detach } : {})
   })
+
+  const cleanup = async (): Promise<void> => {
+    for (const p of [paths.cwdOut, paths.envOut, paths.envIn]) {
+      try {
+        await io.rm(p, { force: true })
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+  // Moved to the background while it ran: the session keeps the state it had (what the
+  // command changes now belongs to it alone), and the snapshot files it writes when it
+  // ends are removed then, since one can carry exported secrets. Returned at once, so
+  // the caller adopts the process before any more of its output arrives.
+  if (result.detached) {
+    result.detached.child.once('close', () => void cleanup())
+    return result
+  }
 
   const read = async (p: string): Promise<string> => {
     try {
@@ -219,14 +240,7 @@ export async function runInSession(opts: {
     }
   }
   applySessionResult(opts.session, { cwd: await read(paths.cwdOut), env: await read(paths.envOut) })
-
-  for (const p of [paths.cwdOut, paths.envOut, paths.envIn]) {
-    try {
-      await io.rm(p, { force: true })
-    } catch {
-      // best-effort cleanup
-    }
-  }
+  await cleanup()
 
   if (movedFrom === null) return result
   const note = `[the shell's working directory ${movedFrom} no longer exists, so this command ran from the project root]`

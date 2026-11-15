@@ -32,6 +32,7 @@ import {
 import { createDraftStore } from './tui-drafts'
 import { killAllShells, killShell, listShells, shellTail } from './agent/shells'
 import { stopSubagent } from './agent/subagentStops'
+import { backgroundForegroundShells } from './agent/foregroundShells'
 import { lspManager } from './agent/lsp/manager'
 import { flushRuleUsage, getRuleUsage } from './ruleUsage'
 import { describePermissionPolicy, defaultPolicyDeps } from './permissionPolicy'
@@ -994,6 +995,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       unsteerRun,
       // Each chat's unsent draft, one 0600 file per chat under userData.
       drafts: createDraftStore(join(getUserDataDir(), 'tui-drafts'), { warn: (m) => log.warn(m) }),
+      backgroundShells: (runId) => backgroundForegroundShells(runId),
       editText: (initial) => editInEditor(initial),
       persistHistory,
       // /copy: the platform's clipboard helper when this is a local session (never

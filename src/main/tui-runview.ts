@@ -1,15 +1,15 @@
 import type { ReviewFinding } from '@shared/agent'
 import { droppedSummary, findingTally, isDropped, upsertFinding } from '@shared/reviewFindings'
-import { describeToolCall } from '@shared/toolLabel'
 import { turnErrorHelp, type TurnErrorAction, type TurnErrorCause } from '@shared/turnError'
 import type { Painter } from './tui'
-import { terminalText, truncateVisible } from './tui-wrap'
+import { terminalText } from './tui-wrap'
 
 /**
  * How the terminal shows parts of a running turn that the desktop shows in its
- * transcript rows: a failed turn's explanation, folded file reads, a finished
- * review's tally, images a tool returned, and the models a turn used. Pure (or, for
- * the read fold, self-contained state), so the driver only decides when to print.
+ * transcript rows: a failed turn's explanation, which tools get no line, a finished
+ * review's tally, images a tool returned, and the models a turn used. Pure, so the
+ * driver only decides when to print. Folded tool lines, file reads included, are
+ * renderFoldedCalls in tui.ts.
  */
 
 /** The TUI command for each next step the desktop's failed-turn bar offers. */
@@ -81,80 +81,4 @@ const HIDDEN_TOOLS = new Set(['list_dir'])
  */
 export function isHiddenTool(name: string, verbose: boolean): boolean {
   return !verbose && HIDDEN_TOOLS.has(name)
-}
-
-interface PendingRead {
-  callId: string
-  args: Record<string, unknown>
-  /** The result's output once it has landed (successfully). */
-  output?: string
-}
-
-/**
- * Consecutive `read_file` calls, held back so a burst of reads prints as one line
- * ("· Read 3 files  a.ts, b.ts, c.ts") the way the desktop folds them into one row
- * (`foldReadRuns`). Line mode can't rewrite a line already printed, so the reads
- * are printed when something else happens; a lone read prints exactly as before.
- */
-export class ReadFold {
-  private pending: PendingRead[] = []
-
-  constructor(
-    private readonly render: {
-      /** One read, as an ordinary tool start line plus its result line (if it has one). */
-      single: (args: Record<string, unknown>, output: string | undefined) => string
-      /** The fold line for several reads. */
-      many: (targets: string[]) => string
-    }
-  ) {}
-
-  /** Hold a read back. */
-  start(callId: string, args: Record<string, unknown>): void {
-    this.pending.push({ callId, args })
-  }
-
-  /** Whether a call is a read being held back. */
-  holds(callId: string): boolean {
-    return this.pending.some((p) => p.callId === callId)
-  }
-
-  /** A held read finished successfully: keep its output for a lone read's result line. */
-  finish(callId: string, output: string): void {
-    const p = this.pending.find((x) => x.callId === callId)
-    if (p) p.output = output
-  }
-
-  /**
-   * The held reads as text to print (no trailing newline), or '' when none are held.
-   * A read whose result hasn't landed yet prints its start line alone; its result
-   * then prints the ordinary way.
-   */
-  flush(): string {
-    const reads = this.pending
-    this.pending = []
-    if (reads.length === 0) return ''
-    const done = reads.filter((r) => r.output !== undefined)
-    const open = reads.filter((r) => r.output === undefined)
-    const parts: string[] = []
-    if (done.length >= 2) parts.push(this.render.many(done.map((r) => describeToolCall('read_file', r.args).target)))
-    else if (done.length === 1) parts.push(this.render.single(done[0].args, done[0].output))
-    for (const r of open) parts.push(this.render.single(r.args, undefined))
-    return parts.filter(Boolean).join('\n')
-  }
-}
-
-/** The fold line's list of files, cut to fit the terminal. */
-export function readFoldLine(
-  targets: string[],
-  paint: Painter,
-  opts: { width: number; sentence?: boolean }
-): string {
-  const files = targets.map((t) => terminalText(t, { lines: false }).replace(/\s+/g, ' ').trim()).filter(Boolean)
-  const count = `${targets.length} files`
-  const list = files.join(', ')
-  if (opts.sentence) return `Using tool Read: ${count}${list ? `: ${list}` : ''}`
-  const head = `${paint('·', 'dim')} ${paint('Read', 'cyan')} ${count}`
-  // "· Read 3 files  " is about 16 columns; the list gets the rest of the row.
-  const room = Math.max(20, opts.width - count.length - 10)
-  return list ? `${head}  ${paint(truncateVisible(list, room), 'dim')}` : head
 }

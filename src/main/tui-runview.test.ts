@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ReviewFinding } from '@shared/agent'
-import { makePainter, spinnerFrame } from './tui'
+import { foldedCall, makePainter, renderFoldedCalls, spinnerFrame } from './tui'
 import {
-  ReadFold,
   ReviewTally,
   isHiddenTool,
-  readFoldLine,
   renderTurnError,
   toolImagesLine,
   turnModelsLabel
@@ -83,56 +81,21 @@ describe('isHiddenTool', () => {
   })
 })
 
-describe('ReadFold', () => {
-  const fold = (): ReadFold =>
-    new ReadFold({
-      single: (args, output) => `one ${String(args.path)}${output === undefined ? '' : ` = ${output}`}`,
-      many: (targets) => `many ${targets.join(',')}`
-    })
+describe('folded reads', () => {
+  const read = (path: string) => ({ ...foldedCall('read_file', { path }, true, 'x'), alone: `row ${path}` })
 
-  it('prints a lone finished read as itself and several as one fold', () => {
-    const r = fold()
-    r.start('a', { path: 'a.ts' })
-    r.finish('a', 'A')
-    expect(r.flush()).toBe('one a.ts = A')
-    r.start('a', { path: 'a.ts' })
-    r.start('b', { path: 'b.ts' })
-    r.finish('a', 'A')
-    r.finish('b', 'B')
-    expect(r.holds('a')).toBe(true)
-    expect(r.flush()).toBe('many a.ts,b.ts')
-    expect(r.holds('a')).toBe(false)
-    expect(r.flush()).toBe('')
-  })
-
-  it('prints a read still in flight as its start line alone, after the finished ones', () => {
-    const r = fold()
-    r.start('a', { path: 'a.ts' })
-    r.start('b', { path: 'b.ts' })
-    r.start('c', { path: 'c.ts' })
-    r.finish('a', 'A')
-    r.finish('c', 'C')
-    expect(r.flush()).toBe('many a.ts,c.ts\none b.ts')
-  })
-
-  it('ignores a result for a call it does not hold', () => {
-    const r = fold()
-    r.finish('zzz', 'x')
-    expect(r.holds('zzz')).toBe(false)
-    expect(r.flush()).toBe('')
-  })
-})
-
-describe('readFoldLine', () => {
   it('lists the files after the count, cut to the width', () => {
-    expect(readFoldLine(['a.ts', 'b.ts'], paint, { width: 80 })).toBe('· Read 2 files  a.ts, b.ts')
-    const long = readFoldLine(Array.from({ length: 30 }, (_, i) => `src/file-${i}.ts`), paint, { width: 60 })
+    expect(renderFoldedCalls('Read', [read('a.ts'), read('b.ts')], paint, { width: 80, count: 'files' })).toBe(
+      '· Read 2 files  a.ts, b.ts'
+    )
+    const many = Array.from({ length: 30 }, (_, i) => read(`src/file-${i}.ts`))
+    const long = renderFoldedCalls('Read', many, paint, { width: 60, count: 'files' })
     expect(long.length).toBeLessThanOrEqual(60)
     expect(long).toContain('…')
   })
 
   it('is a sentence in screen-reader mode, with control characters shown inert', () => {
-    expect(readFoldLine(['a\x1b[2J.ts', 'b.ts'], paint, { width: 80, sentence: true })).toBe(
+    expect(renderFoldedCalls('Read', [read('a\x1b[2J.ts'), read('b.ts')], paint, { width: 80, sentence: true, count: 'files' })).toBe(
       'Using tool Read: 2 files: a<U+001B>[2J.ts, b.ts'
     )
   })

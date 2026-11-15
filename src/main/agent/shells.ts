@@ -264,6 +264,12 @@ export function registerShell(
     signal?: AbortSignal
     /** Phrases whose lines are reported to the agent as they print (see normalizeNotifyOn). */
     notifyOn?: string[]
+    /**
+     * A foreground command moved to the background while it ran: what it printed
+     * before, already in the agent's tool result, so reads start after it, and when it
+     * started.
+     */
+    adopted?: { stdout: string; stderr: string; startedAt: number }
   } = {}
 ): string {
   const notifyOnRaw = normalizeNotifyOn(opts.notifyOn)
@@ -377,6 +383,16 @@ export function registerShell(
     notifyShellsChanged()
     watchLeftovers()
   })
+  if (opts.adopted) {
+    const { stdout, stderr, startedAt } = opts.adopted
+    shell.stdout = appendCapped('', stdout)
+    shell.stderr = appendCapped('', stderr)
+    shell.stdoutProduced = shell.readStdout = stdout.length
+    shell.stderrProduced = shell.readStderr = stderr.length
+    shell.recent = appendRecent('', stdout + stderr)
+    shell.startedAt = startedAt
+    addPreviewUrls(shell, detectLocalUrls(stdout + stderr))
+  }
   pruneExited()
   shells.set(id, shell)
   persistLedger()

@@ -23,6 +23,7 @@ export type {
   SandboxRunOptions,
   SandboxRunResult,
   SandboxSpawnOptions,
+  DetachedProcess,
   RunSandboxedDeps,
   SandboxBackend,
   ShellLaunch,

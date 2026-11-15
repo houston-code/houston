@@ -139,7 +139,7 @@ import {
   type ExportArgs
 } from './tui-sessions'
 import { markdownLinks, type MarkdownLinks } from './tui-links'
-import { ReadFold, ReviewTally, isHiddenTool, readFoldLine, renderTurnError, toolImagesLine, turnModelsLabel } from './tui-runview'
+import { ReviewTally, isHiddenTool, renderTurnError, toolImagesLine, turnModelsLabel } from './tui-runview'
 import { meterOnEvent, meterTokens, startMeter } from '@shared/runMeter'
 import { comeBackHint, parseForkArg, reconcileChatModel } from './tui-chat-handoff'
 import type { ForkPoint } from '@shared/conversation-io'
@@ -157,6 +157,8 @@ import {
   renderTaskList,
   shellInChat,
   shellKillPhrase,
+  liveAgentLines,
+  liveAgentPanel,
   SubagentTracker,
   taskPickerSpec,
   taskRows,
@@ -164,7 +166,8 @@ import {
   TASK_TAIL_LINES,
   TASKS_USAGE,
   type TaskRow,
-  type TasksOp
+  type TasksOp,
+  type TrackedSubagent
 } from './tui-tasks'
 import { parseGitCommand, runGitCommand, YIELDS_TO_CUSTOM, type GitDeps, type GitOp } from './tui-git'
 import { parseChangesArgs, renderChangeSummary, runChangesCommand, type ChangesDeps, type ChangesOp } from './tui-changes'
@@ -235,7 +238,7 @@ import {
   type SessionFlags,
   type SessionInputs
 } from './sessionFlags'
-import { isSubagentTool, splitSubagentReport, subagentSpend, SubagentTermLines, type SubagentRecord, type SubagentSpend } from '@shared/subagents'
+import { isSubagentTool, splitSubagentReport, stepHint, subagentSpend, SubagentTermLines, type SubagentRecord, type SubagentSpend } from '@shared/subagents'
 import { renderSubagentSpend, renderWhatsNew } from './tui-info'
 import { formatElapsed } from '@shared/elapsed'
 import {
@@ -669,6 +672,144 @@ export function tagResultLines(rendered: string, tag: string, paint: Painter): s
   const m = /^((?:\x1b\[[0-9;]*m)*)(\s*)/.exec(first)
   const lead = m ? m[0].length : 0
   return `${first.slice(0, lead)}${paint(`${tag}:`, 'dim')} ${first.slice(lead)}${rest}`
+}
+
+/** One tool call, folded into its line: what it worked on and how it went. */
+export interface FoldedCall {
+  target: string
+  hint: string
+  ok: boolean
+  /** A file read's own row and result, printed instead when it is the only call on its line. */
+  alone?: string
+}
+
+/** The width a folded call's target may take before it is cut. */
+const FOLDED_TARGET = 60
+
+/**
+ * A finished call as one item of a folded tool line: its target ("src/a.ts") and a short
+ * outcome ("40 lines", "exit 0 · 2s", "+3 −1"). Both come from the model's arguments or
+ * the tool's output, so control characters are stripped.
+ */
+export function foldedCall(
+  name: string,
+  args: Record<string, unknown>,
+  ok: boolean,
+  output: string,
+  opts: { preview?: FileDiffPreview[]; durationMs?: number } = {}
+): FoldedCall {
+  const { verb, target } = describeToolCall(name, args)
+  const raw = terminalText(target || (verb === name ? toolArgHint(args) : ''), { lines: false }).replace(/\s+/g, ' ')
+  const moved = /moved this command to the background[^\n]*background shell (\w+)/.exec(output)
+  const started = /^Started background shell (\w+)/.exec(output)
+  // A time only once it is worth reading; a shell's outcome only when it says how it ended.
+  const durationMs = opts.durationMs !== undefined && opts.durationMs >= 1000 ? opts.durationMs : undefined
+  let hint = moved
+    ? `in the background as ${moved[1]}`
+    : started
+      ? `background shell ${started[1]}`
+      : stepHint(name, output, ok, { ...(opts.preview ? { preview: opts.preview } : {}), ...(durationMs !== undefined ? { durationMs } : {}) })
+  if (name === 'run_shell' && !moved && !started && !/^(exit|killed|failed)/.test(hint)) hint = ''
+  if (!hint) {
+    const first = terminalText(output).split('\n').find((l) => l.trim()) ?? ''
+    hint = ok ? truncate(first.trim(), 50) : 'failed'
+  }
+  return { target: truncate(raw.trim(), FOLDED_TARGET), hint: terminalText(hint, { lines: false }), ok }
+}
+
+/**
+ * The one line for a run of folded calls of one kind: "· Read  src/a.ts · 40 lines,
+ * src/b.ts · 12 lines". Fitted to `width`, so it never wraps: the calls that don't fit
+ * are counted ("+3 more"). `sentence` is the screen-reader wording, plain words with no
+ * glyphs: "Used tool Read: src/a.ts, 40 lines".
+ */
+export function renderFoldedCalls(
+  verb: string,
+  items: FoldedCall[],
+  paint: Painter,
+  opts: { width?: number; sentence?: boolean; count?: string } = {}
+): string {
+  const shownVerb = terminalText(verb, { lines: false })
+  // Counted ("Read 3 files  a.ts, b.ts, c.ts"): the targets only, as the desktop's
+  // folded read row lists them.
+  if (opts.count && items.length > 1) {
+    const count = `${items.length} ${opts.count}`
+    const list = items.map((i) => i.target).filter(Boolean).join(', ')
+    if (opts.sentence) return `Using tool ${shownVerb}: ${count}${list ? `: ${list}` : ''}`
+    const head = `${paint('·', 'dim')} ${paint(shownVerb, 'cyan')} ${count}`
+    // "· Read 3 files  " is about 16 columns; the list gets the rest of the row.
+    const room = Math.max(20, (opts.width ?? 80) - count.length - 10)
+    return list ? `${head}  ${paint(truncateVisible(list, room), 'dim')}` : head
+  }
+  if (opts.sentence) {
+    const parts = items.map((i) => [i.target, i.ok ? i.hint : `failed${i.hint && i.hint !== 'failed' ? ` (${i.hint})` : ''}`].filter(Boolean).join(', '))
+    return `Used tool ${shownVerb}${parts.length ? `: ${parts.join('; ')}` : ''}`
+  }
+  const width = Math.max(30, (opts.width ?? 80) - 1)
+  const item = (i: FoldedCall): string => {
+    const mark = i.ok ? '' : `${paint('✗', 'red')} `
+    const hint = i.hint ? paint(` · ${i.hint}`, i.ok ? 'dim' : 'red') : ''
+    return `${mark}${i.target}${hint}`
+  }
+  const head = `${paint('·', 'dim')} ${paint(shownVerb, 'cyan')}`
+  const sep = paint(', ', 'dim')
+  let line = items.length && items[0].target ? `${head}  ` : head
+  let shown = 0
+  for (const i of items) {
+    const rest = items.length - shown - 1
+    const room = width - (rest > 0 ? ` +${rest} more`.length : 0)
+    const next = `${line}${shown ? sep : ''}${item(i)}`
+    if (shown > 0 && visibleWidth(next) > room) break
+    line = next
+    shown++
+  }
+  const more = items.length - shown
+  if (more > 0) line += paint(` +${more} more`, 'dim')
+  return truncateVisible(line, width)
+}
+
+/**
+ * Whether a finished call's whole story fits its folded line. A failure shows its
+ * first lines, a subagent its report, a plan its outcome, a stopped prompt what
+ * stopped it, and a proposal or gallery its own line: those keep their row above them.
+ */
+export function foldsToOneLine(name: string, ok: boolean, output: string): boolean {
+  if (!ok || isSubagentTool(name)) return false
+  if (name === PRESENT_PLAN_TOOL || name === PROPOSE_SESSION_TOOL || name === SHOW_IMAGES_NAME) return false
+  return stoppedPromptText(output) === null
+}
+
+/**
+ * Whether an event prints something while tool rows may be waiting for their results
+ * (so they print first). Tool events, usage and bookkeeping print nothing of their
+ * own here; text and reasoning say so themselves when they print; a subagent's steps
+ * go to the live panel when it is on (and nowhere in the focus view).
+ */
+export function printsBetweenCalls(e: AgentEvent, view: { focus: boolean; panel: boolean; verbose: boolean }): boolean {
+  switch (e.type) {
+    case 'tool_start':
+    case 'tool_result':
+    case 'usage':
+    case 'run_info':
+    case 'turn_start':
+    case 'steers_returned':
+    case 'text':
+    case 'reasoning':
+      return false
+    case 'tool_progress':
+      return !view.focus && e.message.trim() !== ''
+    case 'subagent_step':
+      return !view.focus && (!view.panel || view.verbose)
+    case 'subagent_start':
+    case 'subagent_end':
+    case 'subagent':
+    case 'review_finding':
+    case 'notice':
+    case 'compaction':
+      return !view.focus
+    default:
+      return true
+  }
 }
 
 /** Best-effort one-liner describing a tool call's most salient argument. */
@@ -2278,6 +2419,8 @@ export type SlashResult =
   | { kind: 'changes'; last?: number; op?: ChangesOp }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
+  /** Only your messages, one line per tool call, and each turn's final reply (/focus). */
+  | { kind: 'focus'; on?: boolean }
   /** How the model's reasoning shows as it streams (/thoughts); bare steps to the next. */
   | { kind: 'thoughts'; mode?: ReasoningDisplay; bad?: string }
   /** Open the transcript viewer (/transcript, Ctrl-O). */
@@ -2494,6 +2637,12 @@ export function parseSlashCommand(
       if (a === 'off') return { kind: 'verbose', on: false }
       return { kind: 'verbose' } // bare /verbose toggles
     }
+    case 'focus': {
+      const a = arg.trim().toLowerCase()
+      if (a === 'on') return { kind: 'focus', on: true }
+      if (a === 'off') return { kind: 'focus', on: false }
+      return { kind: 'focus' } // bare /focus toggles
+    }
     case 'thoughts': {
       const a = arg.trim().toLowerCase()
       if (!a) return { kind: 'thoughts' }
@@ -2674,7 +2823,8 @@ export const HELP_TEXT = [
   '  /push                 push this branch, or publish it on a first push',
   "  /ship                 hand the changes to the agent to open a PR (the Changes view's Create PR)",
   "  /pr                   this branch's pull request, its state, and its CI checks",
-  '  /verbose [on|off]     show each tool\'s full output as it runs',
+  '  /verbose [on|off]     show every tool call and its full output as it runs',
+  '  /focus [on|off]       show only your messages, one line per tool call, and the final reply (wins over /verbose)',
   '  /thoughts [mode]      how reasoning shows as it streams: show | summary | hide (Alt-T)',
   '  /transcript           the whole session full screen, with reasoning and full tool output (Ctrl-O)',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
@@ -2718,11 +2868,13 @@ export const HELP_TEXT = [
   '  Ctrl-O                the whole session full screen: j/k, / search, { } your messages, v editor, q',
   '  Alt-T                 cycle how reasoning shows (show, summary, hide), also while a turn runs',
   '  Ctrl-Z                suspend to the shell (fg to come back), also while a turn runs',
+  '  Ctrl-B                while a command runs: move it to the background (/tasks lists it)',
   '  Ctrl-C                clear the message (twice to exit; Up brings it back); Ctrl-D exits',
   '  ultrathink            a word in the message: think harder for that turn',
   '',
   'While a turn runs: type, then Enter steers it or Tab queues for after it.',
   'Up on an empty line takes the last waiting message back. Esc or Ctrl-C stops it.',
+  'While subagents run: Enter on an empty line watches their steps live.',
   '',
   'Approvals (one key press answers):',
   '  y                     allow this call once',
@@ -2750,6 +2902,8 @@ export const STARTUP_TIPS = [
   'type while the agent works and press Enter to steer it',
   'while the agent works, Tab queues what you typed for after the turn instead of steering',
   '/tasks lists background shells and subagents, even while a turn runs',
+  'Ctrl-B moves a slow command to the background so the turn carries on',
+  '/focus hides the working and keeps one line per tool call',
   'Shift-Enter or Ctrl-J starts a new line',
   '/resume filters saved chats as you type; Ctrl-A shows every folder',
   'Ctrl-O opens the whole session full screen, with reasoning and full tool output',
@@ -3839,6 +3993,17 @@ export interface TuiIo {
   onTranscript?: (handler: (during: 'composer' | 'run') => Promise<void>) => void
   /** Register the handler for Alt-T (cycle the reasoning display), at the composer or mid-run. */
   onCycleThoughts?: (handler: () => void) => void
+  /** Register the handler for Ctrl-B mid-run (move the running command to the background). */
+  onBackground?: (handler: () => void) => void
+  /**
+   * Rows drawn under the spinner line while a turn runs (the subagents at work),
+   * rendered at each redraw for the terminal's width so elapsed times stay current;
+   * null removes them. Redrawn in place under synchronized output. A no-op in
+   * screen-reader mode, where the driver prints plain step lines instead.
+   */
+  setLivePanel?: (render: ((width: number) => string[]) | null) => void
+  /** Register the handler for Enter on an empty line mid-run while the live panel shows. */
+  onOpenLivePanel?: (handler: () => Promise<void>) => void
 }
 
 export interface TuiDeps {
@@ -3875,6 +4040,12 @@ export interface TuiDeps {
   setRunPolicy?: (runId: string, policy: ApprovalPolicy) => void
   /** Retarget a running turn's reasoning effort (its next model turn), like setRunPolicy. */
   setRunEffort?: (runId: string, effort: ReasoningEffort) => void
+  /**
+   * Move a run's foreground run_shell command to the background (Ctrl-B): its tool call
+   * returns at once and the process goes on as a background shell. Returns how many
+   * commands were moved; 0 when none was running.
+   */
+  backgroundShells?: (runId: string) => number
   /**
    * Hand a running turn a course correction, seen before its next step. Returns
    * false when the run is already over (nothing to steer), which is what lets the
@@ -4680,6 +4851,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // transcript is a conversation, and most results are noise until they aren't.
   // Remembered across sessions once chosen.
   let verbose = settings.tuiVerbose === true
+  // The focus view (/focus): your messages, one line per tool call, and each turn's
+  // final reply; reasoning, progress and the text between tool calls are left out.
+  // Remembered like /verbose; the transcript viewer always has everything.
+  let focusView = settings.tuiFocus === true
   // How the model's reasoning shows as it streams (/thoughts, Alt-T): one line per
   // thought by default, since a long chain of thought buries the reply. Remembered
   // like /verbose; the transcript viewer always has it in full.
@@ -4694,10 +4869,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     thoughtLineOpen = false
     return nl
   }
+  // Prints the tool lines the running turn is holding for their results (set per run,
+  // see the tool line folding in runTurn), so a note printed mid-run lands after them.
+  let flushHeldCalls: () => void = () => {}
+  const flushPendingOutput = (): string => {
+    flushHeldCalls()
+    return freshLine()
+  }
   const setReasoningDisplay = (d: ReasoningDisplay): void => {
     reasoningDisplay = d
     deps.updateSettings?.({ reasoningDisplay: d })
-    deps.io.out(`${freshLine()}${paint(reasoningDisplayNote(d), 'dim')}\n`)
+    deps.io.out(`${flushPendingOutput()}${paint(reasoningDisplayNote(d), 'dim')}\n`)
   }
   /**
    * Change one of the terminal's own preferences and say so: the body of /vim,
@@ -5281,6 +5463,31 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // The subagents this session's runs dispatched, for /tasks (shells come from the
   // registry each time; agents only exist as the events that described them).
   const subagentTracker = new SubagentTracker()
+  // The subagents the live panel and live view follow: this turn's, and any agent of
+  // this chat still at work (a background one from an earlier turn).
+  const liveSubagents = (): TrackedSubagent[] =>
+    subagentTracker
+      .forChat(conversationId)
+      .filter((a) => a.runId !== undefined && (a.runId === activeRunId || a.status === 'running'))
+  // The live view's redraw hooks while it is open (see the pager's `subscribe`).
+  const liveViewers = new Set<() => void>()
+  // Enter on an empty line under the panel: the agents' steps, full screen, as they
+  // happen. The viewer gives the keyboard back by itself when a prompt needs it.
+  deps.io.onOpenLivePanel?.(async () => {
+    if (!deps.io.pager) return
+    await deps.io.pager({
+      title: 'Subagents at work (live)',
+      render: (width) => ({
+        lines: liveAgentLines(liveSubagents(), nowFn()).flatMap((l) => (width > 0 ? wrapAnsi(l, width).split('\n') : [l])),
+        prompts: []
+      }),
+      plain: () => `${liveAgentLines(liveSubagents(), nowFn()).join('\n')}\n`,
+      subscribe: (changed) => {
+        liveViewers.add(changed)
+        return () => void liveViewers.delete(changed)
+      }
+    })
+  })
   // /tasks: this chat's background shells and subagents, numbered oldest first.
   const currentTasks = (): TaskRow[] => {
     const shells = deps.backgroundTasks
@@ -5561,6 +5768,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
 
   // Alt-T, at the composer or mid-run: the live turn's next thought already follows it.
   deps.io.onCycleThoughts?.(() => setReasoningDisplay(nextReasoningDisplay(reasoningDisplay)))
+  // Ctrl-B mid-run: the command the agent is waiting on goes on in the background, and
+  // the turn carries on with its shell id. `/tasks` lists it from then on.
+  deps.io.onBackground?.(() => {
+    const moved = activeRunId ? (deps.backgroundShells?.(activeRunId) ?? 0) : 0
+    const note = moved
+      ? `· moved ${moved === 1 ? 'the running command' : `${moved} running commands`} to the background; /tasks lists ${moved === 1 ? 'it' : 'them'}`
+      : '· no command is running to move to the background (Ctrl-B moves a running shell command)'
+    deps.io.out(`${flushPendingOutput()}${paint(note, 'dim')}\n`)
+  })
   // Ctrl-O and /transcript: the whole session full screen. Not while a turn runs:
   // the viewer would have to hold back the run's output and its approval prompts,
   // so it says when it can open instead. In screen-reader mode there is no full
@@ -5588,7 +5804,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
   deps.io.onTranscript?.(async (during) => {
     if (during === 'run') {
-      deps.io.out(`${freshLine()}${paint('· the transcript opens at the prompt once this turn ends (Ctrl-O or /transcript)', 'dim')}\n`)
+      deps.io.out(`${flushPendingOutput()}${paint('· the transcript opens at the prompt once this turn ends (Ctrl-O or /transcript)', 'dim')}\n`)
       return
     }
     await openTranscript()
@@ -5602,7 +5818,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.io.setMode?.(policy)
     if (activeRunId) {
       deps.setRunPolicy?.(activeRunId, policy)
-      deps.io.out(paint(`\n· approval → ${APPROVAL_POLICY_LABEL[policy]} (this run too)\n`, 'dim'))
+      deps.io.out(`${flushPendingOutput()}${paint(`\n· approval → ${APPROVAL_POLICY_LABEL[policy]} (this run too)\n`, 'dim')}`)
     } else if (screenReader) {
       // The arrow-key composer shows the mode in its prompt; a screen reader is told.
       deps.io.out(`approval: ${APPROVAL_POLICY_LABEL[policy]}\n`)
@@ -6472,6 +6688,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         applyTerminalSetting({ kind: 'screen-reader', on: result.on ?? !screenReader })
         continue
       }
+      if (result.kind === 'focus') {
+        focusView = result.on ?? !focusView
+        deps.updateSettings?.({ tuiFocus: focusView })
+        deps.io.out(
+          paint(
+            focusView
+              ? '· focus: only your messages, one line per tool call, and the final reply (Ctrl-O has everything)\n'
+              : '· focus off: the turn\'s working shows again\n',
+            'dim'
+          )
+        )
+        continue
+      }
       if (result.kind === 'verbose') {
         applyTerminalSetting({ kind: 'verbose', on: result.on ?? !verbose })
         continue
@@ -7333,19 +7562,6 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     const printFinding = createFindingPrinter()
     // ...and are tallied by severity under the review's result, as the desktop's row is.
     const reviewTally = new ReviewTally()
-    // Consecutive file reads, printed as one line once something else happens.
-    const readFold = new ReadFold({
-      single: (args, output) => {
-        const start = renderToolStart('read_file', args, paint, { sentence: screenReader })
-        const result = output === undefined ? '' : renderToolResult('read_file', true, output, paint, { width: columns() })
-        return result ? `\n${start}\n${result}` : `\n${start}`
-      },
-      many: (targets) => `\n${readFoldLine(targets, paint, { width: columns(), sentence: screenReader })}`
-    })
-    const flushReads = (): void => {
-      const s = readFold.flush()
-      if (s) deps.io.out(`${s}\n`)
-    }
     // The models this turn's rounds were billed to, for the line that ends it.
     const turnModels: string[] = []
     // The turn's output tokens so far (reported, plus the open round's estimate), for
@@ -7353,20 +7569,74 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     let meter = startMeter(nowFn())
     // A stop that didn't come from this keyboard (a hook, another client) is said once.
     let stopSaid = false
-    // Events that leave held-back reads held: more reads, a hidden tool's lines, and
-    // bookkeeping that prints nothing.
-    const foldsIntoReads = (e: AgentEvent): boolean => {
-      if (e.type === 'usage' || e.type === 'run_info' || e.type === 'steers_returned') return true
-      if (e.type === 'tool_start') return (e.name === 'read_file' && !verbose) || isHiddenTool(e.name, verbose)
-      if (e.type === 'tool_result') return (e.ok && readFold.holds(e.callId)) || isHiddenTool(e.name, verbose)
-      return false
-    }
     // A subagent's start, finished steps and end (reviewers' steps only under /verbose).
     const subagentLines = new SubagentTermLines({
       get verbose() {
         return verbose
       }
     })
+    // The live panel under the spinner (subagents at work). Not in screen-reader mode,
+    // which never redraws in place: there each step prints as a plain line instead.
+    const panelOn = (): boolean => !screenReader && deps.io.setLivePanel !== undefined
+    const refreshPanel = (): void => {
+      if (panelOn()) {
+        const running = liveSubagents().some((a) => a.status === 'running')
+        deps.io.setLivePanel?.(running ? (w) => liveAgentPanel(liveSubagents(), nowFn(), paint, w) : null)
+      }
+      for (const changed of liveViewers) changed()
+    }
+
+    // Tool rows, folded. Unless /verbose is on or a screen reader is reading (it hears
+    // each call as it starts), a call's row waits for its result so the two print as
+    // one line ("· Read  src/a.ts · 40 lines"), and calls of one kind in a row share
+    // it. Anything that must print in between (progress, a prompt, a subagent) prints
+    // the waiting rows first, the way they always looked, and their results render
+    // under them as before. /focus folds every call, failures included, and prints
+    // nothing in between.
+    // File reads fold for a screen reader too, into one sentence, as they always have.
+    const foldCalls = (name: string): boolean => focusView || (!verbose && (!screenReader || name === 'read_file'))
+    const heldCalls = new Map<string, { name: string; args: Record<string, unknown>; at: number }>()
+    let foldedGroup: { verb: string; items: FoldedCall[] } | null = null
+    // The last thing printed is a folded tool line: the next one follows without a gap.
+    let toolLineLast = false
+    const flushGroup = (): void => {
+      if (!foldedGroup) return
+      const g = foldedGroup
+      foldedGroup = null
+      const alone = g.items.length === 1 ? g.items[0].alone : undefined
+      if (alone) {
+        deps.io.out(`\n${alone}\n`)
+        toolLineLast = false
+        return
+      }
+      // Several reads are "Read N files" and their paths, as the desktop folds them.
+      const count = g.items.every((i) => i.alone !== undefined) ? 'files' : undefined
+      deps.io.out(
+        `${toolLineLast ? '' : '\n'}${renderFoldedCalls(g.verb, g.items, paint, { width: columns(), sentence: screenReader, ...(count ? { count } : {}) })}\n`
+      )
+      toolLineLast = true
+    }
+    const releaseHeld = (): void => {
+      flushGroup()
+      toolLineLast = false
+      // The focus view never prints a row ahead of its result.
+      if (focusView) return
+      for (const c of heldCalls.values()) deps.io.out(`\n${renderToolStart(c.name, c.args, paint, { sentence: screenReader })}\n`)
+      heldCalls.clear()
+    }
+    flushHeldCalls = releaseHeld
+    // The focus view's reply: each round's text is held, and dropped when the round
+    // turns out to be working (it calls a tool); what is left when the turn ends is the
+    // final reply.
+    let focusReply = ''
+    const releaseFocusReply = (): void => {
+      if (!focusReply) return
+      const text = focusReply
+      focusReply = ''
+      flushGroup()
+      toolLineLast = false
+      deps.io.out(`${screenReader ? '\nhouston:\n' : '\n'}${text}`)
+    }
     // Per-turn token/cost tally. The loop emits a `usage` event per model round
     // (and per subagent), which would be noisy to print each time — the live
     // session total already sits in the status line above the composer. So we sum
@@ -7402,10 +7672,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     let roundShown = false
     const flushMd = (): void => {
       const s = md.flush()
-      if (s) {
-        deps.io.out(s)
-        roundShown = true
+      if (!s) return
+      if (focusView) {
+        focusReply += s
+        return
       }
+      releaseHeld()
+      deps.io.out(s)
+      roundShown = true
     }
     // The streaming round's reasoning: when it began and what it said, for the
     // one-line summary ('summary') printed when the next thing arrives.
@@ -7417,7 +7691,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       const t = thought
       thought = null
       // A dropped round's thought is dropped with it: its redo thinks again.
-      if (discard || reasoningDisplay !== 'summary') return
+      if (discard || reasoningDisplay !== 'summary' || focusView) return
+      releaseHeld()
       // A screen reader hears whose line it is, as it would for streamed thinking.
       const label = screenReader ? '\nhouston, thinking:\n' : ''
       deps.io.out(`${freshLine()}${label}${renderThoughtSummary(t.text, nowFn() - t.start, columns(), paint)}\n`)
@@ -7435,7 +7710,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
     flushStreamedText = () => {
       flushReasoning()
-      flushReads()
+      releaseHeld()
       flushMd()
     }
     // Liveness while the agent works (relabelled per event; erased on any output).
@@ -7466,9 +7741,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         meter = nextMeter
         deps.io.setSpinnerTokens?.(meterTokens(meter))
       }
-      // Held-back reads print before anything that isn't another read (or a hidden
-      // tool, or bookkeeping), so the transcript keeps its order.
-      if (!foldsIntoReads(e)) flushReads()
+      // Whatever prints for this event goes after the tool rows waiting for results.
+      if (printsBetweenCalls(e, { focus: focusView, panel: panelOn(), verbose })) releaseHeld()
       // A background subagent's line (or a rolled-up usage with no transcript place)
       // can land while the main agent is mid-reply or mid-thought. It prints between
       // the reply's finished blocks without ending the round: flushing the half-received
@@ -7497,7 +7771,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           saysResponding = true
         }
         const s = md.push(e.delta)
-        if (s) roundShown = true
+        if (focusView) {
+          focusReply += s
+          return
+        }
+        if (s) {
+          releaseHeld()
+          roundShown = true
+        }
         // Who is speaking, once per stretch of reply, for a screen reader.
         if (s && screenReader && speaking !== 'reply') {
           speaking = 'reply'
@@ -7512,8 +7793,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         if (e.type !== 'reasoning' && e.type !== 'usage') speaking = null
         // A discarded round's unfinished block is dropped unrendered, never flushed:
         // its redo will print the whole reply again.
-        if (e.type === 'turn_discarded') md.discard()
-        else flushMd()
+        if (e.type === 'turn_discarded') {
+          md.discard()
+          focusReply = ''
+        } else flushMd()
         // Any event but reasoning means the streaming round is over (or gone).
         if (e.type !== 'reasoning') roundShown = false
         // Usage and a discarded partial round belong to the retry they surround.
@@ -7523,14 +7806,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       switch (e.type) {
         case 'reasoning': {
+          // A new round of thinking: the folded tool line before it is complete.
+          flushGroup()
           // A screen reader hears the "houston, thinking:" label instead of a spinner.
           if (!screenReader) deps.io.setSpinnerLabel?.('Thinking')
           thought ??= { start: nowFn(), text: '' }
           thought.text += e.delta
-          if (reasoningDisplay !== 'show') break
+          if (reasoningDisplay !== 'show' || focusView) break
           // Model text, so it can't carry a terminal control of its own.
           const safe = terminalText(e.delta)
           if (!safe) break
+          releaseHeld()
           if (screenReader && speaking !== 'thinking') {
             deps.io.out(`${freshLine()}\nhouston, thinking:\n`)
             speaking = 'thinking'
@@ -7565,10 +7851,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             parallelCalls.add(e.callId)
           }
           liveCalls.set(e.callId, e.name)
+          // The round calls a tool, so what it said so far was working, not the reply.
+          focusReply = ''
           // A todo update IS its list; showing "· todo_write" and then a count of
-          // what changed tells you nothing about the plan.
+          // what changed tells you nothing about the plan. (The focus view gives it
+          // one line, like any call.)
           const todos = e.name === 'todo_write' ? parseTodosSafe(e.args.todos) : []
-          if (e.name === 'todo_write') {
+          if (e.name === 'todo_write' && !focusView) {
+            releaseHeld()
             deps.io.out(`\n${renderTodoList(todos, paint)}\n`)
             todoCalls.add(e.callId)
             break
@@ -7576,13 +7866,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // A question or a plan prints itself as the prompt that follows; a "· ask_user"
           // line in front of it is only the wire name.
           if (e.name === ASK_USER_TOOL || e.name === PRESENT_PLAN_TOOL) break
-          // Navigation noise gets no line, as it gets no row in the desktop app.
-          if (isHiddenTool(e.name, verbose)) break
-          if (e.name === 'read_file' && !verbose) {
-            readFold.start(e.callId, e.args)
+          // Navigation noise gets no line, as it gets no row in the desktop app (the
+          // focus view hides it even under /verbose).
+          if (isHiddenTool(e.name, verbose && !focusView)) break
+          if (e.kind === 'write' && e.preview?.length) writePreviews.set(e.callId, e.preview)
+          if (foldCalls(e.name)) {
+            // A call of another kind: the folded line waiting is complete.
+            if (foldedGroup && foldedGroup.verb !== describeToolCall(e.name, e.args).verb) flushGroup()
+            heldCalls.set(e.callId, { name: e.name, args: e.args, at: nowFn() })
             break
           }
-          if (e.kind === 'write' && e.preview?.length) writePreviews.set(e.callId, e.preview)
           deps.io.out(`\n${renderToolStart(e.name, e.args, paint, { sentence: screenReader })}\n`)
           break
         }
@@ -7599,16 +7892,62 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             toolArgs.delete(e.callId)
             break
           }
-          if (isHiddenTool(e.name, verbose)) {
+          if (isHiddenTool(e.name, verbose && !focusView)) {
             toolArgs.delete(e.callId)
             break
           }
-          // A held-back read that landed stays held; one that failed was already
-          // printed (with the reads before it) by the flush above, and fails below.
-          if (e.ok && readFold.holds(e.callId)) {
-            readFold.finish(e.callId, e.output)
+          const held = heldCalls.get(e.callId)
+          heldCalls.delete(e.callId)
+          // A result with more to show under it (images a tool returned, a review's
+          // tally) keeps its row, except in the focus view, which shows one line a call.
+          const extra = (e.images?.length ?? 0) > 0 || e.name === 'review_changes'
+          if (held && (focusView || (foldsToOneLine(e.name, e.ok, e.output) && !extra))) {
+            if (e.name === 'review_changes') reviewTally.take(e.callId, paint)
+            const preview = writePreviews.get(e.callId)
+            writePreviews.delete(e.callId)
             toolArgs.delete(e.callId)
+            const prompted = promptedWrites.delete(e.callId)
+            if (preview && e.ok) recentEdits = [...recentEdits, preview].slice(-RECENT_EDITS)
+            // A call the user denied at its prompt: that prompt already said so.
+            if (!e.ok && deniedPromptText(e.output) !== null) break
+            // An edit that landed without a prompt gets its summary line (the file and
+            // its +/- counts), so no edit lands unseen; one approved at a prompt already
+            // showed its diff there and folds like any call.
+            if (!focusView && preview && e.ok && !prompted) {
+              flushGroup()
+              deps.io.out(`${toolLineLast ? '' : '\n'}${renderEditSummary(preview, paint)}\n`)
+              toolLineLast = true
+              break
+            }
+            const item: FoldedCall = {
+              ...foldedCall(held.name, held.args, e.ok, e.output, { preview, durationMs: nowFn() - held.at }),
+              // A read on its own prints as it always did: its row and the start of
+              // what it read (see flushGroup); several fold into one "Read N files" line.
+              ...(held.name === 'read_file' && !focusView
+                ? {
+                    alone: `${renderToolStart('read_file', held.args, paint, { sentence: screenReader })}\n${renderToolResult('read_file', true, e.output, paint, { width: columns() })}`.trimEnd()
+                  }
+                : {})
+            }
+            const verb = describeToolCall(held.name, held.args).verb
+            if (focusView) {
+              // One line per call: nothing is grouped, so each reads on its own.
+              foldedGroup = { verb, items: [item] }
+              flushGroup()
+              break
+            }
+            if (foldedGroup && foldedGroup.verb !== verb) flushGroup()
+            // The line stays open for the next call of this kind; anything else (another
+            // kind of call, the model thinking or writing, a prompt) completes it.
+            if (foldedGroup) foldedGroup.items.push(item)
+            else foldedGroup = { verb, items: [item] }
             break
+          }
+          // A result that needs more than one line: its row goes above it, as it did.
+          if (held) {
+            flushGroup()
+            toolLineLast = false
+            deps.io.out(`\n${renderToolStart(held.name, held.args, paint, { sentence: screenReader })}\n`)
           }
           // A proposal is a card in the desktop app; here it's a line pointing at
           // the command that starts it.
@@ -7654,7 +7993,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
         case 'tool_progress': {
-          if (!e.message.trim()) break
+          if (!e.message.trim() || focusView) break
           const tag = callTag(e.callId)
           deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(terminalText(e.message, { lines: false }).trim(), 80)}\n`, 'dim'))
           break
@@ -7668,7 +8007,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             const r = sessionAgents.get(e.recordId)
             if (r) sessionAgents.set(e.recordId, { ...r, ...e.update })
           }
+          refreshPanel()
           const line = subagentLines.line(e)
+          // The focus view leaves the agents' working out; the panel shows their steps
+          // while they run (screen-reader mode, and /verbose, print each one).
+          if (focusView || (e.type === 'subagent_step' && panelOn() && !verbose)) break
           if (line) {
             const text = `  ${'  '.repeat(line.depth)}${truncate(terminalText(line.text, { lines: false }), Math.max(40, columns() - 6))}\n`
             deps.io.out(line.tone === 'plain' ? text : paint(text, line.tone))
@@ -7676,6 +8019,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
         case 'subagent':
+          if (focusView) break
           // Line mode can't update a row in place, so print discrete markers: a
           // start line, then a done/error line, indented under the parent tool.
           deps.io.out(paint(`    ${subagentGlyph(e.status)} ${terminalText(e.label, { lines: false })}\n`, 'dim'))
@@ -7683,7 +8027,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'review_finding': {
           reviewTally.add(e.parentCallId, e.finding)
           const line = printFinding(e.parentCallId, e.finding)
-          if (line) {
+          if (line && !focusView) {
             const s = e.finding.status
             const tone = s === 'confirmed' ? 'yellow' : s === 'candidate' ? undefined : 'dim'
             const text = `      ${truncate(terminalText(line, { lines: false }), 120)}\n`
@@ -8048,17 +8392,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               paint(`\n· tried ${retryStreak} more time${retryStreak === 1 ? '' : 's'}, then stopped\n`, 'yellow')
             )
           }
+          releaseFocusReply()
           deps.io.out(`\n${renderTurnError(e.message, e.cause, paint)}\n`)
           break
         case 'limit':
           deps.io.out(paint(`\n· ${limitNoticeText(e.reason)}\n`, 'yellow'))
           break
         case 'compaction':
+          if (focusView) break
           deps.io.out(paint(`\n· ${compactionNoticeText(e.summarized)}\n`, 'dim'))
           break
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension) — display-only, never
           // part of the model's context.
+          if (focusView) break
           deps.io.out(paint(`\n· ${terminalText(e.message)}\n`, 'dim'))
           break
         case 'runtime_missing':
@@ -8072,6 +8419,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             stopSaid = true
             deps.io.out(paint(`\n· ${runEndNoticeText({ reason: 'aborted', at: new Date(nowFn()).toISOString() })}\n`, 'yellow'))
           }
+          // The focus view's final reply, held until now.
+          releaseFocusReply()
           // One compact cost summary for the whole turn (this turn + running
           // session), instead of a line per model round. Only when the turn
           // actually spent tokens; otherwise just a blank separator. It names the
@@ -8207,7 +8556,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // last line and its summary line, and reads still held back get theirs.
     flushReasoning()
     endThought(false)
-    flushReads()
+    // Whatever is still held (a run cut off before it said it was done) prints now.
+    flushMd()
+    releaseFocusReply()
+    releaseHeld()
+    flushHeldCalls = () => {}
+    deps.io.setLivePanel?.(null)
     flushStreamedText = () => {}
     deps.io.stopSpinner?.()
     // Drain any approval/question prompts still in flight before the next composer read.
