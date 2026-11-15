@@ -2692,7 +2692,7 @@ export function parseSlashCommand(
     case 'settings':
       return arg.trim() ? { kind: 'settings', page: arg.trim() } : { kind: 'settings' }
     case 'config':
-      return { kind: 'config', op: parseConfigArgs(arg, { settings, themes: Object.keys(THEMES) }) }
+      return { kind: 'config', op: parseConfigArgs(arg, { settings, themes: themeNames(), resolveTheme }) }
     case 'status':
       return { kind: 'status' }
     case 'feedback':
@@ -5190,7 +5190,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
   }
   const configLive = (): ConfigLive => ({ theme, verbose, focus: focusView, reasoningDisplay, notifyMode, reduceMotion, screenReader })
-  const configContext = (): ConfigContext => ({ settings: deps.getSettings(), themes: Object.keys(THEMES) })
+  const configContext = (): ConfigContext => ({ settings: deps.getSettings(), themes: themeNames(), resolveTheme })
   /** Save one /config value (already validated) through the same path its own command takes. */
   const applyConfig = (key: ConfigKeyName, value: string): void => {
     switch (key) {

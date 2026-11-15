@@ -2,7 +2,7 @@ import { isReasoningEffort, REASONING_EFFORTS, type ReasoningEffort } from '@sha
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { resolveModelArg } from '@shared/modelArg'
 import { APPROVAL_POLICIES, parseApprovalPolicy, type AppSettings, type ApprovalPolicy } from '@shared/types'
-import { NOTIFY_MODES, type NotifyMode } from './tui-notify'
+import { isProgressMode, NOTIFY_MODES, PROGRESS_MODES, type NotifyMode } from './tui-notify'
 import { stripControlChars } from './tui-wrap'
 
 /**
@@ -23,6 +23,8 @@ export type ConfigKeyName =
   | 'focus'
   | 'thoughts'
   | 'notify'
+  | 'turn-clock'
+  | 'progress'
   | 'reduce-motion'
   | 'screen-reader'
   | 'model'
@@ -46,8 +48,10 @@ export interface ConfigLive {
 
 export interface ConfigContext {
   settings: AppSettings
-  /** The terminal color theme names. */
+  /** The terminal color theme names (the built-ins and the user's own). */
   themes: readonly string[]
+  /** A theme name as /theme takes it (an old alias included), or null; absent: exact names only. */
+  resolveTheme?: (name: string) => string | null
 }
 
 export interface ConfigKeySpec {
@@ -106,6 +110,20 @@ export const CONFIG_KEYS: readonly ConfigKeySpec[] = [
     description: 'bell and terminal notification when a run needs you',
     values: () => NOTIFY_MODES,
     current: (_s, live) => live.notifyMode
+  },
+  {
+    key: 'turn-clock',
+    aliases: ['tuiTurnClock'],
+    description: 'add the time a turn finished to its "done in" note',
+    values: () => ON_OFF,
+    current: (s) => onOff(s.tuiTurnClock === true)
+  },
+  {
+    key: 'progress',
+    aliases: ['tuiProgress'],
+    description: "turn progress for the terminal's tab or title bar (passthrough: inside tmux too)",
+    values: () => PROGRESS_MODES,
+    current: (s) => (isProgressMode(s.tuiProgress) ? s.tuiProgress : 'auto')
   },
   {
     key: 'reduce-motion',
@@ -208,6 +226,9 @@ export function normalizeConfigValue(
   if (values === ON_OFF) {
     if (TRUE_WORDS.has(lower)) return { value: 'on' }
     if (FALSE_WORDS.has(lower)) return { value: 'off' }
+  } else if (spec.key === 'theme' && ctx.resolveTheme) {
+    const theme = ctx.resolveTheme(lower)
+    if (theme) return { value: theme }
   } else if (spec.key === 'approval') {
     const policy = parseApprovalPolicy(lower)
     if (policy) return { value: policy }
@@ -306,6 +327,14 @@ export function configPatch(
             ? 'memory on: the agent sees and saves memories from your next message'
             : 'memory off: the agent runs without memories from your next message (nothing is deleted)'
       }
+    case 'turn-clock':
+      return {
+        patch: { tuiTurnClock: value === 'on' },
+        note: value === 'on' ? 'turn clock on: "done in" notes say when the turn finished' : 'turn clock off'
+      }
+    case 'progress':
+      if (!isProgressMode(value)) return null
+      return { patch: { tuiProgress: value }, note: `terminal progress → ${value} (takes effect at the next launch)` }
     case 'usage-limit-wait':
       return {
         patch: { usageLimitWait: value === 'on' },

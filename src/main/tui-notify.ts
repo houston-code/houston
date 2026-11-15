@@ -217,6 +217,9 @@ export interface ProgressSupport {
 
 export type ProgressMode = 'auto' | 'passthrough' | 'off'
 
+/** The `tuiProgress` modes, in the order /config steps through them. */
+export const PROGRESS_MODES: readonly ProgressMode[] = ['auto', 'passthrough', 'off']
+
 /** Whether a value is a `tuiProgress` mode. */
 export function isProgressMode(v: unknown): v is ProgressMode {
   return v === 'auto' || v === 'passthrough' || v === 'off'

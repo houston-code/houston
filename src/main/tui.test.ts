@@ -82,6 +82,7 @@ import {
   renderMcpTools,
   resolveTheme,
   THEMES,
+  setUserThemes,
   parseMemoryCapture,
   nextPolicy,
   addModelUsage,
@@ -11417,6 +11418,30 @@ describe('/config, /status and /feedback', () => {
     expect(saved).toEqual([{ tuiFocus: true }])
     expect(t.text()).toContain('· focus: only your messages')
     expect(t.text()).toContain('focus: on')
+  })
+
+  it('/config theme takes the new built-in themes, a user theme and the old aliases', async () => {
+    setUserThemes({ solar: THEMES.default })
+    try {
+      const { d, saved } = liveDeps()
+      const t = fakeIo(['/config theme=colorblind-light', '/config theme=solar', '/config theme=bright', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(saved).toEqual([{ tuiTheme: 'colorblind-light' }, { tuiTheme: 'solar' }, { tuiTheme: 'dark' }])
+      const help = parseSlashCommand('/config theme=solar', settings())
+      expect(help).toEqual({ kind: 'config', op: { op: 'set', key: 'theme', value: 'solar' } })
+    } finally {
+      setUserThemes({})
+    }
+  })
+
+  it('/config turn-clock and progress save their settings', async () => {
+    const { d, saved } = liveDeps()
+    const t = fakeIo(['/config turn-clock=on', '/config progress=off', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([{ tuiTurnClock: true }, { tuiProgress: 'off' }])
+    expect(t.text()).toContain('terminal progress → off (takes effect at the next launch)')
   })
 
   it('/config with no picker prints the list', async () => {
