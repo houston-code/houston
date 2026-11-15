@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { resolve as resolvePath } from 'node:path'
 import type { ChatMessage, Provider } from '@shared/agent'
 import {
@@ -9,14 +9,16 @@ import {
   type GitActionResult,
   type PrLookup
 } from '@shared/gitActions'
-import { workingTreeToText } from '@shared/workingTree'
-import { getProvider, getSettings } from '../agentHost'
+import { workingTreeToText, type WorkingTreeChanges } from '@shared/workingTree'
+import { collectSecrets, getProvider, getSettings } from '../agentHost'
 import { peekConversation } from '../conversations'
 import { createProvider } from '../providers'
 import { GIT_ENV, hardenedGitArgs, runGitCapture } from './gitRead'
 import { ghAuthedHosts, ghRepoEnv, ghRepoKey, resolveGh, runGh, type GhExec } from './github'
 import { gitExecutable } from './gitBinary'
+import { redactSecrets } from './redact'
 import { providerStreamError, withProviderRetry } from './retry'
+import { isSensitivePath } from './sensitive-paths'
 import { titleRequestOptions } from './title'
 import { collectWorkingTreeChanges } from './workingTree'
 
@@ -145,9 +147,41 @@ async function repoRoot(workspace: unknown, deps: GitActionDeps): Promise<string
   return root
 }
 
-/** Refuse when the repository's own config would run a command for a commit or push. */
-async function guardRepoConfig(root: string): Promise<GitActionResult | null> {
+/**
+ * Filter drivers the repository's own config defines (`filter.<name>.clean`, `.smudge`,
+ * `.process`), by name, from the same listing as {@link riskyRepoConfig}. A commit
+ * can't run them (they are switched off for every host git, see gitRead.ts), and
+ * staging without them would store the files unfiltered: a git-crypt or transcrypt
+ * repository would get its secrets committed in plain text. Pure.
+ */
+export function repoFilterDrivers(output: string): string[] {
+  const names: string[] = []
+  const fields = output.split('\0')
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    if (TRUSTED_SCOPES.has(fields[i].trim())) continue
+    const m = /^filter\.(.+)\.(clean|smudge|process)$/i.exec(fields[i + 1].split('\n')[0])
+    if (m && !names.includes(m[1])) names.push(m[1])
+  }
+  return names
+}
+
+/**
+ * Refuse when the repository's own config would run a command for a commit or push,
+ * or (for a commit) defines a filter driver. Also refuses when the config can't be
+ * listed in full: a cut-off listing could leave out exactly the key that matters.
+ */
+async function guardRepoConfig(root: string, op: 'commit' | 'push'): Promise<GitActionResult | null> {
   const r = await runGitCapture(['config', '--show-scope', '-z', '--list'], root)
+  if (!r.ok) {
+    return { ok: false, error: `Could not read this repository's git config, so Houston won't ${op} here. Use a terminal.` }
+  }
+  const filters = op === 'commit' ? repoFilterDrivers(r.stdout) : []
+  if (filters.length) {
+    return {
+      ok: false,
+      error: `This repository defines its own git filter (${filters.join(', ')}), which Houston won't run, so it won't commit here. Use a terminal.`
+    }
+  }
   const risky = riskyRepoConfig(r.stdout)
   if (risky.length === 0) return null
   return {
@@ -180,18 +214,26 @@ async function guardInProgress(root: string): Promise<GitActionResult | null> {
   return null
 }
 
-/** Stage every change in the repository and commit it with `message`. */
+/**
+ * Stage every change under the project folder and commit it with `message`. The folder
+ * may sit below the repository root (one package of a monorepo): the Changes list
+ * shows only paths under it, so staging and committing are limited to it too (the
+ * `.` pathspec, from the folder), and changes elsewhere in the repository, staged or
+ * not, stay out of the commit.
+ */
 export async function commitAll(workspace: unknown, message: unknown, deps: GitActionDeps): Promise<GitActionResult> {
   const text = cleanCommitMessage(message)
   if (!text) return { ok: false, error: 'Write a commit message first.' }
   const root = await repoRoot(workspace, deps)
   if (typeof root !== 'string') return root
-  const blocked = (await guardRepoConfig(root)) ?? (await guardInProgress(root))
+  const blocked = (await guardRepoConfig(root, 'commit')) ?? (await guardInProgress(root))
   if (blocked) return blocked
-  const add = await runGitWrite(['add', '--all'], root, 60_000)
+  const add = await runGitWrite(['add', '--all', '--', '.'], root, 60_000)
   if (!add.ok) return { ok: false, error: gitError(add.stderr, 'Could not stage the changes.') }
-  // --no-verify is implied by the hardening (no hooks); --cleanup=strip drops comment lines.
-  const commit = await runGitWrite(['commit', '--quiet', '--cleanup=strip', '-m', text], root, 60_000)
+  // --no-verify is implied by the hardening (no hooks). --cleanup=whitespace, as for
+  // `git commit -m`: the message never went through an editor, so a `#123` line is
+  // the user's text, not a comment. `-- .` commits only the folder's paths.
+  const commit = await runGitWrite(['commit', '--quiet', '--cleanup=whitespace', '-m', text, '--', '.'], root, 60_000)
   if (!commit.ok) return { ok: false, error: gitError(commit.stderr || commit.stdout, 'The commit failed.') }
   const head = await runGitCapture(['rev-parse', '--short', 'HEAD'], root)
   return { ok: true, detail: head.ok ? head.stdout.trim() : undefined }
@@ -317,6 +359,45 @@ async function guardPushTarget(root: string, remote: string): Promise<GitActionR
   return null
 }
 
+/** An attributes line assigning the LFS filter, as a JS regex and as git grep's ERE. */
+const LFS_ATTR = /filter=lfs(\s|$)/m
+const LFS_ATTR_ERE = 'filter=lfs([[:space:]]|$)'
+
+/**
+ * Refuse a push from a repository that uses Git LFS. git-lfs uploads the large files
+ * only from its `pre-push` hook, and hooks never run for Houston's host git, so the
+ * push would send pointers to objects the remote never gets. In use means a committed
+ * `.gitattributes` (anywhere in HEAD's tree) or `info/attributes` names `filter=lfs`.
+ * A check that fails refuses too.
+ */
+async function guardLfs(root: string): Promise<GitActionResult | null> {
+  const refused: GitActionResult = {
+    ok: false,
+    error: "This repository uses Git LFS, whose upload Houston doesn't run, so it won't push here. Push from a terminal."
+  }
+  const unknown: GitActionResult = {
+    ok: false,
+    error: "Could not check whether this repository uses Git LFS, so Houston won't push here. Push from a terminal."
+  }
+  const info = await runGitCapture(['rev-parse', '--git-path', 'info/attributes'], root)
+  if (!info.ok) return unknown
+  try {
+    if (LFS_ATTR.test(readFileSync(resolvePath(root, info.stdout.trim()), 'utf8'))) return refused
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return unknown
+  }
+  const head = await runGitCapture(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], root)
+  // No commit yet: nothing to push, and nothing to search.
+  if (!head.ok) return null
+  const grep = await runGitCapture(
+    ['grep', '-q', '-I', '-E', '-e', LFS_ATTR_ERE, 'HEAD', '--', ':(top,glob)**/.gitattributes'],
+    root
+  )
+  if (grep.ok) return refused
+  // Exit 1 is "no match"; anything else is a failed search.
+  return grep.code === 1 ? null : unknown
+}
+
 /**
  * Push the current branch to the same-named branch on its remote: the branch's push
  * remote or upstream remote, else the repository's remote (`origin` when there is
@@ -328,10 +409,12 @@ async function guardPushTarget(root: string, remote: string): Promise<GitActionR
 export async function pushBranch(workspace: unknown, deps: GitActionDeps): Promise<GitActionResult> {
   const root = await repoRoot(workspace, deps)
   if (typeof root !== 'string') return root
-  const blocked = await guardRepoConfig(root)
+  const blocked = await guardRepoConfig(root, 'push')
   if (blocked) return blocked
   const sync = await branchSync(root)
   if (!sync.branch) return { ok: false, error: 'Check out a branch before pushing.' }
+  const lfs = await guardLfs(root)
+  if (lfs) return lfs
   const branch = sync.branch
   const remotes = await runGitCapture(['remote'], root)
   const names = remotes.ok ? remotes.stdout.split('\n').map((l) => l.trim()).filter(Boolean) : []
@@ -372,6 +455,21 @@ export function commitMessageRequest(diffText: string): ChatMessage[] {
   const clipped =
     diffText.length > SUGGEST_DIFF_BUDGET ? `${diffText.slice(0, SUGGEST_DIFF_BUDGET)}\n… (diff shortened)` : diffText
   return [{ role: 'user', content: `Write the commit message for this change.\n\n${clipped}` }]
+}
+
+/**
+ * The change set as text for the model, with what must not leave the machine taken
+ * out: the contents of credential files (`.env`, private keys, as the agent's own
+ * sensitive-read gate names them) replaced by a note, and secret-looking values and
+ * the user's stored keys masked everywhere else.
+ */
+export function suggestionDiffText(changes: WorkingTreeChanges, knownSecrets: readonly string[] = collectSecrets()): string {
+  const files = changes.files.map((f) =>
+    isSensitivePath(f.path) || (f.oldPath !== undefined && isSensitivePath(f.oldPath))
+      ? { ...f, hunks: [], note: 'Sensitive file, contents not shown' }
+      : f
+  )
+  return redactSecrets(workingTreeToText({ ...changes, files }), knownSecrets)
 }
 
 /** Tidy a model's commit message: drop fences and wrapping quotes, cap it. Null when empty. Pure. */
@@ -417,7 +515,7 @@ export async function suggestCommitMessage(
         for await (const ev of provider.streamChat({
           model: selected.model,
           system: commitMessageSystemPrompt,
-          messages: commitMessageRequest(workingTreeToText(changes)),
+          messages: commitMessageRequest(suggestionDiffText(changes)),
           ...request,
           signal: abort.signal
         })) {

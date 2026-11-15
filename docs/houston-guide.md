@@ -1829,9 +1829,14 @@ The Changes view also has a commit form, for when you'd rather not spend an agen
 
 - **Commit message**, with **Suggest message**, which asks the chat's model (or your
   default model in a new chat) to describe the uncommitted changes, the way a chat gets
-  its title. The diff goes to that model's provider. Edit the suggestion as you like.
+  its title. The diff goes to that model's provider, with the contents of credential
+  files (such as `.env` or a private key) left out and secret-looking values masked.
+  Edit the suggestion as you like.
 - **Commit** stages every change and commits it (`Cmd+Enter` / `Ctrl+Enter` in the
-  message box). The repository's own git hooks do not run. While a merge, rebase,
+  message box). When the project folder is below the repository root (one package of
+  a monorepo), only changes under that folder are staged and committed, the ones the
+  Changes view lists. The message is kept as written, `#` lines included. The
+  repository's own git hooks do not run. While a merge, rebase,
   cherry-pick, or revert is in progress, Commit is refused: resolve the conflicts and
   finish the operation in a terminal first.
 - **Push** sends the branch's new commits to the branch of the same name on its
@@ -1846,8 +1851,12 @@ The Changes view also has a commit form, for when you'd rather not spend an agen
 
 Houston refuses to commit or push when the repository's own git config names a program
 git would run for it (a signing program, an ssh command, a credential helper, an
-include, a remote helper, or an alternate-refs command) or pushes submodules too: use
-a terminal there. Your global git config (identity, signing, credentials)
+include, a remote helper, or an alternate-refs command) or pushes submodules too, or
+when that config can't be read in full: use a terminal there. It also won't commit in
+a repository whose own config defines a git filter (as git-crypt, transcrypt, or
+`git lfs install --local` set up), since Houston doesn't run it and the files would
+be stored unfiltered, and won't push from a repository that uses Git LFS, whose upload
+runs from a hook Houston doesn't run. Your global git config (identity, signing, credentials)
 applies as usual. **Create PR** stays a hand-off to the agent.
 
 **Pull request chip.** When the chat's branch has a pull request on GitHub, a chip at
@@ -1864,7 +1873,7 @@ mid-merge, network remotes only):
 
 | Command | Does |
 | --- | --- |
-| `/commit [message]` | lists the files, shows the message, asks `[y/N]`, then stages every change and commits it. With no message, the chat's model suggests one first (as **Suggest message** does); you still confirm it |
+| `/commit [message]` | lists the files, shows the message, asks `[y/N]`, then stages every change under the session's folder and commits it (the list says so when it leaves out untracked files the commit includes). With no message, the chat's model suggests one first (as **Suggest message** does); you still confirm it |
 | `/push` | pushes the branch's new commits, or publishes the branch on a first push, as **Push** does |
 | `/ship` | sends the agent the request the shipping button would (**Create PR**, **Publish to GitHub**, **Push first commit**, or **Commit & push**, whichever fits), shown as that action |
 | `/pr` | the branch's pull request: number, state, link, and its checks, each listed with failures first. Needs `gh` signed in and a GitHub remote |

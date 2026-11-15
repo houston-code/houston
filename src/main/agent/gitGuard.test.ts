@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   lstatSync,
@@ -31,6 +32,8 @@ import {
   parseConfigList,
   resetKeptElsewhere,
   reviewGitChanges,
+  UNREADABLE,
+  UNREADABLE_CONFIG_KEY,
   type GitChange,
   type RepoSnap
 } from './gitGuard'
@@ -133,6 +136,9 @@ describe('defaultReadConfigEntries', () => {
         ['include.path', 'inc']
       ])
       expect(await defaultReadConfigEntries(file, Buffer.from('[core\n'))).toBeNull()
+      // Too large to parse in full: unreadable, never "nothing there".
+      const huge = Buffer.from(`[pad]\n\tx = ${'A'.repeat(2_000_000)}\n[core]\n\tfsmonitor = evil\n`)
+      expect(await defaultReadConfigEntries(file, huge)).toBe(UNREADABLE)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -306,6 +312,38 @@ describe('GitGuard on real repositories', () => {
     expect(describeChange(changes[0]!, ws)).toContain('new hook .git/hooks/pre-commit')
     await guard.undo(changes)
     expect(existsSync(hook)).toBe(false)
+  })
+
+  it('reports a config grown too large to check instead of reading it as empty', async () => {
+    const guard = await guarded()
+    const file = join(ws, '.git/config')
+    appendFileSync(file, `[pad]\n\tx = ${'A'.repeat(5_000_000)}\n[core]\n\tfsmonitor = sh -c evil\n`)
+    const { changes } = await guard.check()
+    expect(changes).toMatchObject([{ kind: 'config', file, key: UNREADABLE_CONFIG_KEY }])
+    expect(describeChange(changes[0]!, ws)).toBe('.git/config: changed, and too large or slow to check for settings that run a command')
+    // Not something undo can put back by itself: it says so instead of claiming it did.
+    expect(await guard.undo(changes)).toHaveLength(1)
+  })
+
+  it('sees a hook hidden behind hundreds of sample files', async () => {
+    const guard = await guarded()
+    const hooks = join(ws, '.git/hooks')
+    for (let i = 0; i < 260; i++) writeFileSync(join(hooks, `${String(i).padStart(5, '0')}.sample`), '#!/bin/sh\n')
+    const hook = join(hooks, 'pre-commit')
+    writeFileSync(hook, '#!/bin/sh\necho evil\n')
+    chmodSync(hook, 0o755)
+    const { changes } = await guard.check()
+    expect(changes).toMatchObject([{ kind: 'hook', file: hook }])
+  })
+
+  it('reports a hook changed beyond the files it reads one by one', async () => {
+    const hooks = join(ws, '.git/hooks')
+    for (let i = 0; i < 300; i++) writeFileSync(join(hooks, `h${String(i).padStart(3, '0')}`), '#!/bin/sh\n')
+    const guard = await guarded()
+    writeFileSync(join(hooks, 'h299'), '#!/bin/sh\necho evil\n')
+    const { changes } = await guard.check()
+    expect(changes).toHaveLength(1)
+    expect(describeChange(changes[0]!, ws)).toBe('.git/hooks: hook files changed beyond the 256 Houston reads')
   })
 
   it('puts a changed hook back with its old bytes and mode', async () => {

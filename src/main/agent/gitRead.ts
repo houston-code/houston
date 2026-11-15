@@ -67,7 +67,9 @@ export function localFilterOverrides(output: string): string[] | null {
  * The full hardening for a git command in `cwd`: {@link GIT_HARDENING} plus overrides
  * for the filter drivers the repo defines. Reading config runs no external program.
  * Outside a repo (or when git is missing) it is just the fixed flags. Rejects when the
- * repo defines a driver no override can name (see {@link localFilterOverrides}).
+ * repo defines a driver no override can name (see {@link localFilterOverrides}), and
+ * when the listing did not finish (cut off at the buffer, timed out, or a git too old
+ * for `--show-scope`): a partial listing could leave out exactly the driver that runs.
  */
 export function hardenedGitArgs(cwd: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
@@ -75,13 +77,35 @@ export function hardenedGitArgs(cwd: string): Promise<string[]> {
       gitExecutable(GIT_ENV),
       [...GIT_HARDENING, 'config', '--show-scope', '-z', '--get-regexp', '^filter\\.'],
       { cwd, env: GIT_ENV, timeout: 5_000, maxBuffer: 1_000_000, windowsHide: true },
-      (_err, stdout) => {
+      (err, stdout, stderr) => {
+        if (filterProbeFailed(err, String(stdout ?? ''))) {
+          // git's own fatal error (a broken `.git`, a config it can't parse) says more
+          // than ours; anything else (cut off, timed out, too old) gets ours.
+          const fatal = err?.code === 128 ? /^fatal: .+$/m.exec(String(stderr ?? ''))?.[0] : undefined
+          reject(new Error(fatal ?? "Houston could not read this repository's git config, so it will not run git here."))
+          return
+        }
         const overrides = localFilterOverrides(String(stdout ?? ''))
         if (overrides) resolve([...GIT_HARDENING, ...overrides])
         else reject(new Error('This repository defines a git filter driver Houston cannot switch off, so it will not run git here.'))
       }
     )
   })
+}
+
+/**
+ * Whether the filter-driver probe failed in a way that leaves its listing incomplete.
+ * Exit 0 is a full listing and exit 1 with no output is "no filter keys". A git that
+ * could not be started at all (ENOENT: not installed, or the folder is gone) runs
+ * nothing afterwards either, so it is not a failure here. Anything else (a kill by
+ * the timeout, the output buffer overflowing, an unknown option on an old git, a
+ * config git cannot parse) is. Pure.
+ */
+export function filterProbeFailed(err: (Error & { code?: unknown; killed?: boolean; signal?: unknown }) | null, stdout: string): boolean {
+  if (!err) return false
+  if (err.code === 'ENOENT') return false
+  if (err.code === 1 && !err.killed && !err.signal && stdout === '') return false
+  return true
 }
 
 export const GIT_ENV = {

@@ -1,5 +1,17 @@
-import { describe, it, expect } from 'vitest'
-import { GIT_HARDENING, localFilterOverrides, uncommittedDiffBase, type GitTry } from './gitRead'
+import { afterEach, describe, it, expect } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { appendFileSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  filterProbeFailed,
+  GIT_HARDENING,
+  hardenedGitArgs,
+  localFilterOverrides,
+  runGitCapture,
+  uncommittedDiffBase,
+  type GitTry
+} from './gitRead'
 
 /** A GitTry answering from a map keyed by the joined args; unknown args fail. */
 const fake =
@@ -74,4 +86,65 @@ describe('localFilterOverrides', () => {
     expect(localFilterOverrides('')).toEqual([])
     expect(localFilterOverrides('local')).toEqual([])
   })
+})
+
+describe('filterProbeFailed', () => {
+  const err = (code: unknown, extra: Record<string, unknown> = {}): Error => Object.assign(new Error('x'), { code, ...extra })
+
+  it('accepts a full listing, no filter keys, and a git that could not start', () => {
+    expect(filterProbeFailed(null, 'local\0filter.a.clean\nx\0')).toBe(false)
+    expect(filterProbeFailed(err(1), '')).toBe(false)
+    expect(filterProbeFailed(err('ENOENT'), '')).toBe(false)
+  })
+
+  it('rejects a cut-off, timed-out, or failed listing', () => {
+    expect(filterProbeFailed(err('ERR_CHILD_PROCESS_STDIO_MAXBUFFER'), 'local\0filter.pad.clean\nAAAA')).toBe(true)
+    expect(filterProbeFailed(err(null, { killed: true, signal: 'SIGTERM' }), '')).toBe(true)
+    // A git too old for --show-scope.
+    expect(filterProbeFailed(err(129), '')).toBe(true)
+    expect(filterProbeFailed(err(128), '')).toBe(true)
+    expect(filterProbeFailed(err(1), 'local\0filter.a.clean\nx\0')).toBe(true)
+  })
+})
+
+const gitOk = (() => {
+  try {
+    execFileSync('git', ['--version'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+})()
+
+describe('hardenedGitArgs on a real repository', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const posix = gitOk && process.platform !== 'win32' ? it : it.skip
+
+  posix(
+    'refuses to run git when padding pushes a planted filter past the listing, so it never runs',
+    async () => {
+      const r = realpathSync(mkdtempSync(join(tmpdir(), 'houston-gitread-')))
+      dirs.push(r)
+      const git = (...args: string[]): string => execFileSync('git', ['-C', r, ...args], { encoding: 'utf8' })
+      git('init', '-q')
+      writeFileSync(join(r, 'a.txt'), 'one\n')
+      git('add', 'a.txt')
+      git('-c', 'user.email=t@t.t', '-c', 'user.name=T', 'commit', '-qm', 'init')
+      const marker = join(r, 'filter-ran')
+      appendFileSync(
+        join(r, '.git', 'config'),
+        `[filter "pad"]\n\tclean = ${'A'.repeat(1_200_000)}\n[filter "evil"]\n\tclean = "touch '${marker}'; cat"\n`
+      )
+      writeFileSync(join(r, '.gitattributes'), 'a.txt filter=evil\n')
+      writeFileSync(join(r, 'a.txt'), 'two\n')
+      await expect(hardenedGitArgs(r)).rejects.toThrow(/could not read this repository's git config/)
+      const status = await runGitCapture(['status', '--porcelain'], r)
+      expect(status.ok).toBe(false)
+      expect(existsSync(marker)).toBe(false)
+    },
+    30_000
+  )
 })
