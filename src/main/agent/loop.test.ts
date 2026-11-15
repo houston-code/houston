@@ -9475,6 +9475,27 @@ describe('egress hardening', () => {
       expect(resultOf(r, 'n2')).toContain('added 12 packages')
     })
 
+    it('takes an answer given synchronously inside send, as headless full auto answers it', async () => {
+      // The card's resolver must exist before the card is emitted: headless resolves it
+      // inside its send callback, and an answer with no resolver to take it was dropped,
+      // leaving the run waiting forever.
+      h.probeTools = [probeNeedsNetShell()]
+      const r = await run({
+        policy: 'full-auto',
+        unattended: true,
+        syncReplies: true,
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [needsNetCall('n2'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['n1'])
+      expect(needsNetRuns).toEqual([false, true])
+      expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+    })
+
     it('a plain "Allow" on the card also grants network (any non-deny answer does)', async () => {
       h.probeTools = [probeNeedsNetShell()]
       await run({

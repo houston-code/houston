@@ -3190,8 +3190,10 @@ export async function startRun(
         shellNetwork: true as const
       }
       run.pendingApprovals.set(call.id, prompt)
+      // Register the resolver before the card goes out: headless answers inside send.
+      const approval = waitForApproval(run, call.id)
       emit({ type: 'tool_approval', callId: call.id, ...prompt })
-      const { decision } = await waitForApproval(run, call.id)
+      const { decision } = await approval
       run.pendingApprovals.delete(call.id)
       // A stopped run resolves the card as a deny; that is not the user's answer.
       if (abort.signal.aborted) return output
@@ -3237,8 +3239,10 @@ export async function startRun(
           egressHost: host
         }
         run.pendingApprovals.set(call.id, prompt)
+        // Register the resolver before the card goes out: a client may answer inside send.
+        const approval = waitForApproval(run, call.id)
         emit({ type: 'tool_approval', callId: call.id, ...prompt })
-        const { decision } = await waitForApproval(run, call.id)
+        const { decision } = await approval
         run.pendingApprovals.delete(call.id)
         // A stopped run resolves the card as a deny; that is not the user's answer.
         if (abort.signal.aborted) break
