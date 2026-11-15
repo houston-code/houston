@@ -204,6 +204,14 @@ describe('formatWorktreeContext', () => {
     expect(s).not.toContain('/repo [main]') // main is not repeated in the linked list
   })
 
+  it('marks current when the workspace uses backslashes and git lists forward slashes', () => {
+    const entries = [
+      { path: 'C:/repo', branch: 'main', detached: false, bare: false },
+      { path: 'C:/repo/wt-a', branch: 'feat/x', detached: false, bare: false }
+    ]
+    expect(formatWorktreeContext(entries, 'C:\\repo\\wt-a')).toContain('C:/repo/wt-a [feat/x] (current)')
+  })
+
   it('marks current even with a trailing slash mismatch', () => {
     const entries = [main, { path: '/repo/wt-a', branch: 'feat/x', detached: false, bare: false }]
     const s = formatWorktreeContext(entries, '/repo/wt-a/')
@@ -717,6 +725,10 @@ describe('gitContext text matches the one-at-a-time lookups (real repos)', () =>
 
       // A linked worktree of the clone.
       const linked = join(root, 'linked')
+      // Checked out as committed: the hardened runner skips the system config, where Git
+      // for Windows turns on CRLF conversion, so a converted checkout would read as changed
+      // to it and clean to plain git.
+      run(['config', 'core.autocrlf', 'false'], clone)
       run(['worktree', 'add', '-q', '-b', 'side', linked], clone)
       expect(await same(linked)).toContain('(current)')
 

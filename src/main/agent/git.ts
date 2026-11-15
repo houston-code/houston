@@ -112,7 +112,12 @@ export function formatWorktreeContext(entries: WorktreeEntry[], workspace: strin
   // The first entry is the main worktree; "linked" worktrees are the rest.
   const main = entries[0]
   if (!main || entries.length <= 1) return ''
-  const norm = (p: string): string => p.replace(/\/+$/, '')
+  // git lists worktree paths with forward slashes, Windows included, while the workspace
+  // comes in the platform's form, and Windows paths compare case-insensitively.
+  const norm = (p: string): string => {
+    const unified = p.replace(/\\/g, '/').replace(/\/+$/, '')
+    return process.platform === 'win32' ? unified.toLowerCase() : unified
+  }
   const ws = norm(workspace)
   let out = `Git worktrees: this repo has ${entries.length} worktrees; main worktree is at "${main.path}".`
   const linked = entries.slice(1)
