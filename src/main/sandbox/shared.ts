@@ -591,12 +591,20 @@ export function spawnWithBackend(
   })
   if (opts.signal) {
     const signal = opts.signal
-    if (signal.aborted) killProcessTree(child)
+    // A cancelled turn stops the tree as a timeout does: SIGTERM, so a server (or
+    // `docker compose up`, which only stops its containers on SIGTERM) can shut down
+    // cleanly, then SIGKILL whatever is still in the group once the grace runs out.
+    // Windows has no graceful tree signal, so the first one already ends it there.
+    const onAbort = (): void => {
+      signalProcessTree(child, 'SIGTERM')
+      if (process.platform === 'win32') return
+      setTimeout(() => killProcessTree(child), KILL_GRACE_MS).unref?.()
+    }
+    if (signal.aborted) onAbort()
     else {
-      const onAbort = (): void => killProcessTree(child)
       signal.addEventListener('abort', onAbort, { once: true })
       // Drop the listener once the child exits (as runWithBackend's cleanupAbort does),
-      // so a cancel arriving after exit can't SIGKILL a recycled process group, and
+      // so a cancel arriving after exit can't signal a recycled process group, and
       // listeners don't accumulate on the shared per-run signal across background shells.
       child.once('exit', () => signal.removeEventListener('abort', onAbort))
     }

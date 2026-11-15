@@ -13,7 +13,10 @@ vi.mock('node:child_process', async (importOriginal) => {
     ...real,
     execFile: ((file: string, args: string[], ...rest: unknown[]) => {
       if (/(^|\/)git$/.test(file)) {
-        h.spawned.push(args.find((a, i) => !a.startsWith('-') && args[i - 1] !== '-c') ?? '')
+        const at = args.findIndex((a, i) => !a.startsWith('-') && args[i - 1] !== '-c')
+        const sub = args[at] ?? ''
+        // rev-parse runs for two things (the top level, HEAD): say which.
+        h.spawned.push(sub === 'rev-parse' ? `${sub} ${args[at + 1]}` : sub)
       }
       return (real.execFile as (...a: unknown[]) => unknown)(file, args, ...rest)
     }) as typeof real.execFile
@@ -97,6 +100,28 @@ describe('snapshotWorkingTree / changedSince', () => {
     expect(await changedSince(before!, dir)).toEqual([])
   })
 
+  it('reports a file the command changed and committed, though the tree is clean before and after', async () => {
+    repo()
+    const before = await snapshotWorkingTree(dir)
+    writeFileSync(join(dir, 'a.txt'), 'a2 changed\n')
+    git('commit', '-q', '-am', 'edit and commit')
+    expect(await changedSince(before!, dir)).toEqual(['a.txt'])
+  })
+
+  it('reports the files a branch switch or a reset changed', async () => {
+    repo()
+    git('checkout', '-q', '-b', 'other')
+    writeFileSync(join(dir, 'src', 'b.ts'), 'b on other\n')
+    git('commit', '-q', '-am', 'other')
+    git('checkout', '-q', '-')
+    const before = await snapshotWorkingTree(dir)
+    git('checkout', '-q', 'other')
+    expect(await changedSince(before!, dir)).toEqual([join('src', 'b.ts')])
+    const onOther = await snapshotWorkingTree(dir)
+    git('reset', '-q', '--hard', 'HEAD~1')
+    expect(await changedSince(onOther!, dir)).toEqual([join('src', 'b.ts')])
+  })
+
   it('ignores ignored files', async () => {
     repo()
     writeFileSync(join(dir, '.gitignore'), 'out/\n')
@@ -147,12 +172,12 @@ describe('snapshotWorkingTree / changedSince', () => {
     repo()
     h.spawned.length = 0
     const before = await snapshotWorkingTree(dir)
-    expect(h.spawned.sort()).toEqual(['config', 'rev-parse', 'status'])
+    expect(h.spawned.sort()).toEqual(['config', 'rev-parse --show-toplevel', 'rev-parse --verify', 'status'])
     h.spawned.length = 0
     writeFileSync(join(dir, 'a.txt'), 'a2 changed\n')
     expect(await changedSince(before!, dir)).toEqual(['a.txt'])
-    // The filter-driver probe runs again; rev-parse does not.
-    expect(h.spawned).toEqual(['config', 'status'])
+    // The filter-driver probe runs again, and HEAD is read again; the top level is not.
+    expect(h.spawned.sort()).toEqual(['config', 'rev-parse --verify', 'status'])
   })
 
   it('reports nothing once the repository is gone or another one is found', async () => {

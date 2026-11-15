@@ -78,7 +78,11 @@ export class ShellSpill {
     private readonly now: () => number = Date.now
   ) {}
 
-  private get runDir(): string {
+  /**
+   * This run's folder. The loop lets a read-only command read inside it without the
+   * workspace-escape prompt, since the result points the model there.
+   */
+  get runDir(): string {
     // Run ids come from the client; keep only filename-safe characters.
     return join(this.baseDir, this.runId.replace(/[^\w.-]/g, '_').slice(0, 100) || 'run')
   }
@@ -143,8 +147,11 @@ export function runShellSpill(runId: string, redact: (text: string) => string): 
 
 /** The note appended to a clamped run_shell result. */
 export function spillNote(r: SpillResult): string {
+  // The app data folder has a space on macOS (`Application Support`): quote the path so
+  // the command the model copies from here reads it as one word.
+  const path = /^[\w@%+=:,./\\-]+$/.test(r.path) ? r.path : `'${r.path.replace(/'/g, `'\\''`)}'`
   return (
-    `[full output (${r.lines} line${r.lines === 1 ? '' : 's'}) saved to ${r.path}; ` +
+    `[full output (${r.lines} line${r.lines === 1 ? '' : 's'}) saved to ${path}; ` +
     `read the part you need with run_shell, e.g. sed -n '1000,1200p' or grep -n 'error']`
   )
 }

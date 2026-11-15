@@ -78,6 +78,12 @@ describe('ShellSpill', () => {
       /^\[full output \(5000 lines\) saved to \/data\/shell-output\/r\/shell-1\.log; read the part you need with run_shell/
     )
   })
+
+  it('quotes a path with a space, so a copied command reads it as one word', () => {
+    expect(spillNote({ path: "/Lib/Application Support/H/it's/shell-1.log", lines: 1 })).toContain(
+      `saved to '/Lib/Application Support/H/it'\\''s/shell-1.log';`
+    )
+  })
 })
 
 describe('run_shell spills clamped output', () => {

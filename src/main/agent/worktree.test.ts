@@ -541,10 +541,15 @@ describe('removeWorktree', () => {
 describe('isWorktreeDisposable', () => {
   const wt = { path: '/repo/.houston/worktrees/x', branch: 'feat/x', repoRoot: '/repo' }
   const onDisk = (): boolean => true
+  const SHA = 'a'.repeat(40)
+  const headSha = (): string => `${SHA}\n`
 
   it('is true for a clean worktree whose branch HEAD already contains', async () => {
     const calls: string[][] = []
-    const exec = fakeGit({ 'status --porcelain': () => '', 'merge-base --is-ancestor': () => '' }, calls)
+    const exec = fakeGit(
+      { 'status --porcelain': () => '', 'rev-parse --verify': headSha, 'merge-base --is-ancestor': () => '' },
+      calls
+    )
     expect(await isWorktreeDisposable(wt, exec, onDisk)).toBe(true)
     // The branch is passed fully qualified so it can't be read as an option.
     expect(calls).toContainEqual(['merge-base', '--is-ancestor', 'refs/heads/feat/x', 'HEAD'])
@@ -555,6 +560,7 @@ describe('isWorktreeDisposable', () => {
     const exec = fakeGit(
       {
         'status --porcelain': () => '',
+        'rev-parse --verify': headSha,
         'merge-base --is-ancestor': (args) => {
           if (args[3] === 'HEAD') throw new Error('')
           return ''
@@ -579,6 +585,23 @@ describe('isWorktreeDisposable', () => {
       }
     })
     expect(await isWorktreeDisposable(wt, exec, onDisk)).toBe(false)
+  })
+
+  it('is false when the commit checked out there (a detached HEAD) is merged nowhere, though the branch is', async () => {
+    const calls: string[][] = []
+    const exec = fakeGit(
+      {
+        'status --porcelain': () => '',
+        'rev-parse --verify': headSha,
+        'merge-base --is-ancestor': (args) => {
+          if (args[2] === SHA) throw new Error('')
+          return ''
+        }
+      },
+      calls
+    )
+    expect(await isWorktreeDisposable(wt, exec, onDisk)).toBe(false)
+    expect(calls).toContainEqual(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])
   })
 
   it('is false, without running git, when the worktree is gone or the branch is unsafe', async () => {

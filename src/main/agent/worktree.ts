@@ -364,11 +364,16 @@ function removalFailureMessage(wt: ConversationWorktree, e: unknown): string {
 const ORIGIN_DEFAULT = 'refs/remotes/origin/HEAD'
 
 /** Whether every commit on the worktree's branch is in `base`. Never throws. */
-async function mergedInto(wt: ConversationWorktree, base: string, exec: GitRun): Promise<boolean> {
+async function mergedInto(
+  wt: ConversationWorktree,
+  base: string,
+  exec: GitRun,
+  commit = `refs/heads/${wt.branch}`
+): Promise<boolean> {
   try {
     // Fully qualified so the branch can never be read as an option; exits non-zero
     // (rejects) when the branch has commits `base` doesn't contain, or `base` is unknown.
-    await exec(['merge-base', '--is-ancestor', `refs/heads/${wt.branch}`, base], wt.repoRoot)
+    await exec(['merge-base', '--is-ancestor', commit, base], wt.repoRoot)
     return true
   } catch {
     return false
@@ -446,9 +451,16 @@ export async function isWorktreeDisposable(
   try {
     const status = await exec(['status', '--porcelain'], wt.path)
     if (status.trim() !== '') return false
+    // What the worktree has checked out, which need not be its branch: commits made on
+    // a detached HEAD (or another branch) are on no ref the branch check would see,
+    // and removing the checkout would leave them unreachable.
+    const head = (await exec(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], wt.path)).trim()
+    if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(head)) return false
     // Merged into the main checkout's HEAD, or into origin's default branch (a PR
     // merged upstream while the main checkout wasn't pulled yet).
-    return (await mergedInto(wt, 'HEAD', exec)) || (await mergedInto(wt, ORIGIN_DEFAULT, exec))
+    const merged = async (commit?: string): Promise<boolean> =>
+      (await mergedInto(wt, 'HEAD', exec, commit)) || (await mergedInto(wt, ORIGIN_DEFAULT, exec, commit))
+    return (await merged()) && (await merged(head))
   } catch {
     return false
   }

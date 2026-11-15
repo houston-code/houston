@@ -117,8 +117,10 @@ export async function worktreeWork(
   if (!exists(wt.path) || !isSafeGitRef(wt.branch)) return null
   try {
     const status = await exec(['status', '--porcelain'], wt.path)
-    // Fully qualified, so the branch can never be read as an option.
-    const count = (await exec(['rev-list', '--count', `${wt.base}..refs/heads/${wt.branch}`], wt.path)).trim()
+    // Fully qualified, so the branch can never be read as an option. HEAD too: commits
+    // made on a detached HEAD (or another branch checked out there) are on no ref the
+    // branch would show, and removing the checkout would lose them.
+    const count = (await exec(['rev-list', '--count', `${wt.base}..refs/heads/${wt.branch}`, 'HEAD'], wt.path)).trim()
     const commits = Number.parseInt(count, 10)
     if (!Number.isFinite(commits)) return null
     return { dirty: status.trim() !== '', commits }

@@ -7,7 +7,8 @@
  * the ledger never hears of. Around a foreground run_shell call that may write, the loop
  * takes a cheap snapshot of the git working tree before and after (the `git status`
  * listing plus the size and modification time of each listed path) and records the
- * paths that differ.
+ * paths that differ, plus the files that differ between the commits HEAD named before
+ * and after, when the command moved it.
  *
  * Bounded and inert: every git call goes through the hardened runner (no hooks, no
  * filters, no fsmonitor, no optional index lock), a tree with too many dirty paths is
@@ -30,6 +31,30 @@ export interface TreeSnapshot {
   marks: string
   /** Each listed path's size and mtime, or 'missing' for one that isn't on disk. */
   entries: Map<string, string>
+  /**
+   * The commit checked out, or null when there is none yet. A command that changes
+   * files and commits them, or moves HEAD (`git pull`, `git switch`, `git reset`), leaves
+   * a tree that is clean before and after; only HEAD shows what it changed.
+   */
+  head?: string | null
+}
+
+/** The commit HEAD names in `top`, or null (an unborn branch, or git failed). */
+async function headOf(top: string, hardening: Promise<string[]>): Promise<string | null> {
+  const r = await runGitCapture(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], top, hardening)
+  const sha = r.ok ? r.stdout.trim() : ''
+  return /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha) ? sha : null
+}
+
+/**
+ * The paths that differ between two commits, relative to the repository top. Compares
+ * trees only (no file contents are read, so no filter runs). At most
+ * {@link MAX_SNAPSHOT_PATHS}; empty when git fails.
+ */
+async function pathsBetween(from: string, to: string, top: string, hardening: Promise<string[]>): Promise<string[]> {
+  const r = await runGitCapture(['diff', '--name-only', '-z', '--no-renames', '--no-ext-diff', from, to, '--'], top, hardening)
+  if (!r.ok) return []
+  return r.stdout.split('\0').filter(Boolean).slice(0, MAX_SNAPSHOT_PATHS)
 }
 
 function statOf(path: string): string {
@@ -115,8 +140,8 @@ export async function snapshotWorkingTree(workspace: string): Promise<TreeSnapsh
   } catch {
     return null
   }
-  const entries = await listTree(top, hardening)
-  return entries && { top, base, marks: discoveryMarks(base, top), entries }
+  const [entries, head] = await Promise.all([listTree(top, hardening), headOf(top, hardening)])
+  return entries && { top, base, marks: discoveryMarks(base, top), entries, head }
 }
 
 /**
@@ -138,9 +163,20 @@ export async function changedSince(before: TreeSnapshot, workspace: string): Pro
     return []
   }
   if (base !== before.base || discoveryMarks(base, before.top) !== before.marks) return []
-  const after = await listTree(before.top, hardenedGitArgs(before.top))
+  const hardening = hardenedGitArgs(before.top)
+  const [after, head] = await Promise.all([listTree(before.top, hardening), headOf(before.top, hardening)])
   if (!after) return []
   const changed = new Set<string>()
+  // HEAD moved (a commit, a pull, a branch switch, a reset): the files that differ
+  // between the two commits changed too, even where the tree is clean both times.
+  // A file that was dirty before and is the same on disk now was only committed (or
+  // stashed into the commit), not changed.
+  if (before.head && head && head !== before.head) {
+    for (const rel of await pathsBetween(before.head, head, before.top, hardening)) {
+      const was = before.entries.get(rel)
+      if (was === undefined || statOf(join(before.top, rel)) !== was) changed.add(rel)
+    }
+  }
   for (const [rel, now] of after) {
     const was = before.entries.get(rel)
     // Staging alone (` M` to `M `) changes the status code, not the file.

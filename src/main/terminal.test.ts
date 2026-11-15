@@ -174,7 +174,11 @@ describe('command terminals', () => {
   })
 
   it('passes the command the way each Windows shell takes it', () => {
-    expect(commandArgs('C:\\Windows\\System32\\cmd.exe', 'dir')).toEqual(['/d', '/s', '/c', 'dir'])
+    // cmd.exe gets the command line verbatim: an argv would be C-runtime quoted, and
+    // cmd does not read `\"`.
+    expect(commandArgs('C:\\Windows\\System32\\cmd.exe', 'dir')).toBe('/d /s /c "dir"')
+    expect(commandArgs('cmd.exe', 'git commit -m "fix bug"')).toBe('/d /s /c "git commit -m "fix bug""')
+    expect(commandArgs('cmd', 'type "C:\\Program Files\\x.txt"')).toBe('/d /s /c "type "C:\\Program Files\\x.txt""')
     expect(commandArgs('powershell.exe', 'ls')).toEqual(['-NoLogo', '-Command', 'ls'])
     expect(commandArgs('pwsh', 'ls')).toEqual(['-NoLogo', '-Command', 'ls'])
   })

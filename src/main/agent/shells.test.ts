@@ -48,6 +48,25 @@ describe('killShellsFor', () => {
     await closedB
   })
 
+  it.skipIf(process.platform === 'win32')('gives a deleted chat\'s shells SIGTERM first, so they can shut down cleanly', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'shells-grace-'))
+    const marker = join(dir, 'stopped')
+    try {
+      const child = node(
+        `process.on("SIGTERM", () => { require("fs").writeFileSync(${JSON.stringify(marker)}, "ok"); process.exit(0) });` +
+          'console.log("up"); setInterval(() => {}, 1000)'
+      )
+      registerShell('docker compose up', child, 'conv-grace')
+      await new Promise<void>((resolve) => child.stdout!.once('data', () => resolve()))
+      const closed = onClose(child)
+      expect(killShellsFor('conv-grace')).toBe(1)
+      await closed
+      expect(readFileSync(marker, 'utf8')).toBe('ok')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('does nothing for a conversation with no shells', () => {
     expect(killShellsFor('conv-none')).toBe(0)
   })
@@ -197,6 +216,29 @@ describe('background shell registry', () => {
     expect(killShell(id)).toBe('killed-leftovers')
     await vi.waitFor(() => expect(groupAlive()).toBe(false))
     expect(killShell(id)).toBe('already-exited')
+  })
+
+  // A command that starts a daemon in its own session and exits: the daemon inherits
+  // stdout, so 'close' never fires, but the shell itself is done.
+  it.skipIf(process.platform === 'win32')('marks a shell exited when its process exits, even if a daemon keeps the pipe open', async () => {
+    const child = node(
+      'const d = require("child_process").spawn("sleep", ["30"], { detached: true, stdio: "inherit" });' +
+        'd.unref(); console.log("daemon " + d.pid)'
+    )
+    const id = registerShell('start-daemon', child, 'conv-daemon', '/ws/daemon')
+    let daemon = 0
+    child.stdout!.on('data', (c: Buffer) => {
+      const m = /daemon (\d+)/.exec(c.toString())
+      if (m) daemon = Number(m[1])
+    })
+    try {
+      await vi.waitFor(() => expect(peekShell(id)?.running).toBe(false), { timeout: 5_000, interval: 50 })
+      expect(peekShell(id)?.exitCode).toBe(0)
+      expect(runningShellsFor('conv-daemon', '/ws/daemon')).toEqual([])
+      expect(peekShell(id)?.output).toContain('daemon ')
+    } finally {
+      if (daemon) process.kill(daemon, 'SIGKILL')
+    }
   })
 
   it('exposes timestamps, exit code, and the spawning conversation in listShells', async () => {

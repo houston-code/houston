@@ -2379,7 +2379,15 @@ export async function startRun(
     ): { escapes: boolean; discards: boolean; ruleAction: PermissionRule['action'] | null } => {
       const pathExists = pathExistsFor(session)
       const cwdOutside = shellCwdOutsideRoots(session.cwd, roots)
-      const escapes = cwdOutside || shellReferencesExternalPath(command, roots)
+      // The result of a clamped command tells the model to read the rest back from this
+      // run's spill folder (see shellSpill.ts), which sits outside the workspace. A
+      // command that only reads and names nothing outside the roots but that folder is
+      // not an escape; one that may write anywhere still is.
+      const readsOnlySpill = (): boolean =>
+        shellSpill !== null &&
+        !shellMayEdit(command) &&
+        !shellReferencesExternalPath(command, [...roots, shellSpill.runDir])
+      const escapes = cwdOutside || (shellReferencesExternalPath(command, roots) && !readsOnlySpill())
       const discards = shellDiscardsWork(command, pathExists)
       // A write to a control or credential file is a tripwire of the same kind: it
       // asks in every mode, and an allow skips it only when it names that write.

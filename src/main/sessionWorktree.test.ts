@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ConversationWorktree } from '@shared/agent'
+import { isWorktreeDisposable } from './agent/worktree'
 import {
   comeBackCommand,
   confirmsRemoval,
@@ -149,6 +150,32 @@ describe('session worktree (real git)', () => {
         expect(git(wt.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(wt.branch)
         // Kept out of the parent's status.
         expect(git(repo, 'status', '--porcelain')).toBe('')
+      } finally {
+        rmSync(repo, { recursive: true, force: true })
+      }
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    'counts commits made on a detached HEAD as work, and the worktree as not disposable',
+    async () => {
+      const repo = initRepo()
+      try {
+        const wt = await make(repo, 'detached-work')
+        expect(await worktreeWork(wt)).toEqual({ dirty: false, commits: 0 })
+        expect(await isWorktreeDisposable(wt)).toBe(true)
+        git(wt.path, 'checkout', '-q', '--detach')
+        writeFileSync(join(wt.path, 'b.txt'), 'b\n')
+        git(wt.path, 'add', 'b.txt')
+        git(wt.path, 'commit', '-q', '-m', 'on a detached head')
+        expect(await worktreeWork(wt)).toEqual({ dirty: false, commits: 1 })
+        expect(await isWorktreeDisposable(wt)).toBe(false)
+        // So leaving asks rather than removing it on its own.
+        const { result, asked } = await finish(wt, [null])
+        expect(result).toBe('kept')
+        expect(asked).toHaveLength(1)
+        expect(existsSync(wt.path)).toBe(true)
       } finally {
         rmSync(repo, { recursive: true, force: true })
       }
