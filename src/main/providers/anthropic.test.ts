@@ -837,6 +837,38 @@ describe('anthropic stream closed before message_stop', () => {
     expect(isRetryableError(caught)).toBe(true)
   })
 
+  it('fails a stream that closed before its first event as a retryable error too', async () => {
+    // Opened when the request is made, as the SDK does, so the provider is reading it
+    // when the empty body ends (a stream that already failed has no reader to tell).
+    const { MessageStream } = await vi.importActual<typeof import('@anthropic-ai/sdk/lib/MessageStream')>(
+      '@anthropic-ai/sdk/lib/MessageStream'
+    )
+    h.stream.mockImplementationOnce(() =>
+      MessageStream.fromReadableStream(
+        new ReadableStream({
+          start(c) {
+            c.close()
+          }
+        })
+      )
+    )
+    const out: unknown[] = []
+    let caught: unknown
+    try {
+      for await (const ev of createAnthropicProvider('sk-test').streamChat({
+        model: 'claude-opus-4-8',
+        messages: [{ role: 'user', content: 'hi' }]
+      })) {
+        out.push(ev)
+      }
+    } catch (e) {
+      caught = e
+    }
+    expect(out).toEqual([])
+    expect(caught).toMatchObject({ name: 'StreamClosedEarlyError' })
+    expect(isRetryableError(caught)).toBe(true)
+  })
+
   it('still finishes a reply that reached message_stop', async () => {
     const { out, caught } = await run([
       messageStart,

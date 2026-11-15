@@ -435,7 +435,10 @@ export async function runQuarantineExtraction(opts: {
           signal: abort.signal
         })) {
           if (ev.type === 'text') acc += ev.text
-          else if (ev.type === 'done' && ev.usage) opts.onUsage?.(ev.usage)
+          else if (ev.type === 'done') {
+            if (ev.discardedUsage) opts.onUsage?.(ev.discardedUsage)
+            if (ev.usage) opts.onUsage?.(ev.usage)
+          }
           else if (ev.type === 'error') throw providerStreamError(ev)
         }
         return acc

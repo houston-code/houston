@@ -1,3 +1,4 @@
+import { BlockList, isIP } from 'node:net'
 import { Agent, EnvHttpProxyAgent, type Dispatcher } from 'undici'
 import { log } from './logger'
 
@@ -10,7 +11,9 @@ import { log } from './logger'
  * error." while a browser on the same machine worked. This routes those requests
  * through the proxy the user named: the `proxyUrl` setting when set, otherwise the
  * conventional `HTTPS_PROXY` / `HTTP_PROXY` (either case) from the environment, with
- * `NO_PROXY` honoured either way. Loopback hosts always go direct, so a local model
+ * `NO_PROXY` honoured either way (names, dot-suffixes, and CIDR ranges such as
+ * `10.0.0.0/8`). The user's own machine and private network always go direct (see
+ * {@link isLocalModelHost}): a remote proxy can't reach them, so a local or LAN model
  * server keeps working under a corporate proxy.
  *
  * Deliberately not routed here:
@@ -40,6 +43,67 @@ const KEEP_ALIVE = { keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS, keepAliveMaxTimeou
 
 /** Hosts that always go direct: a remote proxy can't reach this machine's loopback. */
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]']
+
+/**
+ * Whether a base URL points at the user's own machine or private network: loopback,
+ * `localhost` (and `*.localhost`), the unspecified address, a private IPv4 range, an
+ * mDNS `.local` name, or an IPv6 unique-local address. That's where self-hosted model
+ * servers (Ollama, LM Studio, vLLM, llama.cpp) live. A malformed URL is not local.
+ */
+export function isLocalModelHost(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false
+  let host: string
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  host = host.replace(/^\[|\]$/g, '')
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true
+  if (host === '::1' || host === '::' || host === '0.0.0.0') return true
+  if (/^f[cd][0-9a-f]{2}:/.test(host)) return true
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host)
+  if (!v4) return false
+  const [a, b] = [Number(v4[1]), Number(v4[2])]
+  return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)
+}
+
+let cidrCache: { noProxy: string; list: BlockList } | null = null
+
+/** The CIDR entries (`10.0.0.0/8`, `fd00::/8`) of a `NO_PROXY` list, as one matcher. */
+function noProxyRanges(noProxy: string): BlockList {
+  if (cidrCache?.noProxy === noProxy) return cidrCache.list
+  const list = new BlockList()
+  for (const entry of noProxy.split(',')) {
+    const m = /^\[?([0-9a-fA-F:.]+)\]?\/(\d{1,3})$/.exec(entry.trim())
+    if (!m) continue
+    const family = isIP(m[1])
+    const prefix = Number(m[2])
+    if (!family || prefix > (family === 6 ? 128 : 32)) continue
+    list.addSubnet(m[1], prefix, family === 6 ? 'ipv6' : 'ipv4')
+  }
+  cidrCache = { noProxy, list }
+  return list
+}
+
+/**
+ * Whether a request to `target` goes straight to its host under `config`: the user's
+ * own machine or private network ({@link isLocalModelHost}), or an IP literal inside a
+ * CIDR range of `NO_PROXY`. Names and dot-suffixes in `NO_PROXY` are left to the proxy
+ * agent, which matches those itself. Exported for testing.
+ */
+export function bypassesProxy(target: string, config: OutboundProxyConfig): boolean {
+  if (isLocalModelHost(target)) return true
+  let host: string
+  try {
+    host = new URL(target).hostname.replace(/^\[|\]$/g, '')
+  } catch {
+    return false
+  }
+  const family = isIP(host)
+  if (!family) return false
+  return noProxyRanges(config.noProxy).check(host, family === 6 ? 'ipv6' : 'ipv4')
+}
 
 export interface OutboundProxyConfig {
   /** Proxy for `http:` targets. */
@@ -170,6 +234,10 @@ export function outboundDispatcher(config: OutboundProxyConfig | null = currentC
   // what it does must match what resolveOutboundProxy decided.
   const dispatcher = new EnvHttpProxyAgent({
     ...KEEP_ALIVE,
+    // A plain-http target is forwarded to the proxy, as curl and browsers do, rather
+    // than tunnelled with CONNECT, which proxies commonly refuse for ports other than 443.
+    // https targets are always tunnelled.
+    proxyTunnel: false,
     httpProxy: config.httpProxy,
     httpsProxy: config.httpsProxy,
     noProxy: config.noProxy
@@ -192,6 +260,9 @@ type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Resp
  * for `globalThis.fetch`.
  */
 export const outboundFetch: Fetch = (input, init) => {
+  const config = currentConfig()
+  const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  const dispatcher = config && bypassesProxy(target, config) ? directDispatcher() : outboundDispatcher(config)
   // `dispatcher` is Node's fetch extension, absent from the DOM RequestInit type.
-  return globalThis.fetch(input, { ...init, dispatcher: outboundDispatcher() } as RequestInit)
+  return globalThis.fetch(input, { ...init, dispatcher } as RequestInit)
 }

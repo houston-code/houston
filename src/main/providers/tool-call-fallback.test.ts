@@ -104,6 +104,29 @@ describe('parseTextToolCalls: local model formats', () => {
     ])
   })
 
+  it('keeps the written text for XML parameters the tool declares as strings', () => {
+    const known = new Set(['write_file', 'grep'])
+    const schemas = new Map<string, unknown>([
+      [
+        'write_file',
+        { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, mode: { type: 'integer' } } }
+      ],
+      ['grep', { type: 'object', properties: { pattern: { type: ['string', 'null'] }, opts: { type: 'object' } } }]
+    ])
+    expect(
+      parseTextToolCalls(
+        '<function=write_file><parameter=path>a.json</parameter><parameter=content>{"a":1}</parameter><parameter=mode>420</parameter></function>',
+        known,
+        schemas
+      )
+    ).toEqual([{ name: 'write_file', arguments: { path: 'a.json', content: '{"a":1}', mode: 420 } }])
+    for (const v of ['8080', 'null', '"use strict"', '42', '[1,2]']) {
+      expect(
+        parseTextToolCalls(`<function=grep><parameter=pattern>${v}</parameter><parameter=opts>{"x":1}</parameter></function>`, known, schemas)
+      ).toEqual([{ name: 'grep', arguments: { pattern: v, opts: { x: 1 } } }])
+    }
+  })
+
   it('keeps XML that is mixed with prose, or names an unknown tool, as text', () => {
     expect(parseTextToolCalls('Use <function=read_file><parameter=path>a</parameter></function> like this.', KNOWN)).toBeNull()
     expect(parseTextToolCalls('<function=rm_rf><parameter=path>/</parameter></function>', KNOWN)).toBeNull()

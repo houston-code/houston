@@ -73,6 +73,33 @@ describe('openai adapter: tool calls emitted as text (Ollama)', () => {
     expect(events.find((e) => e.type === 'done')).toMatchObject({ type: 'done', stopReason: 'tool_use' })
   })
 
+  it('passes the tool schema to the XML recovery, so a string parameter keeps JSON-looking text', async () => {
+    const events = await run(
+      [textChunk('<function=write_file><parameter=path>a.json</parameter>'), textChunk('<parameter=content>{"a":1}</parameter></function>'), stopChunk()],
+      {
+        tools: [
+          {
+            name: 'write_file',
+            description: 'Write a file',
+            parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } }
+          }
+        ]
+      }
+    )
+    expect(events.find((e) => e.type === 'tool_call')).toMatchObject({
+      call: { name: 'write_file', arguments: { path: 'a.json', content: '{"a":1}' } }
+    })
+  })
+
+  it('treats a stream cut with no finish reason and no usage as closed early, not a finished reply', async () => {
+    await expect(run([textChunk('The fix is to change line 12 to')])).rejects.toMatchObject({
+      name: 'StreamClosedEarlyError'
+    })
+    // Usage alone still ends a reply, for a host that never names a finish reason.
+    const events = await run([textChunk('done'), { choices: [], usage: { prompt_tokens: 5, completion_tokens: 1 } }])
+    expect(events.find((e) => e.type === 'done')).toMatchObject({ stopReason: 'end_turn' })
+  })
+
   it('streams ordinary prose as text and does not invent a tool call', async () => {
     const events = await run([textChunk('Here are '), textChunk('the gaps.'), stopChunk()])
     expect(textOf(events)).toBe('Here are the gaps.')

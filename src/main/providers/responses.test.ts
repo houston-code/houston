@@ -388,6 +388,20 @@ describe('responses prompt_cache_key', () => {
       'prompt_cache_key'
     )
   })
+
+  it('treats a gateway named by OPENAI_BASE_URL like a configured one', async () => {
+    // The SDK sends there when no base URL is passed, so the gateway gates must follow.
+    const saved = process.env.OPENAI_BASE_URL
+    process.env.OPENAI_BASE_URL = 'https://gateway.example.test/v1'
+    try {
+      expect(await paramsFor({ promptCacheKey: 'abc123' })).not.toHaveProperty('prompt_cache_key')
+      expect(createResponsesProvider('k').webSearch).toBeUndefined()
+    } finally {
+      if (saved === undefined) delete process.env.OPENAI_BASE_URL
+      else process.env.OPENAI_BASE_URL = saved
+    }
+    expect(createResponsesProvider('k').webSearch).toBeTypeOf('function')
+  })
 })
 
 describe('responses usage reporting', () => {

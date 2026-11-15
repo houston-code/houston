@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import Anthropic from '@anthropic-ai/sdk'
-import { anthropicDefaultHeaders } from './anthropic'
+import { anthropicDefaultHeaders, createAnthropicProvider, listAnthropicModels } from './anthropic'
 
 /**
  * Which header carries the API key. SDK 1.x sends it as `Authorization: Bearer`, where
@@ -82,5 +84,47 @@ describe('anthropicDefaultHeaders', () => {
 
   it('adds no key header when there is no key', () => {
     expect(anthropicDefaultHeaders('', 'https://gw.example.com')).toBeUndefined()
+  })
+})
+
+describe('a gateway named by ANTHROPIC_BASE_URL', () => {
+  let server: Server
+  let url = ''
+  const seen: { headers?: IncomingHttpHeaders } = {}
+  const saved = process.env.ANTHROPIC_BASE_URL
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      seen.headers = req.headers
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ data: [], has_more: false, first_id: null, last_id: null }))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve))
+  })
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ANTHROPIC_BASE_URL
+    else process.env.ANTHROPIC_BASE_URL = saved
+  })
+
+  it('gets the key as X-Api-Key, as a configured gateway does', async () => {
+    // The SDK sends to the environment's base URL when none is configured, so the
+    // gateway handling must follow it there.
+    process.env.ANTHROPIC_BASE_URL = ` ${url} `
+    delete seen.headers
+    await listAnthropicModels('sk-env-gateway')
+    const sent = seen.headers as IncomingHttpHeaders | undefined
+    expect(sent?.['x-api-key']).toBe('sk-env-gateway')
+    expect(sent?.authorization).toBeUndefined()
+  })
+
+  it('gets no built-in web search, which only the first-party API documents', () => {
+    process.env.ANTHROPIC_BASE_URL = url
+    expect(createAnthropicProvider('sk').webSearch).toBeUndefined()
+    delete process.env.ANTHROPIC_BASE_URL
+    expect(createAnthropicProvider('sk').webSearch).toBeTypeOf('function')
   })
 })

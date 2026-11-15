@@ -505,6 +505,7 @@ async function summarize(
         else if (ev.type === 'done') {
           truncated = ev.stopReason === 'max_tokens'
           // Billed whether or not the summary is kept, so counted either way.
+          if (ev.discardedUsage) onUsage?.(ev.discardedUsage)
           if (ev.usage) onUsage?.(ev.usage)
         }
         else if (ev.type === 'error') throw providerStreamError(ev)
@@ -4537,6 +4538,9 @@ export async function startRun(
                 turnInput = ev.usage.inputTokens
               }
               if (ev.usage?.outputTokens) turnOutput = ev.usage.outputTokens
+              // An attempt the adapter retried and threw away: billed as its own request,
+              // kept out of the context size this turn reports.
+              if (ev.discardedUsage) recordSideRequestUsage(ev.discardedUsage, route.model, route.caps)
               turnCacheRead = ev.usage?.cacheReadTokens ?? 0
               turnCacheWrite = ev.usage?.cacheWriteTokens ?? 0
               if (ev.reasoning?.length) turnReasoning = ev.reasoning

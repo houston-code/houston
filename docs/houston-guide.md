@@ -670,9 +670,12 @@ requests through it: model providers, MCP servers reached over HTTP or SSE (and 
 sign-in endpoints), and web search APIs. It uses the **Network proxy** setting
 (Settings → Providers & Models, or `proxyUrl` in `settings.json`) when set, and otherwise the
 `HTTPS_PROXY` and `HTTP_PROXY` environment variables (either case), in the desktop
-app and the terminal alike. `NO_PROXY` lists hosts that connect directly (`NO_PROXY=*`
-turns the proxy off), and `localhost`, `127.0.0.1` and `::1` always do, so a local
-model server keeps working. Only `http://` and `https://` proxy URLs are supported;
+app and the terminal alike. `NO_PROXY` lists hosts that connect directly: names,
+`.domain` suffixes, and address ranges such as `10.0.0.0/8` (`NO_PROXY=*` turns the
+proxy off). Your own machine and private network always connect directly (`localhost`,
+`0.0.0.0`, `*.local` names, and the private address ranges), so a model server on your
+computer or LAN keeps working. Plain `http://` targets are forwarded through the proxy
+rather than tunnelled. Only `http://` and `https://` proxy URLs are supported;
 credentials can ride in the URL (`http://user:pass@proxy:8080`).
 
 Two things never use it: `web_fetch`, which connects straight to an address it has

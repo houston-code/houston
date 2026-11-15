@@ -3,20 +3,32 @@ import type { Provider, ProviderStreamEvent } from '@shared/agent'
 import type { ProviderQuota } from '@shared/rateLimit'
 
 /**
- * The rate-limit quota each provider reported on its latest response, success or
- * not. Anthropic and OpenAI-style APIs send `*-ratelimit-*` headers on every reply,
+ * The rate-limit quota each provider and model reported on its latest response,
+ * success or not. Anthropic and OpenAI-style APIs send `*-ratelimit-*` headers on every reply,
  * but only a 429 used to be read, so nothing could show how close a session was to
  * being throttled until it already was. The clients read this to show the quota
  * left (the TUI status line; the desktop app over IPC).
  *
- * Responses are attributed to a provider by an async context set around each step
- * of its stream ({@link withQuotaScope}), so the shared `fetch` wrapper records them
- * without every adapter threading a provider id through. In-memory, per process.
+ * Responses are attributed to a provider and the model the request named by an async
+ * context set around each step of its stream ({@link withQuotaScope}), so the shared
+ * `fetch` wrapper records them without every adapter threading them through. The
+ * hosts limit each model separately, so a side request on the small model must not
+ * replace the chat model's quota. In-memory, per process.
  */
 
-const scope = new AsyncLocalStorage<string>()
+interface QuotaScope {
+  providerId: string
+  model: string
+}
+
+const scope = new AsyncLocalStorage<QuotaScope>()
+/** The latest quota per provider, whichever model reported it. */
 const latest = new Map<string, ProviderQuota>()
-const listeners = new Set<(providerId: string, quota: ProviderQuota) => void>()
+/** The latest quota per provider and model. */
+const latestByModel = new Map<string, ProviderQuota>()
+const listeners = new Set<(providerId: string, quota: ProviderQuota, model: string) => void>()
+
+const modelKey = (providerId: string, model: string): string => `${providerId}\n${model}`
 
 /** A header as a non-negative whole number, or undefined. */
 function count(headers: Headers, names: string[]): number | undefined {
@@ -60,32 +72,40 @@ export function quotaFromHeaders(headers: Headers, status: number, now: Date = n
  * outside any provider scope (a model listing) or without the headers is ignored.
  */
 export function recordResponseQuota(headers: Headers | undefined, status: number): void {
-  const providerId = scope.getStore()
-  if (!providerId || typeof headers?.get !== 'function') return
+  const current = scope.getStore()
+  if (!current || typeof headers?.get !== 'function') return
   const quota = quotaFromHeaders(headers, status)
   if (!quota) return
+  const { providerId, model } = current
   latest.set(providerId, quota)
+  latestByModel.set(modelKey(providerId, model), quota)
   for (const l of listeners) {
     try {
-      l(providerId, quota)
+      l(providerId, quota, model)
     } catch {
       // A listener's failure must not fail the provider request.
     }
   }
 }
 
-/** The latest quota per provider id. */
+/** The latest quota per provider id, whichever of its models reported it. */
 export function providerQuotas(): Record<string, ProviderQuota> {
   return Object.fromEntries(latest)
 }
 
-/** The latest quota a provider reported, if any. */
-export function providerQuota(providerId: string): ProviderQuota | undefined {
-  return latest.get(providerId)
+/**
+ * The latest quota a provider reported for `model`, if any; with no model, the latest
+ * it reported for any model. Pass the model the chat runs on: the hosts limit each
+ * model on its own, so another model's quota says nothing about the chat's.
+ */
+export function providerQuota(providerId: string, model?: string): ProviderQuota | undefined {
+  return model === undefined ? latest.get(providerId) : latestByModel.get(modelKey(providerId, model))
 }
 
 /** Be told whenever a provider reports a new quota. Returns the unsubscribe. */
-export function onProviderQuota(listener: (providerId: string, quota: ProviderQuota) => void): () => void {
+export function onProviderQuota(
+  listener: (providerId: string, quota: ProviderQuota, model: string) => void
+): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
 }
@@ -93,11 +113,13 @@ export function onProviderQuota(listener: (providerId: string, quota: ProviderQu
 /** Forget every recorded quota (tests). */
 export function resetProviderQuotas(): void {
   latest.clear()
+  latestByModel.clear()
 }
 
 /**
  * `provider` with every step of its stream (and the web search it runs) attributed
- * to `providerId`, so the requests they make record their quota under it. Each
+ * to `providerId` and the request's model, so the requests they make record their
+ * quota under them. Each
  * `next()` runs inside the scope: an async generator's body resumes in the caller's
  * context, so scoping only its creation would not reach the requests.
  */
@@ -106,21 +128,22 @@ export function withQuotaScope(providerId: string, provider: Provider): Provider
     ...provider,
     async *streamChat(req) {
       const it = provider.streamChat(req)
+      const at: QuotaScope = { providerId, model: req.model }
       try {
         for (;;) {
-          const r: IteratorResult<ProviderStreamEvent> = await scope.run(providerId, () => it.next())
+          const r: IteratorResult<ProviderStreamEvent> = await scope.run(at, () => it.next())
           if (r.done) return
           yield r.value
         }
       } finally {
         // An abandoned stream (the consumer stopped early) releases the inner one.
-        await scope.run(providerId, () => it.return?.(undefined)).catch(() => {})
+        await scope.run(at, () => it.return?.(undefined)).catch(() => {})
       }
     }
   }
   if (provider.webSearch) {
     const search = provider.webSearch.bind(provider)
-    scoped.webSearch = (req) => scope.run(providerId, () => search(req))
+    scoped.webSearch = (req) => scope.run({ providerId, model: req.model }, () => search(req))
   }
   return scoped
 }

@@ -14,6 +14,7 @@ import { anthropicMaxTokens, anthropicThinking } from './reasoning'
 import { releaseDateFrom } from './release-date'
 import { parseToolArguments } from './tool-args'
 import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS, StreamClosedEarlyError } from './idle-fetch'
+import { effectiveBaseUrl } from './env-base-url'
 import { anthropicWebSearch, isFirstPartyAnthropic, type AnthropicCreateClient } from './native-search'
 import { SDK_MAX_RETRIES } from '../agent/retry'
 
@@ -380,14 +381,21 @@ export function createMessagesProvider(
       // only that earlier reasoning; text and tool calls are untouched.
       let stream = open(buildMessages(thinking !== null))
       let events = stream[Symbol.asyncIterator]()
+      const advance = async (): Promise<IteratorResult<Anthropic.MessageStreamEvent>> => {
+        try {
+          return await events.next()
+        } catch (err) {
+          throw closedEarlyOr(err)
+        }
+      }
       let next: IteratorResult<Anthropic.MessageStreamEvent>
       try {
-        next = await events.next()
+        next = await advance()
       } catch (err) {
         if (!(thinking?.kind === 'adaptive' && thinking.preserved && isStaleThinkingError(err))) throw err
         stream = open(buildMessages(false))
         events = stream[Symbol.asyncIterator]()
-        next = await events.next()
+        next = await advance()
       }
 
       // Buffer streamed tool-call JSON per content block index. Finished calls are held
@@ -397,7 +405,7 @@ export function createMessagesProvider(
       const calls: { index: number; call: ToolCall }[] = []
       let lastBlock: { index: number; type: string } | undefined
 
-      for (; !next.done; next = await events.next()) {
+      for (; !next.done; next = await advance()) {
         const event = next.value
         if (event.type === 'content_block_start') {
           const block = event.content_block
@@ -428,14 +436,7 @@ export function createMessagesProvider(
       try {
         final = await stream.finalMessage()
       } catch (err) {
-        // The SDK keeps a message only once `message_stop` arrives, so a body that ended
-        // cleanly before it (a proxy or a dropped connection closing the stream) rejects
-        // here with a plain error the retry policy reads as permanent. The reply was cut
-        // off, not refused: fail it as a transient error so the loop retries the turn.
-        if (/stream ended without producing a Message/i.test(String((err as Error | null)?.message ?? ''))) {
-          throw new StreamClosedEarlyError(err)
-        }
-        throw err
+        throw closedEarlyOr(err)
       }
       const stopReason = mapStopReason(final.stop_reason)
       // A block the stream opened but never closed was cut off mid-call.
@@ -477,6 +478,22 @@ export function createMessagesProvider(
       }
     }
   }
+}
+
+/**
+ * `err` as a {@link StreamClosedEarlyError} when it says the body ended cleanly before the
+ * reply did (a proxy or a dropped connection closing the stream), else `err` itself. The
+ * SDK reports that with a plain error the retry policy reads as permanent: before the
+ * first event ("request ended without sending any chunks") and after `message_start`
+ * but before `message_stop` ("stream ended without producing a Message"). The reply was
+ * cut off, not refused, so it fails as a transient error and the loop retries the turn.
+ */
+function closedEarlyOr(err: unknown): unknown {
+  const message = String((err as Error | null)?.message ?? '')
+  if (/stream ended without producing a Message|request ended without sending any chunks/i.test(message)) {
+    return new StreamClosedEarlyError(err)
+  }
+  return err
 }
 
 /**
@@ -542,6 +559,8 @@ export function createAnthropicProvider(
   baseURL?: string,
   headers?: Record<string, string>
 ): Provider {
+  // A base URL from the environment is as much a gateway as a configured one.
+  baseURL = effectiveBaseUrl(baseURL, 'ANTHROPIC_BASE_URL')
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
   let clientPromise: Promise<Anthropic> | undefined
@@ -573,6 +592,7 @@ export async function listAnthropicModels(
   baseURL?: string,
   headers?: Record<string, string>
 ): Promise<ModelOption[]> {
+  baseURL = effectiveBaseUrl(baseURL, 'ANTHROPIC_BASE_URL')
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
   const client = new Anthropic({
     fetch: idleTimeoutFetch(LIST_MODELS_TIMEOUT_MS),

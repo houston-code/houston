@@ -581,6 +581,27 @@ describe('startRun', () => {
     expect(usage!.inputTokens).toBeGreaterThan(0)
   })
 
+  it('bills a discarded provider attempt on its own, without counting it as context', async () => {
+    const r = await run({
+      turns: [
+        [
+          { type: 'text', text: 'hi' },
+          {
+            type: 'done',
+            stopReason: 'end_turn',
+            usage: { inputTokens: 120_000, outputTokens: 10 },
+            discardedUsage: { inputTokens: 120_000, outputTokens: 5 }
+          }
+        ]
+      ]
+    })
+    const usage = r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]
+    // The turn's own round reports the reply's request size, not the two attempts added up.
+    expect(usage.find((u) => u.inputTokens > 0)).toMatchObject({ inputTokens: 120_000, outputTokens: 10 })
+    // The thrown-away attempt is still billed, as a request that fills no context.
+    expect(usage.find((u) => u.inputTokens === 0)).toMatchObject({ delegatedInputTokens: 120_000, outputTokens: 5 })
+  })
+
   it('reports what fills the context with each main round, adding up to its estimate', async () => {
     writeFileSync(join(ws, 'big.txt'), 'x'.repeat(8000))
     const r = await run({

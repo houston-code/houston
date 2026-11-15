@@ -81,12 +81,13 @@ export function classifyLead(lead: string): 'tool' | 'text' | 'wait' {
  */
 export function parseTextToolCalls(
   content: string,
-  knownToolNames: ReadonlySet<string>
+  knownToolNames: ReadonlySet<string>,
+  toolSchemas?: ReadonlyMap<string, unknown>
 ): ParsedToolCall[] | null {
   const trimmed = stripLeadingThink(content).trim()
   if (!trimmed) return null
 
-  const raw = rawCalls(trimmed)
+  const raw = rawCalls(trimmed, toolSchemas)
   if (!raw) return null
 
   const calls: ParsedToolCall[] = []
@@ -99,8 +100,8 @@ export function parseTextToolCalls(
 }
 
 /** The call-shaped values in `text`, or null when it isn't a clean tool-call payload. */
-function rawCalls(text: string): unknown[] | null {
-  if (text.includes('<function=')) return xmlCalls(text)
+function rawCalls(text: string, toolSchemas?: ReadonlyMap<string, unknown>): unknown[] | null {
+  if (text.includes('<function=')) return xmlCalls(text, toolSchemas)
   if (text.includes('<tool_call>')) {
     const blocks: unknown[] = []
     for (const m of text.matchAll(TOOL_CALL_TAG)) {
@@ -128,14 +129,17 @@ function unfence(text: string): string | null {
 /**
  * Qwen3-Coder's XML calls. Everything outside the `<function=…>` blocks must be
  * `<tool_call>` wrappers or whitespace, so prose that mentions the syntax stays text.
- * A parameter's value is JSON when it parses as JSON, otherwise the string itself.
+ * A parameter the tool declares as a string keeps the text the model wrote (a JSON file's
+ * content, `8080`, `null`, `"use strict"` are all strings there); any other parameter's
+ * value is JSON when it parses as JSON, otherwise the string itself.
  */
-function xmlCalls(text: string): unknown[] | null {
+function xmlCalls(text: string, toolSchemas?: ReadonlyMap<string, unknown>): unknown[] | null {
   const calls: unknown[] = []
   const rest = text.replace(FUNCTION_TAG, (_m, name: string, body: string) => {
     const args: Record<string, unknown> = {}
+    const schema = toolSchemas?.get(name)
     const leftover = body.replace(PARAMETER_TAG, (_p, key: string, value: string) => {
-      args[key] = xmlValue(value)
+      args[key] = xmlValue(value, declaresString(schema, key))
       return ''
     })
     if (leftover.trim()) calls.push(null) // stray text inside the call: not a clean call
@@ -146,12 +150,25 @@ function xmlCalls(text: string): unknown[] | null {
   return calls.length ? calls : null
 }
 
-function xmlValue(raw: string): unknown {
+function xmlValue(raw: string, isString: boolean): unknown {
   // The template puts each value on its own line; those newlines aren't part of it.
   const value = raw.replace(/^\r?\n/, '').replace(/\r?\n$/, '')
+  if (isString) return value
   const parsed = tryParseJson(value)
   // Only structured or literal JSON replaces the string: a bare word stays a string.
   return parsed !== undefined && (typeof parsed !== 'string' || /^\s*"/.test(value)) ? parsed : value
+}
+
+/** Whether the tool's schema declares `key` as a string (alone or alongside null). */
+function declaresString(schema: unknown, key: string): boolean {
+  if (!schema || typeof schema !== 'object') return false
+  const props = (schema as { properties?: unknown }).properties
+  if (!props || typeof props !== 'object') return false
+  const prop = (props as Record<string, unknown>)[key]
+  if (!prop || typeof prop !== 'object') return false
+  const type = (prop as { type?: unknown }).type
+  if (type === 'string') return true
+  return Array.isArray(type) && type.includes('string') && type.every((t) => t === 'string' || t === 'null')
 }
 
 /** Mistral: a JSON array (or object) of calls, or one or more `name[ARGS]{json}` calls. */

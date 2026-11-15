@@ -82,12 +82,16 @@ interface AnthropicBlock {
 
 /**
  * Turn a Messages API reply into hits. Throws on a search-tool error (which the
- * API reports inside a 200 response, not as an HTTP error).
+ * API reports inside a 200 response, not as an HTTP error) when no search in the
+ * reply found anything: a model that searched once and then tried again past
+ * `max_uses` gets `max_uses_exceeded` on the second try, and the first one's hits
+ * and its summary are still the answer.
  */
 export function parseAnthropicSearch(content: unknown, maxResults: number): ProviderWebSearchResult {
   const blocks = Array.isArray(content) ? (content as AnthropicBlock[]) : []
   const hits: Hit[] = []
   const answer: string[] = []
+  let failure: string | undefined
   for (const b of blocks) {
     if (b.type !== 'web_search_tool_result') continue
     if (Array.isArray(b.content)) {
@@ -97,9 +101,7 @@ export function parseAnthropicSearch(content: unknown, maxResults: number): Prov
       }
     } else {
       const err = b.content as { type?: string; error_code?: string } | null
-      if (err?.type === 'web_search_tool_result_error') {
-        throw new Error(`Web search failed: ${err.error_code ?? 'unknown error'}`)
-      }
+      if (err?.type === 'web_search_tool_result_error') failure ??= err.error_code ?? 'unknown error'
     }
   }
   for (const b of blocks) {
@@ -109,6 +111,7 @@ export function parseAnthropicSearch(content: unknown, maxResults: number): Prov
       if (c.type === 'web_search_result_location') addHit(hits, c.url, c.title, c.cited_text)
     }
   }
+  if (failure !== undefined && !hits.length) throw new Error(`Web search failed: ${failure}`)
   const text = answer.join('').trim()
   return { ...(text ? { answer: text } : {}), hits: hits.slice(0, maxResults) }
 }

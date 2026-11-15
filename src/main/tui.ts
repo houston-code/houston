@@ -5337,7 +5337,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                 cost: sessionCost,
                 contextTokens,
                 branch,
-                quota: providerQuota(providerId),
+                quota: providerQuota(providerId, model),
                 effort,
                 modelReasons: activeModelReasons(deps, providerId, model) ?? modelCapabilities(model).reasoning
               },

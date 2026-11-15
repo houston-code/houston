@@ -837,6 +837,8 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
               else if (ev.type === 'tool_call') calls.push(ev.call)
               else if (ev.type === 'done') {
                 stopReason = ev.stopReason
+                // A discarded retry attempt bills as its own request (see ProviderStreamEvent).
+                if (ev.discardedUsage) opts.onUsage?.(ev.discardedUsage)
                 if (ev.usage) opts.onUsage?.(ev.usage)
                 if (ev.reasoning?.length) reasoning = ev.reasoning
               } else if (ev.type === 'error') throw providerStreamError(ev)
