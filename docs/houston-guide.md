@@ -853,6 +853,26 @@ In the terminal:
   memory, extra folders, and the terminal's own theme, keys, and notifications.
 - `/settings <page>` names the commands that cover one of the desktop's pages, and says
   what on it only the desktop app edits (`/settings permissions`, `/settings keys`).
+- `/settings get` lists the settings the terminal can change, with their values;
+  `/settings get <key>` says what one takes (for `verifyCommand`, also the command this
+  project suggests).
+- `/settings set <key> <value>` changes one, checked against the same bounds as the
+  desktop field, and `/settings unset <key>` puts it back to the default. The keys:
+  Agent Behavior (`maxIterations`, `autoExtendTurns`, `maxIterationsCeiling`,
+  `costCeilingUsd`, `maxCostUsd`, `compactionThreshold` as `auto`, `off`, `70%` or a
+  token count, `shellOutputMaxBytes`, `subagentHistoryMb`, `stallDetection`,
+  `doneEvidenceNote`, `verifyOnStop`, `verifyCommand`, `reasoningSummary`, `verbosity`,
+  `suggestNextPrompt`, `systemPromptExtra`), `proxyUrl`, `searchProvider`, `lspEnabled`,
+  `formatOnSave`, `diagnosticsOnSave`, `desktopNotifications`, `appBadge`,
+  `backgroundWake`, and `webReads`. Anything else (rules, hooks, providers, egress) is
+  refused.
+- `/settings add additionalRoots <path>` and `/settings remove additionalRoots
+  <path|n>` change the folders the agent may use in every session.
+- `/settings search-key [provider]` takes a web search provider's API key, hidden, as
+  `/login` takes a model provider's. Keys are never set with `/settings set`.
+- `/settings export <path>` and `/settings import <path>` move your preferences as the
+  desktop's Export and Import do (the same file format, and the same summary before an
+  import, which asks first); `/settings reset` resets them, after asking.
 
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
@@ -893,6 +913,9 @@ the model.
   Under the rules it lists the calls you denied at an approval prompt this session
   (the last 20, newest first, with any reason you gave); `/permissions allow <n>` saves
   for one the allow rule "Always allow" would have saved.
+  Under the rules it shows whether web reads ask first, the extra folders, and the
+  sandbox egress mode with its added and denied domains (egress is edited in the
+  desktop app).
   After "Always allow" or "Always deny" at a prompt, the terminal prints the rule it
   saved (a shell command may be saved as a shorter prefix), with its number and the
   `/permissions remove <n>` that takes it back.

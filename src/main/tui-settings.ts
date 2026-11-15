@@ -37,21 +37,32 @@ const PAGES: Readonly<Record<string, PageGuide>> = {
     entries: [
       { cmd: '/login', does: 'set or replace a provider API key, or add a host (also /providers)' },
       { cmd: '/model [id]', does: "this chat's model; --default for new chats too" },
-      { cmd: '/reasoning [effort]', does: "this chat's thinking effort; --default for new chats too" }
+      { cmd: '/reasoning [effort]', does: "this chat's thinking effort; --default for new chats too" },
+      { cmd: '/settings set proxyUrl <url>', does: 'the HTTP proxy for model, MCP, and web search requests' }
     ],
-    desktopOnly: 'removing a provider, editing its fields, curating its model list, the network proxy, and the scorecard'
+    desktopOnly: 'removing a provider, editing its fields, curating its model list, and the scorecard'
   },
   agent: {
     label: 'Agent Behavior',
     words: ['agent behavior', 'behavior', 'behaviour', 'loop'],
-    entries: [],
-    desktopOnly: 'turn limits, cost ceiling, compaction, verify on stop, and custom instructions'
+    entries: [
+      { cmd: '/settings get', does: 'every setting the terminal changes, with its value' },
+      {
+        cmd: '/settings set <key> <value>',
+        does: 'turn limits, cost ceilings, compaction, verify on stop, reasoning, custom instructions'
+      }
+    ]
   },
   tools: {
     label: 'Tools',
     words: ['web search', 'lsp', 'language servers', 'format on save', 'diagnostics'],
-    entries: [{ cmd: '/doctor', does: 'which tools are available here, and why one is not' }],
-    desktopOnly: 'the web search provider and key, language servers, and format and diagnostics on save'
+    entries: [
+      { cmd: '/settings set searchProvider <id>', does: 'the web search provider' },
+      { cmd: '/settings search-key [provider]', does: "enter a web search provider's API key (hidden)" },
+      { cmd: '/settings set lspEnabled on|off', does: 'language servers (also formatOnSave, diagnosticsOnSave)' },
+      { cmd: '/doctor', does: 'which tools are available here, and why one is not' }
+    ],
+    desktopOnly: 'removing a web search key, editing language servers, and integrations'
   },
   customize: {
     label: 'Customize',
@@ -112,14 +123,21 @@ const PAGES: Readonly<Record<string, PageGuide>> = {
   workspace: {
     label: 'Workspace',
     words: ['folders', 'additional folders', 'worktree'],
-    entries: [{ cmd: '/add-dir [path]', does: 'let the agent work in another folder this session (alone: list them)' }],
-    desktopOnly: 'additional folders kept for every session, and whether new chats start in a worktree'
+    entries: [
+      { cmd: '/add-dir [path]', does: 'let the agent work in another folder this session (alone: list them)' },
+      { cmd: '/settings add|remove additionalRoots <path>', does: 'a folder the agent may use in every session' }
+    ],
+    desktopOnly: 'whether new chats start in a worktree'
   },
   general: {
     label: 'General',
     words: ['notifications', 'notify', 'preferences'],
-    entries: [{ cmd: '/notify [mode]', does: `bell and notification when a run needs you: ${NOTIFY_MODES.join(' | ')}` }],
-    desktopOnly: 'exporting, importing, or resetting your preferences'
+    entries: [
+      { cmd: '/notify [mode]', does: `bell and notification when a run needs you: ${NOTIFY_MODES.join(' | ')}` },
+      { cmd: '/settings set desktopNotifications on|off', does: "the app's notifications (also appBadge, backgroundWake)" },
+      { cmd: '/settings export|import <path>', does: 'save your preferences to a file, or load them (asks first)' },
+      { cmd: '/settings reset', does: 'every preference back to its default (asks first)' }
+    ]
   },
   appearance: {
     label: 'Appearance',
@@ -149,9 +167,10 @@ const PAGES: Readonly<Record<string, PageGuide>> = {
       { cmd: '/permissions [remove n]', does: 'list your saved permission rules, or remove one' },
       { cmd: '/permissions add …', does: 'add a rule: allow|ask|deny <tool> <pattern> [--exact]' },
       { cmd: '/trust [forget]', does: "this folder's project-config trust, or forget it to re-decide" },
-      { cmd: '/trust list|forget <n>', does: 'every folder you trusted or refused, or clear one' }
+      { cmd: '/trust list|forget <n>', does: 'every folder you trusted or refused, or clear one' },
+      { cmd: '/settings set webReads ask|allow', does: 'whether reading a web page asks first' }
     ],
-    desktopOnly: 'editing a rule in place, and sandbox egress'
+    desktopOnly: 'editing a rule in place, and sandbox egress (/permissions shows it)'
   },
   about: {
     label: 'About',
@@ -230,11 +249,13 @@ const ANY_SETTING: Entry[] = [
 export function renderSettingsOverview(path: string, live: TerminalLiveSettings, paint: Painter): string {
   const groups: Array<[string, string[]]> = [
     ['Models and keys', ['models']],
+    ['Agent behavior and tools', ['agent', 'tools']],
     ['Permissions', ['permissions']],
     ['Extensions', ['mcp', 'hooks', 'memory', 'customize']],
     ['Scheduled runs', ['schedules']],
-    ['This session', ['workspace']],
-    ['This terminal', ['appearance', 'keyboard', 'general']]
+    ['Folders', ['workspace']],
+    ['Preferences and notifications', ['general']],
+    ['This terminal', ['appearance', 'keyboard']]
   ]
   const lines = [paint('Settings', 'bold'), `  file: ${stripControlChars(path)}`, '']
   lines.push('  Any setting:', ...entryLines(ANY_SETTING, paint))

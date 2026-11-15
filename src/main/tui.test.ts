@@ -671,8 +671,15 @@ describe('parseSlashCommand', () => {
   })
 
   it('routes /settings, /hooks and /mcp to the settings surface', () => {
-    expect(parseSlashCommand('/settings', s)).toEqual({ kind: 'settings' })
-    expect(parseSlashCommand('/settings agent behavior', s)).toEqual({ kind: 'settings', page: 'agent behavior' })
+    expect(parseSlashCommand('/settings', s)).toEqual({ kind: 'settings', cmd: { op: 'overview' } })
+    expect(parseSlashCommand('/settings agent behavior', s)).toEqual({
+      kind: 'settings',
+      cmd: { op: 'page', page: 'agent behavior' }
+    })
+    expect(parseSlashCommand('/settings set maxIterations 80', s)).toEqual({
+      kind: 'settings',
+      cmd: { op: 'set', key: 'maxIterations', value: '80' }
+    })
     expect(parseSlashCommand('/hooks', s)).toEqual({ kind: 'hooks', action: { op: 'list' } })
     expect(parseSlashCommand('/hooks add', s)).toEqual({ kind: 'hooks', action: { op: 'add' } })
     expect(parseSlashCommand('/hooks remove 2', s)).toEqual({ kind: 'hooks', action: { op: 'remove', index: 2 } })
@@ -4035,6 +4042,21 @@ describe('runTui', () => {
     // turn, so they apply on the next message — the overview must not claim restart.
     expect(out).toContain('apply on your next message')
     expect(out).not.toContain('picked up on restart')
+  })
+
+  it('/settings set writes a checked patch, and /permissions shows egress and folders read-only', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => void saved.push(p)
+    d.inferVerifyCommand = () => null
+    const t = fakeIo(['/settings set maxCostUsd 4', '/settings set apiKey sk-x', '/permissions', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([{ maxCostUsd: 4 }])
+    expect(t.text()).toContain('maxCostUsd → 4')
+    expect(t.text()).toContain('API keys are never set with /settings set')
+    expect(t.text()).toContain('sandbox egress: allowlist')
+    expect(t.text()).toContain('Sandbox egress is edited in the desktop app')
   })
 
   it('/hooks lists configured hooks with the settings path + restart note', async () => {
