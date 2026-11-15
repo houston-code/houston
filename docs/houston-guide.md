@@ -3341,6 +3341,10 @@ default.
 | Linux | bubblewrap (an unprivileged user namespace), when available |
 | Windows | none broadly available, so shell commands run unconfined. Houston reports them as not sandboxed and never silently auto-approves one. |
 
+Where shell commands run unconfined, every approval for one says so, in the app, the
+terminal, and an editor, next to any other warning that applies (such as a command that
+changes a credential file).
+
 The structured file tools stay confined to the project on every platform.
 
 **Working across repos.** **Additional folders** (Settings) adds folders to the file

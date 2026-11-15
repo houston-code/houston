@@ -462,6 +462,19 @@ describe('approval prompt', () => {
     )
   })
 
+  it('shows every warning that applies, not just the first', () => {
+    const p = renderApprovalPrompt(ev({ sandboxed: false, sensitiveWrite: true }), makePainter(false))
+    expect(p).toContain('UNSANDBOXED')
+    expect(p).toContain('changes a credential/secret file')
+    const control = renderApprovalPrompt(
+      ev({ sandboxed: false, sensitiveWrite: true, protectedWrite: true }),
+      makePainter(false)
+    )
+    expect(control).toContain('UNSANDBOXED')
+    expect(control).toContain('changes a project control file')
+    expect(control).not.toContain('changes a credential/secret file')
+  })
+
   it('frames the shell-network consent as a network grant, not a command gate', () => {
     const p = renderApprovalPrompt(ev({ shellNetwork: true }), makePainter(false))
     expect(p).toContain('network')

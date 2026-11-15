@@ -139,6 +139,11 @@ export interface ToolItem {
    * unusually, is asking — even in full-auto — so the card can explain why.
    */
   sensitiveRead?: boolean
+  /**
+   * True on a shell prompt whose command runs with no OS sandbox on this host (the
+   * event's `sandboxed: false`), so the card can warn that it runs unconfined.
+   */
+  unsandboxed?: boolean
   /** The awaited call writes a credential / secret file, so it prompts even in full auto. */
   sensitiveWrite?: boolean
   /** With sensitiveWrite: the file is an in-project control file (.houston/, .vscode/, …). */
@@ -517,6 +522,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           shellNetwork: e.shellNetwork === true,
           egressHost: e.egressHost,
           shellOffline: e.shellOffline === true,
+          unsandboxed: e.kind === 'shell' && e.sandboxed === false,
           sensitiveRead: e.sensitiveRead === true,
           sensitiveWrite: e.sensitiveWrite === true,
           protectedWrite: e.protectedWrite === true,
@@ -537,6 +543,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           ...(e.shellNetwork ? { shellNetwork: true } : {}),
           ...(e.egressHost ? { egressHost: e.egressHost } : {}),
           ...(e.shellOffline ? { shellOffline: true } : {}),
+          ...(e.kind === 'shell' && e.sandboxed === false ? { unsandboxed: true } : {}),
           ...(e.sensitiveRead ? { sensitiveRead: true } : {}),
           ...(e.sensitiveWrite ? { sensitiveWrite: true } : {}),
           ...(e.protectedWrite ? { protectedWrite: true } : {}),
