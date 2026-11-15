@@ -1128,6 +1128,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           return conv
             ? {
                 messages: conv.messages,
+                title: conv.title,
+                workspace: conv.workspace,
                 providerId: conv.providerId,
                 model: conv.model,
                 ...(conv.reasoningEffort ? { reasoningEffort: conv.reasoningEffort } : {}),

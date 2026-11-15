@@ -72,23 +72,27 @@ const PAGES: Readonly<Record<string, PageGuide>> = {
       { cmd: '/mcp', does: 'list servers, their status and last error' },
       { cmd: '/mcp add [--url u]', does: 'add a stdio server (guided), or a remote one by URL' },
       { cmd: '/mcp enable|disable|remove <n>', does: 'switch one on or off, or remove it' },
+      { cmd: '/mcp edit <n>', does: "change a server's command, arguments, folder, or URL" },
       { cmd: '/mcp tools|reconnect <n>', does: "list a server's tools, or restart its connection" },
       { cmd: '/mcp login|logout <n>', does: "sign in to a remote server, or forget its tokens" },
       { cmd: '/mcp search <query>', does: 'search the MCP Registry; /mcp add-from-registry <name> adds one' }
-    ],
-    desktopOnly: "editing a server's fields"
+    ]
   },
   hooks: {
     label: 'Hooks',
     words: ['hook'],
-    entries: [{ cmd: '/hooks [add|remove n]', does: 'list hooks, add one (guided), or remove one' }],
-    desktopOnly: "editing a hook in place and listing a project's own hooks"
+    entries: [
+      { cmd: '/hooks [add|edit|remove n]', does: "list your hooks and the project's, add one (guided), edit one, or remove one" }
+    ]
   },
   schedules: {
     label: 'Scheduled Runs',
     words: ['scheduled runs', 'schedule', 'scheduled'],
-    entries: [],
-    desktopOnly: 'scheduled runs'
+    entries: [
+      { cmd: '/schedule', does: 'list scheduled runs (also /schedules)' },
+      { cmd: '/schedule add', does: 'add a scheduled run (guided)' },
+      { cmd: '/schedule show|pause|resume|run|delete <n>', does: 'read one, pause or resume it, run it now, or delete it' }
+    ]
   },
   memory: {
     label: 'Memory',
@@ -143,9 +147,11 @@ const PAGES: Readonly<Record<string, PageGuide>> = {
     entries: [
       { cmd: '/approval [mode]', does: "this chat's approval mode; --default for new chats too (Shift-Tab cycles it)" },
       { cmd: '/permissions [remove n]', does: 'list your saved permission rules, or remove one' },
-      { cmd: '/trust [forget]', does: "this folder's project-config trust, or forget it to re-decide" }
+      { cmd: '/permissions add …', does: 'add a rule: allow|ask|deny <tool> <pattern> [--exact]' },
+      { cmd: '/trust [forget]', does: "this folder's project-config trust, or forget it to re-decide" },
+      { cmd: '/trust list|forget <n>', does: 'every folder you trusted or refused, or clear one' }
     ],
-    desktopOnly: 'adding or editing rules, trusted folders other than this one, and sandbox egress'
+    desktopOnly: 'editing a rule in place, and sandbox egress'
   },
   about: {
     label: 'About',
@@ -226,6 +232,7 @@ export function renderSettingsOverview(path: string, live: TerminalLiveSettings,
     ['Models and keys', ['models']],
     ['Permissions', ['permissions']],
     ['Extensions', ['mcp', 'hooks', 'memory', 'customize']],
+    ['Scheduled runs', ['schedules']],
     ['This session', ['workspace']],
     ['This terminal', ['appearance', 'keyboard', 'general']]
   ]

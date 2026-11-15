@@ -88,6 +88,13 @@ describe('parseConfigArgs', () => {
     expect(parseConfigArgs('vim=maybe', ctx())).toEqual({ op: 'error', message: expect.stringContaining('on | off') })
     expect(parseConfigArgs('effort=extreme', ctx())).toEqual({ op: 'error', message: expect.stringContaining('xhigh') })
     expect(parseConfigArgs('model=gpt-x', ctx())).toEqual({ op: 'error', message: expect.stringContaining('no configured model') })
+    // A known provider with a model it does not list: saving would re-point it to the
+    // provider's default, so it is refused rather than confirmed.
+    expect(parseConfigArgs('model=anthropic/claude-sonet-5', ctx())).toEqual({
+      op: 'error',
+      message: expect.stringContaining('no configured model')
+    })
+    expect(parseConfigArgs('model=anthropic/claude', ctx())).toEqual({ op: 'set', key: 'model', value: 'anthropic/claude' })
     expect(parseConfigArgs('vim=', ctx())).toEqual({ op: 'error', message: expect.stringContaining('give vim a value') })
   })
 

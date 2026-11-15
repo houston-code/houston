@@ -879,12 +879,14 @@ the model.
   - Ctrl-R renames the chat (type the title, Enter saves)
   - Ctrl-D, or `x` while the filter is empty, deletes it after a y/N question; deleting
     the chat you're in says so first, and you carry on in a new chat. A worktree that
-    holds work is kept (use `/delete` inside the chat to remove it)
+    holds work is kept (use `/delete` inside the chat to remove it), and so is the
+    worktree the session itself runs in, by the picker and by `/delete`
   - Ctrl-P pins or unpins the chat and Ctrl-E archives it, as in the desktop sidebar;
     archived chats are left out of the list (and of `--continue`), and the app's
     Archived section has them
   - Ctrl-A switches between this folder and all folders; all folders shows each chat's
-    folder
+    folder. A chat from another folder (a worktree chat among them) runs in its own
+    folder, so picking one prints the command that opens it there instead
   Off a terminal that can't show the picker, it prints a numbered list to answer by
   number.
 - Resuming a chat (`/resume`, `--continue`, `--resume <id>`) replays its last three

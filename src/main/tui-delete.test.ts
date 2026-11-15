@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { deletePromptText, deleteWorktreeOutcome, parseDeleteAnswer } from './tui-delete'
+import { deletePromptText, deleteWorktreeOutcome, parseDeleteAnswer, planForSession } from './tui-delete'
 import type { DeletePlan } from './deleteChat'
 
 const wt = { path: '/r/wt', branch: 'houston/x', repoRoot: '/r' }
@@ -50,5 +50,25 @@ describe('deleteWorktreeOutcome', () => {
         worktree: { removed: false, branchDeleted: false, message: 'dirty' }
       })
     ).toBe('dirty')
+  })
+})
+
+describe('planForSession', () => {
+  it('keeps the worktree the session runs in (or a folder inside it), and words it so', () => {
+    for (const cwd of ['/r/wt', '/r/wt/', '/r/wt/src']) {
+      const p = planForSession(disposable, cwd)
+      expect(p).toMatchObject({ kind: 'plain', inSession: true, worktree: wt })
+      expect(parseDeleteAnswer(p, 'y')).toEqual({ delete: true, removeWorktree: false })
+      expect(deletePromptText(p, 'T', '1 message')).toContain('stays, because this session runs in it')
+      expect(deleteWorktreeOutcome(p, { deleted: true })).toContain('the folder this session runs in')
+    }
+    expect(planForSession(keepable, '/r/wt').kind).toBe('plain')
+  })
+
+  it('leaves the plan alone for a session elsewhere', () => {
+    expect(planForSession(disposable, '/r')).toBe(disposable)
+    expect(planForSession(keepable, '/r/wt-other')).toBe(keepable)
+    expect(planForSession(plain, '/r/wt')).toBe(plain)
+    expect(planForSession(shared, '/r/wt')).toBe(shared)
   })
 })
