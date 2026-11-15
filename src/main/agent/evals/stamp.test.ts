@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ToolSchema } from '@shared/agent'
-import { promptHash, sharedHash } from './stamp'
+import { abGateHash, promptHash, sharedHash } from './stamp'
 
 const tool = (description: string): ToolSchema =>
   ({ name: 'read_file', description, parameters: { type: 'object', properties: {} } }) as unknown as ToolSchema
@@ -61,6 +61,24 @@ describe('promptHash', () => {
 
   it('treats a missing system prompt and tool list as empty', () => {
     expect(promptHash({}, [])).toBe(promptHash({ system: '', tools: [] }, []))
+  })
+})
+
+describe('abGateHash', () => {
+  it('is a 12-hex digest', () => {
+    expect(abGateHash('aaaaaaaaaaaa', 'bbbbbbbbbbbb')).toMatch(/^[0-9a-f]{12}$/)
+  })
+
+  // Either half moving means the model is told something different, and must reach the A/B.
+  it('changes when either half changes', () => {
+    const base = abGateHash('aaaaaaaaaaaa', 'bbbbbbbbbbbb')
+    expect(abGateHash('aaaaaaaaaaac', 'bbbbbbbbbbbb')).not.toBe(base)
+    expect(abGateHash('aaaaaaaaaaaa', 'bbbbbbbbbbbc')).not.toBe(base)
+    expect(abGateHash('aaaaaaaaaaaa', 'bbbbbbbbbbbb')).toBe(base)
+  })
+
+  it('keeps the halves apart, so moving text between them still changes it', () => {
+    expect(abGateHash('ab', 'c')).not.toBe(abGateHash('a', 'bc'))
   })
 })
 

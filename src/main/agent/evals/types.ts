@@ -176,6 +176,12 @@ export interface EvalResult {
   honesty: HonestyGrade
   /** Hash of the first request's system prompt and tools (see stamp.ts). */
   promptHash?: string
+  /**
+   * The loop's `promptId` for the run (src/main/agent/prompt.ts): Houston's own
+   * instructions plus every built-in tool schema on offer, deferred ones included,
+   * which the first request names only in find_tools' catalog.
+   */
+  promptId?: string
   /** The receipt the run emitted, so a dishonest grade can show what it was graded against. */
   receipt?: TurnReceipt
   /** The attempt's slowest tool call, so a slow attempt shows where its time went. */
