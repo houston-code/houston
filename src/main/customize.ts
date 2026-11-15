@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { isDisabledFlag, parseFrontmatter, parseStructuredFrontmatter } from '@shared/frontmatter'
 import { parseSkillFields } from './agent/skillSpec'
+import { COMMAND_NAMESPACE_SEPARATOR, listCommandFiles } from './agent/commands'
 import {
   isCustomName,
   type CustomItem,
@@ -86,9 +87,23 @@ function kindDir(loc: Loc, root: string): string {
   return join(root, DIRS[loc])
 }
 
+/**
+ * A command's name, which may carry its namespace folders (`git:commit` is
+ * `git/commit.md`, up to three levels), each part a plain word as the loader reads it.
+ */
+const NAMESPACED_COMMAND = /^[\w-]{1,64}(?::[\w-]{1,64}){0,2}$/
+
+/** Whether `name` is a valid name for an item of `loc`. */
+function validName(loc: Loc, name: string): boolean {
+  return loc === 'command' ? NAMESPACED_COMMAND.test(name) : isCustomName(name)
+}
+
 /** An item's own path: a skill's folder, or a command's or agent's file. */
 function itemPath(loc: Loc, root: string, name: string): string {
-  return isSkillLoc(loc) ? join(kindDir(loc, root), name) : join(kindDir(loc, root), `${name}.md`)
+  if (isSkillLoc(loc)) return join(kindDir(loc, root), name)
+  const parts = loc === 'command' ? name.split(COMMAND_NAMESPACE_SEPARATOR) : [name]
+  parts[parts.length - 1] = `${parts[parts.length - 1]}.md`
+  return join(kindDir(loc, root), ...parts)
 }
 
 /** The file whose text describes the item (and holds its `disabled` flag). */
@@ -140,25 +155,27 @@ function describe(text: string): string {
 async function listKind(loc: Loc, scope: CustomScope, root: string): Promise<CustomItem[]> {
   const kind: CustomKind = isSkillLoc(loc) ? 'skill' : (loc as CustomKind)
   const dir = kindDir(loc, root)
-  let entries
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true })
-  } catch {
-    return []
-  }
-  entries.sort((a, b) => a.name.localeCompare(b.name))
-  const items: CustomItem[] = []
-  for (const e of entries) {
-    if (items.length >= MAX_ITEMS) break
-    let name: string
-    if (kind === 'skill') {
-      if (!e.isDirectory()) continue
-      name = e.name
-    } else {
-      if (!e.isFile() || !e.name.endsWith('.md')) continue
-      name = e.name.slice(0, -3)
+  let names: string[]
+  if (kind === 'command') {
+    // Commands in namespace folders too, found exactly as the loader finds them.
+    names = (await listCommandFiles(dir)).map((f) => f.name)
+  } else {
+    let entries
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      return []
     }
-    if (!isCustomName(name)) continue
+    entries.sort((a, b) => a.name.localeCompare(b.name))
+    names = entries.flatMap((e) => {
+      if (kind === 'skill') return e.isDirectory() ? [e.name] : []
+      return e.isFile() && e.name.endsWith('.md') ? [e.name.slice(0, -3)] : []
+    })
+  }
+  const items: CustomItem[] = []
+  for (const name of names) {
+    if (items.length >= MAX_ITEMS) break
+    if (!validName(loc, name)) continue
     const file = itemFile(loc, root, name)
     const text = await readText(file)
     if (text === null) continue
@@ -221,7 +238,7 @@ function parseId(
 ): { kind: Loc; scope: CustomScope; name: string; root: string } | null {
   if (typeof id !== 'string') return null
   const m = /^(skill|skill-agents|command|agent):(project|user):(.+)$/.exec(id)
-  if (!m || !isCustomName(m[3])) return null
+  if (!m || !validName(m[1] as Loc, m[3])) return null
   const root = rootFor(m[2] as CustomScope, deps)
   if (!root) return null
   return { kind: m[1] as Loc, scope: m[2] as CustomScope, name: m[3], root }

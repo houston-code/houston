@@ -201,6 +201,7 @@ import type { TurnErrorAction } from '@shared/turnError'
 import { CommandPalette } from './components/CommandPalette'
 import { FindBar } from './components/FindBar'
 import { desktopCommandAction, type DesktopCommandAction, type SettingsSection } from './lib/desktopCommands'
+import { loopScheduleName, scheduleWhen } from '@shared/loopCommand'
 import { pageForWords } from './components/settings/pageIds'
 import type { WhatsNew } from '@shared/update'
 import { describeRule, ruleActionOf, savedRulesText, waitForSavedRules, withoutRules } from './lib/ruleToast'
@@ -1026,12 +1027,15 @@ export default function App(): JSX.Element {
   // The branch's pull request for the composer chip; gh is asked only for a GitHub remote.
   const prStatus = usePrStatus(workspace, workingTreeStats.ship?.remote?.host === 'github', chat.running)
 
-  // Load the workspace's custom slash commands (alongside the built-ins).
+  // Load the workspace's custom slash commands (alongside the built-ins). Read again
+  // when a turn ends: the connected MCP servers' prompts (`/mcp__<server>__<prompt>`)
+  // appear once a turn has connected them.
   useEffect(() => {
     if (!workspace) {
       setCommands(BUILTIN_COMMANDS)
       return
     }
+    if (chat.running) return
     let cancelled = false
     void window.api.listCommands(workspace).then((custom) => {
       if (!cancelled) setCommands(mergeWithBuiltins(BUILTIN_COMMANDS, custom))
@@ -1039,7 +1043,7 @@ export default function App(): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [workspace])
+  }, [workspace, chat.running])
 
   // Resolves true once the chat is in view, false when it no longer exists or a later
   // navigation overtook this one (clicking A then B quickly: B wins even if A's reads
@@ -3020,6 +3024,39 @@ export default function App(): JSX.Element {
             )
           }
           return
+        case 'loop-error':
+          chat.notify(action.error, 'error')
+          return
+        case 'loop': {
+          // A background session in this chat's folder, on this chat's model and
+          // approval mode, at each occurrence: the scheduler schedule_run uses.
+          if (!workspace || !settings?.selected) {
+            chat.notify(workspace ? 'Choose a model first.' : 'Open a folder first to schedule a run.', 'error')
+            return
+          }
+          void window.api
+            .createSchedule({
+              name: loopScheduleName(action.task),
+              spec: action.spec,
+              prompt: action.task,
+              workspace,
+              providerId: settings.selected.providerId,
+              model: settings.selected.model,
+              approvalPolicy: settings.approvalPolicy ?? 'ask'
+            })
+            .then((res) => {
+              if (!res.ok) chat.notify(res.error, 'error')
+              else {
+                const s = res.schedule
+                const next = s?.nextRunAt != null ? `, next at ${scheduleWhen(s.nextRunAt, Date.now())}` : ''
+                chat.notify(
+                  `Scheduled "${s?.name ?? loopScheduleName(action.task)}": ${s?.spec ?? action.spec}${next}. Each run is a background session in this folder. Settings > Scheduled runs lists them.`
+                )
+              }
+            })
+            .catch((e: unknown) => chat.notify(`Couldn't schedule it: ${(e as Error).message}`, 'error'))
+          return
+        }
         case 'reasoning':
           if (action.effort) {
             const effort = action.effort

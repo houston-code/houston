@@ -13,7 +13,16 @@
  * anyone remembering to tag it. `promptVisibility.guard.test.ts` fails when a new
  * send path appears that bypasses them.
  */
-import { agentInvocationPrompt, expandTemplate, parseAgentInvocation, type Command } from './commands'
+import {
+  REVIEW_TEMPLATE,
+  agentInvocationPrompt,
+  expandTemplate,
+  parseAgentInvocation,
+  parseReviewArgs,
+  reviewPrompt,
+  reviewTargetLabel,
+  type Command
+} from './commands'
 import type { ShipAction } from './shipAction'
 import { renderShellEscapeRecord } from './shellEscape'
 
@@ -101,13 +110,35 @@ export function invocationText(inv: PromptInvocation): string {
  */
 export function commandTurn(cmd: Command, args: string, typed: string, expanded?: string): InvokedTurn | null {
   if (cmd.template === undefined) return null
-  const body = expanded ?? expandTemplate(cmd.template, args)
+  // The first-party `/review` reads its argument as what to review (a base branch, a
+  // pull request, paths), not as text to append to the prompt.
+  const review = cmd.source === undefined && cmd.template === REVIEW_TEMPLATE && args.trim() ? parseReviewArgs(args) : null
+  const body = review ? reviewPrompt(review) : (expanded ?? expandTemplate(cmd.template, args))
+  const detail = review ? reviewTargetLabel(review) : cmd.description
   return {
     text: cmd.agent ? agentInvocationPrompt(cmd.agent, body) : body,
     invokedAs: {
       kind: 'command',
       label: `/${cmd.name}`,
-      ...(cmd.description ? { detail: cmd.description } : {}),
+      ...(detail ? { detail } : {}),
+      typed: typed.trim()
+    }
+  }
+}
+
+/**
+ * A connected MCP server's prompt run as `/mcp__<server>__<prompt>`: `text` is the
+ * prompt the server returned for the user's arguments. The chip names the command and
+ * the server, so the turn never reads as something the user typed.
+ */
+export function mcpPromptTurn(cmd: Command, text: string, typed: string): InvokedTurn {
+  const server = cmd.mcpPrompt?.server
+  return {
+    text,
+    invokedAs: {
+      kind: 'command',
+      label: `/${cmd.name}`,
+      detail: clip(server ? `MCP prompt from ${server}${cmd.description ? `: ${cmd.description}` : ''}` : cmd.description, MAX_DETAIL) ?? 'MCP prompt',
       typed: typed.trim()
     }
   }

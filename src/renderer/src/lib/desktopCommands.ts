@@ -1,6 +1,7 @@
 import { isReasoningEffort, type ReasoningEffort } from '@shared/agent'
 import { parseApprovalPolicy, type ApprovalPolicy } from '@shared/types'
 import { isRewindMode, type RewindMode } from '@shared/rewind'
+import { parseLoopArgs } from '@shared/loopCommand'
 import { pageForWords, type TabId } from '../components/settings/pageIds'
 import type { Theme } from './theme'
 
@@ -54,6 +55,9 @@ export type DesktopCommandAction =
   /** No policy: report the current one. `invalid` is a word that named none. */
   | { kind: 'approval'; policy?: ApprovalPolicy; invalid?: string; asDefault?: boolean }
   | { kind: 'reasoning'; effort?: ReasoningEffort; invalid?: string; asDefault?: boolean }
+  /** `/loop [interval] <prompt>`: schedule it, or say why not (`error`). */
+  | { kind: 'loop'; spec: string; task: string }
+  | { kind: 'loop-error'; error: string }
 
 /**
  * Split `--default` off a command argument, anywhere in it, as the terminal does:
@@ -172,6 +176,10 @@ export function desktopCommandAction(name: string, args: string): DesktopCommand
       if (!rest) return { kind: 'approval', ...flag }
       const policy = parseApprovalPolicy(rest)
       return policy ? { kind: 'approval', policy, ...flag } : { kind: 'approval', invalid: rest, ...flag }
+    }
+    case 'loop': {
+      const parsed = parseLoopArgs(arg)
+      return parsed.ok ? { kind: 'loop', spec: parsed.spec, task: parsed.task } : { kind: 'loop-error', error: parsed.error }
     }
     case 'reasoning': {
       const { rest, asDefault } = splitDefaultFlag(arg)

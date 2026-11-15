@@ -234,6 +234,21 @@ export async function gitContext(workspace: string, injected?: GitExec): Promise
   return [formatGitContext(branch, status), formatBaseContext(relation), worktrees].filter(Boolean).join('\n')
 }
 
+/**
+ * The commit where HEAD and `ref` split (`git merge-base HEAD <ref>`), or null when
+ * `ref` is not a safe ref, names no commit, or shares no history with HEAD. Read-only
+ * git, never throws. `exec` is injectable.
+ */
+export async function gitMergeBase(workspace: string, ref: string, exec: GitExec = runGit): Promise<string | null> {
+  if (!isSafeGitRef(ref)) return null
+  try {
+    const out = (await exec(['merge-base', 'HEAD', ref], workspace)).trim()
+    return /^[0-9a-f]{7,64}$/.test(out) ? out : null
+  } catch {
+    return null
+  }
+}
+
 /** The uncommitted change set for a workspace, used as input to a review. */
 export interface WorkspaceDiff {
   /** False when the workspace is not a git repo (there is no diff to review). */

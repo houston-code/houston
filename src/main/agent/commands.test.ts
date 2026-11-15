@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { COMMANDS_DIR, loadCommands } from './commands'
+import { COMMANDS_DIR, loadCommands, loadProjectCommands } from './commands'
 
 let workspace: string
 const cmdFile = (name: string, content: string): void => {
@@ -168,5 +168,67 @@ describe('loadCommands, frontmatter options', () => {
     } finally {
       rmSync(h, { recursive: true, force: true })
     }
+  })
+})
+
+describe('loadCommands, namespace folders', () => {
+  const nested = (rel: string, content: string): void => {
+    const path = join(workspace, COMMANDS_DIR, rel)
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, content)
+  }
+  let home: string
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'houston-cmds-home-'))
+  })
+  afterEach(() => rmSync(home, { recursive: true, force: true }))
+
+  it('names a command in a subfolder namespace:name, nesting up to three levels', async () => {
+    nested('top.md', 'top level')
+    nested('git/commit.md', '---\ndescription: Commit the work\n---\nCommit it.')
+    nested('git/pr/open.md', 'open a PR')
+    nested('a/b/c/too-deep.md', 'ignored')
+    const userDir = join(home, '.houston', 'commands', 'mine')
+    mkdirSync(userDir, { recursive: true })
+    writeFileSync(join(userDir, 'note.md'), 'a personal one')
+    const cmds = await loadCommands(workspace, home)
+    expect(cmds.map((c) => c.name)).toEqual(['git:commit', 'git:pr:open', 'mine:note', 'top'])
+    expect(cmds.find((c) => c.name === 'git:commit')).toMatchObject({ description: 'Commit the work', source: 'project' })
+    expect(cmds.find((c) => c.name === 'mine:note')).toMatchObject({ source: 'user' })
+  })
+
+  it('skips folders and files whose names are not plain words', async () => {
+    nested('bad dir/x.md', 'spaced folder')
+    nested('dot.dir/x.md', 'dotted folder')
+    nested('ok/bad name.md', 'spaced file')
+    nested('ok/fine.md', 'fine')
+    expect((await loadCommands(workspace, home)).map((c) => c.name)).toEqual(['ok:fine'])
+  })
+
+  it('does not follow a symlinked folder out of the repository', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'houston-cmds-outside-'))
+    try {
+      writeFileSync(join(outside, 'leak.md'), 'from outside the repo')
+      nested('real.md', 'real')
+      symlinkSync(outside, join(workspace, COMMANDS_DIR, 'linked'), 'dir')
+      expect((await loadCommands(workspace, home)).map((c) => c.name)).toEqual(['real'])
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('a project command wins over the same namespaced user command', async () => {
+    nested('git/commit.md', 'project version')
+    const userDir = join(home, '.houston', 'commands', 'git')
+    mkdirSync(userDir, { recursive: true })
+    writeFileSync(join(userDir, 'commit.md'), 'user version')
+    const cmds = await loadCommands(workspace, home)
+    expect(cmds).toHaveLength(1)
+    expect(cmds[0]).toMatchObject({ name: 'git:commit', template: 'project version', source: 'project' })
+  })
+
+  it('a project fingerprint covers a namespaced command (loadProjectCommands walks the folders)', async () => {
+    nested('ops/deploy.md', '---\nallowed-tools: run_shell\n---\nDeploy.')
+    expect((await loadProjectCommands(workspace)).map((c) => [c.name, c.allowedTools])).toEqual([['ops:deploy', 'run_shell']])
   })
 })

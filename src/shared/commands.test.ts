@@ -19,6 +19,10 @@ import {
   COMMAND_GROUPS,
   CUSTOM_COMMAND_GROUP,
   commandHasRunOptions,
+  parseReviewArgs,
+  reviewPrompt,
+  reviewTargetLabel,
+  REVIEW_TEMPLATE,
   type Command
 } from './commands'
 import { APPROVAL_POLICIES, APPROVAL_POLICY_LABEL, parseApprovalPolicy } from './types'
@@ -236,6 +240,19 @@ describe('mergeWithBuiltins', () => {
     expect(resolveCommand(gui, 'diff')?.name).toBe('changes')
     expect(resolveCommand(gui, 'vim')).toBeUndefined()
   })
+
+  it('keeps a namespaced command whose last part is a built-in, and finds it in any case', () => {
+    // Only a top-level name can shadow a built-in: /git:diff and /tools:usage are their own commands.
+    for (const n of ['git:diff', 'tools:usage', 'ops:vim', 'Git:Commit']) expect(isReservedCommandName(n), n).toBe(false)
+    const mine = ['git:diff', 'diff', 'Git:Commit'].map(custom)
+    for (const client of ['gui', 'tui'] as const) {
+      const merged = mergeWithBuiltins(builtinCommands(client), mine)
+      expect(merged.filter((c) => c.template === 'x').map((c) => c.name), client).toEqual(['git:diff', 'Git:Commit'])
+      expect(resolveCommand(merged, 'GIT:DIFF')?.name).toBe('git:diff')
+      expect(resolveCommand(merged, 'git:commit')?.name).toBe('Git:Commit')
+      expect(resolveCommand(merged, 'diff')?.name).toBe('changes')
+    }
+  })
 })
 
 describe('expandTemplate — positional arguments', () => {
@@ -392,5 +409,44 @@ describe('command names matching Object.prototype members', () => {
       expect(resolveCommand(cmds, name)).toBeUndefined()
       expect(terminalOnlyNote(name)).toBeNull()
     }
+  })
+})
+
+describe('/review targets', () => {
+  it('reads nothing as the uncommitted changes, unchanged', () => {
+    expect(parseReviewArgs('')).toEqual({ kind: 'uncommitted', paths: [] })
+    expect(reviewPrompt(parseReviewArgs('   '))).toBe(REVIEW_TEMPLATE)
+  })
+
+  it('reads a pull request as #n, n, or its URL, with paths after it', () => {
+    expect(parseReviewArgs('#12')).toEqual({ kind: 'pr', number: 12, paths: [] })
+    expect(parseReviewArgs('12 src/api')).toEqual({ kind: 'pr', number: 12, paths: ['src/api'] })
+    expect(parseReviewArgs('https://github.com/o/r/pull/7/files')).toEqual({ kind: 'pr', number: 7, paths: [] })
+    const text = reviewPrompt({ kind: 'pr', number: 12, paths: [] })
+    expect(text).toContain('gh_pr_view (number 12, diff true)')
+    expect(text).toContain('without changing any files')
+  })
+
+  it('reads a path-only first word as paths, anything else as a base branch', () => {
+    expect(parseReviewArgs('./src lib/')).toEqual({ kind: 'uncommitted', paths: ['./src', 'lib/'] })
+    expect(parseReviewArgs('.')).toEqual({ kind: 'uncommitted', paths: ['.'] })
+    expect(parseReviewArgs('src/*.ts')).toEqual({ kind: 'uncommitted', paths: ['src/*.ts'] })
+    expect(parseReviewArgs('origin/main src/')).toEqual({ kind: 'base', base: 'origin/main', paths: ['src/'] })
+    expect(reviewPrompt({ kind: 'uncommitted', paths: ['src/'] })).toContain('review_changes tool with paths ["src/"]')
+  })
+
+  it('reviews from the merge base, and falls back to a path when the word names no ref', () => {
+    const text = reviewPrompt(parseReviewArgs('src/api'))
+    expect(text).toContain('base "src/api..."')
+    expect(text).toContain('If "src/api" names no branch, tag or commit in this repository, it is a path')
+    expect(text).toContain('paths ["src/api"]')
+    // Values are quoted for the model, so a stray quote can't end the string early.
+    expect(reviewPrompt(parseReviewArgs('a"b'))).toContain('base "a\\"b..."')
+  })
+
+  it('labels each target for the chip', () => {
+    expect(reviewTargetLabel(parseReviewArgs('main'))).toBe('Changes since main')
+    expect(reviewTargetLabel(parseReviewArgs('#3 docs/'))).toBe('Pull request #3 in docs/')
+    expect(reviewTargetLabel(parseReviewArgs('./a ./b'))).toBe('Uncommitted changes in ./a, ./b')
   })
 })

@@ -617,6 +617,66 @@ describe('reviewWorkspaceChanges', () => {
     expect(out).toContain('No uncommitted changes')
     expect(out).toContain('src/api')
   })
+
+  it('reviews from the merge base for a "branch..." base', async () => {
+    const seen: string[][] = []
+    const sha = 'abc1234def5678'
+    const { fn, calls } = fakeAgent(() => 'No issues found.')
+    await reviewWorkspaceChanges({
+      provider: base().provider,
+      model: 'm',
+      workspace: '/ws',
+      base: 'origin/main...',
+      signal: new AbortController().signal,
+      gitExec: async (args) => {
+        seen.push(args)
+        if (args[0] === 'merge-base') return `${sha}\n`
+        if (args[0] === 'rev-parse') return 'true'
+        if (args[0] === 'diff') return '@@ a.ts @@\n+x'
+        return ''
+      },
+      runAgent: fn
+    })
+    expect(seen.find((a) => a[0] === 'merge-base')).toEqual(['merge-base', 'HEAD', 'origin/main'])
+    // The diff runs from the merge base to the working tree: committed and uncommitted.
+    expect(seen.find((a) => a[0] === 'diff')?.[1]).toBe(sha)
+    expect(calls.length).toBeGreaterThan(0)
+  })
+
+  it('says so when a "branch..." base names nothing, and when nothing changed since it', async () => {
+    const run = (exec: GitExec): Promise<string> =>
+      reviewWorkspaceChanges({
+        provider: base().provider,
+        model: 'm',
+        workspace: '/ws',
+        base: 'nope...',
+        signal: new AbortController().signal,
+        gitExec: exec,
+        runAgent: fakeAgent(() => 'unused').fn
+      })
+    expect(await run(gitExecOf({ 'merge-base': new Error('fatal: Not a valid object name nope') }))).toContain(
+      'Cannot find where this branch split from "nope"'
+    )
+    expect(await run(gitExecOf({ 'merge-base': 'abc1234', 'rev-parse': 'true', diff: '', 'ls-files': '' }))).toBe(
+      'No changes to review since this branch split from nope.'
+    )
+    // An option-like ref behind the dots is refused before git sees it.
+    let called = false
+    const out = await reviewWorkspaceChanges({
+      provider: base().provider,
+      model: 'm',
+      workspace: '/ws',
+      base: '-x...',
+      signal: new AbortController().signal,
+      gitExec: async () => {
+        called = true
+        return ''
+      },
+      runAgent: fakeAgent(() => 'unused').fn
+    })
+    expect(out).toContain('Invalid base ref')
+    expect(called).toBe(false)
+  })
 })
 
 describe('describeFinding', () => {

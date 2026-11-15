@@ -1010,9 +1010,10 @@ export function Composer({
         return
       }
       if (cmd) {
-        if (cmd.template && onRunCommand && commandHasRunOptions(cmd)) {
-          // Its own model, effort, agent or tools for this turn: those don't survive
-          // being merged into a queued follow-up, so it waits for the turn to end.
+        if ((cmd.template || cmd.mcpPrompt) && onRunCommand && commandHasRunOptions(cmd)) {
+          // Its own model, effort, agent or tools for this turn (or an MCP prompt main
+          // fetches): those don't survive being merged into a queued follow-up, so it
+          // waits for the turn to end.
           if (running) {
             flashNotice(`/${cmd.name} can't run while the agent is working. Send it once this turn ends.`)
             setCmdDismissed(true)

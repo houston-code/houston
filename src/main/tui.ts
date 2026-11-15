@@ -25,6 +25,9 @@ import { loadProjectConfig } from './agent/projectConfig'
 import type { ShellCapture } from './userShell'
 import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
 import { describeContextConsent } from './agent/commandContext'
+import { isMcpPromptLine, prepareMcpPromptRun, type McpPromptFetch } from './agent/mcpPromptCommands'
+import type { ScheduledRunInfo } from './agent/scheduler'
+import { loopScheduleName, parseLoopArgs, scheduleWhen } from '@shared/loopCommand'
 import { HOOK_TIMEOUT_MAX_S, HOOK_TIMEOUT_MIN_S, HOOK_TIMEOUT_MS } from './agent/hooks'
 import { appendUserTurn } from './agent/userTurn'
 import {
@@ -2321,6 +2324,10 @@ export type SlashResult =
     } & InvokedTurn)
   /** Commit, push, ship, or show the branch's pull request (/commit, /push, /ship, /pr). */
   | { kind: 'git'; op: GitOp }
+  /** Run a prompt on a schedule in this folder (/loop [interval] <prompt>). */
+  | { kind: 'loop'; arg: string }
+  /** A connected MCP server's prompt (`/mcp__<server>__<prompt> [args]`): fetched, then run as a turn. */
+  | { kind: 'mcp-prompt'; command: Command; args: string }
   | { kind: 'unknown'; name: string }
   | { kind: 'not-a-command' }
 
@@ -2387,6 +2394,8 @@ export function parseSlashCommand(
     case 'btw':
     case 'aside':
       return { kind: 'btw', question: arg.trim() }
+    case 'loop':
+      return { kind: 'loop', arg }
     case 'fork':
       return { kind: 'fork', ...parseForkArg(arg) }
     case 'open-in-app':
@@ -2584,6 +2593,7 @@ export function parseSlashCommand(
       // Not a built-in: try the template commands (first-party like /review, plus
       // custom `.houston/commands`). A match runs its expanded prompt as a turn.
       const cmd = resolveCommand(commands, name)
+      if (cmd?.mcpPrompt) return { kind: 'mcp-prompt', command: cmd, args: arg }
       const turn = cmd ? commandTurn(cmd, arg, line) : null
       if (turn && cmd && commandHasRunOptions(cmd)) return { kind: 'prompt', ...turn, command: { cmd, args: arg } }
       if (turn) return { kind: 'prompt', ...turn }
@@ -2619,7 +2629,7 @@ export const HELP_TEXT = [
   '  /clear, /new          start a fresh conversation',
   '  /compact [focus]      summarize older turns to free up context now (focus: what the summary keeps in detail)',
   '  /retry                run your last message again after a turn that failed',
-  '  /review               adversarial review of your uncommitted changes',
+  '  /review [what]        adversarial review of your uncommitted changes, or: a base branch (since it split), #pr, or paths',
   '  /init                 write or improve AGENTS.md, the instructions file for this project',
   '  /resume [query]       pick a saved session to reopen (also /sessions): type to filter, 1-9 open a row, ctrl-r rename, ctrl-d delete, ctrl-a this folder or all folders',
   '  /spawned              list the background sessions the agent started; open one',
@@ -2627,6 +2637,7 @@ export const HELP_TEXT = [
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
   '  /btw [question]       ask a quick side question; the answer stays out of this chat (alone: latest answers, then asks)',
   '  /btw clear            start this chat\'s side chat over',
+  '  /loop [10m] <prompt>  run a prompt on a schedule in this folder (/loop 10m check CI; default every 10m)',
   '  /fork [n]             branch the current session into a copy, or from before message n (as numbered in /rewind)',
   '  /rename <title>       give this chat a title',
   '  /export [md|json] [path]  write this chat to a file (Markdown by default)',
@@ -2683,7 +2694,8 @@ export const HELP_TEXT = [
   '  /image [path|clear]   attach an image from your clipboard, or a file; clear drops them',
   '  /cwd                  show the working directory',
   '  /share                copy an invite to Houston to send a friend',
-  '  /<name>               run a custom command from .houston/commands',
+  '  /<name>               run a custom command from .houston/commands (a subfolder is a namespace: git/commit.md is /git:commit)',
+  '  /mcp__<server>__<p>   run a connected MCP server\'s prompt (args in order, or name=value)',
   '  /exit, /quit          leave (or press Ctrl-D)',
   '',
   'Keys:',
@@ -3895,6 +3907,11 @@ export interface TuiDeps {
   capabilities?: () => Promise<CapabilitySnapshot>
   /** Load the workspace's custom `.houston/commands`, so `/<name>` runs one as a turn. */
   commands?: () => Promise<Command[]>
+  /**
+   * The connected MCP servers' prompts as `/mcp__<server>__<prompt>` commands (this
+   * folder's own servers only), and how to fetch one. Read when such a line is typed.
+   */
+  mcpPrompts?: { commands: () => Promise<Command[]>; fetch: McpPromptFetch }
   /**
    * Run one of a command template's `` !`command` `` pieces. Absent: the user's own
    * shell, bounded in time and output (tests inject a fake).
@@ -5315,6 +5332,51 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     )
   }
   /**
+   * /loop: a recurring run on the scheduler the agent's schedule tools and /schedule
+   * use, so it is listed and managed there. It starts as a background session in this
+   * chat's folder, on this chat's model, approval mode and effort, so it is never more
+   * permissive than the chat.
+   */
+  const runLoopCommand = (arg: string): void => {
+    const store = deps.schedules
+    if (!store) {
+      deps.io.out(paint('· scheduled runs are unavailable here\n', 'dim'))
+      return
+    }
+    const parsed = parseLoopArgs(arg)
+    if (!parsed.ok) {
+      deps.io.out(paint(`· ${parsed.error}\n`, 'yellow'))
+      return
+    }
+    if (!providerId || !model) {
+      deps.io.out(paint('No model is ready yet. Run /login to set an API key first.\n', 'yellow'))
+      return
+    }
+    let created: ScheduledRunInfo
+    try {
+      created = store.create({
+        name: loopScheduleName(parsed.task),
+        spec: parsed.spec,
+        prompt: parsed.task,
+        workspace: opts.cwd,
+        providerId,
+        model,
+        approvalPolicy: policy,
+        reasoningEffort: effort
+      })
+    } catch (e) {
+      deps.io.out(paint(`· ${stripControlChars((e as Error).message)}\n`, 'yellow'))
+      return
+    }
+    const next = created.nextRunAt !== null ? `, next at ${scheduleWhen(created.nextRunAt, nowFn())}` : ''
+    deps.io.out(
+      paint(
+        `· scheduled "${stripControlChars(created.name)}": ${stripControlChars(created.spec)}${next}. Each run is a background session in this folder while Houston is open; /schedule lists them, and /schedule pause <n> or /schedule delete <n> stops one.\n`,
+        'dim'
+      )
+    )
+  }
+  /**
    * Run /tasks. Mid-run (typed while a turn streams) it only prints, with no prompt or
    * picker: the run owns the screen and the input, and an approval may need them.
    */
@@ -5348,6 +5410,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // command once the turn ends.
   deps.io.onSteer?.((typed, id) => {
     if (!activeRunId) return false
+    // An MCP prompt's command is a command even before its server's prompts are read:
+    // it waits for the turn, like any other, rather than reaching the model as text.
+    if (isMcpPromptLine(typed.trim())) return false
     const slash = parseSlashCommand(typed.trim(), deps.getSettings(), templateCommands)
     // /tasks only reads the task lists or stops one task, so it runs now rather than
     // waiting for the turn: that is when you want to see what the turn started.
@@ -5943,6 +6008,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // A custom command's per-turn model, effort and pre-approved tools (its
     // frontmatter): this one turn only, never saved as the chat's settings.
     let turnRun: PreparedCommandRun | null = null
+    // Where this turn's text came from when the user didn't write it (an MCP prompt's
+    // server): saved on the message as its taintSource.
+    let turnTaint: string | undefined
     // Persist composer submissions (commands included) for cross-restart recall;
     // approval/question answers go through a different read and aren't saved.
     if (!wakeTurn && !fromKey) deps.persistHistory?.(text)
@@ -6047,7 +6115,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
 
     if (text.startsWith('/')) {
-      let result = parseSlashCommand(text, deps.getSettings(), templateCommands)
+      // The connected MCP servers' prompts are read when one is typed: a server
+      // connects with a turn, after the session's commands were loaded.
+      const slashCommands = isMcpPromptLine(text) && deps.mcpPrompts
+        ? mergeCommands(templateCommands, await deps.mcpPrompts.commands().catch((): Command[] => []))
+        : templateCommands
+      let result = parseSlashCommand(text, deps.getSettings(), slashCommands)
       if (result.kind === 'exit') break
       if (result.kind === 'clear') {
         subagentTracker.forget(conversationId)
@@ -6462,6 +6535,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'copy') {
         await runCopyCommand(result, messages, deps, paint)
+        continue
+      }
+      if (result.kind === 'loop') {
+        runLoopCommand(result.arg)
         continue
       }
       if (result.kind === 'usage') {
@@ -7057,6 +7134,23 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         invokedAs = last.invokedAs
         pendingImages = last.images ?? []
         deps.io.out(paint('· retrying your last message\n', 'dim'))
+      } else if (result.kind === 'mcp-prompt') {
+        // A connected MCP server's prompt: fetched with the user's arguments, then run
+        // as a turn labelled with the command (the server's text stays out of the
+        // scrollback, as a template's does).
+        if (!deps.mcpPrompts) {
+          deps.io.out(paint('· MCP prompts are not available here\n', 'yellow'))
+          continue
+        }
+        const ran = await prepareMcpPromptRun(result.command, result.args, text, deps.mcpPrompts.fetch)
+        if (!ran.ok) {
+          deps.io.out(paint(`· ${stripControlChars(ran.error)}\n`, 'yellow'))
+          continue
+        }
+        text = ran.turn.text
+        invokedAs = ran.turn.invokedAs
+        turnTaint = ran.taintSource
+        deps.io.out(paint(`${invocationEcho(ran.turn.invokedAs)}\n`, 'dim'))
       } else if (result.kind === 'prompt') {
         // A template command (custom `.houston/commands` or first-party /review):
         // run its expanded prompt as a normal turn. Fall through — don't `continue`.
@@ -7147,7 +7241,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // Staged images wait for the user's own message: an automated wake turn takes none.
       ...(pendingImages.length && !wakeTurn ? { images: pendingImages } : {}),
       ...(invokedAs ? { invokedAs } : {}),
-      ...(wakeTurn && wakeTaint ? { taintSource: wakeTaint } : {})
+      ...(wakeTurn && wakeTaint ? { taintSource: wakeTaint } : turnTaint ? { taintSource: turnTaint } : {})
     })
     if (!wakeTurn) pendingImages = [] // consumed by this turn
     // Lazily open a persisted conversation on the first turn so the session

@@ -6,7 +6,7 @@ import { parseElicitationFields, type McpImageOptions } from '@shared/mcp'
 import { builtinToolNames, type ToolContext, type ToolDef } from '../agent/tools'
 import { presentUntrusted, presentUntrustedInline, untrustedPreamble } from '../agent/untrusted'
 import { getMcpOAuth, getSecretHeaders, setMcpOAuth } from '../agentHost'
-import { McpClient, McpUnauthorizedError, type McpConnection } from './client'
+import { McpClient, McpUnauthorizedError, type McpConnection, type McpPromptInfo } from './client'
 import { McpHttpClient } from './http-client'
 import { McpSseClient } from './sse-client'
 import { canonicalResourceUri, refreshMcpOAuth, tokensNeedRefresh } from './oauth'
@@ -929,6 +929,48 @@ function promptMetaTools(mine: ReadonlyMap<string, string>, runConfigs: readonly
       }
     }
   ]
+}
+
+/**
+ * The prompts of each of a chat's servers that is connected, for the clients'
+ * `/mcp__<server>__<prompt>` commands. `configs` are the chat's own servers (the
+ * user's, a trusted folder's project servers, a session's): each is matched to its own
+ * connection by its full config, as a run's tools are, so a server another chat has
+ * open under the same id (another folder's `proj-db`) is never offered. Read from the
+ * live connections, so a server lists nothing until it has connected (its first turn,
+ * or `/mcp reconnect`). Sorted by server id.
+ */
+export function listMcpPrompts(configs: readonly McpServerConfig[]): { server: string; prompts: McpPromptInfo[] }[] {
+  return ownConnections(chatConnections(configs))
+    .filter(([, conn]) => !conn.client.isClosed && conn.client.prompts.length > 0)
+    .sort(([a], [b]) => byCodeUnit(a, b))
+    .map(([server, conn]) => ({ server, prompts: conn.client.prompts }))
+}
+
+/** A chat's servers, id to connection key, as {@link getMcpToolDefs} keys a run's. */
+function chatConnections(configs: readonly McpServerConfig[]): Map<string, string> {
+  return new Map(configs.filter(connectable).map((c) => [c.id, connectionKey(c)] as const))
+}
+
+/**
+ * Fetch one prompt for a slash command the user ran, with their arguments filled in.
+ * Refused for a server outside `configs` (the chat's own servers) or one not connected.
+ * The text is the server's own authored template (see mcp_get_prompt), capped like
+ * any MCP output.
+ */
+export async function getMcpPromptText(
+  configs: readonly McpServerConfig[],
+  server: string,
+  name: string,
+  args: Record<string, string>,
+  signal?: AbortSignal
+): Promise<string> {
+  const mine = chatConnections(configs)
+  const key = mine.get(server)
+  if (key === undefined) throw new Error(`MCP server "${server}" is not one of this chat's servers.`)
+  const live = connections.get(key)
+  if (!live || live.client.isClosed) throw new Error(`MCP server "${server}" is not connected.`)
+  return capMcpOutput(await live.client.getPrompt(name, args, signal))
 }
 
 /** Close every MCP connection (wired on app shutdown). */

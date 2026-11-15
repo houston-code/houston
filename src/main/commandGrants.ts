@@ -20,6 +20,11 @@ export interface CommandGrant {
   model?: { providerId: string; model: string }
   effort?: ReasoningEffort
   turnAllowRules?: PermissionRule[]
+  /**
+   * The user message's `taintSource` (an MCP prompt's text is the server's, not the
+   * user's): main's own record of where the text came from, applied when it is sent.
+   */
+  taintSource?: string
 }
 
 /** How long a prepared command waits to be sent. Sending is immediate; this only bounds a leak. */
