@@ -7263,6 +7263,84 @@ describe('chat hand-offs: resume by id, titles, model reconcile, rewind, fork, o
   })
 })
 
+describe('suggested next messages', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+  function assist() {
+    const suggests: string[] = []
+    let deliver: ((text: string) => void) | null = null
+    const chatAssist: NonNullable<TuiDeps['chatAssist']> = {
+      suggest: (id, _p, _m, on) => {
+        suggests.push(id)
+        deliver = on
+      }
+    }
+    return { chatAssist, suggests, deliver: (t: string) => deliver?.(t) }
+  }
+
+  // Titles come from generateTitle (tested with the status line); this asks only for a suggestion.
+  it('asks for a suggestion after the turn', async () => {
+    const { d } = deps(done)
+    d.persist = fakePersist().persist
+    const a = assist()
+    d.chatAssist = a.chatAssist
+    const t = fakeIo(['hi', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(a.suggests).toEqual(['conv-1'])
+  })
+
+  it('shows the suggestion in the next composer, and drops it once a turn is sent', async () => {
+    const { d } = deps(done)
+    d.persist = fakePersist().persist
+    const a = assist()
+    d.chatAssist = a.chatAssist
+    const t = fakeIo([])
+    const composed: Array<string | null> = ['hi', 'next', null]
+    const seen: Array<string | undefined> = []
+    t.io.readComposer = async (_p, _initial, o) => {
+      // The suggestion lands while the second composer is open.
+      if (seen.length === 1) a.deliver('\u001b[31mrun the tests')
+      seen.push(o?.suggestion?.())
+      return composed.shift() ?? null
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(seen[0]).toBeUndefined()
+    expect(seen[1]).toBe('[31mrun the tests')
+    // After 'next' went out the old suggestion is gone (the new one has not landed).
+    expect(seen[2]).toBeUndefined()
+  })
+
+  it('suggests nothing after a stopped or failed turn', async () => {
+    for (const events of [
+      [{ runId: 'x', type: 'done', stopReason: 'aborted' }],
+      [
+        { runId: 'x', type: 'error', message: 'boom' },
+        { runId: 'x', type: 'done', stopReason: 'end_turn' }
+      ]
+    ] as AgentEvent[][]) {
+      const { d } = deps(events)
+      d.persist = fakePersist().persist
+      const a = assist()
+      d.chatAssist = a.chatAssist
+      const t = fakeIo(['hi', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(a.suggests).toEqual([])
+    }
+  })
+
+  it('an unsaved session asks for none', async () => {
+    const { d } = deps(done)
+    const a = assist()
+    d.chatAssist = a.chatAssist
+    const t = fakeIo(['hi', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(a.suggests).toEqual([])
+  })
+})
+
 // Headless has had --continue/--resume since it existed. The terminal had neither,
 // so picking up where you left off meant launching and then running /resume — one
 // extra step, every time, for the most ordinary thing you do.

@@ -4036,6 +4036,10 @@ export interface TuiIo {
        * raw-mode composer they print once, before the prompt.
        */
       header?: () => string[]
+      /** The suggested next message, shown dim in an empty composer; Tab takes it. */
+      suggestion?: () => string | undefined
+      /** Subscribe a redraw for when the suggestion arrives; returns the unsubscribe. */
+      watchSuggestion?: (redraw: () => void) => () => void
     }
   ) => Promise<string | null>
   /**
@@ -4552,6 +4556,14 @@ export interface TuiDeps {
    * OS's URL handler). Absent ⇒ /open-in-app says it is unavailable.
    */
   openInApp?: (conversationId: string) => Promise<void>
+  /**
+   * The desktop app's suggested next message, through the same helper its run drain
+   * uses (agent/drain.ts), which checks the suggestNextPrompt setting itself.
+   * Best-effort, never blocks a turn. Absent ⇒ no suggestion. (Titles: generateTitle.)
+   */
+  chatAssist?: {
+    suggest: (conversationId: string, providerId: string, model: string, onSuggestion: (text: string) => void) => void
+  }
   /**
    * Rewind the chat to an earlier message (agent/rewind.ts): preview, apply, undo.
    * Absent ⇒ /rewind says it is unavailable.
@@ -5571,7 +5583,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // What belongs to the chat on screen rather than the session: the staged /image, the
   // context meter and the run /undo falls back to. Reset whenever another chat (or a
   // fresh one) takes its place, or the status bar, /context and /undo act on the old one.
+  // The suggested next message for the chat on screen (chatAssist.suggest), shown dim
+  // in the empty composer until a turn is sent or another chat takes its place.
+  let suggestion: string | null = null
+  let redrawSuggestion: (() => void) | null = null
   const resetChatState = (): void => {
+    suggestion = null
     pendingImages = []
     contextTokens = 0
     contextParts = null
@@ -6573,7 +6590,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             activeModelReasons(deps, providerId, model) ?? (model ? modelCapabilities(model).reasoning : false),
             activeModelSendsXhigh(deps, providerId, model)
           ),
-        ...(statusHeader ? { header: statusHeader } : {})
+        ...(statusHeader ? { header: statusHeader } : {}),
+        // The suggested next message, dim in the empty composer (Tab takes it). It can
+        // land while this read is open, so the composer subscribes a redraw.
+        suggestion: () => suggestion ?? undefined,
+        watchSuggestion: (redraw) => {
+          redrawSuggestion = redraw
+          return () => {
+            if (redrawSuggestion === redraw) redrawSuggestion = null
+          }
+        }
       })
       if (text === null && rewindRequested) {
         // Esc Esc on an empty composer: the same picker /rewind opens.
@@ -8044,6 +8070,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Persist the user's message up front (like the GUI) so an early run error can't
     // lose the prompt or leave an empty "New chat" orphan in /resume and the sidebar.
     persistMessages(messages)
+    suggestion = null
     // Keep the stored provider/model in step with the model this turn actually runs
     // under (after a `/model` switch or a `/resume`) — same ordering as the GUI, which
     // follows setMessages with updateConversationMeta on every send.
@@ -8211,6 +8238,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // only relabel the spinner, as the desktop updates one line in place instead of
     // stacking six. Any other output ends the streak.
     let retryStreak = 0
+    // Whether the turn finished on its own (not stopped, not failed): only then is a
+    // next message suggested, as in the desktop app.
+    let turnFinished = false
+    let turnErrored = false
     let turnInputTokens = 0
     let turnOutputTokens = 0
     let turnCost = 0
@@ -8982,6 +9013,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           if (e.context) contextParts = e.context
           break
         case 'error':
+          turnErrored = true
+          turnFinished = false
           // The run gave up mid-streak: say the retries are over, so the line above
           // doesn't read as still in progress.
           if (retryStreak > 0) {
@@ -9018,6 +9051,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           }
           // The focus view's final reply, held until now.
           releaseFocusReply()
+          turnFinished = e.stopReason !== 'aborted' && !turnErrored
           // One compact cost summary for the whole turn (this turn + running
           // session), instead of a line per model round. Only when the turn
           // actually spent tokens; otherwise just a blank separator. It names the
@@ -9195,6 +9229,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (typing) halfDraft = [halfDraft, typing].filter(Boolean).join('\n\n')
     }
     saveHeldDraft()
+    if (turnFinished && !interrupted && conversationId && providerId && model && deps.chatAssist) {
+      const forChat = conversationId
+      try {
+        // Nothing queued or half-typed to send next: offer a suggested next message.
+        if (!pendingQueued.length && !halfDraft) {
+          deps.chatAssist.suggest(forChat, providerId, model, (text) => {
+            if (conversationId !== forChat) return
+            suggestion = stripControlChars(text).trim() || null
+            redrawSuggestion?.()
+          })
+        }
+      } catch {
+        // best-effort
+      }
+    }
 
     // A plan-mode turn hands off to execution through the present_plan flow: the agent
     // calls present_plan, the plan_ready case above renders it and collects an

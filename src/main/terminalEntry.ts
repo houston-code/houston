@@ -56,6 +56,7 @@ import { createWorktree, removeWorktree } from './agent/worktree'
 import { readFlagFile, resolveSessionInputs } from './sessionFlags'
 import { launchDetached, urlOpener } from '../cli/openInApp'
 import { chatDeepLink } from '@shared/deepLink'
+import { maybeSuggestNext } from './agent/suggest'
 import {
   conversationWorktree,
   createSessionWorktree,
@@ -947,6 +948,12 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       openInApp: async (id) => {
         const { cmd, args } = urlOpener(process.platform, chatDeepLink(id))
         await launchDetached(cmd, args)
+      },
+      // The desktop app's suggested next message (agent/drain.ts uses the same helper),
+      // when suggestNextPrompt is on.
+      chatAssist: {
+        suggest: (conversationId, providerId, model, onSuggestion) =>
+          void maybeSuggestNext({ conversationId, providerId, model, onSuggestion })
       },
       rewind: {
         preview: (conversationId, turn, mode, text) => previewRewind(conversationId, turn, mode, text),

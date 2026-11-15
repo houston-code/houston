@@ -745,6 +745,11 @@ export function renderEditor(
     marks?: ReadonlyArray<ReadonlyArray<{ start: number; end: number }>>
     /** How a mark is drawn. Defaults to the keyword emphasis (bold magenta). */
     markPaint?: (s: string) => string
+    /**
+     * Dim text shown after the prompt while the draft is empty (the suggested next
+     * message). Display only: it is cut to the row and never moves the cursor.
+     */
+    ghost?: string
   }
 ): EditorView {
   const view = renderEditorBody(s, opts)
@@ -812,6 +817,11 @@ function renderEditorBody(s: EditorState, opts: Parameters<typeof renderEditor>[
 
   // Guarantee a row for a cursor that landed past the last rendered row.
   while (cursorRow >= rows.length) rows.push('')
+  if (opts.ghost && rows.length === 1 && s.lines.length === 1 && s.lines[0] === '') {
+    const room = width - promptWidth - 1
+    const flat = opts.ghost.replace(/\s+/g, ' ').trim()
+    if (room > 1 && flat) rows[0] += opts.paint(truncateVisible(flat, room), 'dim')
+  }
   // The menu goes after that guard: it must never be mistaken for a buffer line.
   if (opts.below?.length) rows.push(...opts.below)
   return { rows, cursorRow, cursorCol }

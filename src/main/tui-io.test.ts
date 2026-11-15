@@ -2672,6 +2672,43 @@ describe('composer: drafts, images, rewind and suspend', () => {
     await expect(read).resolves.toBe('words')
   })
 
+  it('shows the suggested next message dim in the empty composer, and Tab types it in', async () => {
+    const t = harness()
+    const box: { suggestion?: string } = {}
+    let redraw: (() => void) | null = null
+    const read = t.io.readComposer!('> ', undefined, {
+      suggestion: () => box.suggestion,
+      watchSuggestion: (r) => {
+        redraw = r
+        return () => {
+          redraw = null
+        }
+      }
+    })
+    expect(t.text()).not.toContain('Tab uses the suggestion')
+    // It lands while the composer is open: the composer redraws with it.
+    box.suggestion = 'run the tests'
+    redraw!()
+    expect(t.text()).toContain('run the tests')
+    expect(t.text()).toContain('Tab uses the suggestion')
+    t.stdin.push('\t')
+    await Promise.resolve()
+    t.stdin.push(' again\r')
+    await expect(read).resolves.toBe('run the tests again')
+    // The read is over: the redraw was unsubscribed.
+    expect(redraw).toBeNull()
+  })
+
+  it('Tab on a draft with text does not take the suggestion', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ', undefined, { suggestion: () => 'run the tests' })
+    t.stdin.push('fix')
+    t.stdin.push('\t')
+    await Promise.resolve()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('fix')
+  })
+
   it('a Ctrl-S stash survives into the next read, with a hint on the empty prompt', async () => {
     const t = harness()
     const first = t.io.readComposer!('> ')

@@ -94,7 +94,9 @@ The full GUI:
   turn ends** (Settings, Agent) and, after each turn, the chat's own model writes one
   short follow-up, shown faintly in the empty message box. `Tab` puts it in the box to
   send or change. Each suggestion is a small extra request to the model (the same kind
-  as the one that names a chat), billed like any other.
+  as the one that names a chat), billed like any other. The terminal (`houston -i`)
+  shows it the same way, dim in the empty prompt with `Tab` to take it, under the same
+  setting.
 - **Message box.** `Ctrl+R` searches the messages you sent before, from every folder
   (type to filter,
   `Ctrl+R` or the arrows for an older match, `Enter` to put it in the box). A very large
@@ -874,6 +876,8 @@ the model.
 
 **Terminal sessions.**
 
+- A terminal chat gets a model-written title after its first message, as in the desktop
+  app, unless you named it (`/rename`, `--name`).
 - `/rename <title>` gives the chat a title (the desktop sidebar shows it too).
 - `/export [md|json] [path]` writes the chat to a file in the working folder: Markdown
   by default (your messages, the replies with the reasoning before them folded, each

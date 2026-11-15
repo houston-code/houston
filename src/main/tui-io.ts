@@ -350,6 +350,13 @@ export interface ComposerReadOptions {
    * as plain lines, before the prompt.
    */
   header?: () => string[]
+  /**
+   * The suggested next message, shown dim while the draft is empty; Tab on an empty
+   * draft types it in. A thunk, read on each redraw (it can arrive mid-read).
+   */
+  suggestion?: () => string | undefined
+  /** Called with a redraw for when the suggestion arrives; returns the unsubscribe. */
+  watchSuggestion?: (redraw: () => void) => () => void
 }
 
 /**
@@ -1685,6 +1692,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         if (withMenu && state.stashed && editorEmpty(state) && stashHint.length <= width()) {
           belowRows.push(paint(stashHint, 'dim'))
         }
+        // The suggested next message, while the draft is empty: dim in the composer,
+        // and Tab takes it.
+        const ghost = withMenu && editorEmpty(state) ? opts?.suggestion?.() : undefined
+        const ghostHint = 'Tab uses the suggestion'
+        if (ghost && ghostHint.length <= width()) belowRows.push(paint(ghostHint, 'dim'))
         // Every row under the composer is cut to the width: the
         // redraw moves up by rows as drawn, and a menu row that wrapped (a long command
         // description) left a stale copy of the prompt behind on each keystroke.
@@ -1706,7 +1718,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           // Each header row cut to one row: a wrapped one would desync the redraw.
           ...(opts?.header ? { above: opts.header().map((r) => truncateVisible(filterTerminalOutput(r), width())) } : {}),
           ...(marks ? { marks } : {}),
-          ...(selection ? { markPaint: (t: string) => `\x1b[7m${t}\x1b[27m` } : {})
+          ...(selection ? { markPaint: (t: string) => `\x1b[7m${t}\x1b[27m` } : {}),
+          ...(ghost ? { ghost } : {})
         })
         // A draft taller than the screen (a long one handed back) shows the rows
         // around the cursor, so the redraw never climbs past the top of the screen.
@@ -1782,12 +1795,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const redrawMenu = (): void => {
         if (!done && drawn) draw()
       }
+      let stopSuggest: (() => void) | null = null
       const teardown = (): void => {
         stopResize?.()
         stopResize = null
         cancelChord?.()
         cancelChord = null
         held = []
+        stopSuggest?.()
+        stopSuggest = null
         try {
           stdin.removeListener('data', onData)
           // Hand the cursor back: a block cursor left behind outlives Houston and
@@ -1813,6 +1829,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         rawWrite(ENABLE_MODIFIED_KEYS)
         stdin.on('data', onData)
         stopResize = onResize?.(onTerminalResize) ?? null
+        // A suggestion that lands while the composer is open shows at once.
+        stopSuggest = opts?.watchSuggestion?.(redrawMenu) ?? null
       }
       const finish = (value: string | null, echo = false): void => {
         if (done) return
@@ -1883,6 +1901,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
 
       /** Tab: ask the injected completer about the token under the cursor. */
       const runComplete = async (): Promise<void> => {
+        // An empty draft with a suggestion showing: Tab types the suggestion in.
+        const suggested = editorEmpty(state) ? opts?.suggestion?.() : undefined
+        if (suggested) {
+          state = reduceEditor(state, { type: 'char', value: suggested }).state
+          return void draw()
+        }
         const completer = deps.completer
         if (!completer) return void draw()
         const line = [...(state.lines[state.row] ?? '')].slice(0, state.col).join('')
