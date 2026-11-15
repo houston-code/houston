@@ -12857,3 +12857,79 @@ describe('richer @ mentions at send', () => {
     expect(rec.runs).toHaveLength(0)
   })
 })
+
+describe('runTui: /todos and live shell output', () => {
+  it('/todos reprints the latest todo list with its progress', async () => {
+    const { d } = deps([
+      {
+        runId: 'x',
+        type: 'tool_start',
+        callId: 't1',
+        name: 'todo_write',
+        args: { todos: [{ content: 'write the parser', status: 'completed' }, { content: 'test it', status: 'in_progress' }] }
+      },
+      { runId: 'x', type: 'tool_result', callId: 't1', name: 'todo_write', ok: true, output: 'Updated' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ], {}, (req) => [
+      ...req.messages,
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            id: 't1',
+            name: 'todo_write',
+            arguments: { todos: [{ content: 'write the parser', status: 'completed' }, { content: 'test it', status: 'in_progress' }] }
+          }
+        ]
+      }
+    ])
+    const t = fakeIo(['/todos', 'go', '/todos', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('· no todo list in this chat yet')
+    const after = out.slice(out.lastIndexOf('test it'))
+    expect(after).toContain('1 of 2 done')
+  })
+
+  it('under /verbose asks for live shell output and prints each new line once', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_start', callId: 's1', name: 'run_shell', args: { command: 'npm test' } },
+      { runId: 'x', type: 'tool_progress', callId: 's1', message: '', output: 'building\nrun' },
+      { runId: 'x', type: 'tool_progress', callId: 's1', message: '', output: 'building\nrunning 3 tests\n' },
+      { runId: 'x', type: 'tool_result', callId: 's1', name: 'run_shell', ok: true, output: 'building\nrunning 3 tests\nall passed' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const seen: boolean[] = []
+    const start = d.startRun
+    d.startRun = async (req, send, onMessages) => {
+      seen.push(req.liveShellOutput === true)
+      return start(req, send, onMessages)
+    }
+    const t = fakeIo(['/verbose on', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(seen).toEqual([true])
+    expect(rec.runs).toHaveLength(1)
+    expect(out.match(/│ building/g)).toHaveLength(1)
+    expect(out.match(/│ running 3 tests/g)).toHaveLength(1)
+    // The result isn't printed again in full: only its one-line summary.
+    expect(out.match(/running 3 tests/g)).toHaveLength(1)
+  })
+
+  it('does not ask for live shell output without /verbose', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const seen: Array<boolean | undefined> = []
+    const start = d.startRun
+    d.startRun = async (req, send, onMessages) => {
+      seen.push(req.liveShellOutput)
+      return start(req, send, onMessages)
+    }
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(seen).toEqual([undefined])
+  })
+})

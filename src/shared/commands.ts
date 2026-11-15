@@ -565,6 +565,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'todos', group: 'Terminal',
+    description: "Reprint the agent's current todo list and how much of it is done",
+    clients: ['tui']
+  },
+  {
     name: 'output', group: 'Terminal', args: '[n]',
     description: 'Reprint a tool result in full (/output [n])',
     clients: ['tui']
@@ -742,6 +747,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   focus: 'the app folds each tool call into a row you can open',
   output: 'in the app, open a tool row to see its full output',
   thoughts: 'in the app, reasoning folds above each reply; Settings > Appearance > Always show reasoning keeps it open',
+  todos: 'in the app, the todo list stays pinned above the message box while the agent works',
   transcript: 'in the app, the chat itself is the full transcript: open a tool row or the reasoning to see it in full',
   copy: 'in the app, use the copy button on a reply or code block',
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
