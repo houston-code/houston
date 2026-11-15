@@ -112,6 +112,20 @@ function job(name: string): string {
   return next === -1 ? workflow.slice(start) : workflow.slice(start, start + 1 + next)
 }
 
+describe('CI steps that release-prepare runs against an older release line', () => {
+  it('checks the installed CLI compile cache only when the tree built the launcher', () => {
+    // release-prepare.yml runs main's ci.yml against a release line's commit; a line cut
+    // before the launcher links the bundle directly and never writes a compile cache.
+    const test = job('test')
+    const step = test.slice(test.indexOf('name: Smoke the CLI installer'))
+    const guard = step.indexOf('if [ -f out/cli/houston.cjs ]; then')
+    const check = step.indexOf('installed houston wrote no compile cache')
+    expect(guard).toBeGreaterThan(-1)
+    expect(check).toBeGreaterThan(guard)
+    expect(step.indexOf('\n          fi\n', guard)).toBeGreaterThan(check)
+  })
+})
+
 describe('CI never scopes away a required check', () => {
   it('has no path scoping that could skip a required check', () => {
     // A job skipped by a condition reports its required check as a PASS, so any scoping

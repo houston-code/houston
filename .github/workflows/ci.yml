@@ -158,7 +158,12 @@ jobs:
           got="$(HOME="$scratch/home" XDG_CACHE_HOME="$scratch/cache" PATH="$bindir:$PATH" houston --version)"
           echo "houston --version -> $got (expected $ver)"
           [ "$got" = "$ver" ] || { echo "::error::bare houston --version printed '$got', expected '$ver'"; exit 1; }
-          [ -n "$(find "$scratch" -path '*/houston/compile-cache/*' -type f | head -1)" ] || { echo "::error::installed houston wrote no compile cache"; exit 1; }
+          # A release run can check out a commit that predates the launcher (its installer
+          # links the bundle itself, with no compile cache): check the cache only when the
+          # build wrote the launcher.
+          if [ -f out/cli/houston.cjs ]; then
+            [ -n "$(find "$scratch" -path '*/houston/compile-cache/*' -type f | head -1)" ] || { echo "::error::installed houston wrote no compile cache"; exit 1; }
+          fi
 
   # Exercise the Linux bubblewrap backend for REAL — the macOS-bound developer can't
   # run it locally, so CI is the source of truth. Installs bubblewrap, enables
