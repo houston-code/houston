@@ -1,4 +1,5 @@
 import type { Middleware } from '@anthropic-ai/sdk'
+import { join } from 'node:path'
 import type { Provider } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { VERTEX_MODELS } from '@shared/provider-catalog'
@@ -6,6 +7,7 @@ import { createMessagesProvider, type MessagesClient } from './anthropic'
 import { idleTimeoutFetch } from './idle-fetch'
 import { SDK_MAX_RETRIES } from '../agent/retry'
 import { GOOGLE_CREDENTIALS, boundCredentialLookup, findCredentialLookupError } from './cloud-credentials'
+import { clientKey, fileStamp, forgetSharedClient, isAuthRejection, sharedClient } from './client-cache'
 
 /**
  * Claude on Google Vertex AI.
@@ -54,12 +56,43 @@ export interface VertexOptions {
   headers?: Record<string, string>
 }
 
+/**
+ * The file `gcloud auth application-default login` writes, where google-auth looks when
+ * `GOOGLE_APPLICATION_CREDENTIALS` is unset (its own well-known-file lookup).
+ */
+function wellKnownCredentialsFile(): string | undefined {
+  const root = process.platform === 'win32' ? process.env.APPDATA : process.env.HOME && join(process.env.HOME, '.config')
+  return root ? join(root, 'gcloud', 'application_default_credentials.json') : undefined
+}
+
+/**
+ * The shared-client key for these options (see client-cache.ts): the settings, the SDK's
+ * environment fallbacks for them, and the credential files google-auth reads, so a new
+ * login or service account gets a new client. Exported for testing.
+ */
+export function vertexClientKey(opts: VertexOptions): string {
+  const env = process.env
+  return clientKey('vertex', {
+    region: opts.region || env.CLOUD_ML_REGION,
+    projectId: opts.projectId || env.ANTHROPIC_VERTEX_PROJECT_ID,
+    baseUrl: opts.baseUrl || env.ANTHROPIC_VERTEX_BASE_URL,
+    headers: opts.headers,
+    credentials: [
+      env.GOOGLE_APPLICATION_CREDENTIALS,
+      fileStamp(env.GOOGLE_APPLICATION_CREDENTIALS),
+      fileStamp(wellKnownCredentialsFile())
+    ]
+  })
+}
+
 /** A provider for Claude on Vertex AI, authenticated with Google ADC. */
 export function createVertexProvider(opts: VertexOptions = {}): Provider {
-  // Lazy + memoized: google-auth-library is imported only once a turn actually runs.
-  let clientPromise: Promise<MessagesClient> | undefined
+  // Lazy: google-auth-library is imported only once a turn actually runs. Shared across
+  // turns and side requests, so the google-auth client keeps its access token and only
+  // the first request on it exchanges one.
+  const key = vertexClientKey(opts)
   const getClient = (): Promise<MessagesClient> =>
-    (clientPromise ??= import('@anthropic-ai/vertex-sdk').then((m) => {
+    sharedClient(key, () => import('@anthropic-ai/vertex-sdk').then((m) => {
       // The Google OAuth lookup runs before the SDK's request timer and ignores the
       // abort signal, so bound it here (see cloud-credentials.ts).
       class BoundedVertex extends m.AnthropicVertex {
@@ -87,10 +120,11 @@ export function createVertexProvider(opts: VertexOptions = {}): Provider {
         yield* inner.streamChat(req)
       } catch (err) {
         // The SDK keeps the first google-auth client it asked for, stuck or not, so a
-        // lookup that never answered would fail every later turn the same way. Start
-        // the next one from a fresh client.
+        // lookup that never answered would fail every later turn the same way; and a
+        // token Google refused would be presented again. Start the next one from a
+        // fresh client.
         const lookup = findCredentialLookupError(err)
-        if (lookup) clientPromise = undefined
+        if (lookup || isAuthRejection(err)) forgetSharedClient(key)
         throw lookup ?? err
       }
     }

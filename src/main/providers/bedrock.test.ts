@@ -1,7 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ChatRequest } from '@shared/agent'
-import { createBedrockProvider, explainLegacyModelError, listBedrockModels, predatesClaude47 } from './bedrock'
+import {
+  bedrockClientKey,
+  createBedrockProvider,
+  explainLegacyModelError,
+  listBedrockModels,
+  predatesClaude47
+} from './bedrock'
 import { ProviderError } from '../agent/retry'
+import { resetSharedClients } from './client-cache'
 
 /**
  * Bedrock rides the shared Anthropic adapter, so these tests cover the two things
@@ -11,7 +21,22 @@ import { ProviderError } from '../agent/retry'
  * host quietly losing thinking or prompt caching.
  */
 
-const h = vi.hoisted(() => ({ stream: vi.fn(), ctor: vi.fn() }))
+// Clients are shared across providers at module level; each test builds its own.
+beforeEach(() => resetSharedClients())
+
+const h = vi.hoisted(() => ({ stream: vi.fn(), ctor: vi.fn(), chains: 0, lookups: 0 }))
+// The AWS chain, counted: how many chains were built, and how often one was asked.
+vi.mock('@aws-sdk/credential-providers', () => ({
+  fromEnv: () => async () => ({ accessKeyId: 'env', secretAccessKey: 'env' }),
+  fromNodeProviderChain: () => async () => ({ accessKeyId: 'node', secretAccessKey: 'node' }),
+  createCredentialChain: (...providers: Array<() => Promise<unknown>>) => {
+    h.chains++
+    return async () => {
+      h.lookups++
+      return providers[0]()
+    }
+  }
+}))
 vi.mock('@anthropic-ai/bedrock-sdk', () => {
   class FakeAnthropicBedrockMantle {
     messages = { stream: h.stream }
@@ -65,10 +90,10 @@ describe('createBedrockProvider client options', () => {
 
   it('omits every option the user did not set, so the SDK resolves its own defaults', async () => {
     // Passing awsRegion: undefined would override the SDK's AWS_REGION fallback. The
-    // only options always set are the idle-timeout fetch and the SDK's retries turned off
-    // (Houston's RetryBudget is the only retry layer).
+    // only options always set are the idle-timeout fetch, the SDK's retries turned off
+    // (Houston's RetryBudget is the only retry layer) and the client's one credential chain.
     const { ctorOpts } = await run({}, { model: 'anthropic.claude-opus-4-8' })
-    expect(ctorOpts).toEqual({ fetch: expect.any(Function), maxRetries: 0 })
+    expect(ctorOpts).toEqual({ fetch: expect.any(Function), maxRetries: 0, providerChainResolver: expect.any(Function) })
   })
 
   it('omits an empty apiKey rather than sending one', async () => {
@@ -111,6 +136,89 @@ describe('createBedrockProvider client options', () => {
       }
     }
     expect(h.ctor).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('bedrock clients shared across turns and side requests', () => {
+  beforeEach(() => {
+    h.stream.mockReset()
+    h.ctor.mockReset()
+    h.chains = 0
+    h.lookups = 0
+  })
+
+  it('reuses one client for providers built with the same settings (a turn, then its title request)', async () => {
+    await run({ region: 'us-east-1' }, { model: 'anthropic.claude-opus-4-8' })
+    await run({ region: 'us-east-1' }, { model: 'anthropic.claude-haiku-5-5' })
+    expect(h.ctor).toHaveBeenCalledTimes(1)
+  })
+
+  it('builds a new client when a setting or the bearer key changes', async () => {
+    const settings = [
+      { region: 'us-east-1' },
+      { region: 'us-west-2' },
+      { region: 'us-west-2', apiKey: 'key-one' },
+      { region: 'us-west-2', apiKey: 'key-two' },
+      { region: 'us-west-2', apiKey: 'key-two', baseUrl: 'https://gateway.example.test' },
+      { region: 'us-west-2', apiKey: 'key-two', baseUrl: 'https://gateway.example.test', headers: { 'X-Key': 'a' } }
+    ]
+    for (const opts of settings) await run(opts, { model: 'anthropic.claude-opus-4-8' })
+    expect(h.ctor).toHaveBeenCalledTimes(settings.length)
+  })
+
+  it('builds a new client once the shared credentials file is rewritten', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-bedrock-creds-'))
+    const file = join(dir, 'credentials')
+    writeFileSync(file, '[default]\naws_access_key_id = OLD\n')
+    vi.stubEnv('AWS_SHARED_CREDENTIALS_FILE', file)
+    try {
+      await run({ region: 'us-east-1' }, { model: 'anthropic.claude-opus-4-8' })
+      await run({ region: 'us-east-1' }, { model: 'anthropic.claude-opus-4-8' })
+      expect(h.ctor).toHaveBeenCalledTimes(1)
+      writeFileSync(file, '[default]\naws_access_key_id = ROTATED\n')
+      await run({ region: 'us-east-1' }, { model: 'anthropic.claude-opus-4-8' })
+      expect(h.ctor).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('gives each client one credential chain, built on first use and asked again from there', async () => {
+    const { ctorOpts } = await run({ region: 'us-east-1' }, { model: 'anthropic.claude-opus-4-8' })
+    const resolve = ctorOpts.providerChainResolver as () => Promise<() => Promise<unknown>>
+    // Nothing is loaded or looked up until a request is signed.
+    expect(h.chains).toBe(0)
+    for (let i = 0; i < 3; i++) await (await resolve())()
+    expect(h.chains).toBe(1)
+    expect(h.lookups).toBe(3)
+  })
+
+  it('starts the next turn from a fresh client after AWS refuses the credentials', async () => {
+    h.stream.mockReturnValueOnce({
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.reject(Object.assign(new Error('The security token included in the request is invalid.'), { status: 403 }))
+      })
+    })
+    const provider = createBedrockProvider({ region: 'us-east-1' })
+    const gen = provider.streamChat({
+      model: 'anthropic.claude-opus-4-8',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest)
+    await expect(gen.next()).rejects.toMatchObject({ status: 403 })
+    await run({ region: 'us-east-1' }, { model: 'anthropic.claude-opus-4-8' })
+    expect(h.ctor).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the bearer key and AWS secrets out of the cache key', () => {
+    vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'aws-secret-xyz')
+    try {
+      const key = bedrockClientKey({ region: 'us-east-1', apiKey: 'bedrock-key-abc', headers: { 'X-Key': 'gw-123' } })
+      for (const secret of ['bedrock-key-abc', 'aws-secret-xyz', 'gw-123']) expect(key).not.toContain(secret)
+      expect(key).toMatch(/^bedrock:[0-9a-f]{64}$/)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 
