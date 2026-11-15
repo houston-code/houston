@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
 import { cachedImageDataUrl } from '../lib/imageUrl'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -679,6 +679,13 @@ const ToolRow = memo(function ToolRow({
   )
 })
 
+/**
+ * The ids of every approval waiting in the transcript, oldest first, so each prompt
+ * can say "Approval 2 of 5" while parallel calls wait at once. Provided by the
+ * Transcript; empty (no count shown) anywhere else.
+ */
+export const ApprovalOrderContext = createContext<readonly string[]>([])
+
 /** The waiting approval's verdict buttons, with Y / A / N keys (see useApprovalKeys). */
 function ApprovalPrompt({
   item,
@@ -692,23 +699,57 @@ function ApprovalPrompt({
 }): JSX.Element {
   // Guidance to send with a denial ("no, use staging instead").
   const [note, setNote] = useState('')
+  // Guidance to send with an approval ("go ahead, but keep the old file"), in its own
+  // field so a reason typed for a denial is never sent with an allow by mistake.
+  const [allowNoteOpen, setAllowNoteOpen] = useState(false)
+  const [allowNote, setAllowNote] = useState('')
+  // A command that can throw away work runs only on a second, deliberate click (or Y
+  // press): the first one arms the choice and says what it will do.
+  const [armed, setArmed] = useState<'allow' | 'rule-allow' | null>(null)
   const ref = useRef<HTMLDivElement | null>(null)
+  const order = useContext(ApprovalOrderContext)
+  const place = order.length > 1 ? order.indexOf(item.id) : -1
   const chatGrant = Boolean(item.egressHost || item.shellNetwork)
-  useApprovalKeys(ref, chatGrant ? 'chat-grant' : 'standard', (decision) =>
-    onApprove(item.id, decision, decision === 'deny' ? note.trim() || undefined : undefined)
+  const discards = !chatGrant && item.discardsWork === true
+  const allowNoteText = (): string | undefined => (allowNoteOpen ? allowNote.trim() || undefined : undefined)
+  const decide = (decision: ToolApprovalDecision, viaKey = false): void => {
+    if (discards && (decision === 'allow' || decision === 'rule-allow') && armed !== decision) {
+      setArmed(decision)
+      return
+    }
+    const refusal = decision === 'deny' || decision === 'rule-deny'
+    const sent = refusal
+      ? note.trim() || undefined
+      : decision === 'allow' || decision === 'always'
+        ? allowNoteText()
+        : undefined
+    // A clicked allow with no note sends just the verdict.
+    if (sent === undefined && !refusal && !viaKey) onApprove(item.id, decision)
+    else onApprove(item.id, decision, sent)
+  }
+  useApprovalKeys(ref, chatGrant ? 'chat-grant' : discards ? 'discard' : 'standard', (decision) =>
+    chatGrant ? onApprove(item.id, decision, undefined) : decide(decision, true)
   )
   const keysTitle = chatGrant
     ? 'Keys: Y allows, N keeps it blocked (while you are not typing in a text box)'
-    : 'Keys: Y allows once, A allows for this chat, N denies (while you are not typing in a text box)'
+    : discards
+      ? 'Keys: Y twice allows once, N denies (while you are not typing in a text box)'
+      : 'Keys: Y allows once, A allows for this chat, N denies (while you are not typing in a text box)'
   const shared = {
     ref,
     className: 'tool-row__approval',
     tabIndex: -1,
     role: 'group',
-    'aria-label': 'Approval',
+    'aria-label': place >= 0 ? `Approval ${place + 1} of ${order.length}` : 'Approval',
     title: keysTitle,
     'data-approval-keys': ''
   } as const
+  const count =
+    place >= 0 ? (
+      <p className="tool-row__approval-count">
+        Approval {place + 1} of {order.length}
+      </p>
+    ) : null
   // Plain text in a scrolling block: the exact command, post or arguments being approved.
   const requestBlock = request ? (
     <pre className="tool-row__approval-request" tabIndex={0} aria-label="What this asks to do">
@@ -718,6 +759,7 @@ function ApprovalPrompt({
   if (item.egressHost) {
     return (
       <div {...shared}>
+        {count}
         {requestBlock}
         <p className="tool-row__approval-note">
           A command tried to reach <strong>{item.egressHost}</strong>, which isn't on the sandbox's
@@ -736,6 +778,7 @@ function ApprovalPrompt({
   if (item.shellNetwork) {
     return (
       <div {...shared}>
+        {count}
         {requestBlock}
         <p className="tool-row__approval-note">
           This command could not reach the network. Shell commands in this chat run offline
@@ -756,6 +799,7 @@ function ApprovalPrompt({
   const hidden = request !== null && hasHiddenCharacters(request)
   return (
     <div {...shared}>
+      {count}
       {requestBlock}
       {hidden && (
         <p className="tool-row__approval-note tool-row__approval-note--warn">
@@ -806,28 +850,43 @@ function ApprovalPrompt({
           "Allow for this chat" covers {item.networkScope} only, for the rest of this chat.
         </p>
       )}
+      {discards && (
+        <p className="tool-row__approval-note tool-row__approval-note--warn">
+          &quot;Allow for this chat&quot; isn&apos;t offered for it, since it asks every time.
+          Allowing takes a second click.
+        </p>
+      )}
+      {armed && (
+        <p className="tool-row__approval-note tool-row__approval-note--warn" role="status">
+          {armed === 'allow'
+            ? 'Click Confirm: run it (or press Y) to run this command.'
+            : 'Click Confirm: always allow to save the rule and run this command.'}
+        </p>
+      )}
       <button
-        className="btn btn--sm btn--ok"
+        className={`btn btn--sm ${discards ? 'btn--danger' : 'btn--ok'}`}
         aria-keyshortcuts="Y"
         title="Run this call only"
-        onClick={() => onApprove(item.id, 'allow')}
+        onClick={() => decide('allow')}
       >
-        Allow once <KeyHint k="Y" />
+        {armed === 'allow' ? 'Confirm: run it' : 'Allow once'} <KeyHint k="Y" />
       </button>
+      {!discards && (
+        <button
+          className="btn btn--sm"
+          aria-keyshortcuts="A"
+          title={
+            item.networkScope
+              ? `Stop asking about ${item.networkScope} for the rest of this chat, until Houston quits`
+              : 'Stop asking for this kind of tool for the rest of this chat, until Houston quits'
+          }
+          onClick={() => decide('always')}
+        >
+          Allow for this chat <KeyHint k="A" />
+        </button>
+      )}
       <button
-        className="btn btn--sm"
-        aria-keyshortcuts="A"
-        title={
-          item.networkScope
-            ? `Stop asking about ${item.networkScope} for the rest of this chat, until Houston quits`
-            : 'Stop asking for this kind of tool for the rest of this chat, until Houston quits'
-        }
-        onClick={() => onApprove(item.id, 'always')}
-      >
-        Allow for this chat <KeyHint k="A" />
-      </button>
-      <button
-        className="btn btn--sm"
+        className={`btn btn--sm${discards ? ' btn--danger' : ''}`}
         title={
           item.name === 'web_fetch'
             ? 'Save a permission rule so fetches from this site are allowed in future runs too'
@@ -835,24 +894,51 @@ function ApprovalPrompt({
               ? 'Save a permission rule so web searches are allowed in future runs too'
               : 'Save a permission rule so this is allowed in future runs too'
         }
-        onClick={() => onApprove(item.id, 'rule-allow')}
+        onClick={() => decide('rule-allow')}
       >
-        Always allow
+        {armed === 'rule-allow' ? 'Confirm: always allow' : 'Always allow'}
+      </button>
+      <button
+        className="btn btn--sm"
+        aria-expanded={allowNoteOpen}
+        title="Write a note that goes to the agent with the result when you allow this"
+        onClick={() => setAllowNoteOpen((v) => !v)}
+      >
+        {allowNoteOpen ? 'No note' : 'Allow with a note…'}
       </button>
       <button
         className="btn btn--sm btn--danger"
         aria-keyshortcuts="N"
-        onClick={() => onApprove(item.id, 'deny', note.trim() || undefined)}
+        onClick={() => decide('deny')}
       >
         Deny <KeyHint k="N" />
       </button>
       <button
         className="btn btn--sm btn--danger"
         title="Save a permission rule so this is denied in future runs too"
-        onClick={() => onApprove(item.id, 'rule-deny', note.trim() || undefined)}
+        onClick={() => decide('rule-deny')}
       >
         Always deny
       </button>
+      {allowNoteOpen && (
+        <input
+          className="tool-row__approval-reason"
+          type="text"
+          value={allowNote}
+          autoFocus
+          placeholder={
+            discards
+              ? 'Note for the agent, sent if you allow this (Enter allows once)'
+              : 'Note for the agent, sent with Allow once or Allow for this chat (Enter allows once)'
+          }
+          aria-label="Note sent to the agent with your approval"
+          maxLength={MAX_APPROVAL_NOTE}
+          onChange={(e) => setAllowNote(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && allowNote.trim()) decide('allow')
+          }}
+        />
+      )}
       {/*
         Guidance rides the same interaction as the refusal. Without it a denial
         is a dead end: the agent is told only that it was refused, so it retries

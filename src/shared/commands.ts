@@ -435,8 +435,9 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   { name: 'delete', group: 'Chat', description: 'Delete this chat (asks first)', clients: ['tui'] },
   {
-    name: 'permissions', group: 'Setup', args: '[remove n]',
-    description: 'List the saved permission rules, or remove one', clients: ['tui']
+    name: 'permissions', group: 'Setup', args: '[remove n | allow n | add …]',
+    description: 'Saved permission rules and recent denials: remove a rule, allow a denial, or add one',
+    clients: ['tui']
   },
   { name: 'cost', group: 'Setup', description: 'Session token and cost totals', clients: ['gui', 'tui'] },
   {
@@ -556,7 +557,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   rename: "in the app, rename a chat from its More actions menu in the sidebar",
   export: "in the app, export a chat from its More actions menu in the sidebar, or the File menu",
   delete: "in the app, delete a chat from its More actions menu in the sidebar",
-  permissions: 'in the app, saved rules are under Settings > Permissions',
+  permissions: 'in the app, saved rules and recent denials are under Settings > Permissions',
   exit: 'close the window to leave',
   quit: 'close the window to leave'
 }

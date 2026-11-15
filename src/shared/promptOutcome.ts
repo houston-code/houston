@@ -34,6 +34,18 @@ export function denialText(base: string, note?: string): string {
   return note ? `${base} ${DENIAL_NOTE_LEAD} ${note}` : base
 }
 
+/** What introduces a note the user allowed a call with, after the call's own result. */
+export const APPROVAL_ALLOW_NOTE_LEAD = 'Allowed by the user. Note from the user:'
+
+/**
+ * A call's result with the note the user allowed it with ("go ahead, but keep the old
+ * file"), so their guidance reaches the model alongside what it qualifies. Unchanged
+ * when there is no note.
+ */
+export function withApprovalNote(output: string, note?: string): string {
+  return note ? `${output}\n\n${APPROVAL_ALLOW_NOTE_LEAD} ${note}` : output
+}
+
 /** A short user-facing line for a prompt the run was stopped in front of, or null. */
 export function stoppedPromptText(output: string | undefined): string | null {
   if (!output) return null

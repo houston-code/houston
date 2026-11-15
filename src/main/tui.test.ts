@@ -423,7 +423,15 @@ describe('approval prompt', () => {
     expect(p).toContain('[!] always allow (saves a rule)')
     expect(p).not.toContain('for run')
     const labels = APPROVAL_OPTIONS.map((o) => o.label)
-    expect(labels).toEqual(['Allow once', 'Allow for this chat', 'Always allow', 'Deny', 'Deny with a reason…', 'Always deny'])
+    expect(labels).toEqual([
+      'Allow once',
+      'Allow for this chat',
+      'Allow with a note…',
+      'Always allow',
+      'Deny',
+      'Deny with a reason…',
+      'Always deny'
+    ])
     expect(APPROVAL_OPTIONS[1].description).toContain('until Houston quits')
     expect(HELP_TEXT).toContain('allow this kind of tool for the rest of this chat, until Houston quits')
   })
@@ -1934,8 +1942,8 @@ describe('runTui', () => {
     }
     d.io = t.io
     await runTui(opts, d)
-    // y / n / a / ! / x, as typed answers read them; a reason has no key.
-    expect(specs[0].options.map((o) => o.key)).toEqual(['y', 'a', '!', 'n', undefined, 'x'])
+    // y / n / a / c / ! / x, as typed answers read them; a reason has no key.
+    expect(specs[0].options.map((o) => o.key)).toEqual(['y', 'a', 'c', '!', 'n', undefined, 'x'])
     expect(specs[0].typeLabel).toBe('type a reason to deny')
     // The network question is yes or no, with nothing to type.
     expect(specs[1].options.map((o) => o.key)).toEqual(['y', 'n'])

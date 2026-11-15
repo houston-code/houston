@@ -825,6 +825,11 @@ the model.
   always stays.
 - `/permissions` lists your saved permission rules, numbered; `/permissions remove <n>`
   deletes one. Rules in a project's `.houston/settings.json` are edited in that file.
+  Under the rules it lists the calls you denied at an approval prompt this session
+  (the last 20, newest first, with any reason you gave); `/permissions allow <n>` saves
+  for one the allow rule "Always allow" would have saved. `/permissions add allow|ask|deny
+  [exact] <tool> <pattern>` adds a rule by typing it, after your other rules
+  (`/permissions add allow run_shell npm run *`).
 - `/resume [search]` (or `/sessions`) opens a picker of this folder's saved chats,
   newest first, marked unread or failed as in the desktop sidebar. Under the list it
   previews the highlighted chat: its title, when it was last updated, how many messages
@@ -2216,10 +2221,12 @@ commands.
   down infrastructure (`terraform destroy`, `kubectl delete namespace`)
 
 Quoting a word, splitting it across lines, or running it through `bash -c` doesn't
-hide one. "Allow for this chat" doesn't stop these asking. An `allow` permission rule does
-only when it is exact for the command, or its pattern names the destructive part
-(`git push --force*`): a prefix like `git push` doesn't. The "Always allow" choice on
-the prompt saves an exact rule for that command.
+hide one. "Allow for this chat" doesn't stop these asking, so the prompt doesn't offer
+it, and allowing takes a deliberate second step: in the terminal you type `yes`, in the
+desktop app you click the allow button a second time (or press `Y` twice). An `allow`
+permission rule skips the prompt only when it is exact for the command, or its pattern
+names the destructive part (`git push --force*`): a prefix like `git push` doesn't. The
+"Always allow" choice on the prompt saves an exact rule for that command.
 
 The prompt says when this is why it is asking, and likewise when a command reaches
 outside the project folder (which also asks in every mode), in the app, the terminal,
@@ -2262,7 +2269,8 @@ On any single tool call you can:
 
 **Keys in the desktop app.** A waiting approval answers to `Y` (allow once), `A` (allow
 for this chat) and `N` (deny, with any reason typed in the box below), shown on the
-buttons.
+buttons. When several prompts wait at once (subagents working in parallel), each says
+which it is, "Approval 2 of 5", oldest first; the terminal shows the same count.
 The keys work whenever you are not typing in a text box. When the prompt appears and
 the message box is empty and idle, the prompt takes the keyboard, and gives it back
 once answered. With several prompts waiting, the keys answer the first. The two
@@ -2299,8 +2307,24 @@ says, so "no, and here's what to do instead" lands in the same step.
   prompt. Anything that isn't a shortcut key is read as a denial plus that
   explanation.
 
-**Terminal approval keys:** `y` allow once, `a` allow for this chat, `!` always allow
-(saves a rule), `n` deny, `x` always deny (saves a rule).
+**Allowing with a note.** An approval can carry guidance too ("go ahead, but keep the
+old build"): the call runs and the agent gets your note with its result.
+
+- **Desktop app:** click **Allow with a note…**, type it, then **Allow once** or
+  **Allow for this chat** (`Enter` in the note box allows once).
+- **Terminal:** pick "Allow with a note…" (or type `c`), type the note, then choose
+  once or for this chat.
+
+Headless runs and editors over ACP send no note.
+
+**Recently denied.** Settings > Permissions and the terminal's `/permissions` list the
+calls you denied this session, so one you denied by mistake, or keep being asked about,
+can become an allow rule: **Allow this** (or `/permissions allow <n>`) saves the rule
+"Always allow" would have saved for it. A deny rule that still matches wins over it, and
+the list says so. The list lives in memory and is gone when Houston quits.
+
+**Terminal approval keys:** `y` allow once, `a` allow for this chat, `c` allow with a
+note, `!` always allow (saves a rule), `n` deny, `x` always deny (saves a rule).
 
 Stopping a run while an approval is waiting is recorded as an interruption, not a
 refusal, so the agent isn't told you rejected something you never answered.

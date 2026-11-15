@@ -148,7 +148,7 @@ export interface ToolItem {
   sensitiveWrite?: boolean
   /** With sensitiveWrite: the file is an in-project control file (.houston/, .vscode/, …). */
   protectedWrite?: boolean
-  /** A shell command that can throw away work, so it asks in every mode (see the event). */
+  /** A shell command that can throw away work, so it asks in every mode and takes a second click. */
   discardsWork?: boolean
   /** A shell command that reaches outside the workspace, so it asks in every mode. */
   escapesWorkspace?: boolean

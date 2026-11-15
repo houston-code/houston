@@ -3,9 +3,9 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { ChatMessage } from '@shared/agent'
 import { COMPACTION_SUMMARY_PREFIX, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import type { PermissionRule } from '@shared/types'
+import type { PermissionRule, RecentDenial } from '@shared/types'
 import type { Painter } from './tui'
-import { stripControlChars } from './tui-wrap'
+import { stripControlChars, terminalText, truncateVisible } from './tui-wrap'
 
 /**
  * Session commands for the terminal: what a resumed chat shows of its past
@@ -366,6 +366,53 @@ export function renderPermissionRules(rules: PermissionRule[], paint: Painter, n
   })
   lines.push(paint('/permissions remove <n> deletes one. Project rules in .houston/settings.json are edited in that file.', 'dim'))
   return lines.join('\n')
+}
+
+/** How `/permissions add` is typed, for its usage line and the list's footer. */
+export const PERMISSIONS_ADD_USAGE = '/permissions add allow|ask|deny [exact] <tool> <pattern>'
+
+/**
+ * The calls denied at an approval prompt this session, newest first, numbered for
+ * `/permissions allow <n>`. Empty when nothing was denied. A subject is the model's
+ * text, so it is shown with its hidden characters as codes, on one line, and cut to fit.
+ */
+export function renderRecentDenials(denials: RecentDenial[], paint: Painter, now: number, width = 80): string {
+  if (!denials.length) return ''
+  const lines = [paint('Recently denied this session (newest first):', 'bold')]
+  const toolOf = (d: RecentDenial): string => stripControlChars(d.tool)
+  const toolWidth = Math.max(...denials.map((d) => toolOf(d).length))
+  denials.forEach((d, i) => {
+    const subject = d.subject.trim()
+      ? truncateVisible(terminalText(d.subject, { lines: false }), Math.max(20, width - toolWidth - 30))
+      : paint('(no target)', 'dim')
+    const why = d.reason ? `, "${truncateVisible(terminalText(d.reason, { lines: false }), 60)}"` : ''
+    lines.push(
+      `  ${paint(String(i + 1).padStart(2), 'cyan')}. ${toolOf(d).padEnd(toolWidth)}  ${subject}${paint(`  (${ago(now - d.at)}${why})`, 'dim')}`
+    )
+  })
+  lines.push(paint('/permissions allow <n> saves an allow rule for one, the rule "Always allow" would have saved.', 'dim'))
+  return lines.join('\n')
+}
+
+/**
+ * Parse `/permissions add <action> [exact] <tool> <pattern>` (the words after "add")
+ * into a rule, or an error to show. The pattern is the rest of the line as typed, so a
+ * shell command keeps its own spaces and quoting; the matcher canonicalizes it.
+ */
+export function parsePermissionAdd(rest: string): { rule: PermissionRule } | { error: string } {
+  const m = /^(allow|ask|deny)\s+(?:(exact)\s+)?(\S+)\s+([\s\S]+)$/i.exec(rest.trim())
+  if (!m) return { error: `usage: ${PERMISSIONS_ADD_USAGE}` }
+  const tool = m[3]
+  if (!/^[\w.*:-]+$/.test(tool)) return { error: `"${stripControlChars(tool)}" is not a tool name (or *)` }
+  const match = m[4].trim()
+  const rule: PermissionRule = {
+    action: m[1].toLowerCase() as PermissionRule['action'],
+    tool,
+    match,
+    ...(m[2] ? { exact: true } : {}),
+    source: 'settings'
+  }
+  return { rule }
 }
 
 /**

@@ -38,7 +38,7 @@ import { scrollBehavior } from '../lib/motion'
 import { liveAnnouncement, messageHeading } from '../lib/transcriptA11y'
 import { useTransientFlag } from '../hooks/useTransientFlag'
 import { useStableCallback } from '../hooks/useStableCallback'
-import { ToolGroup } from './ToolGroup'
+import { ApprovalOrderContext, ToolGroup } from './ToolGroup'
 import { QuestionCard } from './QuestionCard'
 import { ProposalCard, type ProposalHandlers } from './ProposalCard'
 import { ElicitationCard } from './ElicitationCard'
@@ -811,6 +811,13 @@ export function Transcript({
   // Memoized so it isn't rebuilt when the Transcript re-renders for a non-content
   // reason (e.g. the scroll-to-bottom button toggling).
   const nodes = useMemo(() => groupItems(items), [items])
+  // Every approval waiting at once, oldest first, so each prompt can say "2 of 5". Kept
+  // as the same array while the set is unchanged, so rows don't re-render per update.
+  const awaitingKey = items
+    .filter((it) => it.kind === 'tool' && it.status === 'awaiting-approval')
+    .map((it) => it.id)
+    .join('\n')
+  const approvalOrder = useMemo(() => (awaitingKey ? awaitingKey.split('\n') : []), [awaitingKey])
 
   // Expand / collapse every tool row at once. Each press is a new numbered command, so
   // pressing it again reaches rows the user has toggled since.
@@ -944,6 +951,7 @@ export function Transcript({
 
   return (
     <TranscriptPrefsContext.Provider value={prefs}>
+    <ApprovalOrderContext.Provider value={approvalOrder}>
     <div className="transcript-wrap">
       {hasTools && (
         <button
@@ -1007,6 +1015,7 @@ export function Transcript({
         </button>
       )}
     </div>
+    </ApprovalOrderContext.Provider>
     </TranscriptPrefsContext.Provider>
   )
 }

@@ -15,7 +15,9 @@ import {
   type Hook,
   type McpServerConfig,
   type ModelOption,
-  type ProviderConfig
+  type PermissionRule,
+  type ProviderConfig,
+  type RecentDenial
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
 import type { ShellCapture } from './userShell'
@@ -115,13 +117,17 @@ import { MarkdownStream, renderMarkdownAnsi } from './markdown-ansi'
 import { describeToolCall } from '@shared/toolLabel'
 import { approvalAskReasons } from '@shared/approvalReasons'
 import { renderPreviewView } from './tui-diff'
+import { lintPermissionRules } from '@shared/permissionLint'
 import {
   chatToJson,
   chatToMarkdown,
   defaultExportName,
   parseExportArgs,
+  parsePermissionAdd,
+  PERMISSIONS_ADD_USAGE,
   redactExport,
   renderPermissionRules,
+  renderRecentDenials,
   renderRecap,
   sessionPreviewLines,
   type ExportArgs
@@ -708,9 +714,14 @@ export function renderApprovalKeys(ev: Extract<AgentEvent, { type: 'tool_approva
     return paint(`  [y] allow ${terminalText(ev.egressHost, { lines: false })} for this chat   [n] keep blocked`, 'dim')
   }
   if (ev.shellNetwork) return paint('  [y] allow network for this chat   [n] keep offline', 'dim')
+  // A command that can throw away work asks every time, so there is no chat-wide grant
+  // to offer for it.
+  const chat = ev.discardsWork ? '' : '   [a] allow for this chat'
   return (
-    paint('  [y] allow once   [a] allow for this chat   [!] always allow (saves a rule)   [n] deny   [x] always deny', 'dim') +
-    paint('\n  …or type why not, and that goes back to the agent', 'dim')
+    paint(
+      `  [y] allow once${chat}   [c] allow with a note   [!] always allow (saves a rule)   [n] deny   [x] always deny`,
+      'dim'
+    ) + paint('\n  …or type why not, and that goes back to the agent', 'dim')
   )
 }
 
@@ -727,8 +738,11 @@ export function renderApprovalKeys(ev: Extract<AgentEvent, { type: 'tool_approva
 export function renderApprovalPrompt(
   ev: Extract<AgentEvent, { type: 'tool_approval' }>,
   paint: Painter,
-  /** The arrow-key picker lists the choices itself; the typed-answer keys would repeat them. */
-  opts: { picker?: boolean; width?: number } = {}
+  /**
+   * The arrow-key picker lists the choices itself; the typed-answer keys would repeat
+   * them. `position` is where this prompt sits among those waiting at once ("2 of 5").
+   */
+  opts: { picker?: boolean; width?: number; position?: ApprovalPosition } = {}
 ): string {
   const text = (t: string): string => renderApprovalText(t, paint, opts.width).join('\n')
   // The full-auto shell-network question comes after a command already failed offline.
@@ -793,8 +807,64 @@ export function renderApprovalPrompt(
   // Named as the call's tool line names it ("Run", "Write"), not by its wire name.
   const head = paint(`Approve ${terminalText(describeToolCall(ev.name, ev.args).verb, { lines: false })}`, 'bold')
   const kind = paint(`[${ev.kind}]${extent ? ` · ${extent}` : ''}`, 'dim')
+  const count = opts.position ? ` ${paint(approvalPositionText(opts.position), 'cyan')}` : ''
+  // A command that can throw away work asks every time (the reasons above say so), so
+  // there is no chat-wide grant to offer, and running it takes a typed "yes", not one key.
+  const discards = ev.discardsWork
+    ? `\n${paint('  "Allow for this chat" does not cover it. Allowing it asks you to type yes to confirm.', 'dim')}`
+    : ''
   const keys = opts.picker ? '' : `\n${renderApprovalKeys(ev, paint)}`
-  return `\n${head} ${kind}${background}\n${subject}${warn}${reasons}${offline}${scope}${keys}`
+  return `\n${head} ${kind}${count}${background}\n${subject}${warn}${reasons}${discards}${offline}${scope}${keys}`
+}
+
+/** Where a prompt sits among the approvals waiting at once, oldest first. */
+export interface ApprovalPosition {
+  index: number
+  total: number
+}
+
+/** "2 of 5": shown only when more than one approval is waiting. */
+export function approvalPositionText(p: ApprovalPosition): string {
+  return `${p.index} of ${p.total}`
+}
+
+/**
+ * Numbers the approvals a run raises while others still wait (parallel subagents can
+ * ask at once), so each prompt can say "2 of 5". A prompt counts from the moment its
+ * event arrives; the batch starts over once none is left waiting.
+ */
+export class ApprovalCounter {
+  private waiting = new Set<string>()
+  private answered = 0
+  arrived(callId: string): void {
+    this.waiting.add(callId)
+  }
+  /** This prompt's place, or null when it is the only one in the batch. */
+  position(): ApprovalPosition | null {
+    const total = this.answered + this.waiting.size
+    return total > 1 ? { index: this.answered + 1, total } : null
+  }
+  done(callId: string): void {
+    if (!this.waiting.delete(callId)) return
+    this.answered++
+    if (this.waiting.size === 0) this.answered = 0
+  }
+}
+
+/** "Allow once or for this chat?" after a note, typed: y once, a for the chat, anything else denies. */
+export function parseNoteScope(answer: string | null | undefined): ToolApprovalDecision {
+  const a = (answer ?? '').trim().toLowerCase()
+  if (a === 'y' || a === 'yes' || a === 'once' || a === '1') return 'allow'
+  if (a === 'a' || a === 'chat' || a === '2') return 'always'
+  return 'deny'
+}
+
+/** The typed word that confirms running a command that can throw away work. */
+export const DISCARD_CONFIRM_WORD = 'yes'
+
+/** Whether the typed confirmation for a work-discarding command says to run it. */
+export function confirmsDiscard(answer: string | null | undefined): boolean {
+  return (answer ?? '').trim().toLowerCase() === DISCARD_CONFIRM_WORD
 }
 
 /**
@@ -816,11 +886,12 @@ export function approvalOutcome(
     if (decision === 'deny') return 'Running offline'
     return 'Network allowed for this chat'
   }
+  const withNote = (base: string): string => (opts.note ? `${base}, with a note: ${opts.note}` : base)
   switch (decision) {
     case 'allow':
-      return 'Allowed'
+      return withNote('Allowed')
     case 'always':
-      return 'Allowed for this chat'
+      return withNote('Allowed for this chat')
     case 'rule-allow':
       return 'Always allowed (rule saved)'
     case 'rule-deny':
@@ -839,10 +910,12 @@ export function approvalOutcome(
  * the model saw a bare refusal, which is the worst of both — the user thinks they
  * gave direction, and the agent retries a variant of the same thing.
  */
-export function parseApprovalAnswer(answer: string): { decision: ToolApprovalDecision; note?: string } {
+export function parseApprovalAnswer(answer: string): { decision: ToolApprovalDecision; note?: string; askNote?: true } {
   const raw = answer.trim()
   const a = raw.toLowerCase()
   if (a === 'y' || a === 'yes' || a === 'allow') return { decision: 'allow' }
+  // Allow, then ask for the note that goes to the agent with the result.
+  if (a === 'c' || a === 'comment' || a === 'note') return { decision: 'allow', askNote: true }
   if (a === 'a' || a === 'always' || a === 'allow-run') return { decision: 'always' }
   if (a === '!' || a === 'always-allow') return { decision: 'rule-allow' }
   if (a === 'x' || a === 'always-deny') return { decision: 'rule-deny' }
@@ -860,7 +933,7 @@ export function parseApprovalAnswer(answer: string): { decision: ToolApprovalDec
  */
 export const APPROVAL_OPTIONS: {
   label: string
-  value: ToolApprovalDecision | 'deny-note'
+  value: ToolApprovalDecision | 'deny-note' | 'allow-note'
   description: string
   key?: string
 }[] = [
@@ -871,11 +944,20 @@ export const APPROVAL_OPTIONS: {
     description: 'stop asking for this kind of tool in this chat (a network call: this destination), until Houston quits',
     key: 'a'
   },
+  { label: 'Allow with a note…', value: 'allow-note', description: 'run it, and tell the agent something with the result', key: 'c' },
   { label: 'Always allow', value: 'rule-allow', description: 'save a permission rule, kept across restarts', key: '!' },
   { label: 'Deny', value: 'deny', description: 'refuse this once', key: 'n' },
   { label: 'Deny with a reason…', value: 'deny-note', description: 'tell the agent what to do instead' },
   { label: 'Always deny', value: 'rule-deny', description: 'save a permission rule, kept across restarts', key: 'x' }
 ]
+
+/**
+ * The picker's choices for one prompt. A command that can throw away work asks every
+ * time, so "Allow for this chat" would grant nothing for it: it isn't offered.
+ */
+export function approvalOptionsFor(ev: { discardsWork?: boolean }): typeof APPROVAL_OPTIONS {
+  return ev.discardsWork ? APPROVAL_OPTIONS.filter((o) => o.value !== 'always') : APPROVAL_OPTIONS
+}
 
 /**
  * Render the per-file diff preview the main process computed against the files'
@@ -2006,8 +2088,12 @@ export type SlashResult =
   | { kind: 'rename'; title: string }
   /** Delete this chat, after a confirmation (/delete). */
   | { kind: 'delete' }
-  /** List the saved permission rules, or remove the n-th (/permissions [remove n]). */
-  | { kind: 'permissions'; remove?: number; bad?: boolean }
+  /**
+   * List the saved permission rules and this session's denials, remove the n-th rule,
+   * allow the n-th recent denial, or add a typed rule
+   * (/permissions [remove n | allow n | add <action> [exact] <tool> <pattern>]).
+   */
+  | { kind: 'permissions'; remove?: number; allow?: number; add?: PermissionRule; bad?: boolean; error?: string }
   | { kind: 'capability'; which: 'skills' | 'agents' }
   | { kind: 'set-theme'; theme: ThemeName }
   | { kind: 'image'; path: string }
@@ -2173,7 +2259,15 @@ export function parseSlashCommand(
       const a = arg.trim()
       if (!a) return { kind: 'permissions' }
       const m = /^(?:remove|rm|delete)\s+(\d+)$/i.exec(a)
-      return m ? { kind: 'permissions', remove: Number(m[1]) } : { kind: 'permissions', bad: true }
+      if (m) return { kind: 'permissions', remove: Number(m[1]) }
+      const allow = /^allow\s+(\d+)$/i.exec(a)
+      if (allow) return { kind: 'permissions', allow: Number(allow[1]) }
+      const add = /^add(?:\s+([\s\S]*))?$/i.exec(a)
+      if (add) {
+        const r = parsePermissionAdd(add[1] ?? '')
+        return 'rule' in r ? { kind: 'permissions', add: r.rule } : { kind: 'permissions', error: r.error }
+      }
+      return { kind: 'permissions', bad: true }
     }
     case 'skills':
     case 'agents':
@@ -2393,7 +2487,7 @@ export const HELP_TEXT = [
   '  /export [md|json] [path]  write this chat to a file (Markdown by default)',
   '  /export --copy        put it on the clipboard instead; also --no-reasoning, --no-tools; secrets are masked (--no-redact keeps them)',
   '  /delete               delete this chat (asks first)',
-  '  /permissions [remove n]  list the saved permission rules, or remove one',
+  '  /permissions [op n]   saved permission rules and this session\'s denials: remove n (a rule), allow n (save an allow rule for a denial), or add allow|ask|deny [exact] <tool> <pattern>',
   '  /cost                 show session token + cost totals',
   '  /usage                spend and tokens per day (last 7) and per project, from the chats on this computer',
   '  /context              what fills the context now, part by part',
@@ -2461,7 +2555,9 @@ export const HELP_TEXT = [
   '  y                     allow this call once',
   '  a                     allow this kind of tool for the rest of this chat, until Houston quits (a network call: that destination only)',
   '  !                     always allow: saves a permission rule, kept across restarts',
+  '  c                     allow with a note: what you type goes to the agent with the result',
   '  n, x                  deny this call, or always deny (saves a rule)',
+  '  yes                   typed to run a command that can throw away work (git reset --hard, a forced push, rm -r)',
   '  any other key         start a reason to deny with, sent to the agent',
   '  Esc, Ctrl-C           deny; Ctrl-C also stops the turn'
 ].join('\n')
@@ -3610,6 +3706,14 @@ export interface TuiDeps {
   compact?: (id: string, providerId: string, model: string, opts?: CompactOptions) => Promise<CompactResult>
   /** Persist a settings patch (for /hooks and /mcp editing). Absent ⇒ editing disabled. */
   updateSettings?: (patch: Partial<AppSettings>) => void
+  /** The calls denied at an approval prompt this session, newest first (for /permissions). */
+  recentDenials?: () => RecentDenial[]
+  /**
+   * Save the allow rules "Always allow" would have saved for a recent denial (by its id),
+   * and drop it from the list. Null when it is no longer listed. `deniedByRule` says a
+   * saved deny rule still matches it, which wins over any allow.
+   */
+  allowRecentDenial?: (id: string) => { added: PermissionRule[]; deniedByRule: boolean } | null
   /**
    * OAuth sign-in/out for remote MCP servers (the `/mcp login|logout <n>` verbs).
    * `login` runs the interactive browser flow for the server and persists the
@@ -5739,12 +5843,71 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'permissions') {
         const rules = deps.getSettings().permissionRules ?? []
-        if (result.bad) {
-          deps.io.out(paint('· usage: /permissions, or /permissions remove <n>\n', 'dim'))
+        const denials = deps.recentDenials?.() ?? []
+        const ruleText = (r: PermissionRule): string =>
+          `${r.action} ${stripControlChars(r.tool || '*')} ${terminalText(r.match, { lines: false })}${r.exact ? ' (exact)' : ''}`
+        if (result.bad || result.error) {
+          deps.io.out(
+            paint(
+              result.error
+                ? `· ${result.error}\n`
+                : `· usage: /permissions, /permissions remove <n>, /permissions allow <n>, or ${PERMISSIONS_ADD_USAGE}\n`,
+              'dim'
+            )
+          )
+          continue
+        }
+        if (result.allow !== undefined) {
+          const denial = denials[result.allow - 1]
+          if (!denial) {
+            deps.io.out(paint(`· no recently denied call ${result.allow}; /permissions lists them\n`, 'yellow'))
+            continue
+          }
+          const saved = deps.allowRecentDenial?.(denial.id)
+          if (!saved) {
+            deps.io.out(paint('· saving rules is unavailable here\n', 'dim'))
+            continue
+          }
+          deps.io.out(
+            paint(
+              saved.added.length
+                ? `· saved: ${saved.added.map(ruleText).join('; ')}\n`
+                : '· nothing to save: your rules already allow it, or it names nothing a rule can match\n',
+              'dim'
+            )
+          )
+          if (saved.deniedByRule) {
+            deps.io.out(paint('· a deny rule still matches it, and a deny always wins: /permissions remove <n> drops that rule\n', 'yellow'))
+          }
+          continue
+        }
+        if (result.add) {
+          if (!deps.updateSettings) {
+            deps.io.out(paint('· editing settings is unavailable here\n', 'dim'))
+            continue
+          }
+          const rule: PermissionRule = { ...result.add, addedAt: nowFn() }
+          // Last, as Settings adds them: a new rule never pre-empts an existing one.
+          const next = [...rules, rule]
+          deps.updateSettings({ permissionRules: next })
+          deps.io.out(paint(`· added rule ${next.length}: ${ruleText(rule)}\n`, 'dim'))
+          // The same notes Settings shows: a rule that never applies, or allows everything.
+          for (const issue of lintPermissionRules(next).get(next.length - 1) ?? []) {
+            const why =
+              issue.kind === 'broad-allow'
+                ? `it approves every ${rule.tool === '*' ? 'tool' : stripControlChars(rule.tool)} call without asking`
+                : issue.kind === 'shadowed'
+                  ? `rule ${issue.by + 1} already decides what it matches, so it never applies`
+                  : 'it matches nothing'
+            deps.io.out(paint(`· note: ${why}; /permissions remove ${next.length} drops it\n`, 'yellow'))
+          }
           continue
         }
         if (result.remove === undefined) {
           deps.io.out(`${renderPermissionRules(rules, paint, nowFn())}\n`)
+          const recent = renderRecentDenials(denials, paint, nowFn(), columns())
+          if (recent) deps.io.out(`${recent}\n`)
+          deps.io.out(paint(`${PERMISSIONS_ADD_USAGE} adds a rule by typing it.\n`, 'dim'))
           continue
         }
         const rule = rules[result.remove - 1]
@@ -6585,6 +6748,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         .then(() => deps.io.signal?.({ title: workingTitle('working', workspaceName) }))
         .catch(() => {})
     }
+    // "2 of 5" on each approval while several wait at once (parallel subagents).
+    const approvalCount = new ApprovalCounter()
     // Args captured at tool_start, so a write approval can show the actual diff
     // (the approval event itself only carries a human summary).
     const toolArgs = new Map<string, Record<string, unknown>>()
@@ -6897,10 +7062,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         case 'tool_approval':
           if (e.kind === 'write') promptedWrites.add(e.callId)
+          approvalCount.arrived(e.callId)
           enqueue(async () => {
-            if (screenReader) deps.io.out('\nwaiting for approval\n')
+            const position = approvalCount.position()
+            if (screenReader) {
+              deps.io.out(`\nwaiting for approval${position ? `, ${approvalPositionText(position)}` : ''}\n`)
+            }
             // Context (name, kind, unsandboxed warning) + the diff for a write.
-            deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select, width: columns() })}\n`)
+            deps.io.out(
+              `${renderApprovalPrompt(e, paint, {
+                picker: !!deps.io.select,
+                width: columns(),
+                ...(position ? { position } : {})
+              })}\n`
+            )
             if (e.kind === 'write') {
               // Prefer the main process's preview: it is diffed against the files'
               // actual contents, so an overwrite shows what changed rather than the
@@ -6926,6 +7101,25 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             let note: string | undefined
             // An answer the picker already took as typed text (the numbered list).
             let typed: string | undefined
+            // "Allow with a note": the note is asked for next, then how long the allow lasts.
+            let askNote = false
+            const askNoteScope = async (): Promise<ToolApprovalDecision> => {
+              if (deps.io.select) {
+                const r = await deps.io.select({
+                  title: 'Allow:',
+                  escLabel: 'deny',
+                  options: [
+                    { label: 'Allow once', value: 'allow', description: 'run this call only', key: 'y' },
+                    { label: 'Allow for this chat', value: 'always', description: APPROVAL_OPTIONS[1].description, key: 'a' }
+                  ]
+                })
+                if (r.kind === 'commit') return r.value as ToolApprovalDecision
+                // Esc or Ctrl-C backs out of the allow.
+                if (r.kind === 'cancel' || r.kind === 'interrupt') return 'deny'
+                return parseNoteScope(r.text ?? (await deps.io.readLine('Allow once or for this chat? [y/a] ', { discardPending: true })))
+              }
+              return parseNoteScope(await deps.io.readLine('Allow once or for this chat? [y/a] ', { discardPending: true }))
+            }
             if (deps.io.select) {
               // The shell-network consent is a yes/no question about egress, not a
               // permission rule about a command — offering "always allow"/"deny with a
@@ -6947,7 +7141,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                       { label: 'Allow network for this chat', value: 'always', key: 'y' },
                       { label: 'Keep offline', value: 'deny', key: 'n' }
                     ]
-                  : APPROVAL_OPTIONS.map((o) => ({
+                  : approvalOptionsFor(e).map((o) => ({
                       label: o.label,
                       value: o.value,
                       description: o.description,
@@ -6980,6 +7174,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                   })
                   decision = 'deny'
                   note = reason?.trim() || undefined
+                } else if (r.value === 'allow-note') {
+                  askNote = true
                 } else {
                   decision = r.value as ToolApprovalDecision
                 }
@@ -6987,18 +7183,56 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               else typed = r.text
               // 'type' → fall through to the typed prompt below
             }
-            if (decision === null) {
+            if (decision === null && !askNote) {
               const ans = typed ?? (await deps.io.readLine('> ', { discardPending: true }))
               const parsed = parseApprovalAnswer(ans ?? '')
               decision = parsed.decision
               note = parsed.note
+              if (parsed.askNote) {
+                // The network questions take no note: "c" there is no answer, so no grant.
+                if (e.shellNetwork || e.egressHost) decision = 'deny'
+                else {
+                  askNote = true
+                  decision = null
+                }
+              }
             }
-            const outcome = approvalOutcome(decision, {
-              shellNetwork: e.shellNetwork,
-              ...(e.egressHost ? { egressHost: e.egressHost } : {}),
-              note
-            })
+            if (askNote) {
+              // The note rides with the result ("go ahead, but keep the old file").
+              const typedNote = await deps.io.readLine('Note for the agent: ', { discardPending: true })
+              if (typedNote === null) decision = 'deny' // Ctrl-C or end of input: no allow
+              else {
+                note = typedNote.trim() || undefined
+                decision = e.discardsWork ? 'allow' : await askNoteScope()
+                // Backing out of the allow drops the note: it was written for an approval.
+                if (decision === 'deny') note = undefined
+              }
+            }
+            if (decision === null) decision = 'deny'
+            // Nothing covers a work-discarding command for the chat, so a chat grant
+            // typed at it runs it once, as the loop does.
+            if (e.discardsWork && decision === 'always') decision = 'allow'
+            let unconfirmed = false
+            if (e.discardsWork && decision !== 'deny' && decision !== 'rule-deny') {
+              const confirm = await deps.io.readLine(
+                `Type ${DISCARD_CONFIRM_WORD} to run it (anything else denies): `,
+                { discardPending: true }
+              )
+              if (!confirmsDiscard(confirm)) {
+                decision = 'deny'
+                note = undefined
+                unconfirmed = true
+              }
+            }
+            const outcome = unconfirmed
+              ? 'Denied: not confirmed'
+              : approvalOutcome(decision, {
+                  shellNetwork: e.shellNetwork,
+                  ...(e.egressHost ? { egressHost: e.egressHost } : {}),
+                  note
+                })
             deps.io.out(paint(`  ↳ ${stripControlChars(outcome)}\n`, decision === 'deny' || decision === 'rule-deny' ? 'yellow' : 'dim'))
+            approvalCount.done(e.callId)
             deps.resolveApproval(e.runId, e.callId, decision, note)
           })
           break
