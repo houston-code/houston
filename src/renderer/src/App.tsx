@@ -31,7 +31,7 @@ import type {
   RepoInfo,
   ToolApprovalDecision
 } from '@shared/agent'
-import { commandGroup, matchCommands, mergeCommands, builtinCommands, resolveCommand, type Command } from '@shared/commands'
+import { commandGroup, matchCommands, mergeWithBuiltins, builtinCommands, resolveCommand, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import {
   agentTurn,
@@ -1034,7 +1034,7 @@ export default function App(): JSX.Element {
     }
     let cancelled = false
     void window.api.listCommands(workspace).then((custom) => {
-      if (!cancelled) setCommands(mergeCommands(BUILTIN_COMMANDS, custom))
+      if (!cancelled) setCommands(mergeWithBuiltins(BUILTIN_COMMANDS, custom))
     })
     return () => {
       cancelled = true

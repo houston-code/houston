@@ -7,6 +7,9 @@ import {
   groupCommands,
   matchCommands,
   mergeCommands,
+  mergeWithBuiltins,
+  isReservedCommandName,
+  YIELDS_TO_CUSTOM,
   parseAgentInvocation,
   parseSlashCommand,
   resolveCommand,
@@ -203,6 +206,35 @@ describe('mergeCommands', () => {
     )
     expect(merged.map((c) => c.name)).toEqual(['new', 'review'])
     expect(merged.find((c) => c.name === 'new')?.description).toBe('built-in')
+  })
+})
+
+describe('mergeWithBuiltins', () => {
+  const custom = (name: string): Command => ({ name, description: `custom ${name}`, template: 'x', source: 'project' })
+
+  it('reserves every built-in name in either client, and every alias', () => {
+    for (const c of BUILTIN_COMMAND_CATALOG) {
+      expect(isReservedCommandName(c.name), c.name).toBe(!YIELDS_TO_CUSTOM.has(c.name))
+    }
+    // A project's own /commit, /push, /ship or /pr runs in place of the built-in.
+    for (const n of ['commit', 'push', 'ship', 'pr', 'COMMIT']) expect(isReservedCommandName(n), n).toBe(false)
+    for (const a of Object.keys(COMMAND_ALIASES)) expect(isReservedCommandName(a), a).toBe(true)
+    expect(isReservedCommandName('VIM')).toBe(true)
+    expect(isReservedCommandName('deploy')).toBe(false)
+    expect(isReservedCommandName('constructor')).toBe(false)
+  })
+
+  it('drops a custom command named like a terminal-only built-in or an alias, in both clients', () => {
+    const mine = ['vim', 'diff', 'usage', 'Q', 'deploy'].map(custom)
+    for (const client of ['gui', 'tui'] as const) {
+      const merged = mergeWithBuiltins(builtinCommands(client), mine)
+      const customs = merged.filter((c) => c.template === 'x').map((c) => c.name)
+      expect(customs, client).toEqual(['deploy'])
+    }
+    // So a name resolves the same in both: /diff is /changes, a custom /vim never runs.
+    const gui = mergeWithBuiltins(builtinCommands('gui'), mine)
+    expect(resolveCommand(gui, 'diff')?.name).toBe('changes')
+    expect(resolveCommand(gui, 'vim')).toBeUndefined()
   })
 })
 

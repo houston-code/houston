@@ -44,6 +44,7 @@ import {
   BUILTIN_TEMPLATE_COMMANDS,
   commandHasRunOptions,
   mergeCommands,
+  isReservedCommandName,
   resolveCommand,
   type Command
 } from '@shared/commands'
@@ -80,7 +81,7 @@ import { providerQuota } from './providers/quota'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
-import type { ContextParts, ModelUsage, RunLimitReason } from '@shared/agent'
+import type { ContextParts, ModelUsage, RunLimitReason, SideChatTurn } from '@shared/agent'
 import { latestRunEnd, limitNoticeText, runEndNoticeText, runOutcomePhrase, type RunOutcome } from '@shared/runEnd'
 import { renderContextReport } from '@shared/contextBreakdown'
 import { compactionLimitFrom, compactionThresholdNote } from '@shared/compactionThreshold'
@@ -165,6 +166,8 @@ import {
   type NotifyMode,
   type TerminalSignal
 } from './tui-notify'
+import { renderSettingsOverview, renderSettingsPage } from './tui-settings'
+import { BTW_QUESTION_PROMPT, renderRecentSideChat } from './tui-btw'
 import { workspaceLabel, type NotifySpec } from '@shared/notify'
 import {
   REWIND_MODE_INFO,
@@ -1954,8 +1957,8 @@ export type SlashResult =
   | { kind: 'set-model'; providerId: string; model: string; asDefault?: boolean }
   /** Summarize older turns now (/compact [focus]), steering the summary toward `focus`. */
   | { kind: 'compact'; focus?: string }
-  /** The settings overview hub (/settings). */
-  | { kind: 'settings' }
+  /** The settings overview hub (/settings), or what covers one desktop page (/settings <page>). */
+  | { kind: 'settings'; page?: string }
   /** Read or change the terminal's settings (/config, /config key=value). */
   | { kind: 'config'; op: ConfigOp }
   /** What this session runs on, on one screen (/status). */
@@ -2060,8 +2063,10 @@ export function parseSlashCommand(
   commands: Command[] = []
 ): SlashResult {
   if (!line.startsWith('/')) return { kind: 'not-a-command' }
-  const [name, ...rest] = line.slice(1).trim().split(/\s+/)
+  const [typed, ...rest] = line.slice(1).trim().split(/\s+/)
   const arg = rest.join(' ')
+  // Command names are case-insensitive, as in the desktop app: `/NEW` is `/new`.
+  const name = typed.toLowerCase()
   // A project's own /commit (or /push, /ship, /pr) keeps running as it did: these
   // built-ins arrived after such commands were common, so they yield to them.
   const git = YIELDS_TO_CUSTOM.has(name) && !resolveCommand(commands, name) ? parseGitCommand(name, arg) : null
@@ -2117,7 +2122,7 @@ export function parseSlashCommand(
       return { kind: 'prompt', ...turn }
     }
     case 'settings':
-      return { kind: 'settings' }
+      return arg.trim() ? { kind: 'settings', page: arg.trim() } : { kind: 'settings' }
     case 'config':
       return { kind: 'config', op: parseConfigArgs(arg, { settings, themes: Object.keys(THEMES) }) }
     case 'status':
@@ -2279,7 +2284,7 @@ export function parseSlashCommand(
       const turn = cmd ? commandTurn(cmd, arg, line) : null
       if (turn && cmd && commandHasRunOptions(cmd)) return { kind: 'prompt', ...turn, command: { cmd, args: arg } }
       if (turn) return { kind: 'prompt', ...turn }
-      return { kind: 'unknown', name }
+      return { kind: 'unknown', name: typed }
     }
   }
 }
@@ -2314,7 +2319,7 @@ export const HELP_TEXT = [
   '  /spawned              list the background sessions the agent started; open one',
   '  /tasks [n|kill n]     background shells and subagents of this chat: list, show n, or stop n (works mid-turn)',
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
-  '  /btw <question>       ask a quick side question; the answer stays out of this chat',
+  '  /btw [question]       ask a quick side question; the answer stays out of this chat (alone: latest answers, then asks)',
   '  /btw clear            start this chat\'s side chat over',
   '  /fork                 branch the current session into a copy',
   '  /rename <title>       give this chat a title',
@@ -2327,7 +2332,7 @@ export const HELP_TEXT = [
   '  /context              what fills the context now, part by part',
   '  /skills /agents       list workspace skills / custom agents',
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
-  '  /settings             settings overview + where to edit them',
+  '  /settings [page]      what you can change from here, and with which command (a page: just that desktop page)',
   '  /config [key[=value]] pick and change a setting, or show or set one (/config --help lists them)',
   '  /status               version, model, approval, sandbox, network, MCP, settings sources, cost',
   '  /feedback, /bug       report an issue: shows what the report holds, then opens it or prints its link',
@@ -3710,6 +3715,8 @@ export interface TuiDeps {
     }) => Promise<{ answer?: string; error?: string }>
     /** Start the chat's side chat over (`/btw clear`). */
     clear: (conversationId: string) => void
+    /** The chat's stored side-chat exchanges, oldest first (a bare `/btw` reprints the latest). */
+    recent?: (conversationId: string) => SideChatTurn[]
     /** Stop the chat's in-flight side chat answer (Ctrl-C / Esc while it works). */
     cancel?: (conversationId: string) => void
   }
@@ -4631,7 +4638,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let customCommands: Command[] = []
   if (deps.commands) {
     try {
-      customCommands = await deps.commands()
+      // A custom command named like a built-in (in either client) or an alias never
+      // runs, here or in the desktop app, so it isn't listed either.
+      customCommands = (await deps.commands()).filter((c) => !isReservedCommandName(c.name))
     } catch {
       /* no custom commands — fine, carry on with the built-ins */
     }
@@ -5618,7 +5627,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'settings') {
-        renderSettingsOverview(deps, paint, { reduceMotion, screenReader, notifyMode })
+        const text = result.page
+          ? renderSettingsPage(result.page, paint)
+          : renderSettingsOverview(deps.settingsPath?.() ?? '(unknown)', { reduceMotion, screenReader, notifyMode }, paint)
+        deps.io.out(`${text}\n`)
         continue
       }
       if (result.kind === 'config') {
@@ -6157,15 +6169,28 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· side chat is unavailable here\n', 'dim'))
           continue
         }
-        if (!result.question) {
-          deps.io.out(paint('· usage: /btw <question>, or /btw clear to start the side chat over\n', 'dim'))
+        const btwUsage = '· usage: /btw <question>, or /btw clear to start the side chat over\n'
+        if (!result.question && !conversationId) {
+          deps.io.out(paint(btwUsage, 'dim'))
           continue
         }
         if (!conversationId || !providerId || !model) {
           deps.io.out(paint('· side chat needs a saved chat: send a message first\n', 'dim'))
           continue
         }
-        if (result.question === 'clear') {
+        let question = result.question
+        if (!question) {
+          // Bare /btw: what the side chat said lately, as the desktop panel shows, then
+          // ask for the question rather than make the user retype the command.
+          const recent = renderRecentSideChat(deps.sideChat.recent?.(conversationId) ?? [], paint)
+          if (recent) deps.io.out(`${recent}\n`)
+          question = ((await deps.io.readLine(paint(BTW_QUESTION_PROMPT, 'green'), { discardPending: true })) ?? '').trim()
+          if (!question) {
+            deps.io.out(paint(btwUsage, 'dim'))
+            continue
+          }
+        }
+        if (question === 'clear') {
           deps.sideChat.clear(conversationId)
           deps.io.out(paint('· side chat cleared; the next /btw starts a new one\n', 'dim'))
           continue
@@ -6186,7 +6211,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // The chat's one side chat, stored with it: follow-ups keep its context.
           // Raced against Ctrl-C / Esc, so a stop returns to the composer at once even
           // if the answer is slow to wind down.
-          const ask = sideChat.ask({ conversationId, question: result.question, providerId, model })
+          const ask = sideChat.ask({ conversationId, question, providerId, model })
           ask.catch(() => {}) // a late failure after a stop has no one to report to
           const turn = await Promise.race([ask, stop])
           if (turn === null || stopped) {
@@ -7252,7 +7277,7 @@ function handleInfoCommand(
   customCommands: Command[] = []
 ): void {
   const parts = line.slice(1).trim().split(/\s+/)
-  const name = nameOf(parts[0])
+  const name = nameOf(parts[0]).toLowerCase()
   const arg = parts.slice(1).join(' ') // present only when the user passed an (invalid) arg
   if (name === 'help') {
     const width = deps.columns?.() ?? 80
@@ -7335,38 +7360,6 @@ function handleInfoCommand(
  * and the safe subset editable from the terminal. Read-only — the editing verbs live
  * on /hooks and /mcp.
  */
-function renderSettingsOverview(
-  deps: TuiDeps,
-  paint: Painter,
-  live: { reduceMotion: boolean; screenReader: boolean; notifyMode: NotifyMode }
-): void {
-  const path = deps.settingsPath?.() ?? '(unknown)'
-  const lines = [
-    paint('Settings', 'bold'),
-    `  file: ${path}`,
-    '',
-    '  The desktop app has the full settings panel: models, API keys, remote and',
-    '  authenticated MCP servers, hooks, and more.',
-    '  From the terminal you can edit a safe subset:',
-    `    ${paint('/config', 'cyan')}  pick and change a setting  ·  /config <key>=<value>  ·  /config --help`,
-    `    ${paint('/status', 'cyan')}  what this session runs on: model, approval, sandbox, network, settings sources`,
-    `    ${paint('/hooks', 'cyan')}   list, or  /hooks add  ·  /hooks remove <n>`,
-    `    ${paint('/mcp', 'cyan')}     list, or  /mcp add (stdio)  ·  /mcp remove <n>  ·  /mcp login|logout <n>`,
-    `    ${paint('/trust', 'cyan')}   this folder's project-config trust  ·  /trust forget re-decides`,
-    `    ${paint('/memory', 'cyan')}  saved memories  ·  /memory show|edit|pin|forget <n>  ·  /memory on|off`,
-    '',
-    '  This terminal:',
-    `    notifications:  ${live.notifyMode}, ${describeNotifyMode(live.notifyMode)}  (/notify ${NOTIFY_MODES.join('|')})`,
-    `    screen reader:  ${live.screenReader ? 'on' : 'off'}  (/screen-reader on|off)`,
-    `    reduced motion: ${live.reduceMotion || live.screenReader ? 'on' : 'off'}${
-      live.screenReader && !live.reduceMotion ? ' (with screen-reader mode)' : ''
-    }  (/reduce-motion on|off)`,
-    '',
-    paint('  Changes here apply on your next message, no restart needed.', 'dim')
-  ]
-  deps.io.out(`${lines.join('\n')}\n`)
-}
-
 /** How many lines of the highlighted row's text the /copy picker previews. */
 const COPY_PREVIEW_LINES = 6
 

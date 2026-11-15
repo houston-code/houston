@@ -761,6 +761,7 @@ Commands that take something after the name show it beside the name, such as
 to see only commands, and `/help` opens it that way.
 
 Both clients accept the same names, so a command learned in one works in the other.
+Names are case-insensitive: `/NEW` is `/new`.
 
 ### Built-in commands
 
@@ -783,8 +784,8 @@ Also: `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`, `/cost`, `/context`, `
 and `/doctor`. The exact set depends on the client.
 
 **Settings commands.** `/settings`, `/login`, `/mcp`, `/hooks`, `/memory`, `/trust`, and
-`/theme` open the matching page of Settings in the desktop app. The terminal edits a
-safe subset in place. In the desktop app:
+`/theme` open the matching page of Settings in the desktop app. The terminal edits
+settings in place. In the desktop app:
 
 - `/settings <page>` opens that page (`/settings permissions`)
 - `/settings <words>` opens Settings searching for them (`/settings proxy`)
@@ -795,6 +796,15 @@ safe subset in place. In the desktop app:
   `/memory` and `/mcp` words open the page and say so, since the numbered verbs belong
   to the terminal's lists
 - `/agent` alone lists the workspace's agents, as `/agents` does
+
+In the terminal:
+
+- `/settings` shows the settings file and every command that changes a setting from
+  the terminal: API keys and hosts (`/login`), the model, thinking, and approval mode
+  (`--default` for new chats too), permission rules, folder trust, MCP servers, hooks,
+  memory, extra folders, and the terminal's own theme, keys, and notifications.
+- `/settings <page>` names the commands that cover one of the desktop's pages, and says
+  what on it only the desktop app edits (`/settings permissions`, `/settings keys`).
 
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
@@ -916,6 +926,9 @@ Any Markdown file at `.houston/commands/<name>.md` becomes a `/name` command.
 - **Running one:** in the desktop app, `/name` fills the message box with the expanded
   prompt, for you to read, change, and send. In the terminal it runs at once. A
   command with frontmatter options (below) or dynamic context runs at once in both.
+- **Names:** a command named like a built-in in either client (`/vim`, `/usage`) or
+  one of their second names (`/diff`, `/q`) is ignored in both, so a name always means
+  the same command in the desktop app and the terminal.
 
 ```markdown
 ---
@@ -2930,7 +2943,8 @@ to it.
 
 - **Open it** from the titlebar (or the command palette). In the terminal,
   `/btw <question>` asks the same side chat (shared with the desktop panel), and
-  `/btw clear` starts it over. Ctrl-C or Esc stops an answer you no longer want to
+  `/btw clear` starts it over. `/btw` alone shows its latest answers and asks for
+  the question. Ctrl-C or Esc stops an answer you no longer want to
   wait for.
 - **What it can do:** it sees the chat so far and can read the project, but it can't
   edit files, run commands, or reach the network.
