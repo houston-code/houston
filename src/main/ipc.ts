@@ -57,6 +57,7 @@ import {
   isGitInitDismissed,
   dismissGitInit,
   folderTrustFor,
+  forgetFolderTrust,
   setFolderTrust
 } from './store'
 import { loadProjectConfig } from './agent/projectConfig'
@@ -1081,6 +1082,14 @@ export function registerIpc(ready?: Promise<unknown>): void {
     if (decision !== 'trusted' && decision !== 'never') return getSettings()
     const cfg = await loadProjectConfig(workspace)
     return setFolderTrust(workspace, decision, cfg.elevatedHash)
+  })
+
+  // `/trust forget`: drop the folder's decision so the banner asks again. `elevated`
+  // says whether the project has anything that needs trust at all.
+  handle(IPC.folderTrustForget, async (_event, workspace: unknown) => {
+    if (typeof workspace !== 'string' || !workspace) return { settings: getSettings(), forgot: false, elevated: false }
+    const cfg = await loadProjectConfig(workspace)
+    return { ...forgetFolderTrust(workspace), elevated: Boolean(cfg.elevatedHash) }
   })
 
   // Custom slash commands from the workspace's .houston/commands directory.

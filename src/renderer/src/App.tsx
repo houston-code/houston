@@ -146,6 +146,8 @@ import { FileLinkContext, type FileLinks } from './components/FileLink'
 import { filesPanelKey } from './lib/fileLinks'
 import { RewindDialog } from './components/RewindDialog'
 import { RewindPicker } from './components/RewindPicker'
+import { PastEditDialog, pastEdits, type PastEdit } from './components/PastEditDialog'
+import { PAGE_LABELS } from './components/settings/pageIds'
 import { rewindDoneText, rewindsConversation, type RewindMode, type RewindOutcome } from '@shared/rewind'
 import { PlanPanel } from './components/PlanPanel'
 import { SideChatPanel } from './components/SideChatPanel'
@@ -373,6 +375,8 @@ export default function App(): JSX.Element {
     | undefined
   >()
   const [canUndoRewind, setCanUndoRewind] = useState(false)
+  // `/changes last [n]`: the past edit whose diff is showing.
+  const [pastEdit, setPastEdit] = useState<{ edit: PastEdit; back: number } | null>(null)
   // The full-size image viewer (a show_images gallery or a tool-card screenshot).
   const [viewer, setViewer] = useState<{ images: ViewerImage[]; index: number } | null>(null)
   // Inline visuals in replies: running interactive HTML is the user's opt-in.
@@ -811,6 +815,8 @@ export default function App(): JSX.Element {
   const onGitInitNotNow = useMemo(() => notNowFor(workspace, setGitInitNotNow), [workspace])
   // Session-only "Not now" for the trusted-folders consent banner (per workspace).
   const [trustNotNow, setTrustNotNow] = useState<ReadonlySet<string>>(() => new Set())
+  // Bumped by `/trust forget`, so the trust banner checks the folder again and asks.
+  const [trustEpoch, setTrustEpoch] = useState(0)
   const onTrustNotNow = useMemo(() => notNowFor(workspace, setTrustNotNow), [workspace])
   // Nudge the git-init banner to re-check repo state when the Changes panel closes —
   // the user may have initialized the repo from there, which no window-focus event
@@ -2363,6 +2369,7 @@ export default function App(): JSX.Element {
     setRewindConfirm(null)
     setRewindPickerOpen(false)
     setCanUndoRewind(false)
+    setPastEdit(null)
     setComposerPrefill(undefined)
     if (!currentId) return
     let live = true
@@ -2500,6 +2507,9 @@ export default function App(): JSX.Element {
   // The agent's open `ask_user` question, if it is waiting on one. While it is, the
   // run can't read a steer (it is blocked on the answer), so Enter answers it instead.
   const latestQuestion = useFromItems(chatItems, openQuestionIn)
+  // What `/rewind <n>` and `/changes last <n>` pick from.
+  const chatRewindTargets = useFromItems(chatItems, rewindTargets)
+  const chatPastEdits = useFromItems(chatItems, pastEdits)
   const openQuestion = chat.running ? latestQuestion : null
 
   // Enter mid-run: answer the open question, or else steer the running turn (the
@@ -2628,7 +2638,14 @@ export default function App(): JSX.Element {
   }, [])
 
   const onCompact = useCallback(async (focus?: string) => {
-    if (!currentId || !settings?.selected) return
+    if (!currentId) {
+      chat.notify('Nothing to compact yet: send a message first.')
+      return
+    }
+    if (!settings?.selected) {
+      chat.notify('Choose a model first: compacting asks it for the summary.')
+      return
+    }
     if (compacting) {
       chat.notify('A compaction is already in progress.')
       return
@@ -2689,6 +2706,37 @@ export default function App(): JSX.Element {
     [workspace, chat]
   )
 
+  // `--default` on /model, /reasoning and /approval: what new chats start with too.
+  // Run after the change to the open chat, so the two saves never race.
+  const saveDefaults = useCallback(async (patch: Partial<AppSettings>) => {
+    const fresh = await window.api.saveSettings({ ...(await window.api.getSettings()), ...patch })
+    setSettings(fresh)
+  }, [])
+
+  // `/trust forget`: drop this folder's trust decision, then ask again.
+  const onForgetTrust = useCallback(async () => {
+    if (!workspace) {
+      chat.notify('Open a folder first: trust is decided per folder.')
+      return
+    }
+    const res = await window.api.forgetFolderTrust(workspace)
+    setSettings(res.settings)
+    setTrustNotNow((cur) => {
+      if (!cur.has(workspace)) return cur
+      const next = new Set(cur)
+      next.delete(workspace)
+      return next
+    })
+    setTrustEpoch((n) => n + 1)
+    chat.notify(
+      !res.elevated
+        ? 'This project defines no extra permissions: nothing in its .houston folder needs trust.'
+        : res.forgot
+          ? 'Forgot the trust decision for this folder. The banner above asks again.'
+          : 'No decision was recorded for this folder yet. The banner above asks.'
+    )
+  }, [workspace, chat])
+
   /**
    * A command the desktop shares with the terminal: do it with the desktop's own
    * surface for the job (see desktopCommandAction), and say so when it can't run.
@@ -2700,9 +2748,76 @@ export default function App(): JSX.Element {
           setSettingsSection(action.section)
           setSettingsQuery(action.query ?? '')
           setSettingsOpen(true)
+          if (action.ignored) {
+            chat.notify(
+              `Opened ${PAGE_LABELS[action.section]} in Settings: make the change there ("${action.ignored}" is for the terminal).`
+            )
+          }
           return
+        case 'theme':
+          if ('invalid' in action) {
+            setSettingsSection('appearance')
+            setSettingsQuery('')
+            setSettingsOpen(true)
+            chat.notify(`No app theme "${action.invalid}". The app has system, dark and light.`, 'error')
+          } else {
+            void saveDefaults({ theme: action.theme })
+            chat.notify(`Theme: ${action.theme}`)
+          }
+          return
+        case 'trust-forget':
+          void onForgetTrust()
+          return
+        case 'memory-enable':
+          void saveDefaults({ memoryEnabled: action.on })
+          chat.notify(
+            action.on ? 'Memory is on: new runs see your saved memories.' : 'Memory is off: runs no longer see or save memories.'
+          )
+          return
+        case 'memory-folder':
+          void window.api.revealMemoryFolder()
+          return
+        case 'rewind': {
+          if (action.invalid !== undefined) {
+            chat.notify('Usage: /rewind, /rewind <n> [both|conversation|code], or /rewind undo.', 'error')
+            return
+          }
+          if (!currentId) {
+            chat.notify('Nothing to rewind yet: send a message first.')
+            return
+          }
+          if (action.undo) {
+            if (chat.running) chat.notify('/rewind undo can run once this turn ends.')
+            else if (canUndoRewind) void onUndoRewind()
+            else chat.notify('Nothing to undo: no rewind in this chat can be undone now.')
+            return
+          }
+          if (action.turn === undefined) {
+            setRewindPickerOpen(true)
+            return
+          }
+          const targets = chatRewindTargets
+          const target = targets[action.turn]
+          if (!target) {
+            chat.notify(`No message ${action.turn + 1} to rewind to (there are ${targets.length}).`, 'error')
+            return
+          }
+          // The confirmation still shows what the rewind changes before anything happens.
+          setRewindConfirm({ target, mode: action.mode ?? 'both' })
+          return
+        }
         case 'model': {
           const q = action.query.toLowerCase()
+          if (action.asDefault && !q) {
+            const sel = settings?.selected
+            if (!sel) {
+              chat.notify('No model is selected yet.', 'error')
+              return
+            }
+            void saveDefaults({ selected: sel })
+            chat.notify('New chats will start on this model.')
+            return
+          }
           if (q && settings) {
             // An exact id, provider/id, or display name switches straight away;
             // anything else opens the picker on that search.
@@ -2715,19 +2830,42 @@ export default function App(): JSX.Element {
                   (x.label ?? modelDisplayName(p.kind, x.id)).toLowerCase() === q
               )
               if (m) {
-                void onSelectModel({ providerId: p.id, model: m.id })
-                chat.notify(`Model: ${m.label ?? modelDisplayName(p.kind, m.id)}`)
+                const sel = { providerId: p.id, model: m.id }
+                void (async () => {
+                  await onSelectModel(sel)
+                  if (action.asDefault) await saveDefaults({ selected: sel })
+                })()
+                chat.notify(
+                  `Model: ${m.label ?? modelDisplayName(p.kind, m.id)}${action.asDefault ? ' (new chats too)' : ''}`
+                )
                 return
               }
             }
           }
           setPaletteSeed(action.query || 'model')
           setPaletteOpen(true)
+          if (action.asDefault) {
+            chat.notify('--default needs an exact model name. The picker changes this chat only.')
+          }
           return
         }
-        case 'changes':
-          showChanges()
+        case 'changes': {
+          if (action.last === undefined) {
+            showChanges()
+            return
+          }
+          const edits = chatPastEdits
+          const edit = edits[edits.length - action.last]
+          if (edit) setPastEdit({ edit, back: action.last })
+          else {
+            chat.notify(
+              edits.length
+                ? `Only ${edits.length} edit${edits.length === 1 ? '' : 's'} in this chat so far.`
+                : 'No edits in this chat yet. /changes shows the working tree.'
+            )
+          }
           return
+        }
         case 'undo':
           if (chat.running) chat.notify('/undo can run once this turn ends.')
           else if (chat.checkpoint && !chat.checkpoint.reverted) void onRevert()
@@ -2791,8 +2929,16 @@ export default function App(): JSX.Element {
           return
         case 'approval':
           if (action.policy) {
-            void onChangePolicy(action.policy)
-            chat.notify(`Approval mode: ${POLICY_LABEL[action.policy]}`)
+            const policy = action.policy
+            void (async () => {
+              await onChangePolicy(policy)
+              if (action.asDefault) await saveDefaults({ approvalPolicy: policy })
+            })()
+            chat.notify(`Approval mode: ${POLICY_LABEL[policy]}${action.asDefault ? ' (new chats too)' : ''}`)
+          } else if (action.asDefault && !action.invalid) {
+            const current = settings?.approvalPolicy ?? 'ask'
+            void saveDefaults({ approvalPolicy: current })
+            chat.notify(`New chats will start in ${POLICY_LABEL[current]}.`)
           } else {
             const current = settings?.approvalPolicy ?? 'ask'
             chat.notify(
@@ -2804,8 +2950,16 @@ export default function App(): JSX.Element {
           return
         case 'reasoning':
           if (action.effort) {
-            void onChangeReasoning(action.effort)
-            chat.notify(`Thinking effort: ${action.effort}`)
+            const effort = action.effort
+            void (async () => {
+              await onChangeReasoning(effort)
+              if (action.asDefault) await saveDefaults({ reasoningEffort: effort })
+            })()
+            chat.notify(`Thinking effort: ${effort}${action.asDefault ? ' (new chats too)' : ''}`)
+          } else if (action.asDefault && !action.invalid) {
+            const current = settings?.reasoningEffort ?? DEFAULT_REASONING_EFFORT
+            void saveDefaults({ reasoningEffort: current })
+            chat.notify(`New chats will start with thinking effort ${current}.`)
           } else {
             chat.notify(
               (action.invalid ? `No thinking effort "${action.invalid}". ` : '') +
@@ -2829,7 +2983,13 @@ export default function App(): JSX.Element {
       onRetry,
       onForkConversation,
       onChangePolicy,
-      onChangeReasoning
+      onChangeReasoning,
+      saveDefaults,
+      onForgetTrust,
+      canUndoRewind,
+      onUndoRewind,
+      chatRewindTargets,
+      chatPastEdits
     ]
   )
 
@@ -2847,13 +3007,11 @@ export default function App(): JSX.Element {
         // model and approval tier stay identical to when the model picks it itself.
         const turn = agentTurn(args, `/${cmd.name} ${args}`)
         if (turn) onInvoke(turn)
+        // Bare `/agent` lists what there is to hand a task to, as in the terminal.
+        else if (!args.trim()) void onListCapability('agents')
         else chat.notify('Usage: /agent <name> <task>. The name matches a file in .houston/agents', 'error')
       } else if (cmd.name === 'doctor') setDoctorOpen(true)
       else if (cmd.name === 'usage') setUsageOpen(true)
-      else if (cmd.name === 'rewind') {
-        if (currentId) setRewindPickerOpen(true)
-        else chat.notify('Nothing to rewind yet: send a message first.')
-      }
       else if (cmd.name === 'help') {
         // Every command with what it does, searchable and runnable: the palette
         // filtered to slash commands.
@@ -2868,7 +3026,7 @@ export default function App(): JSX.Element {
         if (action) runSharedCommand(action)
       }
     },
-    [onNewChat, onCompact, onListCapability, onChangePolicy, onInvoke, chat, currentId, runSharedCommand]
+    [onNewChat, onCompact, onListCapability, onChangePolicy, onInvoke, chat, runSharedCommand]
   )
 
   // ---- Keyboard shortcuts, command palette, mode cycling ----
@@ -3711,7 +3869,7 @@ export default function App(): JSX.Element {
         <div className="notices">
         <TrustFolderBanner
           // Re-evaluate cleanly per workspace: a new folder gets its own banner state.
-          key={`trust-${workspace ?? 'none'}`}
+          key={`trust-${workspace ?? 'none'}-${trustEpoch}`}
           workspace={workspace}
           running={chat.running}
           sessionDismissed={workspace ? trustNotNow.has(workspace) : false}
@@ -4151,6 +4309,8 @@ export default function App(): JSX.Element {
             }}
           />
         )}
+
+        {pastEdit && <PastEditDialog edit={pastEdit.edit} back={pastEdit.back} onClose={() => setPastEdit(null)} />}
 
         {rewindConfirm && currentId && (
           <RewindDialog

@@ -249,6 +249,9 @@ const api = {
   /** Persist the user's trust decision for a workspace ('trusted' | 'never'). */
   decideFolderTrust: (workspace: string, decision: 'trusted' | 'never'): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.folderTrustDecide, workspace, decision),
+  /** Forget a workspace's trust decision so the banner asks again (/trust forget). */
+  forgetFolderTrust: (workspace: string): Promise<{ settings: AppSettings; forgot: boolean; elevated: boolean }> =>
+    ipcRenderer.invoke(IPC.folderTrustForget, workspace),
 
   // Settings
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.settingsGet),

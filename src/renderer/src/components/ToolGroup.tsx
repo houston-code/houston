@@ -101,7 +101,7 @@ function iconFor(item: ToolItem): string {
  * `write_file` it can only diff against nothing, because the arguments alone do not
  * say what the file used to contain.
  */
-function previewsFor(item: ToolItem): FileDiffPreview[] | null {
+export function previewsFor(item: ToolItem): FileDiffPreview[] | null {
   if (item.preview && item.preview.length > 0) return item.preview
   const a = item.args
   if (!a) return null

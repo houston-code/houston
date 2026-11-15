@@ -945,6 +945,25 @@ describe('trusted folders — consent for project elevating config', () => {
     }
   })
 
+  it('forgets a decision so the folder is undecided again, touching no other folder', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'ws-tf-'))
+    const other = mkdtempSync(join(tmpdir(), 'ws-tf-other-'))
+    try {
+      const { folderTrustFor, setFolderTrust, forgetFolderTrust, getSettings } = await loadStore()
+      expect(forgetFolderTrust(ws).forgot).toBe(false)
+      setFolderTrust(ws, 'never', 'hash-1')
+      setFolderTrust(other, 'trusted', 'hash-9')
+      expect(forgetFolderTrust(ws).forgot).toBe(true)
+      expect(folderTrustFor(ws, 'hash-1')).toBe('undecided')
+      expect(folderTrustFor(other, 'hash-9')).toBe('trusted')
+      expect(getSettings().trustedFolders).toHaveLength(1)
+      expect(forgetFolderTrust('').forgot).toBe(false)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(other, { recursive: true, force: true })
+    }
+  })
+
   it('normalizes symlinked paths like the other per-folder records', async () => {
     const real = mkdtempSync(join(tmpdir(), 'ws-tf-real-'))
     const link = join(mkdtempSync(join(tmpdir(), 'ws-tf-link-')), 'alias')

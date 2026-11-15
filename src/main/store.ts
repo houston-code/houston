@@ -20,7 +20,8 @@ import {
   mcpEnvScope,
   mcpHeaderScope,
   providerHeaderScope,
-  upsertFolderTrust
+  upsertFolderTrust,
+  removeFolderTrust
 } from '@shared/types'
 import {
   backfillDefaultModels,
@@ -790,6 +791,18 @@ export function setFolderTrust(
     decidedAt: Date.now()
   }
   return updateSettings({ trustedFolders: upsertFolderTrust(getSettings().trustedFolders, entry) })
+}
+
+/**
+ * Forget a workspace's trust decision (`/trust forget`), so the folder is undecided
+ * and asked about again. Only ever removes a record: it can't grant trust.
+ */
+export function forgetFolderTrust(workspace: string): { settings: AppSettings; forgot: boolean } {
+  if (!workspace) return { settings: getSettings(), forgot: false }
+  const path = normalizeWorkspacePath(workspace)
+  const records = getSettings().trustedFolders
+  if (!records?.some((r) => r.path === path)) return { settings: getSettings(), forgot: false }
+  return { settings: updateSettings({ trustedFolders: removeFolderTrust(records, path) }), forgot: true }
 }
 
 /**

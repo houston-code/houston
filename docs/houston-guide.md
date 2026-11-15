@@ -495,8 +495,11 @@ every option with a line saying what it does. Next to them a badge reads
 
 - **Desktop app:** the controls on the new-chat screen set the defaults, and **Use
   for new chats** in an open chat makes its settings the defaults.
-- **Terminal:** add `--default` to change the default as well as the current chat:
-  `/model <id> --default`, `/reasoning high --default`, `/approval ask --default`.
+- **Both:** add `--default` to change the default as well as the current chat:
+  `/model <id> --default`, `/reasoning high --default`, `/approval ask --default`. In the
+  desktop app, `--default` alone (`/model --default`) makes the chat's current setting
+  the default, and `/model` needs an exact model name for it (a search opens the picker,
+  which changes the chat only).
 
 ### When a model isn't found
 
@@ -744,8 +747,8 @@ Both clients accept the same names, so a command learned in one works in the oth
 | `/review` | run an adversarial review of your uncommitted changes and fix what it confirms |
 | `/init` | write or improve `AGENTS.md`, the project's instructions file |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
-| `/rewind` | go back to an earlier message: the conversation, the code, or both |
-| `/changes` (or `/diff`) | what's different in the working tree |
+| `/rewind` | go back to an earlier message: the conversation, the code, or both. `/rewind <n> [both\|conversation\|code]` goes to message n (numbered as in the list), and `/rewind undo` reverses the last rewind |
+| `/changes` (or `/diff`) | what's different in the working tree; `/changes last [n]` shows the diff of this chat's latest edit, or the one n edits back |
 | `/skills`, `/agents` | list the workspace's skills and custom agents (run a skill with `/<skill-name>`) |
 | `/help` | list the available commands (in the desktop app, opens the command palette on them) |
 
@@ -758,6 +761,13 @@ safe subset in place. In the desktop app:
 
 - `/settings <page>` opens that page (`/settings permissions`)
 - `/settings <words>` opens Settings searching for them (`/settings proxy`)
+- `/theme system`, `/theme dark` or `/theme light` switches the app theme (the
+  terminal's palettes have their own names)
+- `/trust forget` forgets this folder's trust decision, and the banner asks again
+- `/memory on`, `/memory off` and `/memory folder` work as in the terminal; other
+  `/memory` and `/mcp` words open the page and say so, since the numbered verbs belong
+  to the terminal's lists
+- `/agent` alone lists the workspace's agents, as `/agents` does
 
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
