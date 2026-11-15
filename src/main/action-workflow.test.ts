@@ -198,4 +198,28 @@ describe('the action end-to-end workflow', () => {
     expect(stepWith(e2e, 'mode: fix-ci')).toContain("post: 'false'")
     expect(stepWith(e2e, 'mode: implement')).toContain("post: 'false'")
   })
+
+  it('runs a mode added after the oldest release line only when the checked-out action has it', () => {
+    // release-prepare.yml runs this (main's) workflow against a release line's commit, whose
+    // action/ may predate a mode. The v0.12 line knows only these modes.
+    const v012 = ['respond', 'review', 'fix-ci']
+    const probe = stepWith(e2e, 'id: caps')
+    expect(probe).toContain("import { MODES } from './action/lib/event.mjs'")
+    expect(probe).toContain('echo "modes=,$modes," >> "$GITHUB_OUTPUT"')
+    expect(e2e.indexOf('id: caps')).toBeLessThan(e2e.search(/uses: \.\/action$/m))
+    const newer = ['implement', 'task']
+    for (const mode of newer) {
+      expect(v012).not.toContain(mode)
+      const guard = `if: contains(steps.caps.outputs.modes, ',${mode},')`
+      expect(stepWith(e2e, `id: ${mode}`), mode).toContain(guard)
+      expect(stepWith(e2e, `node action/test/assert.mjs ${mode} "$FIXTURE"`), mode).toContain(guard)
+    }
+    expect(stepWith(e2e, 'switch --quiet main')).toContain("if: contains(steps.caps.outputs.modes, ',implement,')")
+    // Every scenario that runs the action either uses a v0.12 mode or is guarded.
+    const steps = e2e.split(/\n(?= {6}- )/).filter((s) => /uses: \.\/action$/m.test(s))
+    for (const step of steps) {
+      const mode = /^\s+mode: (\S+)$/m.exec(step)?.[1] ?? (step.includes('EVENT_NAME: schedule') ? 'task' : 'respond')
+      if (!v012.includes(mode)) expect(step, mode).toContain(`if: contains(steps.caps.outputs.modes, ',${mode},')`)
+    }
+  })
 })

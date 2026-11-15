@@ -60,6 +60,17 @@ jobs:
           # The fake gh shadows the real one for the action and for Houston's gh tools.
           echo "$GITHUB_WORKSPACE/action/test/bin" >> "$GITHUB_PATH"
 
+      # This workflow always comes from main, but a release run (release-prepare.yml) points
+      # it at a release line's commit, whose action may predate a mode. Run a mode's scenario
+      # only when the checked-out action has that mode. An import failure fails the job.
+      - name: List the modes the checked-out action supports
+        id: caps
+        run: |
+          set -euo pipefail
+          modes="$(node --input-type=module -e "import { MODES } from './action/lib/event.mjs'; console.log(MODES.join(','))")"
+          echo "The checked-out action supports: $modes"
+          echo "modes=,$modes," >> "$GITHUB_OUTPUT"
+
       - name: respond to a collaborator's mention
         uses: ./action
         env:
@@ -126,10 +137,12 @@ jobs:
         run: node action/test/assert.mjs fix-ci "$FIXTURE"
 
       # An implement run builds on the default branch, as a workflow checking it out would.
-      - run: git -C "$FIXTURE/repo" switch --quiet main
+      - if: contains(steps.caps.outputs.modes, ',implement,')
+        run: git -C "$FIXTURE/repo" switch --quiet main
       # post: false commits the change on its new branch but pushes nothing.
       - name: implement a labelled issue
         id: implement
+        if: contains(steps.caps.outputs.modes, ',implement,')
         uses: ./action
         env:
           HOUSTON_ACTION_EVENT_NAME: issues
@@ -142,13 +155,15 @@ jobs:
           base-url: ${{ env.MOCK_URL }}
           working-directory: ${{ env.FIXTURE }}/repo
           post: 'false'
-      - env:
+      - if: contains(steps.caps.outputs.modes, ',implement,')
+        env:
           BRANCH: ${{ steps.implement.outputs.branch }}
           REPLY_FILE: ${{ steps.implement.outputs.reply-file }}
         run: node action/test/assert.mjs implement "$FIXTURE"
 
       - name: run a scheduled task, read-only
         id: task
+        if: contains(steps.caps.outputs.modes, ',task,')
         uses: ./action
         env:
           HOUSTON_ACTION_EVENT_NAME: schedule
@@ -160,7 +175,8 @@ jobs:
           base-url: ${{ env.MOCK_URL }}
           working-directory: ${{ env.FIXTURE }}/repo
           prompt: Write a short weekly report on what the scripts print.
-      - env:
+      - if: contains(steps.caps.outputs.modes, ',task,')
+        env:
           REPLY_FILE: ${{ steps.task.outputs.reply-file }}
         run: node action/test/assert.mjs task "$FIXTURE"
 

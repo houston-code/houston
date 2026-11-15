@@ -48,8 +48,8 @@ describe('renderTemplate', () => {
  * Run a wrapper script with its exec line swapped for a print of NODE_COMPILE_CACHE,
  * under exactly `env` (plus PATH), and return what Node would have been given.
  */
-function wrapperCache(wrapper, env) {
-  const script = wrapper.replace(/^exec .*$/m, 'printf %s "${NODE_COMPILE_CACHE-unset}"')
+function wrapperCache(wrapper, env, name = 'NODE_COMPILE_CACHE') {
+  const script = wrapper.replace(/^exec .*$/m, `printf %s "\${${name}-unset}"`)
   expect(script).not.toBe(wrapper)
   const r = spawnSync('sh', ['-c', script], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } })
   expect(r.stderr).toBe('')
@@ -73,7 +73,7 @@ describe('renderAll', () => {
     const rb = out['homebrew/houston.rb']
     expect(rb).toContain('"$HOME/Library/Caches/houston/compile-cache"')
     expect(rb).toContain('"${XDG_CACHE_HOME:-$HOME/.cache}/houston/compile-cache"')
-    const guard = 'if [ -z "${NODE_COMPILE_CACHE+set}" ]; then export NODE_COMPILE_CACHE="#{cache_dir}"; fi\n'
+    const guard = 'if [ -z "${NODE_COMPILE_CACHE+set}" ]; then export NODE_COMPILE_CACHE="#{cache_dir}" HOUSTON_OWN_COMPILE_CACHE=1; fi\n'
     expect(rb).toContain(guard)
     expect(rb.indexOf(guard)).toBeLessThan(rb.indexOf('exec "#{formula_opt_bin("node")}/node"'))
     // The same line as the shell sees it once Ruby fills in each OS's directory.
@@ -85,6 +85,10 @@ describe('renderAll', () => {
       expect(wrapperCache(wrapper, env)).toBe(expected)
       expect(wrapperCache(wrapper, { ...env, NODE_COMPILE_CACHE: '/mine' })).toBe('/mine')
       expect(wrapperCache(wrapper, { ...env, NODE_COMPILE_CACHE: '' })).toBe('')
+      // The marker that lets the CLI drop the variable is set exactly when the wrapper set it.
+      expect(wrapperCache(wrapper, env, 'HOUSTON_OWN_COMPILE_CACHE')).toBe('1')
+      expect(wrapperCache(wrapper, { ...env, NODE_COMPILE_CACHE: '/mine' }, 'HOUSTON_OWN_COMPILE_CACHE')).toBe('unset')
+      expect(wrapperCache(wrapper, { ...env, NODE_COMPILE_CACHE: '' }, 'HOUSTON_OWN_COMPILE_CACHE')).toBe('unset')
     }
   })
 
@@ -142,6 +146,10 @@ describe('renderAll', () => {
       expect(wrapperCache(wrapper, { HOME: '/home/u', XDG_CACHE_HOME: '/xdg' })).toBe('/xdg/houston/compile-cache')
       expect(wrapperCache(wrapper, { HOME: '/home/u', NODE_COMPILE_CACHE: '/mine' })).toBe('/mine')
       expect(wrapperCache(wrapper, { HOME: '/home/u', NODE_COMPILE_CACHE: '' })).toBe('')
+      // The marker that lets the CLI drop the variable is set exactly when the wrapper set it.
+      expect(wrapperCache(wrapper, { HOME: '/home/u' }, 'HOUSTON_OWN_COMPILE_CACHE')).toBe('1')
+      expect(wrapperCache(wrapper, { HOME: '/home/u', NODE_COMPILE_CACHE: '/mine' }, 'HOUSTON_OWN_COMPILE_CACHE')).toBe('unset')
+      expect(wrapperCache(wrapper, { HOME: '/home/u', NODE_COMPILE_CACHE: '' }, 'HOUSTON_OWN_COMPILE_CACHE')).toBe('unset')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -38,6 +38,9 @@ export const WORKFLOW = 'ci.yml'
 /** Attempts a run may reach before this stops re-running it: the original plus two re-runs. */
 export const MAX_ATTEMPTS = 3
 
+/** The ci.yml jobs whose checks main's ruleset requires. */
+export const REQUIRED_JOBS = ['test', 'linux-sandbox', 'build', 'revert-guard']
+
 /** The PRs to check: non-draft ones, narrowed to the PR at `headSha` when one is given. */
 export function selectPrs(prs, headSha) {
   return prs.filter((pr) => !pr.isDraft && (!headSha || pr.headRefOid === headSha))
@@ -46,9 +49,13 @@ export function selectPrs(prs, headSha) {
 /**
  * What to do about one PR, given the CI runs (REST `workflow_run` objects) on its head
  * commit for the pull_request event. Pure, so every branch is unit-tested.
+ *
+ * `newestPassed` is the names of the jobs that succeeded in the newest run, once fetched. A
+ * cancelled run can still hold every required check (a `package` leg cancelled for want of
+ * a runner and passed by `package-retry`, say); re-running it would only reset a green PR.
  * @returns {{ action: 'rerun', run: object } | { action: 'none', reason: string } | { action: 'give-up', run: object }}
  */
-export function decide(runs) {
+export function decide(runs, newestPassed = []) {
   if (!runs || runs.length === 0) return { action: 'none', reason: 'no CI runs on the head commit' }
   if (runs.some((r) => r.status !== 'completed')) return { action: 'none', reason: 'a CI run is still going' }
   // Newest suite is what GitHub reads. Suite ids and run ids both rise monotonically; the
@@ -56,6 +63,9 @@ export function decide(runs) {
   const key = (r) => r.check_suite_id ?? r.id
   const newest = runs.reduce((a, b) => (key(b) > key(a) ? b : a))
   if (newest.conclusion !== 'cancelled') return { action: 'none', reason: `newest CI run ended ${newest.conclusion}` }
+  if (REQUIRED_JOBS.every((name) => newestPassed.includes(name))) {
+    return { action: 'none', reason: 'newest CI run was cancelled but passed every required check' }
+  }
   if ((newest.run_attempt ?? 1) >= MAX_ATTEMPTS) return { action: 'give-up', run: newest }
   return { action: 'rerun', run: newest }
 }
@@ -90,7 +100,20 @@ function main() {
         '.workflow_runs'
       ])
     )
-    const verdict = decide(runs)
+    let verdict = decide(runs)
+    if (verdict.action !== 'none') {
+      // The run this exists for has no jobs at all; one whose required jobs passed is green.
+      const passed = gh([
+        'api',
+        '--paginate',
+        `repos/${repo}/actions/runs/${verdict.run.id}/jobs?per_page=100`,
+        '--jq',
+        '.jobs[] | select(.conclusion == "success") | .name'
+      ])
+        .split('\n')
+        .filter(Boolean)
+      verdict = decide(runs, passed)
+    }
     if (verdict.action === 'none') continue
     if (verdict.action === 'give-up') {
       console.log(

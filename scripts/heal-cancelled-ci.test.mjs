@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { decide, selectPrs, MAX_ATTEMPTS, WORKFLOW } from './heal-cancelled-ci.mjs'
+import { decide, selectPrs, MAX_ATTEMPTS, REQUIRED_JOBS, WORKFLOW } from './heal-cancelled-ci.mjs'
 
 // Shaped like the REST workflow_run objects `gh api .../runs?head_sha=` returns.
 const run = (id, suite, conclusion, extra = {}) => ({
@@ -61,6 +61,19 @@ describe('decide', () => {
     expect(decide([run(1, 10, 'cancelled', { run_attempt: 2 })]).action).toBe('rerun')
     const stuck = run(1, 10, 'cancelled', { run_attempt: MAX_ATTEMPTS })
     expect(decide([stuck])).toEqual({ action: 'give-up', run: stuck })
+  })
+
+  it('leaves a cancelled newest run alone when it passed every required check', () => {
+    // A package leg cancelled for want of a runner, passed by package-retry: the run ends
+    // cancelled, yet its suite holds green results for every required check.
+    const runs = [run(1, 10, 'success'), run(2, 11, 'cancelled')]
+    const passed = ['plan', 'test', 'linux-sandbox', 'package-retry (mac-arm64)', 'build', 'revert-guard']
+    expect(REQUIRED_JOBS).toEqual(['test', 'linux-sandbox', 'build', 'revert-guard'])
+    expect(decide(runs, passed)).toEqual({ action: 'none', reason: 'newest CI run was cancelled but passed every required check' })
+    expect(decide([run(2, 11, 'cancelled', { run_attempt: MAX_ATTEMPTS })], passed).action).toBe('none')
+    // Missing any required check (or no jobs at all, the empty suite this exists for): re-run.
+    expect(decide(runs, passed.filter((n) => n !== 'build'))).toEqual({ action: 'rerun', run: runs[1] })
+    expect(decide(runs, [])).toEqual({ action: 'rerun', run: runs[1] })
   })
 
   it('targets the CI workflow, the only one whose checks gate merges', () => {
