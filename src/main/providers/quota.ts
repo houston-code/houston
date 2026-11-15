@@ -41,6 +41,50 @@ function count(headers: Headers, names: string[]): number | undefined {
   return undefined
 }
 
+/**
+ * A reset header as epoch ms. The Claude API sends an RFC 3339 time
+ * (`2026-11-15T10:00:30Z`); OpenAI-style APIs send how long until it, as a Go-style
+ * duration (`1s`, `6m0s`, `1h2m3.5s`, `20ms`). Undefined when it is neither.
+ */
+export function parseResetHeader(raw: string | null | undefined, now: number): number | undefined {
+  const v = raw?.trim()
+  if (!v || v.length > 64) return undefined
+  if (/^\d{4}-\d{2}-\d{2}T/.test(v)) {
+    const t = Date.parse(v)
+    return Number.isFinite(t) ? t : undefined
+  }
+  const unit: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1000, ms: 1 }
+  const re = /(\d+(?:\.\d+)?)(ms|h|m|s)/gy
+  let total = 0
+  let matched = 0
+  for (let m = re.exec(v); m; m = re.exec(v)) {
+    total += Number(m[1]) * unit[m[2]]
+    matched = re.lastIndex
+  }
+  if (matched !== v.length || !Number.isFinite(total)) return undefined
+  return now + Math.round(total)
+}
+
+/**
+ * When the provider's window is next full again: the latest of the reset times its
+ * headers name (requests and tokens reset separately), or undefined when none.
+ */
+function resetAtFrom(headers: Headers, now: number): number | undefined {
+  let latest: number | undefined
+  for (const n of [
+    'anthropic-ratelimit-requests-reset',
+    'anthropic-ratelimit-tokens-reset',
+    'anthropic-ratelimit-input-tokens-reset',
+    'anthropic-ratelimit-output-tokens-reset',
+    'x-ratelimit-reset-requests',
+    'x-ratelimit-reset-tokens'
+  ]) {
+    const t = parseResetHeader(headers.get(n), now)
+    if (t !== undefined && (latest === undefined || t > latest)) latest = t
+  }
+  return latest
+}
+
 /** The quota a response's headers describe, or null when they carry none. */
 export function quotaFromHeaders(headers: Headers, status: number, now: Date = new Date()): ProviderQuota | null {
   const remainingRequests = count(headers, ['anthropic-ratelimit-requests-remaining', 'x-ratelimit-remaining-requests'])
@@ -56,12 +100,14 @@ export function quotaFromHeaders(headers: Headers, status: number, now: Date = n
     'x-ratelimit-limit-tokens'
   ])
   if (remainingRequests === undefined && remainingTokens === undefined) return null
+  const resetAt = resetAtFrom(headers, now.getTime())
   return {
     ...(remainingRequests !== undefined ? { remainingRequests } : {}),
     ...(remainingTokens !== undefined ? { remainingTokens } : {}),
     ...(limitRequests !== undefined ? { limitRequests } : {}),
     ...(limitTokens !== undefined ? { limitTokens } : {}),
     ...(status === 429 ? { throttled: true } : {}),
+    ...(resetAt !== undefined ? { resetAt: new Date(resetAt).toISOString() } : {}),
     at: now.toISOString()
   }
 }

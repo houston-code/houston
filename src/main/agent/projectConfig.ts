@@ -7,6 +7,7 @@ import { parseTightenOnlyRules } from './permissions'
 import { loadProjectCommands } from './commands'
 import { readPluginFiles, type ProjectPluginFile } from './plugins'
 import { contextCommands } from '@shared/commandContext'
+import { parseStatusLineConfig, type StatusLineConfig } from '@shared/statusLine'
 
 /**
  * Per-project config from `.houston/settings.json` in the workspace.
@@ -63,6 +64,11 @@ export interface ProjectElevatedConfig {
    * exact set (see loadTrustedPlugins).
    */
   plugins: ProjectPluginFile[]
+  /**
+   * The terminal's custom status line command (`statusLine`), which runs in the user's
+   * shell. Part of the fingerprint when set, so adding or changing it asks again.
+   */
+  statusLine?: StatusLineConfig
 }
 
 /** One project command's elevating parts, as the trust fingerprint sees them. */
@@ -235,7 +241,8 @@ export function elevatedConfigHash(elevated: ProjectElevatedConfig): string {
     !elevated.hooks.length &&
     !elevated.mcpServers.length &&
     !commands.length &&
-    !plugins.length
+    !plugins.length &&
+    !elevated.statusLine
   ) {
     return ''
   }
@@ -247,6 +254,8 @@ export function elevatedConfigHash(elevated: ProjectElevatedConfig): string {
   const parts: unknown[] = [elevated.allowRules, elevated.hooks, elevated.mcpServers]
   if (commands.length) parts.push(commands)
   if (plugins.length) parts.push({ plugins: plugins.map((p) => ({ name: p.name, sha256: p.sha256 })) })
+  // Tagged and only when set, like plugins: existing trust survives until one appears.
+  if (elevated.statusLine) parts.push({ statusLine: elevated.statusLine })
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 }
 
@@ -292,12 +301,14 @@ export async function loadProjectConfig(workspace: string): Promise<ProjectConfi
     raw = undefined // missing or malformed — no project config
   }
   const commands = await projectCommandGrants(workspace)
+  const statusLine = parseStatusLineConfig((raw as { statusLine?: unknown } | undefined)?.statusLine)
   const elevated: ProjectElevatedConfig = {
     allowRules: parseProjectAllowRules(raw),
     hooks: parseProjectHooks(raw),
     mcpServers: parseProjectMcpServers(raw),
     ...(commands.length ? { commands } : {}),
-    plugins: (await readPluginFiles(workspace)).files
+    plugins: (await readPluginFiles(workspace)).files,
+    ...(statusLine ? { statusLine } : {})
   }
   return {
     permissionRules: parseProjectRules(raw),

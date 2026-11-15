@@ -10,7 +10,12 @@ import {
   resolveNotifyMode,
   describeNotifyMode,
   idleReminderSpec,
-  isNotifyMode
+  isNotifyMode,
+  progressForEvent,
+  progressSequence,
+  progressSupport,
+  supportsOsc94,
+  type ProgressSupport
 } from './tui-notify'
 import type { AgentEvent } from '@shared/agent'
 
@@ -157,5 +162,82 @@ describe('notification modes (/notify)', () => {
       body: 'Houston is waiting for your next message'
     })
     expect(idleReminderSpec().title).toBe('Houston')
+  })
+})
+
+describe('titles that follow the chat', () => {
+  it('puts the chat title in the idle and working titles', () => {
+    expect(idleTitle('proj', 'Fix the login bug')).toBe('Fix the login bug · proj')
+    expect(workingTitle('needs approval', 'proj', 'Fix the login bug')).toBe('● needs approval · Fix the login bug · proj')
+  })
+
+  it('falls back to Houston for an untitled chat', () => {
+    expect(idleTitle('proj', 'New chat')).toBe('Houston · proj')
+    expect(idleTitle('proj', null)).toBe('Houston · proj')
+    expect(workingTitle('working', 'proj', '')).toBe('● working · proj')
+  })
+
+  it('carries the chat title on event signals', () => {
+    expect(signalFor(approval, 'proj', 'Ship it')?.title).toBe('● needs approval · Ship it · proj')
+    expect(signalFor({ runId: 'r', type: 'done', stopReason: 'end_turn' }, 'proj', 'Ship it')?.title).toBe('Ship it · proj')
+  })
+
+  it('strips control characters from a chat title', () => {
+    expect(idleTitle('proj', 'a\x1b]0;evil\x07b')).toBe('a]0;evilb · proj')
+  })
+})
+
+describe('progress reporting', () => {
+  const ESC = '\x1b'
+  const plain: ProgressSupport = { osc94: false, tmux: false }
+  const full: ProgressSupport = { osc94: true, tmux: false }
+
+  it('sends OSC 9;4 only to terminals known to draw it', () => {
+    expect(supportsOsc94({ WT_SESSION: 'x' })).toBe(true)
+    expect(supportsOsc94({ TERM_PROGRAM: 'ghostty' })).toBe(true)
+    expect(supportsOsc94({ TERM_PROGRAM: 'WezTerm' })).toBe(true)
+    expect(supportsOsc94({ ConEmuANSI: 'ON' })).toBe(true)
+    expect(supportsOsc94({ TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.6.1' })).toBe(true)
+    // Older iTerm2 shows any OSC 9 as a notification: it must never get 9;4.
+    expect(supportsOsc94({ TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.5.9' })).toBe(false)
+    expect(supportsOsc94({ TERM_PROGRAM: 'Apple_Terminal' })).toBe(false)
+    expect(supportsOsc94({})).toBe(false)
+  })
+
+  it('stays out of tmux and screen unless passthrough is asked for, and off when off', () => {
+    expect(progressSupport(undefined, {})).toEqual({ osc94: false, tmux: false })
+    expect(progressSupport('off', { WT_SESSION: '1' })).toBeNull()
+    expect(progressSupport('auto', { TMUX: '/tmp/t,1,0' })).toBeNull()
+    expect(progressSupport('passthrough', { TMUX: '/tmp/t,1,0' })).toEqual({ osc94: false, tmux: true })
+    expect(progressSupport('passthrough', { STY: '1.pts' })).toBeNull()
+    expect(progressSupport('bogus', { TERM_PROGRAM: 'ghostty' })).toEqual({ osc94: true, tmux: false })
+  })
+
+  it('reports each state with OSC 7501 and, where drawn, OSC 9;4', () => {
+    expect(progressSequence('working', full)).toBe(`${ESC}]9;4;3\x07${ESC}]7501;state=working:app=houston${ESC}\\`)
+    expect(progressSequence('error', full)).toContain(`${ESC}]9;4;2;100\x07`)
+    expect(progressSequence('done', full)).toBe(`${ESC}]9;4;0\x07${ESC}]7501;state=done:app=houston${ESC}\\`)
+    expect(progressSequence('blocked-permission', plain)).toBe(`${ESC}]7501;state=blocked:kind=permission:app=houston${ESC}\\`)
+    expect(progressSequence('blocked-question', plain)).toContain('state=blocked:kind=question')
+    expect(progressSequence('idle', plain)).toContain('state=idle')
+    expect(progressSequence('clear', plain)).toBe(`${ESC}]7501;state=clear${ESC}\\`)
+  })
+
+  it('sends the label as base64 with no control characters', () => {
+    const seq = progressSequence('working', plain, 'Fix bug\x07 · proj')
+    const b64 = /title=([A-Za-z0-9+/=]+)/.exec(seq)![1]
+    expect(Buffer.from(b64, 'base64').toString('utf8')).toBe('Fix bug · proj')
+  })
+
+  it('wraps every sequence for tmux passthrough, doubling the ESCs inside', () => {
+    const seq = progressSequence('working', { osc94: false, tmux: true })
+    expect(seq).toBe(`${ESC}Ptmux;${ESC}${ESC}]7501;state=working:app=houston${ESC}${ESC}\\${ESC}\\`)
+  })
+
+  it('maps events to progress: blocked on approvals and questions, working otherwise', () => {
+    expect(progressForEvent(approval)).toBe('blocked-permission')
+    expect(progressForEvent({ runId: 'r', type: 'tool_question', callId: 'c', question: 'q?' } as unknown as AgentEvent)).toBe('blocked-question')
+    expect(progressForEvent({ runId: 'r', type: 'text', delta: 'x' })).toBe('working')
+    expect(progressForEvent({ runId: 'r', type: 'done', stopReason: 'end_turn' })).toBeNull()
   })
 })

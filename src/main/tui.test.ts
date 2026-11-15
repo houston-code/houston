@@ -82,6 +82,7 @@ import {
   renderMcpTools,
   resolveTheme,
   THEMES,
+  setUserThemes,
   parseMemoryCapture,
   nextPolicy,
   addModelUsage,
@@ -151,9 +152,12 @@ import {
   parseRewindExtra,
   renderRewindChoices,
   resolveCdTarget,
-  runEndNotice
+  runEndNotice,
+  footerQuota,
+  turnDoneText
 } from './tui'
 import { drivePicker, type PickerKey, type PickerOutcome, type PickerSpec } from './tui-picker'
+import { _resetRateLimits } from './rateLimitStore'
 import { COMMANDS } from './tui-complete'
 import { skillCommandTemplate, skillCommands } from './agent/skills'
 
@@ -5559,6 +5563,12 @@ describe('summarizeElevated', () => {
     expect(elevatedSource(onlyCommands)).toBe('.houston/commands')
     expect(elevatedSource({ ...onlyCommands, hooks: [1] })).toBe('.houston/settings.json and .houston/commands')
     expect(elevatedSource({ allowRules: [1], hooks: [], mcpServers: [] })).toBe('.houston/settings.json')
+  })
+
+  it('names a status line command and where it lives', () => {
+    const only = { allowRules: [], hooks: [], mcpServers: [], statusLine: { command: 'x' } }
+    expect(summarizeElevated(only)).toBe('a status line command')
+    expect(elevatedSource({ ...only, commands: [1] })).toBe('.houston/settings.json and .houston/commands')
   })
 
   it('names each plugin file the trust would cover', () => {
@@ -11410,6 +11420,30 @@ describe('/config, /status and /feedback', () => {
     expect(t.text()).toContain('focus: on')
   })
 
+  it('/config theme takes the new built-in themes, a user theme and the old aliases', async () => {
+    setUserThemes({ solar: THEMES.default })
+    try {
+      const { d, saved } = liveDeps()
+      const t = fakeIo(['/config theme=colorblind-light', '/config theme=solar', '/config theme=bright', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(saved).toEqual([{ tuiTheme: 'colorblind-light' }, { tuiTheme: 'solar' }, { tuiTheme: 'dark' }])
+      const help = parseSlashCommand('/config theme=solar', settings())
+      expect(help).toEqual({ kind: 'config', op: { op: 'set', key: 'theme', value: 'solar' } })
+    } finally {
+      setUserThemes({})
+    }
+  })
+
+  it('/config turn-clock and progress save their settings', async () => {
+    const { d, saved } = liveDeps()
+    const t = fakeIo(['/config turn-clock=on', '/config progress=off', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([{ tuiTurnClock: true }, { tuiProgress: 'off' }])
+    expect(t.text()).toContain('terminal progress → off (takes effect at the next launch)')
+  })
+
   it('/config with no picker prints the list', async () => {
     const { d } = liveDeps()
     const t = fakeIo(['/config', null])
@@ -12405,5 +12439,242 @@ describe('/keybindings and keybinding problems', () => {
   it('the help lists /keybindings and the ? key', () => {
     expect(HELP_TEXT).toContain('/keybindings')
     expect(HELP_TEXT).toMatch(/\n {2}\? {21}on an empty prompt/)
+  })
+})
+
+describe('custom status line (statusLine)', () => {
+  const capture = (stdout: string, exitCode = 0) => ({ exitCode, stdout, stderr: '', timedOut: false, truncated: false })
+
+  it('shows the command output in place of the built-in line, fed the session as JSON', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      statusLine: { command: 'my-status' }
+    })
+    const inputs: string[] = []
+    d.runStatusLine = async (command, input) => {
+      inputs.push(input)
+      return capture(`${command} \x1b[32mok\x1b[0m\x1b[2J\n`)
+    }
+    d.version = '9.9.9'
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('my-status \x1b[32mok\x1b[0m\x1b[0m\n')
+    expect(t.text()).not.toContain('\x1b[2J')
+    // The built-in line (provider/model · policy) is gone.
+    expect(t.text()).not.toContain('anthropic/claude · ask')
+    const first = JSON.parse(inputs[0])
+    expect(first).toMatchObject({ provider: 'anthropic', model: 'claude', approvalMode: 'ask', cwd: '/proj', version: '9.9.9' })
+    expect(first.sessionId).toBeNull()
+    // Refreshed after the turn: a second prompt, a second run.
+    expect(inputs.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('falls back to the built-in line while the command has never worked', async () => {
+    const { d } = deps([], { statusLine: { command: 'broken' } })
+    d.runStatusLine = async () => capture('', 1)
+    const t = fakeIo(['/statusline', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('anthropic/claude')
+    expect(t.text()).toContain('command: broken')
+    expect(t.text()).toContain('last run: exited with code 1')
+  })
+
+  it("runs a project's command only once the folder is trusted", async () => {
+    for (const trusted of [false, true]) {
+      const { d } = deps([])
+      const ran: string[] = []
+      d.runStatusLine = async (command) => {
+        ran.push(command)
+        return capture('project status\n')
+      }
+      d.projectStatusLine = async () => ({ config: { command: 'theirs' }, trusted })
+      const t = fakeIo([null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(ran.length > 0).toBe(trusted)
+      expect(t.text().includes('project status')).toBe(trusted)
+    }
+  })
+
+  it('never runs anything without the setting, and /statusline says how to set one', async () => {
+    const { d } = deps([])
+    const ran = vi.fn(async () => capture('x\n'))
+    d.runStatusLine = ran
+    const t = fakeIo(['/statusline', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(ran).not.toHaveBeenCalled()
+    expect(t.text()).toContain('"statusLine"')
+    for (const field of ['contextPercent', 'approvalMode', 'vimMode', 'worktree']) expect(t.text()).toContain(field)
+  })
+
+  it('hands the composer its rows as a header to redraw, and prints nothing above it', async () => {
+    const { d } = deps([], { statusLine: { command: 'st' } })
+    d.runStatusLine = async () => capture('live status\n')
+    const t = fakeIo([])
+    const headers: string[][] = []
+    t.io.readComposer = async (_p, _i, o) => {
+      headers.push(o?.header?.() ?? [])
+      return null
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(headers[0]).toEqual(['live status'])
+    expect(t.text()).not.toContain('live status')
+  })
+})
+
+describe('turn timing note', () => {
+  it('says how long each turn took, once', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text().match(/· done in \d+s\n/g)).toHaveLength(1)
+  })
+
+  it('adds the clock time when tuiTurnClock is on', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { tuiTurnClock: true })
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toMatch(/· done in \d+s at \d{1,2}:\d{2}/)
+  })
+
+  it('is one plain line in screen-reader mode, not two', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui({ ...opts, screenReader: true }, d)
+    expect(t.text().match(/done in/g)).toHaveLength(1)
+    expect(t.text()).not.toContain('· done in')
+  })
+
+  it('formats the finish time', () => {
+    expect(turnDoneText(66_000)).toBe('done in 1m 6s')
+    expect(turnDoneText(5_000, new Date(2026, 0, 1, 15, 42).getTime())).toMatch(/^done in 5s at 3:42/)
+  })
+})
+
+describe('terminal progress and the chat-titled tab', () => {
+  it('reports working, blocked, then done, and clears at exit', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'text', delta: 'ok' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', 'y', null])
+    const states: string[] = []
+    t.io.progress = (s) => states.push(s)
+    d.io = t.io
+    await runTui(opts, d)
+    expect(states[0]).toBe('working')
+    expect(states).toContain('blocked-permission')
+    expect(states.slice(-2)).toEqual(['done', 'clear'])
+  })
+
+  it('is blocked on each approval, question and plan picker, and working again once all are answered', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Which?', options: [{ label: 'A' }] },
+      { runId: 'x', type: 'plan_ready', callId: 'p1', plan: { title: 'Plan' } },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    const answers: Record<string, string> = { 'Choose:': 'allow', '': 'A', 'Your decision:': 'reject' }
+    t.io.select = async (spec) => ({ kind: 'commit', value: answers[spec.title] })
+    const states: string[] = []
+    t.io.progress = (s) => states.push(s)
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'allow']])
+    expect(rec.questions).toEqual([['run-1', 'q1', 'A']])
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
+    expect(states).toEqual(['working', 'blocked-permission', 'blocked-question', 'working', 'done', 'clear'])
+  })
+
+  it('is blocked at a picker Ctrl-C answers, and idle once that stops the run', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    t.io.select = async () => ({ kind: 'interrupt' })
+    const states: string[] = []
+    t.io.progress = (s) => states.push(s)
+    d.io = t.io
+    await runTui(opts, d)
+    expect(states).toContain('blocked-permission')
+    expect(states).not.toContain('done')
+    expect(states.at(-1)).toBe('clear')
+  })
+
+  it('reports an error on a failed turn and idle on a stopped one', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'error', message: 'boom' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    const states: string[] = []
+    t.io.progress = (s) => states.push(s)
+    d.io = t.io
+    await runTui(opts, d)
+    expect(states).toContain('error')
+    expect(states).not.toContain('done')
+  })
+
+  it('names the chat in the tab once it has a title, and follows a generated one', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    fp.persist.rename = (id, title) => {
+      const c = fp.store.get(id)
+      if (c) c.title = title
+    }
+    d.persist = fp.persist
+    const asked: string[] = []
+    d.generateTitle = (id, _p, _m, onTitle) => {
+      asked.push(id)
+      const c = fp.store.get(id)
+      if (c) c.title = 'Generated title'
+      onTitle('Generated title')
+    }
+    const t = fakeIo(['go', '/rename Chosen name', null])
+    const titles: string[] = []
+    t.io.signal = (s) => {
+      if (s.title !== undefined) titles.push(s.title)
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(asked[0]).toBe('conv-1')
+    expect(titles).toContain('Generated title · proj')
+    expect(titles).toContain('Chosen name · proj')
+    expect(titles.at(-1)).toBe('')
+  })
+})
+
+describe('rate limits in the status line and /usage', () => {
+  it('prefers a newer throttle, with its reset time, over older header counts', () => {
+    const now = Date.now()
+    const headers = { remainingRequests: 40, limitRequests: 50, at: new Date(now - 5000).toISOString() }
+    const throttle = { providerId: 'a', observedAt: now, remainingRequests: 0, resetAt: now + 60_000, source: 'retry' as const }
+    expect(footerQuota('a', headers, throttle)).toMatchObject({ remainingRequests: 0, throttled: true })
+    const newer = { ...headers, at: new Date(now + 1).toISOString() }
+    expect(footerQuota('a', newer, throttle)).toBe(newer)
+    expect(footerQuota('a', headers, undefined)).toBe(headers)
+  })
+
+  it('keeps what a throttled retry reported, for the status line', async () => {
+    _resetRateLimits()
+    const { d } = deps([
+      { runId: 'x', type: 'retry', attempt: 1, max: 3, message: '429', throttle: { waitMs: 1000, retryAfterMs: 120_000, remainingRequests: 0 } } as AgentEvent,
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // The status line after the turn says so, with when it refills.
+    expect(t.text()).toMatch(/rate 0 req left, resets \d{1,2}:\d{2}/)
+    _resetRateLimits()
   })
 })

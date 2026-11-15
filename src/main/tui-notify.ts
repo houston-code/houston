@@ -135,14 +135,30 @@ function sanitize(s: string, max = 120): string {
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
 }
 
-/** The title shown while the agent is working, so a glance at the tab tells you. */
-export function workingTitle(label: string, workspaceName?: string): string {
-  return workspaceName ? `● ${label} · ${workspaceName}` : `● ${label}`
+/**
+ * The chat's title as the tab shows it: '' for a chat that has none yet (the
+ * "New chat" placeholder, or no chat at all), so the tab falls back to "Houston".
+ */
+function chatName(chatTitle?: string | null): string {
+  const t = chatTitle ? stripControlChars(chatTitle).trim() : ''
+  return t && t !== 'New chat' ? t : ''
 }
 
-/** The title shown when nothing is running. */
-export function idleTitle(workspaceName?: string): string {
-  return workspaceName ? `Houston · ${workspaceName}` : 'Houston'
+/**
+ * The title shown while the agent is working, so a glance at the tab tells you. The
+ * chat's title follows the state when it has one, then the project.
+ */
+export function workingTitle(label: string, workspaceName?: string, chatTitle?: string | null): string {
+  return [`● ${label}`, chatName(chatTitle), workspaceName].filter(Boolean).join(' · ')
+}
+
+/**
+ * The title shown when nothing is running: the chat's title (derived from its first
+ * message, generated, or chosen with `--name` or /rename) and the project, or
+ * "Houston" and the project before the chat has one.
+ */
+export function idleTitle(workspaceName?: string, chatTitle?: string | null): string {
+  return [chatName(chatTitle) || 'Houston', workspaceName].filter(Boolean).join(' · ')
 }
 
 /**
@@ -153,23 +169,164 @@ export function idleTitle(workspaceName?: string): string {
  * is the "come back" moment. Everything else is silent — a bell per tool call
  * would train people to ignore the bell, which costs more than it buys.
  */
-export function signalFor(e: AgentEvent, workspaceName?: string): TerminalSignal | null {
+export function signalFor(e: AgentEvent, workspaceName?: string, chatTitle?: string | null): TerminalSignal | null {
   const spec = notificationFor(e, workspaceName)
   if (!spec) return null
   switch (e.type) {
     case 'tool_approval':
-      return { title: workingTitle('needs approval', workspaceName), alert: spec }
+      return { title: workingTitle('needs approval', workspaceName, chatTitle), alert: spec }
     case 'tool_question':
-      return { title: workingTitle('needs an answer', workspaceName), alert: spec }
+      return { title: workingTitle('needs an answer', workspaceName, chatTitle), alert: spec }
     case 'plan_ready':
-      return { title: workingTitle('plan ready', workspaceName), alert: spec }
+      return { title: workingTitle('plan ready', workspaceName, chatTitle), alert: spec }
     case 'error':
-      return { title: workingTitle('error', workspaceName), alert: spec }
+      return { title: workingTitle('error', workspaceName, chatTitle), alert: spec }
     case 'done':
-      return { title: idleTitle(workspaceName), alert: spec }
+      return { title: idleTitle(workspaceName, chatTitle), alert: spec }
     default:
       // A PR notice (tool_result) is worth a ping but shouldn't claim the title —
       // the run is still going.
       return { alert: spec }
+  }
+}
+
+// --- Progress reporting -------------------------------------------------------
+//
+// Two ways to tell the terminal itself what a turn is doing, so a tab, a taskbar
+// button or a session list can show it without anyone reading the screen:
+//
+// - OSC 9;4, the progress bar ConEmu introduced and Windows Terminal, Ghostty,
+//   WezTerm and iTerm2 (3.6 and later) draw: indeterminate while a turn runs, the
+//   error state when it fails, cleared when it ends. Sent ONLY to terminals known to
+//   understand it: OSC 9 is also the notification sequence, so a terminal that knows
+//   OSC 9 but not 9;4 would pop a notification reading "4;3".
+// - OSC 7501, the program status protocol: working, blocked on a permission or a
+//   question, done, error, idle. Terminals ignore an OSC they do not know, so it is
+//   sent wherever progress is on.
+
+/** What a turn is doing, as progress reporting tells the terminal. */
+export type ProgressState = 'working' | 'blocked-permission' | 'blocked-question' | 'done' | 'error' | 'idle' | 'clear'
+
+/** Which progress sequences this terminal gets. */
+export interface ProgressSupport {
+  /** The OSC 9;4 progress bar. */
+  osc94: boolean
+  /** Wrap every sequence for tmux's passthrough. */
+  tmux: boolean
+}
+
+export type ProgressMode = 'auto' | 'passthrough' | 'off'
+
+/** The `tuiProgress` modes, in the order /config steps through them. */
+export const PROGRESS_MODES: readonly ProgressMode[] = ['auto', 'passthrough', 'off']
+
+/** Whether a value is a `tuiProgress` mode. */
+export function isProgressMode(v: unknown): v is ProgressMode {
+  return v === 'auto' || v === 'passthrough' || v === 'off'
+}
+
+/** Whether `v` ("3.6.2") is at least major.minor. */
+function versionAtLeast(v: string | undefined, major: number, minor: number): boolean {
+  const m = /^(\d+)\.(\d+)/.exec(v ?? '')
+  if (!m) return false
+  const [a, b] = [Number(m[1]), Number(m[2])]
+  return a > major || (a === major && b >= minor)
+}
+
+/** Whether the terminal itself (not a multiplexer in it) is known to draw OSC 9;4. */
+export function supportsOsc94(env: NodeJS.ProcessEnv): boolean {
+  if (env.WT_SESSION) return true // Windows Terminal
+  if (env.ConEmuANSI === 'ON') return true
+  const prog = env.TERM_PROGRAM
+  if (prog === 'ghostty' || prog === 'WezTerm') return true
+  if (prog === 'iTerm.app') return versionAtLeast(env.TERM_PROGRAM_VERSION, 3, 6)
+  return false
+}
+
+/**
+ * What this session sends, from the `tuiProgress` setting and the environment: null
+ * (nothing) when it is off, and inside tmux or screen unless the setting asks for
+ * tmux's passthrough (screen has no equivalent). Screen-reader mode is the adapter's
+ * check, since it can change mid-session.
+ */
+export function progressSupport(mode: unknown, env: NodeJS.ProcessEnv): ProgressSupport | null {
+  const m: ProgressMode = isProgressMode(mode) ? mode : 'auto'
+  if (m === 'off') return null
+  if (env.STY) return null
+  const tmux = Boolean(env.TMUX)
+  if (tmux && m !== 'passthrough') return null
+  return { osc94: supportsOsc94(env), tmux }
+}
+
+/** Base64 of a short label for OSC 7501's `title`: no control characters, at most 120 bytes. */
+function b64Label(text: string): string {
+  let t = sanitize(text, 120)
+  while (Buffer.byteLength(t, 'utf8') > 120) t = t.slice(0, -1)
+  return Buffer.from(t, 'utf8').toString('base64')
+}
+
+/** The OSC 9;4 part for a state. */
+function osc94(state: ProgressState): string {
+  switch (state) {
+    case 'working':
+      return `${ESC}]9;4;3${BEL}`
+    case 'blocked-permission':
+    case 'blocked-question':
+      // Paused: the bar stays up, in the terminal's waiting colour.
+      return `${ESC}]9;4;4;100${BEL}`
+    case 'error':
+      return `${ESC}]9;4;2;100${BEL}`
+    case 'done':
+    case 'idle':
+    case 'clear':
+      return `${ESC}]9;4;0${BEL}`
+  }
+}
+
+const ST = `${ESC}\\`
+
+/** The OSC 7501 report for a state. */
+function osc7501(state: ProgressState, label?: string): string {
+  if (state === 'clear') return `${ESC}]7501;state=clear${ST}`
+  const pairs =
+    state === 'blocked-permission'
+      ? ['state=blocked', 'kind=permission']
+      : state === 'blocked-question'
+        ? ['state=blocked', 'kind=question']
+        : [`state=${state}`]
+  pairs.push('app=houston')
+  if (label && sanitize(label).trim()) pairs.push(`title=${b64Label(label)}`)
+  return `${ESC}]7501;${pairs.join(':')}${ST}`
+}
+
+/** A sequence wrapped for tmux's passthrough: inside, every ESC is doubled. */
+function tmuxWrap(seq: string): string {
+  return `${ESC}Ptmux;${seq.split(ESC).join(ESC + ESC)}${ST}`
+}
+
+/** The bytes that report `state` to a terminal with `support`. */
+export function progressSequence(state: ProgressState, support: ProgressSupport, label?: string): string {
+  const parts = [support.osc94 ? osc94(state) : '', osc7501(state, label)].filter(Boolean)
+  return parts.map((p) => (support.tmux ? tmuxWrap(p) : p)).join('')
+}
+
+/**
+ * The progress state an event moves a running turn to, or null when it changes
+ * nothing: a blocking event blocks it, anything after that is work again. The end is
+ * the driver's to settle (done, error, or idle after a stop).
+ */
+export function progressForEvent(e: AgentEvent): ProgressState | null {
+  switch (e.type) {
+    case 'tool_approval':
+      return 'blocked-permission'
+    case 'tool_question':
+    case 'plan_ready':
+    case 'elicitation':
+      return 'blocked-question'
+    case 'done':
+    case 'error':
+      return null
+    default:
+      return 'working'
   }
 }

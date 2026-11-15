@@ -1074,7 +1074,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
         hooks: cfg.elevated.hooks.length,
         mcpServers: cfg.elevated.mcpServers.length,
         ...(cfg.elevated.commands?.length ? { commands: cfg.elevated.commands.length } : {}),
-        plugins: cfg.elevated.plugins.length
+        plugins: cfg.elevated.plugins.length,
+        ...(cfg.elevated.statusLine ? { statusLine: 1 } : {})
       },
       ...(cfg.elevated.plugins.length ? { plugins: cfg.elevated.plugins.map((p) => p.name) } : {})
     }

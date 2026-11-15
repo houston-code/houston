@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Provider, ProviderStreamEvent } from '@shared/agent'
 import {
   onProviderQuota,
+  parseResetHeader,
   providerQuota,
   providerQuotas,
   quotaFromHeaders,
@@ -128,5 +129,55 @@ describe('recording quota per provider', () => {
     for await (const e of p.streamChat({ model: 'm', messages: [] })) events.push(e.type)
     off()
     expect(events).toEqual(['text', 'done'])
+  })
+})
+
+describe('reset times', () => {
+  const now = Date.parse('2026-11-15T10:00:00Z')
+
+  it('parses RFC 3339 times and Go-style durations', () => {
+    expect(parseResetHeader('2026-11-15T10:00:30Z', now)).toBe(now + 30_000)
+    expect(parseResetHeader('1s', now)).toBe(now + 1000)
+    expect(parseResetHeader('6m0s', now)).toBe(now + 360_000)
+    expect(parseResetHeader('1h2m3.5s', now)).toBe(now + 3_723_500)
+    expect(parseResetHeader('20ms', now)).toBe(now + 20)
+  })
+
+  it('ignores anything else', () => {
+    expect(parseResetHeader('soon', now)).toBeUndefined()
+    expect(parseResetHeader('5', now)).toBeUndefined()
+    expect(parseResetHeader('1s junk', now)).toBeUndefined()
+    expect(parseResetHeader('', now)).toBeUndefined()
+    expect(parseResetHeader(null, now)).toBeUndefined()
+  })
+
+  it('records the latest reset the headers name', () => {
+    const q = quotaFromHeaders(
+      new Headers({
+        'x-ratelimit-remaining-requests': '3',
+        'x-ratelimit-reset-requests': '2s',
+        'x-ratelimit-reset-tokens': '1m0s'
+      }),
+      200,
+      new Date(now)
+    )
+    expect(q?.resetAt).toBe(new Date(now + 60_000).toISOString())
+  })
+
+  it('reads the Claude API reset times', () => {
+    const q = quotaFromHeaders(
+      new Headers({
+        'anthropic-ratelimit-requests-remaining': '9',
+        'anthropic-ratelimit-requests-reset': '2026-11-15T10:00:05Z'
+      }),
+      429,
+      new Date(now)
+    )
+    expect(q).toMatchObject({ remainingRequests: 9, throttled: true, resetAt: '2026-11-15T10:00:05.000Z' })
+  })
+
+  it('has no reset when the headers name none', () => {
+    const q = quotaFromHeaders(new Headers({ 'x-ratelimit-remaining-requests': '3' }), 200, new Date(now))
+    expect(q).not.toHaveProperty('resetAt')
   })
 })

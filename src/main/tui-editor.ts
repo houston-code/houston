@@ -733,6 +733,11 @@ export function renderEditor(
      */
     below?: string[]
     /**
+     * Rows drawn ABOVE the prompt (a custom status line). Part of the redraw region
+     * like `below`; the cursor row counts them. Each must fit on one row.
+     */
+    above?: string[]
+    /**
      * Per buffer line, the `[start, end)` ranges (in string offsets) to draw
      * emphasized. Styling only: wrapping and the cursor are computed from the plain
      * text, so a marked draft lays out exactly as an unmarked one.
@@ -742,6 +747,13 @@ export function renderEditor(
     markPaint?: (s: string) => string
   }
 ): EditorView {
+  const view = renderEditorBody(s, opts)
+  const above = opts.above ?? []
+  if (!above.length) return view
+  return { rows: [...above, ...view.rows], cursorRow: view.cursorRow + above.length, cursorCol: view.cursorCol }
+}
+
+function renderEditorBody(s: EditorState, opts: Parameters<typeof renderEditor>[1]): EditorView {
   const width = Math.max(8, opts.width)
   if (s.search) {
     const hit = (s.search.index !== null ? s.history[s.search.index] : '') ?? ''

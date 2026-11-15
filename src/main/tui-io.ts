@@ -36,7 +36,16 @@ import {
   DISABLE_MODIFIED_KEYS,
   type DecoderState
 } from './tui-keys'
-import { alertSequence, IDLE_REMINDER_MS, titleSequence, type NotifyMode, type TerminalSignal } from './tui-notify'
+import {
+  alertSequence,
+  IDLE_REMINDER_MS,
+  progressSequence,
+  titleSequence,
+  type NotifyMode,
+  type ProgressState,
+  type ProgressSupport,
+  type TerminalSignal
+} from './tui-notify'
 import { REDUCED_MOTION_REFRESH_MS, STATIC_SPINNER_GLYPH, plainText } from './tui-a11y'
 import {
   initialPagerState,
@@ -301,6 +310,11 @@ export interface TerminalIoDeps {
   keybindings?: () => KeyBindings
   /** What `?` on an empty prompt shows: the Keys section of /help, and the user's bindings. */
   shortcutHelp?: () => string[]
+  /**
+   * The progress sequences this terminal gets (see `progressSupport`), or null/absent
+   * for none. Never written in screen-reader mode.
+   */
+  progress?: ProgressSupport | null
 }
 
 /**
@@ -329,6 +343,13 @@ export interface ComposerReadOptions {
   ultrathinkEffect?: () => UltrathinkEffect
   /** Told the draft's text after each edit, so it can be saved for this chat. */
   onDraft?: (text: string) => void
+  /**
+   * Rows drawn above the prompt, part of the composer's redraw region (a custom status
+   * line), read on each redraw so {@link TuiIo.redrawComposer} can refresh them in
+   * place. Without a raw-mode composer (screen-reader mode, a pipe) they print once,
+   * as plain lines, before the prompt.
+   */
+  header?: () => string[]
 }
 
 /**
@@ -487,7 +508,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
 
   let pending: ((line: string | null) => void) | null = null
   /** The open raw-mode composer, while one is: whether nothing is typed, and how to close it. */
-  let openComposer: { empty: () => boolean; close: () => void } | null = null
+  let openComposer: { empty: () => boolean; close: () => void; redraw?: () => void } | null = null
   // The AbortController for the outstanding rl.question, so cancelRead / EOF can
   // actually cancel it. Without this, node:readline keeps the abandoned question
   // callback registered; the NEXT read then collides with it — the next prompt
@@ -1521,7 +1542,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     initial?: string,
     opts?: ComposerReadOptions
   ): Promise<string | null> => {
+    // A header with nowhere to redraw prints once, above the prompt.
+    const headerOnce = (): void => {
+      const rows = opts?.header?.() ?? []
+      if (!rows.length) return
+      if (screenReader) for (const r of rows) announce(r)
+      else rawWrite(rows.map((r) => `${filterTerminalOutput(r)}\n`).join(''))
+    }
     if (screenReader) {
+      headerOnce()
       return readLinear(prompt, {
         composer: true,
         ...(initial ? { initial } : {}),
@@ -1532,7 +1561,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     if (closed) return Promise.resolve(null)
     // No TTY / no raw mode → the readline path still works (tests, pipes). It can't
     // be pre-filled; the driver has already shown any `initial` text above it.
-    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return plainRead(promptNow())
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') {
+      headerOnce()
+      return plainRead(promptNow())
+    }
 
     return new Promise<string | null>((resolve) => {
       closePager?.()
@@ -1671,6 +1703,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           paint,
           continuation: paint('… ', 'dim'),
           ...(below.length ? { below } : {}),
+          // Each header row cut to one row: a wrapped one would desync the redraw.
+          ...(opts?.header ? { above: opts.header().map((r) => truncateVisible(filterTerminalOutput(r), width())) } : {}),
           ...(marks ? { marks } : {}),
           ...(selection ? { markPaint: (t: string) => `\x1b[7m${t}\x1b[27m` } : {})
         })
@@ -1808,7 +1842,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       pending = (line) => finish(line)
       openComposer = {
         empty: () => state.lines.every((l) => l.length === 0),
-        close: () => finish(null)
+        close: () => finish(null),
+        // A new header (the status line refreshed): repaint, unless the read is over
+        // or the region is not on screen ($EDITOR, the transcript viewer).
+        redraw: () => {
+          if (!done && drawn) draw()
+        }
       }
       printAbove = showAbove
 
@@ -2451,6 +2490,13 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     readLine: (prompt, opts) => (screenReader ? readLinear(prompt, opts) : plainRead(prompt, opts)),
     readComposer,
     readSecret,
+    redrawComposer: () => {
+      if (!pagerOpen) openComposer?.redraw?.()
+    },
+    progress: (state: ProgressState, label?: string) => {
+      if (!deps.progress || screenReader) return
+      rawWrite(progressSequence(state, deps.progress, label))
+    },
     yieldComposer: () => {
       // The viewer is up over the composer: whatever wants the turn waits for it.
       if (pagerOpen || !openComposer || !openComposer.empty()) return false

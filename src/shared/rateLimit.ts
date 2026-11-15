@@ -69,6 +69,8 @@ export interface ProviderQuota {
   limitTokens?: number
   /** The response that reported it was a 429. */
   throttled?: boolean
+  /** When the window is next full again (ISO 8601), when the provider said. */
+  resetAt?: string
   /** When the response arrived (ISO 8601). */
   at: string
 }
@@ -80,17 +82,26 @@ function compact(n: number): string {
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
 }
 
+/** "3:42 PM": a reset time as the status line shows it. */
+function clockText(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
 /**
  * A short status-line field for a quota, e.g. "rate 45 req · 12k tok left", or null
- * when it names nothing left to show.
+ * when it names nothing to show. Once the quota is low (see {@link quotaIsLow}) and
+ * the provider said when its window refills, the reset time follows ("rate 2 req
+ * left, resets 3:42 PM"), and a throttle with no counts shows just that.
  */
-export function quotaStatusText(q: ProviderQuota | undefined): string | null {
+export function quotaStatusText(q: ProviderQuota | undefined, now: number = Date.now()): string | null {
   if (!q) return null
   const left: string[] = []
   if (q.remainingRequests !== undefined) left.push(`${compact(q.remainingRequests)} req`)
   if (q.remainingTokens !== undefined) left.push(`${compact(q.remainingTokens)} tok`)
-  if (!left.length) return null
-  return `rate ${left.join(' · ')} left`
+  const resetMs = q.resetAt !== undefined ? Date.parse(q.resetAt) : NaN
+  const reset = quotaIsLow(q) && Number.isFinite(resetMs) && resetMs > now ? `resets ${clockText(resetMs)}` : ''
+  if (!left.length) return reset ? `rate limited, ${reset}` : null
+  return `rate ${left.join(' · ')} left${reset ? `, ${reset}` : ''}`
 }
 
 /**

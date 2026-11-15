@@ -70,7 +70,7 @@ import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './
 import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps, sideChatView } from './sideChat'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
-import { runUserShell } from './userShell'
+import { captureUserShell, runUserShell } from './userShell'
 import { loadAgents } from './agent/agents'
 import { loadSlashCommands } from './agent/commands'
 import { loadWorkspaceSlashCommands, workspaceMcpPromptCommands, workspaceMcpPromptFetch } from './agent/mcpPromptWorkspace'
@@ -119,6 +119,7 @@ import {
   HELP_TEXT,
   makePainter,
   resolveTheme,
+  setUserThemes,
   mediaTypeForImagePath,
   type BackgroundSession,
   type ResumeEntry,
@@ -130,7 +131,12 @@ import type { DoctorFacts } from './tui-doctor'
 import { gatherDoctorFacts } from './doctor'
 import { saveMemory } from './memory'
 import { memoryStore } from './agent/memoryStore'
-import { legacyRulesNoticeApplies } from './globalRules'
+import { globalRulesDir, legacyRulesNoticeApplies } from './globalRules'
+import { loadUserThemes } from './tui-themes'
+import { progressSupport } from './tui-notify'
+import { maybeGenerateTitle } from './agent/title'
+import { loadProjectConfig } from './agent/projectConfig'
+import { workspaceTrusted } from './agent/commandRun'
 import { takeLegacyRulesTerminalNotice } from './legacyRulesNotice'
 import {
   checkForUpdate,
@@ -730,6 +736,10 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   let latestUpdate: { latest: string; url: string; hint: string } | null = null
   const hint = upgradeHint(currentInstallMethod())
 
+  // The user's own themes (~/.houston/themes/*.json), offered by /theme beside the
+  // built-ins. Registered before anything resolves the saved theme.
+  const userThemes = loadUserThemes(join(globalRulesDir(), 'themes'))
+  setUserThemes(userThemes.themes)
   // Built-ins plus this workspace's own .houston/commands. The Tab completer only
   // ever knew the built-ins, so a project's commands were undiscoverable unless you
   // already knew their names. Loaded once; the menu redraws on every keystroke and
@@ -807,6 +817,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   const terminalIo = createTerminalIo({
     keybindings: () => keybindings.get(),
     shortcutHelp: () => shortcutLines(keysSection(HELP_TEXT), describeBindings(keybindings.get())),
+    // Turn progress for the terminal itself (OSC 9;4, OSC 7501), per tuiProgress.
+    progress: process.stdout.isTTY ? progressSupport(getSettings().tuiProgress, process.env) : null,
     // Painted with the composer's painter, so the menus follow /theme.
     menuFor: (line, redraw, menuPaint) => {
       if (line.startsWith('/mcp')) refreshMcpMenu(redraw)
@@ -967,6 +979,16 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       },
       doctor: async () => terminalDoctorFacts(tui.cwd, version, tui.color, latestUpdate),
       runUserShell: (command, onOutput) => runUserShell(tui.cwd, command, onOutput),
+      ...(userThemes.errors.length ? { themeErrors: userThemes.errors } : {}),
+      // The custom status line: the user's command, in their shell like `!`.
+      runStatusLine: (command, input, o) => captureUserShell(tui.cwd, command, { ...o, input }),
+      // A project's own status line runs only once the folder is trusted.
+      projectStatusLine: async () => {
+        const config = (await loadProjectConfig(tui.cwd)).elevated.statusLine ?? null
+        return { config, trusted: config ? await workspaceTrusted(tui.cwd, getSettings().trustedFolders) : false }
+      },
+      generateTitle: (conversationId, providerId, model, onTitle) =>
+        void maybeGenerateTitle({ conversationId, providerId, model, onTitle }),
       saveMemory: (scope, text) => saveMemory(tui.cwd, scope, text),
       memoryStore: () => memoryStore({ workspace: tui.cwd }),
       backgroundSessions: () => sessions.backgroundSessions(),

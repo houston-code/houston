@@ -96,12 +96,13 @@ export function TrustFolderBanner({
     // Name every plugin file: trusting the folder consents to running exactly these.
     c.plugins
       ? `${c.plugins} plugin${c.plugins === 1 ? '' : 's'}${status.plugins?.length ? ` (${status.plugins.join(', ')})` : ''}`
-      : ''
+      : '',
+    c.statusLine ? 'a terminal status line command' : ''
   ].filter(Boolean)
   const summary = parts.join(', ')
   // Where the elevating config lives: the settings file, the commands folder, the
   // plugins folder, or any mix of them.
-  const settingsPart = c.allowRules > 0 || c.hooks > 0 || c.mcpServers > 0
+  const settingsPart = c.allowRules > 0 || c.hooks > 0 || c.mcpServers > 0 || (c.statusLine ?? 0) > 0
   const sources = [
     settingsPart || (!c.commands && !c.plugins) ? '.houston/settings.json' : '',
     c.commands ? '.houston/commands' : '',
@@ -129,7 +130,7 @@ export function TrustFolderBanner({
             ? `The extra permissions in this project’s ${source} changed since you trusted it (now: ${summary}). They stay off until you trust it again.${pluginNote}`
             : c.commands || c.plugins
               ? `It defines ${summary} (in ${source}). Hooks, MCP servers, plugins, and command templates’ shell commands run as you, and allow rules and pre-approving commands auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.${pluginNote}`
-              : `Its .houston/settings.json defines ${summary}. Hooks and MCP servers run as you, and allow rules auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.`}
+              : `Its .houston/settings.json defines ${summary}. Hooks${c.statusLine ? ', MCP servers, and a status line command' : ' and MCP servers'} run as you, and allow rules auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.`}
         </p>
         <div className="git-init-banner__actions">
           <button

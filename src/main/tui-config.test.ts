@@ -54,6 +54,37 @@ describe('findConfigKey', () => {
     expect(configPatch('focus', 'on', settings())).toBeNull()
   })
 
+  it('takes the turn clock as on/off and progress as auto | passthrough | off, saved for the next launch', () => {
+    expect(findConfigKey('tuiTurnClock')?.key).toBe('turn-clock')
+    expect(findConfigKey('tuiProgress')?.key).toBe('progress')
+    expect(parseConfigArgs('turn-clock=on', ctx())).toEqual({ op: 'set', key: 'turn-clock', value: 'on' })
+    expect(parseConfigArgs('progress=PASSTHROUGH', ctx())).toEqual({ op: 'set', key: 'progress', value: 'passthrough' })
+    expect(parseConfigArgs('progress=sometimes', ctx())).toEqual({
+      op: 'error',
+      message: 'progress can\'t be "sometimes": use auto | passthrough | off'
+    })
+    expect(configPatch('turn-clock', 'on', settings())?.patch).toEqual({ tuiTurnClock: true })
+    expect(configPatch('progress', 'off', settings())).toEqual({
+      patch: { tuiProgress: 'off' },
+      note: 'terminal progress → off (takes effect at the next launch)'
+    })
+    expect(configPatch('progress', 'loud', settings())).toBeNull()
+    const progress = findConfigKey('progress')!
+    expect(progress.current(settings(), live)).toBe('auto')
+    expect(nextConfigValue(progress, 'off', ctx())).toBe('auto')
+  })
+
+  it('a theme is checked with the resolver the terminal gives, aliases included', () => {
+    const themed: ConfigContext = {
+      ...ctx(),
+      themes: ['default', 'dark', 'colorblind-light', 'solar'],
+      resolveTheme: (n) => (n === 'bright' ? 'dark' : ['default', 'dark', 'colorblind-light', 'solar'].includes(n) ? n : null)
+    }
+    expect(parseConfigArgs('theme=bright', themed)).toEqual({ op: 'set', key: 'theme', value: 'dark' })
+    expect(parseConfigArgs('theme=solar', themed)).toEqual({ op: 'set', key: 'theme', value: 'solar' })
+    expect(parseConfigArgs('theme=nope', themed)).toMatchObject({ op: 'error' })
+  })
+
   it('lists no key that holds a secret', () => {
     const names = CONFIG_KEYS.flatMap((k) => [k.key, ...k.aliases]).join(' ').toLowerCase()
     for (const word of ['key', 'token', 'secret', 'header', 'password', 'env']) expect(names).not.toContain(word)

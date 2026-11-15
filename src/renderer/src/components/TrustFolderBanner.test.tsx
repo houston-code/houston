@@ -50,6 +50,12 @@ describe('TrustFolderBanner', () => {
     ).toBeInTheDocument()
   })
 
+  it('names a terminal status line command in the settings file', async () => {
+    installApi({ state: 'undecided', counts: { allowRules: 0, hooks: 0, mcpServers: 0, statusLine: 1 } })
+    render(<TrustFolderBanner {...props()} />)
+    expect(await screen.findByText(/settings\.json defines a terminal status line command\. Hooks, MCP servers, and a status line command run as you/)).toBeInTheDocument()
+  })
+
   it('names every plugin file the trust would cover', async () => {
     installApi({
       state: 'changed',

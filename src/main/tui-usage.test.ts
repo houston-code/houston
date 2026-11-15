@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildUsageReport, type UsageInput } from '@shared/usageReport'
-import { renderUsageReport, usageDayLabel } from './tui-usage'
+import { renderRateLimits, renderUsageReport, usageDayLabel } from './tui-usage'
 import type { Painter } from './tui'
 
 const plain: Painter = (s) => s
@@ -74,5 +74,28 @@ describe('renderUsageReport', () => {
   it('strips control characters from project names', () => {
     const text = renderUsageReport(buildUsageReport([chat('/p/\x1b[31mevil', [reply(day(0), 1, 1, 1)])], NOW), plain)
     expect(text).not.toContain('\x1b[31m')
+  })
+})
+
+describe('renderRateLimits', () => {
+  const now = NOW.getTime()
+
+  it('lists what each provider last reported, with the reset time', () => {
+    const out = renderRateLimits(
+      [
+        { providerId: 'anthropic', observedAt: now, remainingRequests: 12, resetAt: now + 60_000, source: 'retry' },
+        { providerId: 'openai\x1b[2J', observedAt: now, remainingTokens: 4000, source: 'headers' }
+      ],
+      now,
+      plain
+    )
+    expect(out).toContain('Rate limits (this session)')
+    expect(out).toMatch(/anthropic\s+12 requests left, resets /)
+    expect(out).toContain('4,000 tokens left (as of')
+    expect(out).not.toContain('\x1b')
+  })
+
+  it('is empty before any provider reports', () => {
+    expect(renderRateLimits([], now, plain)).toBe('')
   })
 })
