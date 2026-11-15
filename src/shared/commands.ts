@@ -483,8 +483,9 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'delete', group: 'Chat', description: 'Delete this chat (asks first)', clients: ['tui'] },
   { name: 'open-in-app', group: 'Chat', description: 'Open this chat in the Houston desktop app', clients: ['tui'] },
   {
-    name: 'permissions', group: 'Setup', args: '[add … | remove n]',
-    description: 'List every permission rule that applies, or add or remove one of yours', clients: ['tui']
+    name: 'permissions', group: 'Setup', args: '[add … | remove n | allow n]',
+    description: 'List every permission rule that applies and recent denials; add or remove a rule, or allow a denial',
+    clients: ['tui']
   },
   {
     name: 'schedule', group: 'Setup', args: '[add | pause|resume|run|delete n]',
@@ -613,7 +614,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   export: "in the app, export a chat from its More actions menu in the sidebar, or the File menu",
   delete: "in the app, delete a chat from its More actions menu in the sidebar",
   'open-in-app': 'you are in the app already',
-  permissions: 'in the app, saved rules are under Settings > Permissions',
+  permissions: 'in the app, saved rules and recent denials are under Settings > Permissions',
   commit: 'in the app, commit from the Changes view, where Suggest message writes one',
   push: 'in the app, push from the Changes view',
   ship: "in the app, the Changes view's Create PR button sends the same request",

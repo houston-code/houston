@@ -6,12 +6,17 @@ import type { ToolApprovalDecision } from '@shared/agent'
  * (which is `always`, for the chat) and no separate run-wide grant, so there Y
  * answers with that allow and A does nothing.
  */
-export type ApprovalVariant = 'standard' | 'chat-grant'
+export type ApprovalVariant = 'standard' | 'chat-grant' | 'discard'
 
+/**
+ * `discard` is a command that can throw away work: it asks every time, so A (for this
+ * chat) does nothing there, and the prompt takes Y twice (see ApprovalPrompt).
+ */
 export function approvalKeyDecision(key: string, variant: ApprovalVariant): ToolApprovalDecision | null {
   const k = key.toLowerCase()
   if (k === 'n') return 'deny'
   if (variant === 'chat-grant') return k === 'y' ? 'always' : null
+  if (variant === 'discard') return k === 'y' ? 'allow' : null
   if (k === 'y') return 'allow'
   if (k === 'a') return 'always'
   return null

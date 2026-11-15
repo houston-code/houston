@@ -6,8 +6,10 @@ import {
   APPROVAL_POLICY_LABEL,
   permissionRuleKey,
   type PermissionRule,
-  type PermissionTestResult
+  type PermissionTestResult,
+  type RecentDenial
 } from '@shared/types'
+import { visibleText } from '@shared/visibleText'
 import {
   isRuleWarning as isWarning,
   lintPermissionRules,
@@ -491,6 +493,17 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
           </details>
         ))}
 
+      <RecentDenials
+        rules={rules}
+        onAdd={(added) => {
+          // First, as an approval prompt's "Always allow" saves them; a matching deny
+          // still wins wherever it sits.
+          const at = Date.now()
+          setRuleFilter('')
+          setRules([...added.map((r) => ({ ...r, addedAt: at, source: 'prompt' as const })), ...rules])
+        }}
+      />
+
       <RuleTester ctx={ctx} rules={rules} onMatches={setTested} />
 
       {view !== 'sources' && (
@@ -604,6 +617,100 @@ function RulesTextEditor({
         </button>
       </div>
     </div>
+  )
+}
+
+/** Seconds, minutes or hours since a denial, for the list (it holds this session only). */
+function sinceText(at: number, now: number): string {
+  const s = Math.max(0, Math.floor((now - at) / 1000))
+  if (s < 60) return 'just now'
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m} ${m === 1 ? 'minute' : 'minutes'} ago`
+  const h = Math.floor(m / 60)
+  return `${h} ${h === 1 ? 'hour' : 'hours'} ago`
+}
+
+/**
+ * The calls denied at an approval prompt this session, newest first, each with
+ * "Allow this": the allow rules an approval's "Always allow" would have saved for it,
+ * built in main and added to the rules above (which autosave writes). Hidden when
+ * nothing was denied.
+ */
+function RecentDenials({
+  rules,
+  onAdd
+}: {
+  rules: PermissionRule[]
+  onAdd: (added: PermissionRule[]) => void
+}): JSX.Element | null {
+  const [denials, setDenials] = useState<RecentDenial[]>([])
+  const [status, setStatus] = useState<string | null>(null)
+  const [now] = useState(() => Date.now())
+  useEffect(() => {
+    let alive = true
+    void window.api
+      .listRecentDenials?.()
+      .then((list) => {
+        if (alive) setDenials(list ?? [])
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+  if (denials.length === 0 && !status) return null
+  const allow = async (d: RecentDenial): Promise<void> => {
+    const r = await window.api.denialAllowRules(d.id, rules).catch(() => null)
+    setDenials((prev) => prev.filter((x) => x.id !== d.id))
+    if (!r) {
+      setStatus('That call is no longer listed.')
+      return
+    }
+    void window.api.forgetRecentDenial(d.id).catch(() => {})
+    if (r.rules.length) onAdd(r.rules)
+    const added = r.rules.length
+      ? `Added ${r.rules.length === 1 ? 'an allow rule' : `${r.rules.length} allow rules`} for ${d.tool}.`
+      : 'Your rules already allow it, or it names nothing a rule can match.'
+    setStatus(r.deniedByRule ? `${added} A deny rule still matches it, and a deny always wins: remove that rule for it to run.` : added)
+  }
+  return (
+    <section className="recent-denials" aria-labelledby="recent-denials-title">
+      <h4 className="recent-denials__title" id="recent-denials-title">
+        Recently denied
+      </h4>
+      <p className="rule__meta">
+        Calls you denied at an approval prompt since Houston started. Allow this adds the rule
+        &quot;Always allow&quot; would have saved.
+      </p>
+      {denials.length > 0 && (
+        <ul className="recent-denials__list">
+          {denials.map((d) => (
+            <li key={d.id} className="recent-denials__row">
+              <span className="recent-denials__tool">{d.tool}</span>
+              <code className="recent-denials__subject" title={visibleText(d.subject)}>
+                {d.subject.trim() ? visibleText(d.subject) : '(no target)'}
+              </code>
+              <span className="recent-denials__meta">
+                {sinceText(d.at, now)}
+                {d.reason ? `, you said: ${d.reason}` : ''}
+              </span>
+              <button
+                className="btn btn--sm"
+                aria-label={`Allow this: ${d.tool} ${d.subject}`}
+                onClick={() => void allow(d)}
+              >
+                Allow this
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {status && (
+        <p className="rule-cleanup-status" role="status">
+          {status}
+        </p>
+      )}
+    </section>
   )
 }
 

@@ -548,6 +548,22 @@ export interface PermissionRule {
 }
 
 /**
+ * A call the user denied at an approval prompt this session (see recentDenials.ts in
+ * main), listed in `/permissions` and Settings > Permissions so it can become an allow
+ * rule. `subject` is what a rule for it would match: the command, path, URL, or query.
+ */
+export interface RecentDenial {
+  id: string
+  /** When it was denied (epoch ms). */
+  at: number
+  tool: string
+  kind: 'read' | 'write' | 'shell' | 'network' | 'mcp'
+  subject: string
+  /** The reason the user gave with the denial, if any. */
+  reason?: string
+}
+
+/**
  * A permission rule's identity for bookkeeping that lives outside the rule itself
  * (when it last decided a call): the fields the matcher reads, NUL-separated.
  */

@@ -1095,7 +1095,7 @@ export function isToolApprovalDecision(v: unknown): v is ToolApprovalDecision {
 }
 
 /**
- * How much guidance a denial may carry back to the model. Long enough for a real
+ * How much guidance an approval or a denial may carry back to the model. Long enough for a real
  * instruction ("use the staging bucket, not prod"), short enough that a runaway
  * paste can't be smuggled into the transcript through the approval channel.
  */
@@ -1122,12 +1122,10 @@ export const MAX_PENDING_STEERS = 20
  * interrupt and re-explain in a separate turn. The note rides the SAME
  * interaction, so the correction lands where the refusal did.
  *
- * Carried on a refusal — both `deny` and `rule-deny`, which is why it lives on the
- * resolution rather than just the deny path — where the loop folds it into the tool
- * result the model reads (see `denialText`). An `allow`/`always`/`rule-allow` carries
- * no note today: the tool runs and its real output is the answer, and neither client
- * offers a way to attach "allow, but prefer X next time" to an approval. (Wiring that
- * through would be a feature, with its own UI, not a field the loop already reads.)
+ * Carried on a refusal (`deny` and `rule-deny`), where the loop folds it into the tool
+ * result the model reads (see `denialText`), and on an approval ("yes, but keep the old
+ * file"), where it follows the call's own result (see `withApprovalNote`). The GUI and
+ * the TUI offer it on "Allow once" and "Allow for this chat"; headless and ACP send none.
  */
 export interface ApprovalResolution {
   decision: ToolApprovalDecision
@@ -1473,7 +1471,9 @@ export type AgentEvent =
        * Present and `true` only on a shell command that can throw away work in the
        * project (`git reset --hard`, `rm -r` of tracked files, a forced push). Such a
        * command asks in every mode, since shell side effects aren't checkpointed; lets
-       * the UI say that is why it is asking.
+       * the UI say that is why it is asking. "Allow for this chat" doesn't cover it (the
+       * loop runs it once), so the clients don't offer it and ask for a deliberate
+       * confirmation instead of a single key.
        */
       discardsWork?: boolean
       /**

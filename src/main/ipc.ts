@@ -19,6 +19,7 @@ import { cleanupPermissionRules } from './agent/permissions'
 import { activeBackendId, isSandboxed } from './sandbox'
 import { describePermissionPolicy, defaultPolicyDeps, testPermission } from './permissionPolicy'
 import { getRuleUsage } from './ruleUsage'
+import { allowRulesForDenial, forgetDenial, listRecentDenials } from './agent/recentDenials'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 import {
   isPlanDecision,
@@ -1218,6 +1219,18 @@ export function registerIpc(ready?: Promise<unknown>): void {
     )
   })
   handle(IPC.permissionsUsage, () => getRuleUsage())
+  // Settings' "Recently denied" list. The rules are built in main, the way an approval
+  // prompt's "Always allow" builds them, and checked against the panel's working copy
+  // of the user's rules; the panel adds them to that copy, which autosave writes.
+  handle(IPC.permissionsRecentDenials, () => listRecentDenials())
+  handle(IPC.permissionsDenialRules, (_event, id: unknown, userRules: unknown) =>
+    typeof id === 'string'
+      ? allowRulesForDenial(id, Array.isArray(userRules) ? (userRules as PermissionRule[]).slice(0, 5000) : [])
+      : null
+  )
+  handle(IPC.permissionsForgetDenial, (_event, id: unknown) => {
+    if (typeof id === 'string') forgetDenial(id)
+  })
 
   // Preferences export/import. The renderer builds and parses the content (see
   // @shared/settingsPortable); main only moves bytes to and from a file the user picks.

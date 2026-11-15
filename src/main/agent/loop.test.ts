@@ -62,6 +62,7 @@ import { idleTimeoutFetch } from '../providers/idle-fetch'
 import { promptCacheKeyFor } from '../providers/caching'
 import { startFlakySseServer, type Hiccup } from '../test/flaky-sse-server'
 import { memoryStore } from './memoryStore'
+import { allowRulesForDenial, listRecentDenials, resetRecentDenials } from './recentDenials'
 import { COMPACTION_SUMMARY_PREFIX } from './compaction'
 import { applyCompaction } from './compact'
 import {
@@ -839,7 +840,7 @@ describe('startRun', () => {
   // rides a refusal. On an allow the tool runs and its real output is the answer,
   // so a note has nowhere to go and is dropped — pinned here so the comment can't
   // drift back to claiming "allow, but prefer X next time" works.
-  it('drops a note on an allow — the tool result is the tool output, not the note', async () => {
+  it('runs an allow that carries a note, and follows the real tool output with it', async () => {
     const r = await run({
       policy: 'ask',
       onApproval: (_id, decide) => decide('allow', 'prefer X next time'),
@@ -852,7 +853,11 @@ describe('startRun', () => {
     })
     expect(readFileSync(join(ws, 'yes.txt'), 'utf8')).toBe('x')
     const result = r.events.find((e) => e.type === 'tool_result')
-    expect((result as { output: string }).output).not.toContain('prefer X next time')
+    const output = (result as { output: string }).output
+    // The tool's own output still comes first; the note follows it, never replaces it.
+    expect(output.indexOf('prefer X next time')).toBeGreaterThan(0)
+    expect(output.endsWith('Allowed by the user. Note from the user: prefer X next time')).toBe(true)
+    expect(output.startsWith('Allowed by the user')).toBe(false)
   })
 
   it('blocks writes in plan mode', async () => {
@@ -9284,6 +9289,24 @@ describe('egress hardening', () => {
     })
   })
 
+  it('hands the model the note the user allowed a call with, after its result', async () => {
+    h.sandboxed = true
+    h.probeTools = [probeRunShell()]
+    const r = await run({
+      policy: 'ask',
+      onApproval: (_id, decide) => decide('allow', 'keep the old build around'),
+      turns: [
+        [runShellCall('n1', 'npm test'), { type: 'done', stopReason: 'tool_use' }],
+        [{ type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const res = r.events.find((e) => e.type === 'tool_result') as { ok: boolean; output: string }
+    expect(res.ok).toBe(true)
+    expect(res.output).toBe('ran npm test\n\nAllowed by the user. Note from the user: keep the old build around')
+    const tool = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'n1')
+    expect(tool?.content).toContain('Note from the user: keep the old build around')
+  })
+
   describe('commands that discard work', () => {
     beforeEach(() => {
       shellNetPerCall.length = 0
@@ -9326,6 +9349,49 @@ describe('egress hardening', () => {
       const ask = r.events.find((e) => e.type === 'tool_approval' && e.callId === 'x1') as { discardsWork?: boolean; escapesWorkspace?: boolean }
       expect(ask.escapesWorkspace).toBe(true)
       expect(ask.discardsWork).toBeUndefined()
+    })
+
+    it('flags the prompt, and "Allow for this chat" on it runs it once without granting shell', async () => {
+      h.probeTools = [probeRunShell()]
+      const r = await run({
+        policy: 'ask',
+        onApproval: (id, decide) => decide(id === 'x1' ? 'always' : 'allow'),
+        turns: [
+          [runShellCall('x1', 'git reset --hard'), { type: 'done', stopReason: 'tool_use' }],
+          [runShellCall('x2', 'npm test'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const prompts = r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string; discardsWork?: boolean }>
+      expect(prompts.map((p) => [p.callId, p.discardsWork === true])).toEqual([
+        ['x1', true],
+        ['x2', false]
+      ])
+      // The ordinary command still asked: the chat grant on the discard granted nothing.
+      expect(shellNetPerCall.map((c) => c.command)).toEqual(['git reset --hard', 'npm test'])
+    })
+
+    it('records a denial with its reason for /permissions, and "Allow this" saves the exact rule', async () => {
+      resetRecentDenials()
+      h.probeTools = [probeRunShell()]
+      await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('deny', 'stash it first'),
+        turns: [
+          [runShellCall('x1', 'git reset --hard'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const [d] = listRecentDenials()
+      expect(d).toEqual(
+        expect.objectContaining({ tool: 'run_shell', kind: 'shell', subject: 'git reset --hard', reason: 'stash it first' })
+      )
+      // What "Always allow" would save: a discard stays exact, never a `git reset` prefix.
+      expect(allowRulesForDenial(d.id, [])).toEqual({
+        rules: [{ action: 'allow', tool: 'run_shell', match: 'git reset --hard', exact: true }],
+        deniedByRule: false
+      })
+      resetRecentDenials()
     })
 
     it('an explicit allow rule lets a known destructive command through', async () => {
