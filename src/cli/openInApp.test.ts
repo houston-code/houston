@@ -99,4 +99,12 @@ describe('launchDetached', () => {
   it('rejects when the program cannot be started', async () => {
     await expect(launchDetached(join(tmpdir(), 'houston-no-such-binary'), [])).rejects.toThrow()
   })
+
+  it('rejects when the opener exits non-zero (nothing handles the link)', async () => {
+    await expect(launchDetached(process.execPath, ['-e', 'process.exit(1)'])).rejects.toThrow(/exited with code 1/)
+  })
+
+  it('takes an opener still running after the wait as having opened the link', async () => {
+    await expect(launchDetached(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], 100)).resolves.toBeUndefined()
+  })
 })

@@ -61,6 +61,7 @@ import {
   comeBackCommand,
   resumeWorktreeFolder,
   resumeChatFolder,
+  worktreeWork,
   type SessionWorktree
 } from './sessionWorktree'
 import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
@@ -485,7 +486,8 @@ export function wireTerminalSessionBackends(opts: {
         .finally(() => {
           liveSpawnedRuns.delete(conversationId)
           const conv = getConversation(conversationId)
-          const title = conv?.title ?? conversationId
+          // The model chose the title: nothing in it may drive the terminal it is printed to.
+          const title = stripControlChars(conv?.title ?? conversationId)
           // How it ended, from the record its run left (a stall, a limit, a stop, an
           // error): "finished" for every one of them hid that the work was not done.
           const how = conv ? runOutcomePhrase(runOutcome(conv.messages, conv.lastError)) : 'ended'
@@ -1255,6 +1257,22 @@ export function watchTerminationSignals(
 }
 
 /**
+ * Wait for the background sessions a run spawned, unless `stopped` settles first (a
+ * termination signal: the sessions are then stopped by the caller's cleanup rather
+ * than awaited). Says on `write` how many it waits for. Returns whether it was stopped.
+ */
+export async function waitForBackgroundSessionsUnless(
+  sessions: { pendingBackgroundSessions: () => number; waitForBackgroundSessions: () => Promise<void> },
+  stopped: Promise<unknown>,
+  write: (s: string) => void
+): Promise<boolean> {
+  const outstanding = sessions.pendingBackgroundSessions()
+  if (outstanding === 0) return false
+  write(`· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish…\n`)
+  return Promise.race([sessions.waitForBackgroundSessions().then(() => false), stopped.then(() => true)])
+}
+
+/**
  * The schedule daemon: fire scheduled runs while no Houston window or terminal session
  * is open, as background sessions (approvals declined, as for any terminal-hosted
  * background session). Runs until a signal stops it. One per profile (a pid file), and
@@ -1340,7 +1358,7 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
   // scheduler backend is wired without starting timers — a headless run can
   // create/list/cancel schedules, which then fire in a long-lived host (GUI/TUI).
   const sessions = wireTerminalSessionBackends({
-    notify: (m) => process.stderr.write(`· ${m}\n`),
+    notify: (m) => process.stderr.write(process.stderr.isTTY ? filterTerminalOutput(`· ${m}\n`) : `· ${m}\n`),
     startScheduler: false
   })
   // The update check runs alongside the task and is never waited for: its answer is
@@ -1370,10 +1388,18 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
   }
   let code = 1
   let interrupted = false
+  // Whether the run got as far as starting: a launch refused before that (a missing
+  // file, an empty prompt, no usable model) leaves no worktree behind.
+  let runStarted = false
+  // Watches for a signal once the run is over, while its background sessions finish.
+  let stopWatching: (() => void) | undefined
   try {
     code = await runHeadless(headless, {
       getSettings,
-      startRun,
+      startRun: (...args) => {
+        runStarted = true
+        return startRun(...args)
+      },
       resolveApproval,
       resolveQuestion,
       resolvePlan,
@@ -1429,15 +1455,20 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
     })
     // Don't let the one-shot exit tear down sessions the run spawned; their
     // conversations persist, so a later --resume can pick each one up. An
-    // interrupted run doesn't wait on them: the signal asked Houston to stop.
-    const outstanding = interrupted ? 0 : sessions.pendingBackgroundSessions()
-    if (outstanding > 0) {
-      process.stderr.write(
-        `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish…\n`
-      )
-      await sessions.waitForBackgroundSessions()
+    // interrupted run doesn't wait on them: the signal asked Houston to stop, and a
+    // signal during the wait stops them the same way.
+    if (!interrupted) {
+      let onSignal!: (signal: HeadlessSignal) => void
+      const signalled = new Promise<HeadlessSignal>((r) => (onSignal = r))
+      stopWatching = watchTerminationSignals((signal) => {
+        interrupted = true
+        code = HEADLESS_SIGNAL_EXIT[signal]
+        process.stderr.write(`· interrupted (${signal}), stopping the background sessions\n`)
+        onSignal(signal)
+      })
+      await waitForBackgroundSessionsUnless(sessions, signalled, (s) => process.stderr.write(s))
     }
-    if (pendingUpdate.found && opts.version) {
+    if (pendingUpdate.found && opts.version && !interrupted) {
       process.stderr.write(
         formatHeadlessUpdateNotice(pendingUpdate.found, opts.version, upgradeHint(currentInstallMethod()).line)
       )
@@ -1451,8 +1482,26 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
     killAllShells()
     disconnectAllMcp()
     await lspManager.stopAll()
+    if (runWt && !runStarted) await dropUnusedRunWorktree(runWt)
+    stopWatching?.()
   }
   return code
+}
+
+/** Remove a `-w` worktree a refused launch made, when it holds nothing (it never ran). */
+async function dropUnusedRunWorktree(wt: SessionWorktree): Promise<void> {
+  const work = await worktreeWork(wt)
+  if (!work || work.dirty || work.commits > 0) return
+  const res = await removeWorktree(wt, { branch: 'force' })
+  if (res.removed) {
+    process.stderr.write(`· removed the unused worktree ${stripControlChars(wt.path)} and its branch ${stripControlChars(wt.branch)}\n`)
+  }
+}
+
+/** Settles when `signal` aborts (at once when it already has). */
+function abortedPromise(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise((r) => signal.addEventListener('abort', () => r(), { once: true }))
 }
 
 /**
@@ -1559,13 +1608,10 @@ export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOpti
       },
       { shutdown: shutdown.signal, outputClosed: outputClosed.signal }
     )
-    // Stopped by a signal or a broken pipe: nothing is left to wait for them.
-    const outstanding = signalled || outputClosed.signal.aborted ? 0 : sessions.pendingBackgroundSessions()
-    if (outstanding > 0) {
-      process.stderr.write(
-        `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish…\n`
-      )
-      await sessions.waitForBackgroundSessions()
+    // Stopped by a signal or a broken pipe: nothing is left to wait for them. A
+    // signal during the wait ends it, and the cleanup below stops them.
+    if (!signalled && !outputClosed.signal.aborted) {
+      await waitForBackgroundSessionsUnless(sessions, abortedPromise(shutdown.signal), (s) => process.stderr.write(s))
     }
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)

@@ -1,18 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent, ElicitationResult, PlanDecision } from '@shared/agent'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import {
   guardTerminalExit,
   onFirstPrompt,
   resolveBackgroundEvent,
+  runHeadlessEntry,
   runScheduleDaemonEntry,
+  waitForBackgroundSessionsUnless,
   watchTerminationSignals,
   wireTerminalSessionBackends
 } from './terminalEntry'
+import { parseHeadlessArgs } from './headless'
 import { daemonPidPath, runningDaemonPid } from './scheduleDaemon'
 import { readShellOutput, registerShell } from './agent/shells'
 import type { SignalProcess } from './signalCleanup'
@@ -52,6 +55,42 @@ describe('watchTerminationSignals', () => {
     expect(exits).toEqual([130])
     stop()
     for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) expect(emitter.listenerCount(s)).toBe(0)
+  })
+})
+
+describe('waitForBackgroundSessionsUnless', () => {
+  it('stops waiting for background sessions that never finish once stopped settles', async () => {
+    const lines: string[] = []
+    let stop!: () => void
+    const stopped = new Promise<void>((r) => (stop = r))
+    const waiting = waitForBackgroundSessionsUnless(
+      { pendingBackgroundSessions: () => 2, waitForBackgroundSessions: () => new Promise(() => {}) },
+      stopped,
+      (s) => lines.push(s)
+    )
+    stop()
+    expect(await waiting).toBe(true)
+    expect(lines.join('')).toBe('· waiting for 2 background sessions to finish…\n')
+  })
+
+  it('waits for sessions that finish, and says nothing when there are none', async () => {
+    const lines: string[] = []
+    const never = new Promise<void>(() => {})
+    expect(
+      await waitForBackgroundSessionsUnless(
+        { pendingBackgroundSessions: () => 1, waitForBackgroundSessions: async () => {} },
+        never,
+        (s) => lines.push(s)
+      )
+    ).toBe(false)
+    expect(
+      await waitForBackgroundSessionsUnless(
+        { pendingBackgroundSessions: () => 0, waitForBackgroundSessions: () => never },
+        never,
+        (s) => lines.push(s)
+      )
+    ).toBe(false)
+    expect(lines).toEqual(['· waiting for 1 background session to finish…\n'])
   })
 })
 
@@ -193,6 +232,24 @@ describe('wireTerminalSessionBackends', () => {
     expect(handle.backgroundSessions()).toEqual([
       expect.objectContaining({ id: result.conversationId, running: false, outcome: 'error' })
     ])
+  })
+
+  it('strips control characters from a spawned session title in its completion note', async () => {
+    const notes: string[] = []
+    const handle = wireTerminalSessionBackends({ notify: (m) => notes.push(m), startScheduler: false })
+    await spawnSession({
+      prompt: 'do a thing on your own',
+      title: 'evil \x1b]52;c;QQ==\x07 title \x1b[2J',
+      providerId: 'anthropic',
+      model: 'claude-test',
+      approvalPolicy: 'ask',
+      workspace: dir
+    })
+    await handle.waitForBackgroundSessions()
+    const note = notes.find((n) => n.startsWith('background session')) ?? ''
+    expect(note).toContain('evil ')
+    expect(note).not.toContain('\x1b')
+    expect(note).not.toContain('\x07')
   })
 
   it('persists schedules through the scheduler seam without starting timers', () => {
@@ -342,5 +399,40 @@ describe('runScheduleDaemonEntry', () => {
     expect(await runScheduleDaemonEntry({ out: (s) => out.push(s), proc: fakeSignals() })).toBe(0)
     expect(out.join('')).toBe(`The schedule daemon is already running (pid ${process.ppid}).\n`)
     expect(isSchedulerConfigured()).toBe(false)
+  })
+})
+
+describe('runHeadlessEntry', () => {
+  let dir: string
+  let repo: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-headless-entry-'))
+    setUserDataDir(join(dir, 'data'))
+    repo = join(dir, 'repo')
+    const git = (...args: string[]): void => {
+      const r = spawnSync('git', args, { cwd: repo, encoding: 'utf8' })
+      if (r.status !== 0) throw new Error(r.stderr)
+    }
+    mkdirSync(repo)
+    git('init', '-q', '-b', 'main')
+    git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'first')
+  })
+  afterEach(() => {
+    resetSpawnBackend()
+    resetSchedulerBackend()
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it.skipIf(process.platform === 'win32')('leaves no -w worktree behind for a launch refused before its run', async () => {
+    const opts = parseHeadlessArgs(['-p', 'fix it', '-w', 'refused-run', '--mcp-config', join(dir, 'nope.json')], repo)!
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    expect(await runHeadlessEntry(opts)).toBe(2)
+    const list = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: repo, encoding: 'utf8' }).stdout
+    expect(list).not.toContain('refused-run')
+    const branches = spawnSync('git', ['branch', '--list', 'refused-run'], { cwd: repo, encoding: 'utf8' }).stdout
+    expect(branches.trim()).toBe('')
+    vi.restoreAllMocks()
   })
 })

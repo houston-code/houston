@@ -337,6 +337,47 @@ describe('review', () => {
     expect(w.gh('pr', 'review')).toHaveLength(1)
   })
 
+  it('keeps inline comments off a file the merge checkout numbers differently from the head', async () => {
+    // The default pull_request checkout is the merge commit. The base branch added ten
+    // lines above the change in app.js, so a merged line number is a different head line.
+    const dir = mkdtempSync(join(tmpdir(), 'h-run-merge-'))
+    const git = gitIn(dir)
+    git('init', '--quiet', '--initial-branch=main')
+    git('config', 'maintenance.auto', 'false')
+    const body = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`)
+    writeFileSync(join(dir, 'app.js'), `${body.join('\n')}\n`)
+    writeFileSync(join(dir, 'util.js'), 'old\n')
+    git('add', '.')
+    git('commit', '--quiet', '-m', 'base')
+    git('switch', '--quiet', '--create', 'feature')
+    writeFileSync(join(dir, 'app.js'), `${body.map((l, i) => (i === 19 ? 'BUG' : l)).join('\n')}\n`)
+    writeFileSync(join(dir, 'util.js'), 'new\n')
+    git('commit', '--quiet', '-am', 'head')
+    const head = git('rev-parse', 'HEAD')
+    git('switch', '--quiet', 'main')
+    const top = Array.from({ length: 10 }, (_, i) => `top ${i + 1}`)
+    writeFileSync(join(dir, 'app.js'), `${[...top, ...body].join('\n')}\n`)
+    git('commit', '--quiet', '-am', 'main moves on')
+    const base = git('rev-parse', 'HEAD')
+    git('switch', '--quiet', '--detach', head)
+    git('merge', '--quiet', '--no-edit', 'main')
+    const repo = { dir, base, head, git }
+    const w = world({
+      eventName: 'pull_request',
+      event: prAt,
+      repo,
+      cliOut: reviewOut(
+        // Merged line 21 is head line 11: inside the head diff's numbering, but the wrong code.
+        findingLine({ location: 'app.js:21', title: 'merged numbering' }),
+        findingLine({ id: 'u:1', location: 'util.js:1', title: 'same in both' })
+      )
+    })
+    expect(await w.go()).toBe(0)
+    const payload = JSON.parse(readFileSync(payloadArg(reviewPost(w).args), 'utf8'))
+    expect(payload.commit_id).toBe(head)
+    expect(payload.comments.map((c) => c.path)).toEqual(['util.js'])
+  })
+
   it('refuses to review a checkout that persisted its credential', async () => {
     const repo = gitRepo()
     repo.git('config', 'http.extraheader', 'AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46Z2hzX3h4eA==')

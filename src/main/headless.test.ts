@@ -1982,6 +1982,33 @@ describe('runHeadless termination signals', () => {
     expect(resultLine(out)).toMatchObject({ status: 'success' })
   })
 
+  it('stops waiting for a prompt on stdin on a signal, with an aborted result line', async () => {
+    let raise!: (s: HeadlessSignal) => void
+    let reading!: () => void
+    const waiting = new Promise<void>((r) => (reading = r))
+    let started = false
+    const { d, out } = deps([], {
+      onSignal: (h) => {
+        raise = h
+        return () => {}
+      },
+      readStdin: () => {
+        reading()
+        // The producer never closes stdin.
+        return new Promise<string>(() => {})
+      },
+      startRun: async () => {
+        started = true
+      }
+    })
+    const done = runHeadless({ ...baseOpts, prompt: '', promptFromStdin: true, json: true }, d)
+    await waiting
+    raise('SIGINT')
+    expect(await done).toBe(130)
+    expect(started).toBe(false)
+    expect(resultLine(out)).toMatchObject({ status: 'aborted', error: 'interrupted by SIGINT' })
+  })
+
   it('leaves the exit code alone and unsubscribes when no signal arrives', async () => {
     let unsubscribed = false
     const { d } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], {

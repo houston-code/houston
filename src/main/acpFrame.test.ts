@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { ACP_MAX_FRAME_BYTES, compactDiffTexts, fitAcpFrame } from './acpFrame'
+import { ACP_MAX_FRAME_BYTES, compactDiffTexts, fitAcpFrame, splitChunkText } from './acpFrame'
 
+/** No lone surrogate: a high one always followed by a low one, a low one always preceded by a high one. */
+const wellFormed = (s: string): boolean => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s)
 const size = (line: string): number => Buffer.byteLength(line, 'utf8') + 1
 const lines = (n: number, tag = 'row'): string[] => Array.from({ length: n }, (_, i) => `${tag} ${i} ${'y'.repeat(40)}`)
 
@@ -119,5 +121,50 @@ describe('fitAcpFrame', () => {
     }
     const u = JSON.parse(fitAcpFrame(m)).params.update
     expect(u.content).toEqual({ type: 'text', text: '[image (image/jpeg) not shown: too large for one message]' })
+  })
+})
+
+describe('fitAcpFrame: text and cut points', () => {
+  const leaves = (v: unknown): string[] =>
+    typeof v === 'string'
+      ? [v]
+      : Array.isArray(v)
+        ? v.flatMap(leaves)
+        : v && typeof v === 'object'
+          ? Object.values(v).flatMap(leaves)
+          : []
+
+  it('never cuts a surrogate pair in half', () => {
+    const out = `${'a'.repeat(1999)}😀${'b'.repeat(80_000)}`
+    const line = fitAcpFrame(toolUpdate({ content: [{ type: 'content', content: { type: 'text', text: out } }], rawOutput: { out } }))
+    expect(size(line)).toBeLessThanOrEqual(ACP_MAX_FRAME_BYTES)
+    for (const s of leaves(JSON.parse(line))) expect(wellFormed(s)).toBe(true)
+  })
+
+  it('leaves the text of a message chunk whole (the sender splits it)', () => {
+    const text = 'm'.repeat(100_000)
+    const m = { jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } }
+    expect(JSON.parse(fitAcpFrame(m)).params.update.content.text).toBe(text)
+  })
+
+  it('shortens a permission title when nothing else is left to cut', () => {
+    const title = 'x'.repeat(90_000)
+    const m = { jsonrpc: '2.0', id: 3, method: 'session/request_permission', params: { sessionId: 's', toolCall: { toolCallId: 'p', title, content: [] }, options: [] } }
+    const line = fitAcpFrame(m)
+    expect(size(line)).toBeLessThanOrEqual(ACP_MAX_FRAME_BYTES)
+    expect(JSON.parse(line).params.toolCall.title.startsWith('xxx')).toBe(true)
+  })
+})
+
+describe('splitChunkText', () => {
+  it('splits on code-point boundaries and joins back to the input', () => {
+    const text = `${'a'.repeat(9)}😀${'b'.repeat(5)}`
+    const parts = splitChunkText(text, 10)
+    expect(parts.join('')).toBe(text)
+    for (const p of parts) {
+      expect(p.length).toBeLessThanOrEqual(10)
+      expect(wellFormed(p)).toBe(true)
+    }
+    expect(splitChunkText('')).toEqual([''])
   })
 })

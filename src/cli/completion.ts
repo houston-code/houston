@@ -63,6 +63,13 @@ const takesValue = (f: CliFlag): boolean => f.kind === 'value'
 
 // ---------------------------------------------------------------- bash
 
+/**
+ * A folder or file list for bash. The command substitution is split on newlines
+ * only (a `local IFS` for the rest of the function, which returns right after), so
+ * `My Projects/` stays one candidate.
+ */
+const bashPaths = (kind: '-d' | '-f'): string => `local IFS=$'\\n'; COMPREPLY=($(compgen ${kind} -- "$cur")); return`
+
 function bashScript(flags: readonly CliFlag[] = CLI_FLAGS, subs: readonly CliSubcommand[] = CLI_SUBCOMMANDS): string {
   const subCases = subs
     .map((s) => {
@@ -73,7 +80,7 @@ function bashScript(flags: readonly CliFlag[] = CLI_FLAGS, subs: readonly CliSub
         )
       }
       if (s.dirArg) {
-        body.push(`      if [[ $COMP_CWORD -eq 2 && "$cur" != -* ]]; then COMPREPLY=($(compgen -d -- "$cur")); return; fi`)
+        body.push(`      if [[ $COMP_CWORD -eq 2 && "$cur" != -* ]]; then ${bashPaths('-d')}; fi`)
       }
       if (s.flags?.length) {
         body.push(`      if [[ "$cur" == -* ]]; then COMPREPLY=($(compgen -W ${sq(s.flags.map((f) => f.name).join(' '))} -- "$cur")); fi`)
@@ -86,8 +93,8 @@ function bashScript(flags: readonly CliFlag[] = CLI_FLAGS, subs: readonly CliSub
   const valueCases: string[] = []
   const dirs = flags.filter((f) => f.complete === 'dir').flatMap((f) => f.names)
   const files = flags.filter((f) => f.complete === 'file').flatMap((f) => f.names)
-  if (dirs.length) valueCases.push(`    ${dirs.join('|')}) COMPREPLY=($(compgen -d -- "$cur")); return ;;`)
-  if (files.length) valueCases.push(`    ${files.join('|')}) COMPREPLY=($(compgen -f -- "$cur")); return ;;`)
+  if (dirs.length) valueCases.push(`    ${dirs.join('|')}) ${bashPaths('-d')} ;;`)
+  if (files.length) valueCases.push(`    ${files.join('|')}) ${bashPaths('-f')} ;;`)
   for (const f of flags) {
     if (Array.isArray(f.complete)) {
       valueCases.push(`    ${f.names.join('|')}) COMPREPLY=($(compgen -W ${sq(f.complete.join(' '))} -- "$cur")); return ;;`)

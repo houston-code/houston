@@ -90,7 +90,10 @@ describe('buildDoctorReport', () => {
     })
     expect(check(f, 'docs')?.status).toBe('ok')
     expect(check(f, 'linear')?.status).toBe('warn')
-    expect(check(f, 'linear')?.fix).toContain('/mcp login')
+    expect(check(f, 'linear')?.fix).toContain('/mcp login <n>')
+    // The terminal's `/mcp login` takes a list number: an id there is refused, or one
+    // that starts with digits signs in to another server.
+    expect(check(f, 'linear')?.fix).not.toContain('/mcp login linear')
     expect(check(f, 'broken')?.status).toBe('fail')
     expect(check(f, 'broken')?.detail).toContain('ECONNREFUSED')
   })
