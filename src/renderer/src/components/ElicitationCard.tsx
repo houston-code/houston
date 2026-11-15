@@ -6,7 +6,8 @@ import { Markdown } from './Markdown'
 
 /**
  * Renders an MCP server's mid-call request for input (MCP elicitation): the
- * server's message plus one input per requested field, with Submit and Decline.
+ * server's message plus one input per requested field, with Submit, Decline (a "no"
+ * the server hears as one), and Cancel (dismissed without an answer either way).
  * The card names the server the values go to — this is an EXTERNAL destination,
  * unlike ask_user, so the user must see who is asking. Once resolved it collapses
  * to a read-only record, mirroring QuestionCard.
@@ -93,6 +94,14 @@ export function ElicitationCard({
             onClick={() => onResolve(item.id, { action: 'decline' })}
           >
             Decline
+          </button>
+          <button
+            className="btn btn--sm"
+            type="button"
+            title="Close this request without answering"
+            onClick={() => onResolve(item.id, { action: 'cancel' })}
+          >
+            Cancel
           </button>
         </div>
       </form>

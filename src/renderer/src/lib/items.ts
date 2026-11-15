@@ -207,6 +207,11 @@ export interface ElicitationItem {
   outcome?: 'accepted' | 'declined' | 'cancelled'
 }
 
+/** The card's settled state for the user's answer to an elicitation. */
+export function elicitationOutcome(action: 'accept' | 'decline' | 'cancel'): NonNullable<ElicitationItem['outcome']> {
+  return action === 'accept' ? 'accepted' : action === 'cancel' ? 'cancelled' : 'declined'
+}
+
 /**
  * A plan presented via `present_plan`, shown as a compact "Plan ready" marker in the
  * transcript and (while `pending`) mirrored in the docked review panel. `pending` is
