@@ -175,7 +175,9 @@ describe('notify_on watching', () => {
     expect(shellTail(id)).toEqual(['100% error'])
   })
 
-  it("does not wake the chat for a watched line printed while the user's Stop shuts the shell down", async () => {
+  // Windows stops a shell with a forced kill, so the child never gets to print a
+  // shutdown line there.
+  it.skipIf(process.platform === 'win32')("does not wake the chat for a watched line printed while the user's Stop shuts the shell down", async () => {
     const start = vi.fn(() => true)
     setWakeHost({ enabled: () => true, start })
     const child = node(
