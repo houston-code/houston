@@ -1068,8 +1068,9 @@ long as it needs to be.
   your own commands".
 - **Finding all this:** the startup banner shows two tips about keys and prefixes like
   these, a different pair each time, and `/help` ends with a **Keys** section.
-- **Status line:** above the composer it shows the model, approval mode, folder, git
-  branch, session cost and how full the context window is. While a turn runs, the
+- **Status line:** above the composer it shows the model, its reasoning level (as
+  `/reasoning` sets it; left out for a model that can't reason), approval mode, folder,
+  git branch, session cost and how full the context window is. While a turn runs, the
   model, branch and context stay on the spinner line.
 
 ### Keys
@@ -1079,8 +1080,10 @@ long as it needs to be.
 | `Enter` | send the message |
 | `Shift-Enter`, `Ctrl-J`, `Alt-Enter` | insert a line break (`Shift-Enter` where the terminal reports it) |
 | `Up` / `Down` | move between lines, then step through past messages |
-| `Ctrl-R` | search past messages (type to filter, `Ctrl-R` again for older, `Enter` to accept, `Esc` to cancel) |
-| `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`). Typing `@` already lists the matching files under the message, as `/` lists commands |
+| `Ctrl-R` | search past messages: case doesn't matter and every word you type must appear, in any order (the same search as the desktop app). `Ctrl-R` or `Up` steps to an older match, `Ctrl-S` or `Down` to a newer one, and the prompt shows which match of how many; `Enter` accepts, `Esc` cancels |
+| `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`). Typing `@` already lists the matching files under the message, as `/` lists commands. The menu follows the text before the cursor |
+| `Up` / `Down` *(menu open)* | move through the `/` or `@` menu; `Enter` or `Tab` puts the highlighted one in, `Esc` closes the menu until you type again |
+| `Alt-P`, `Ctrl-X Ctrl-P` | expand collapsed pastes (`[#1 pasted 120 lines]`) back to their text in the draft, to read or edit them; undo folds them again |
 | `Ctrl-A` / `Ctrl-E` | start / end of line |
 | `Alt-B` / `Alt-F` | move a word |
 | `Ctrl-W` | delete the word before the cursor |
@@ -1093,7 +1096,7 @@ long as it needs to be.
 | `Ctrl-O` | open the transcript viewer: the whole session full screen (also `/transcript`) |
 | `Alt-T` | cycle how the model's reasoning shows (show, summary, hide), also while a turn runs |
 | `Ctrl-V`, `Alt-V` | attach the image on your clipboard (`Alt-V` where the terminal keeps `Ctrl-V` for itself, as on Windows). With no image there, it says so and leaves the draft alone |
-| `/image` | attach the image on your clipboard (also `/paste`), or `/image <path>` for a file |
+| `/image` | attach the image on your clipboard (also `/paste`), or `/image <path>` for a file; `/image clear` drops the staged images. Up to 8 can be staged; the prompt shows how many (`[2 images]`). On a model that can't see images, nothing is attached and a note says to switch models; images staged before such a switch are dropped, with a note, when the message is sent |
 | drop or paste image files | a paste that is only paths to existing `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp` files (quoted, with escaped spaces, or as `file://` URLs; relative to the session folder) attaches them instead of inserting the text. Dragging a file onto the terminal pastes its path, so this is how drag and drop works |
 | `Esc Esc` | press twice quickly: clear the draft (`Up` brings it back); on an empty composer, open the `/rewind` list |
 | `Ctrl-C` | discard the draft (`Up` brings it back; twice in a row to leave) |

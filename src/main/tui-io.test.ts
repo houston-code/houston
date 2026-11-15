@@ -16,7 +16,7 @@ import {
 import type { PagerSource } from './tui-pager'
 import { visibleWidth } from './tui-wrap'
 import { makePainter } from './tui'
-import { renderCommandMenu } from './tui-complete'
+import { commandMenuView, renderCommandMenu, type CommandSpec } from './tui-complete'
 
 // Built from a char code: a literal ESC in a regex trips eslint's no-control-regex.
 const ESC = String.fromCharCode(27)
@@ -1376,6 +1376,81 @@ describe('mid-run input', () => {
     t.io.startSpinner!('Working')
     t.stdin.push('\x1b[200~payload\x1b[201~\r\x1b[201~')
     expect(t.io.takeQueued!()).toEqual([]) // the CR became part of the draft, not a submit
+  })
+})
+
+describe('moving through the live menu', () => {
+  const cmds: CommandSpec[] = [
+    { name: 'help', description: 'list commands' },
+    { name: 'history', description: 'past messages' }
+  ]
+  function harness() {
+    const stdin = fakeTty()
+    const written: string[] = []
+    const seen: string[] = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      history: () => ['an old message'],
+      menuFor: (line, _redraw, paint) => {
+        seen.push(line)
+        return commandMenuView(line, cmds, paint as never) ?? { rows: [], options: [] }
+      }
+    })
+    return { io, stdin, seen, text: () => written.join('') }
+  }
+
+  it('Down highlights a command and Enter puts it in the draft instead of sending', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('/h')
+    t.stdin.push('\x1b[B') // Down
+    t.stdin.push('\x1b[B') // Down: the second one
+    expect(t.text()).toContain('› /history')
+    t.stdin.push('\r') // picks it
+    t.stdin.push('now\r') // the menu closed with the pick, so this Enter sends
+    await expect(read).resolves.toBe('/history now')
+  })
+
+  it('Up from the top wraps to the last option, and Tab picks it', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('/h')
+    t.stdin.push('\x1b[A') // Up: the last option, not history
+    t.stdin.push('\t')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('/history ') // a pick leaves a space for the argument
+  })
+
+  it('Esc closes the menu, and then the arrows and Enter work as before', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('/h')
+    t.stdin.push('\x1b')
+    t.stdin.push('\x1b[A') // menu closed: Up goes to history
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('an old message')
+  })
+
+  it('Enter with nothing highlighted still sends what was typed', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('/help')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('/help')
+  })
+
+  it('reads the text before the cursor, not the whole line', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('/h tail')
+    for (let i = 0; i < 5; i++) t.stdin.push('\x1b[D') // Left, back to just after /h
+    expect(t.seen.at(-1)).toBe('/h')
+    t.stdin.push('\x05') // Ctrl-E
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('/h tail')
   })
 })
 

@@ -1,6 +1,7 @@
 import { clusterWidth, graphemes, truncateVisible, truncateVisibleStart, visibleWidth } from './tui-wrap'
 import type { EditorKey } from './tui-keys'
 import type { Painter } from './tui'
+import { promptMatches } from '@shared/promptHistorySearch'
 
 /**
  * The composer's editor model: a pure buffer + cursor + history machine, with a
@@ -225,6 +226,13 @@ function reduceDraftKey(s: EditorState, key: EditorKey): { state: EditorState; o
       const state = recordEdit(s, cleared, null)
       return older.trim() ? { state, outcome: { kind: 'remember', text: older } } : { state }
     }
+    case 'expand-paste': {
+      // Alt-P / Ctrl-X Ctrl-P: every collapsed paste back to its text, in place, so it
+      // can be read and edited before sending. One undo step puts the tokens back.
+      if (!s.blobs.length) return { state: s }
+      const expanded = loadBuffer({ ...s, blobs: [], stash: null }, editorText(s), null)
+      return { state: recordEdit(s, expanded, null) }
+    }
     case 'escape': {
       if (!key.double) return null
       if (editorEmpty(s)) return { state: s, outcome: { kind: 'rewind' } }
@@ -348,17 +356,43 @@ function loadBuffer(s: EditorState, text: string, histIndex: number | null): Edi
   }
 }
 
-/** The most recent history entry at or before `before` containing `query`. */
+/**
+ * The most recent history entry at or before `before` matching `query`: case does
+ * not matter, and every word of the query must appear, in any order (the same
+ * search the desktop app's history uses).
+ */
 export function findHistoryMatch(
   history: string[],
   query: string,
   before: number
 ): number | null {
-  if (!query) return null
+  if (!query.trim()) return null
   for (let i = Math.min(before, history.length - 1); i >= 0; i--) {
-    if (history[i].includes(query)) return i
+    if (promptMatches(history[i], query)) return i
   }
   return null
+}
+
+/** The oldest history entry at or after `after` matching `query` (stepping back toward newer). */
+export function findNewerHistoryMatch(history: string[], query: string, after: number): number | null {
+  if (!query.trim()) return null
+  for (let i = Math.max(0, after); i < history.length; i++) {
+    if (promptMatches(history[i], query)) return i
+  }
+  return null
+}
+
+/** Which match the search is on, counted from the newest (1), and how many there are. */
+export function searchPosition(history: string[], search: SearchState): { at: number; of: number } | null {
+  if (search.index === null || !search.query.trim()) return null
+  let of = 0
+  let at = 0
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (!promptMatches(history[i], search.query)) continue
+    of++
+    if (i === search.index) at = of
+  }
+  return at ? { at, of } : null
 }
 
 /** Reverse-search key handling, split out to keep `reduceEditor` readable. */
@@ -378,10 +412,18 @@ function reduceSearch(s: EditorState, key: EditorKey): { state: EditorState; out
       const query = cpSlice(search.query, 0, Math.max(0, cpLen(search.query) - 1))
       return { state: { ...s, search: { query, index: findHistoryMatch(s.history, query, s.history.length - 1) } } }
     }
-    case 'search': {
-      // Another Ctrl-R steps to the next older match.
+    case 'search':
+    case 'up': {
+      // Another Ctrl-R (or Up) steps to the next older match.
       const from = search.index === null ? s.history.length - 1 : search.index - 1
       const index = findHistoryMatch(s.history, search.query, from)
+      return { state: { ...s, search: { ...search, index: index ?? search.index } } }
+    }
+    case 'stash':
+    case 'down': {
+      // Ctrl-S (or Down) steps back to a newer match.
+      if (search.index === null) return { state: s }
+      const index = findNewerHistoryMatch(s.history, search.query, search.index + 1)
       return { state: { ...s, search: { ...search, index: index ?? search.index } } }
     }
     case 'enter':
@@ -603,6 +645,7 @@ function reduceKey(s: EditorState, key: EditorKey): { state: EditorState; outcom
 
     case 'page-up':
     case 'page-down':
+    case 'expand-paste': // handled with the draft-level keys above
       return { state: s }
   }
 }
@@ -691,7 +734,10 @@ export function renderEditor(
     // so a hit that wrapped (a long prompt, or a multi-line one with its newlines)
     // left copies of itself behind on every keystroke. A long query keeps its end.
     const query = truncateVisibleStart(s.search.query, Math.max(1, width - 24))
-    const label = `(reverse-i-search)\`${query}': `
+    // Which match this is, so stepping through them (Ctrl-R / Up, Ctrl-S / Down) shows
+    // where you are.
+    const pos = searchPosition(s.history, s.search)
+    const label = `(reverse-i-search)\`${query}'${pos ? ` ${pos.at}/${pos.of}` : ''}: `
     const [first, ...more] = hit.split(/\r?\n/)
     const shown = truncateVisible(more.length ? `${first} …` : first, Math.max(0, width - visibleWidth(label)))
     const row = opts.paint(label, 'dim') + shown

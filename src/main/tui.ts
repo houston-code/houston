@@ -74,11 +74,11 @@ import type {
   ToolApprovalDecision
 } from '@shared/agent'
 import { buildElicitationContent } from '@shared/mcp'
-import type { ImageAttachment } from '@shared/images'
+import { MAX_ATTACHMENTS, type ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { quotaIsLow, quotaStatusText, type ProviderQuota } from '@shared/rateLimit'
 import { providerQuota } from './providers/quota'
-import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities, resolveCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import type { ContextParts, ModelUsage, RunLimitReason, SideChatTurn } from '@shared/agent'
@@ -1270,6 +1270,10 @@ export interface StatusState {
   branch?: string | null
   /** The rate-limit quota the provider reported on its latest response, when it sent one. */
   quota?: ProviderQuota
+  /** The reasoning effort the next turn asks for. */
+  effort?: ReasoningEffort
+  /** Whether the model can reason; false hides the effort (it would do nothing). */
+  modelReasons?: boolean
 }
 
 /** A path under the home folder written from `~` (`~/code/app`); any other path as is. */
@@ -1295,6 +1299,8 @@ export function shortCwd(cwd: string, home = process.env.HOME): string {
 export function renderStatusLine(s: StatusState, width: number, paint: Painter): string {
   const parts = [
     paint(`${s.providerId}/${s.model}`, 'cyan'),
+    // How hard the next turn thinks, beside the model it applies to (as /reasoning sets it).
+    ...(s.effort && s.modelReasons !== false ? [paint(`reasoning ${s.effort}`, 'dim')] : []),
     paint(s.policy, 'dim'),
     paint(shortCwd(s.cwd), 'dim')
   ]
@@ -1988,6 +1994,7 @@ export type SlashResult =
   | { kind: 'capability'; which: 'skills' | 'agents' }
   | { kind: 'set-theme'; theme: ThemeName }
   | { kind: 'image'; path: string }
+  | { kind: 'clear-images' }
   /** Attach the image on the clipboard (/image with no path, /paste). */
   | { kind: 'paste-image' }
   /** `asDefault` (`--default`): also make it what new chats start with. */
@@ -2288,6 +2295,8 @@ export function parseSlashCommand(
     case 'image':
       // A bare /image means "paste what I just copied" — the overwhelmingly common
       // reason to attach an image mid-conversation. It used to print usage.
+      // `/image clear` drops what is staged (a file named "clear" is `./clear`).
+      if (arg === 'clear') return { kind: 'clear-images' }
       return arg ? { kind: 'image', path: arg } : { kind: 'paste-image' }
     case 'paste':
       return { kind: 'paste-image' }
@@ -2426,7 +2435,7 @@ export const HELP_TEXT = [
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   '  /trust list           every folder you trusted or refused; /trust forget <n> clears one',
   `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
-  '  /image [path]         attach an image from your clipboard, or a file',
+  '  /image [path|clear]   attach an image from your clipboard, or a file; clear drops them',
   '  /cwd                  show the working directory',
   '  /share                copy an invite to Houston to send a friend',
   '  /<name>               run a custom command from .houston/commands',
@@ -2440,7 +2449,9 @@ export const HELP_TEXT = [
   '  #note                 save a standing instruction to AGENTS.md',
   '  Shift-Tab             cycle the approval mode, also while a turn runs',
   '  Up, Down              earlier messages (this folder)',
-  '  Ctrl-R                search earlier messages',
+  '  Ctrl-R                search earlier messages (Ctrl-R/Up older, Ctrl-S/Down newer)',
+  '  Up, Down in a menu    choose a / command or @ file; Enter or Tab picks, Esc closes',
+  '  Alt-P, Ctrl-X Ctrl-P  expand collapsed pastes back to their text',
   '  Ctrl-X Ctrl-E, Ctrl-G edit the message in $VISUAL or $EDITOR',
   '  Ctrl-_, Ctrl-^        undo, redo the last edit (Ctrl-/ and Ctrl-6 on most keyboards)',
   '  Ctrl-S                stash the message and clear the prompt; again on an empty prompt to restore',
@@ -3960,10 +3971,13 @@ export { parseMemoryCapture, type MemoryScope }
 export { parseAgentInvocation, agentInvocationPrompt } from '@shared/commands'
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
-export function composerPrompt(policy: ApprovalPolicy, paint: Painter, screenReader = false): string {
+export function composerPrompt(policy: ApprovalPolicy, paint: Painter, screenReader = false, images = 0): string {
+  // Staged images ride in front of the prompt, so what the next message will carry is
+  // in view while it is typed.
+  const staged = images ? `${images === 1 ? '1 image' : `${images} images`}` : ''
   // A screen reader hears who is speaking; the mode is on the status line above.
-  if (screenReader) return 'you: '
-  return `${paint(policy, 'dim')} ${paint('›', 'green')} `
+  if (screenReader) return staged ? `you (${staged}): ` : 'you: '
+  return `${staged ? `${paint(`[${staged}]`, 'cyan')} ` : ''}${paint(policy, 'dim')} ${paint('›', 'green')} `
 }
 
 /**
@@ -4671,10 +4685,22 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let pendingImages: ImageAttachment[] = []
   // Stage an image for the next turn, from the clipboard or a file. Each returns the
   // note to print; shared by /image, /paste, Ctrl-V, and a pasted image path.
-  const MAX_STAGED_IMAGES = 8
+  // The same cap a message's attachments have everywhere else (the desktop composer,
+  // the queue, the IPC boundary).
+  const MAX_STAGED_IMAGES = MAX_ATTACHMENTS
   const fullNote = (): string => paint(`· already have ${MAX_STAGED_IMAGES} images staged (the max)`, 'yellow')
+  // Whether the model this chat sends to can see images. Unknown (no model yet) reads
+  // as yes, as in the desktop app.
+  const modelSeesImages = (): boolean => {
+    if (!model) return true
+    const caps = deps.getSettings().providers.find((p) => p.id === providerId)?.models.find((m) => m.id === model)?.caps
+    return resolveCapabilities(model, caps).vision
+  }
+  const noVisionNote = (): string =>
+    paint(`· ${model} can't see images: switch to a vision model (/model) to attach one`, 'yellow')
   const stageClipboardImage = (): string => {
     if (!deps.clipboardImage) return paint('· pasting images is unavailable here; use /image <path>', 'dim')
+    if (!modelSeesImages()) return noVisionNote()
     if (pendingImages.length >= MAX_STAGED_IMAGES) return fullNote()
     const img = deps.clipboardImage()
     if ('error' in img) return paint(`· ${stripControlChars(img.error)}`, 'dim')
@@ -4682,6 +4708,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     return paint(`· attached the image from your clipboard (${pendingImages.length} staged)`, 'dim')
   }
   const stageLoadedImage = (path: string, loaded: ReturnType<NonNullable<TuiDeps['loadImage']>>): string => {
+    if (!modelSeesImages()) return noVisionNote()
     if (pendingImages.length >= MAX_STAGED_IMAGES) return fullNote()
     if ('error' in loaded) return paint(`· ${stripControlChars(loaded.error)}`, 'yellow')
     pendingImages.push(loaded.image)
@@ -5310,7 +5337,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                 cost: sessionCost,
                 contextTokens,
                 branch,
-                quota: providerQuota(providerId)
+                quota: providerQuota(providerId),
+                effort,
+                modelReasons: activeModelReasons(deps, providerId, model) ?? modelCapabilities(model).reasoning
               },
               columns(),
               paint
@@ -5363,7 +5392,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (saved) deps.io.out(paint(`${draftRestoreNote(savedDraft!)}\n`, 'dim'))
       savedDraft = null
       const initial = [draft, kept, half, saved].filter(Boolean).join('\n\n')
-      const text = await deps.io.readComposer(() => composerPrompt(policy, paint, screenReader), initial || undefined, {
+      const text = await deps.io.readComposer(() => composerPrompt(policy, paint, screenReader, pendingImages.length), initial || undefined, {
         onDraft: (t) => saveDraft({ text: t, queued: [] }),
         // Read on each redraw: what the keyword would do on this chat's model right now.
         ultrathinkEffect: () =>
@@ -5395,7 +5424,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // composer with no visible way out (typing the closing ``` submits).
         const p = composer.pending
           ? paint(composer.inFence ? '… (``` to close and send) ' : '… ', 'dim')
-          : composerPrompt(policy, paint, screenReader)
+          : composerPrompt(policy, paint, screenReader, pendingImages.length)
         const line = await deps.io.readLine(p)
         if (line === null) {
           const flag = consumeInterrupt()
@@ -6231,6 +6260,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(`${stageClipboardImage()}\n`)
         continue
       }
+      if (result.kind === 'clear-images') {
+        const n = pendingImages.length
+        pendingImages = []
+        deps.io.out(paint(n ? `· dropped ${plural(n, 'staged image')}\n` : '· no images staged\n', 'dim'))
+        continue
+      }
       if (result.kind === 'image') {
         if (!deps.loadImage) {
           deps.io.out(paint('· image attachments are unavailable\n', 'dim'))
@@ -6594,6 +6629,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       continue
     }
 
+    // Images staged before a switch to a model that can't see them would be ignored by
+    // it: dropped, and said so, rather than sent for nothing (as the desktop app does).
+    if (pendingImages.length && !modelSeesImages()) {
+      deps.io.out(paint(`· dropped ${plural(pendingImages.length, 'staged image')}: ${model} can't see images\n`, 'yellow'))
+      pendingImages = []
+    }
     // A resend of a message whose turn failed replaces it rather than repeating it.
     messages = appendUserTurn(messages, {
       role: 'user',
