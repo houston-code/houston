@@ -207,7 +207,8 @@ export class BrowserSession {
 
   /** The open page, or null when none is open (or it has gone away). */
   private live(): BrowserPage | null {
-    if (this.page && this.page.isClosed()) this.page = null
+    // A crashed renderer still has a window, a DevTools client, and a session to free.
+    if (this.page && this.page.isClosed()) this.close()
     return this.page
   }
 

@@ -3029,20 +3029,32 @@ const browserSessionTool: ToolDef = {
         planned: steps.length
       })
       const lines = ['Steps:']
-      for (const r of res.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step}: ${r.error}`)
+      // A failed step's error is fenced below rather than written here: it can be the
+      // page's own words (an exception the page threw, text it rendered).
+      for (const r of res.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step} (its error is in "Step errors" below)`)
       const notRun = steps.length - res.steps.length
       if (notRun > 0) lines.push(`  (${notRun} later step${notRun === 1 ? '' : 's'} not run)`)
       lines.push(`Now at ${res.finalUrl}`)
-      const parts = pageTextPart(res, lines)
+      const failed = res.steps.filter((r) => !r.ok)
+      const parts: UntrustedPart[] = [
+        ...(failed.length
+          ? [
+              {
+                label: 'Step errors:',
+                text: failed.map((r) => `${r.step}: ${r.error ?? 'failed'}`).join('\n'),
+                source: `${res.finalUrl} (step errors)`
+              }
+            ]
+          : []),
+        ...pageTextPart(res, lines)
+      ]
       if (!parts.length) return lines.join('\n')
       return presentUntrustedInline({
         envelope: lines.join('\n'),
         parts,
-        preamble: browserPreamble("the page's visible text after the steps"),
+        preamble: browserPreamble("the page's visible text and step errors after the steps"),
         subject: 'page',
-        toolNames: builtinToolNames(),
-        // A failed step's error can carry the page's own words, outside the fence.
-        alsoScore: res.steps.map((r) => r.error ?? '').join('\n')
+        toolNames: builtinToolNames()
       })
     }
 
