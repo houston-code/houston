@@ -94,12 +94,18 @@ export async function setScheduleDaemon(on: boolean, deps: ScheduleDaemonHostDep
 }
 
 /**
- * At startup, when the login agent is installed: reinstall it if it starts something
- * else (an update moved the executable). Best effort: a failure is logged.
+ * At startup, when the app's login agent is installed: reinstall it if it starts
+ * something else (an update moved the executable). An agent `houston schedule-daemon
+ * install` set up is the terminal's (its own keys and profile), so it is left alone.
+ * Best effort: a failure is logged.
  */
 export async function ensureScheduleDaemon(deps: ScheduleDaemonHostDeps): Promise<void> {
   const state = await scheduleDaemonState(deps.login, () => null)
   if (!state.installed) return
+  if (!state.byApp) {
+    log.info('schedule daemon: the login agent starts the terminal daemon; leaving it as it is')
+    return
+  }
   const cmd = deps.command()
   if (await loginAgentMatches(cmd, deps.login)) return
   const r = await installLoginAgent(cmd, deps.login)

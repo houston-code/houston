@@ -1144,8 +1144,8 @@ error and the usage rather than being ignored.
 
 `houston schedule-daemon` fires scheduled runs while no Houston window or terminal
 session is open: run it in the foreground, or `houston schedule-daemon install` to
-start it at login (a per-user LaunchAgent, systemd user service, or Task Scheduler
-task; `uninstall` removes it, `status` reports it). It reads keys the same way as
+start it at login (a per-user LaunchAgent, systemd user service, or Windows Run key
+entry; `uninstall` removes it, `status` reports it). It reads keys the same way as
 every CLI command. Desktop users turn the same thing on from Settings > Scheduled
 runs, where it runs as the app and uses the app's saved keys.
 

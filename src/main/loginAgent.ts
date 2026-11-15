@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -8,8 +8,8 @@ import { dirname, join } from 'node:path'
  * closed, so scheduled runs fire on time instead of at the next launch.
  *
  * One entry per platform, installed for the current user only (never system-wide, no
- * elevation): a LaunchAgent on macOS, a systemd user unit on Linux, a Task Scheduler
- * task that runs at logon on Windows. Each starts `program` with `args` (the Houston
+ * elevation): a LaunchAgent on macOS, a systemd user unit on Linux, a value under the
+ * current user's Run key on Windows. Each starts `program` with `args` (the Houston
  * executable in daemon mode) and is started right away when installed. Uninstall stops
  * it and removes the entry. Nothing here runs a shell: every command is execFile with
  * literal arguments, and the file contents escape every value they embed.
@@ -18,10 +18,15 @@ import { dirname, join } from 'node:path'
  * tested on any platform without touching the real login items.
  */
 
-/** The LaunchAgent label and the systemd unit / Windows task names. */
+/**
+ * The LaunchAgent label, the systemd unit, and the Windows Run value name (also the
+ * name of the Task Scheduler task earlier versions created, removed on install).
+ */
 export const LOGIN_AGENT_LABEL = 'ai.houstoncode.houston.schedule-daemon'
 export const SYSTEMD_UNIT = 'houston-schedule-daemon.service'
 export const WINDOWS_TASK = 'Houston schedule daemon'
+/** The current user's Run key: what it names starts at that user's logon. */
+export const WINDOWS_RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
 
 /** What the agent starts. */
 export interface DaemonCommand {
@@ -43,6 +48,13 @@ export interface LoginAgentDeps {
   writeFile: (path: string, content: string) => void
   readFile: (path: string) => string | null
   removeFile: (path: string) => void
+  /**
+   * Start a program in the background, detached from this process, with extra
+   * environment (Windows: the login entry has no "start it now" of its own).
+   */
+  spawnDetached?: (file: string, args: string[], env?: Record<string, string>) => Promise<LoginAgentResult>
+  /** Wait between launchctl retries (tests pass an instant one). */
+  sleep?: (ms: number) => Promise<void>
 }
 
 export type LoginAgentResult = { ok: true } | { ok: false; error: string }
@@ -89,16 +101,23 @@ ${log}</dict>
 }
 
 /**
- * One systemd word: quoted, with backslash, quote and `%` (a specifier) escaped, and a
- * `$` doubled so it is never read as a variable.
+ * One quoted systemd value, with backslash, quote and `%` (a specifier) escaped. For
+ * `ExecStart=` a `$` is doubled too, so it is never read as a variable; `Environment=`
+ * does no variable expansion, so there a `$` stays as it is.
  */
+function systemdQuoted(s: string, expands: boolean): string {
+  const escaped = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')
+  return `"${expands ? escaped.replace(/\$/g, '$$$$') : escaped}"`
+}
+
+/** One `ExecStart=` word. */
 function systemdWord(s: string): string {
-  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\$/g, '$$$$')}"`
+  return systemdQuoted(s, true)
 }
 
 /** The systemd user unit (Linux). */
 export function systemdUnit(cmd: DaemonCommand): string {
-  const env = Object.entries(cmd.env ?? {}).map(([k, v]) => `Environment=${systemdWord(`${k}=${v}`)}\n`)
+  const env = Object.entries(cmd.env ?? {}).map(([k, v]) => `Environment=${systemdQuoted(`${k}=${v}`, false)}\n`)
   return `[Unit]
 Description=Houston scheduled runs
 After=network-online.target
@@ -124,7 +143,7 @@ export function loginAgentPath(platform: NodeJS.Platform, home: string): string 
 }
 
 /**
- * One Windows command-line word for the task's /TR: quoted when it has a space, tab or
+ * One Windows command-line word for the Run value: quoted when it has a space, tab or
  * quote, with quotes and the backslashes before them escaped (the MS C runtime rules).
  */
 function windowsWord(s: string): string {
@@ -132,20 +151,52 @@ function windowsWord(s: string): string {
   return `"${s.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`
 }
 
-/** The Task Scheduler arguments that create the task (Windows). */
-export function windowsTaskArgs(cmd: DaemonCommand): string[] {
-  return [
-    '/Create',
-    '/F',
-    '/SC',
-    'ONLOGON',
-    '/RL',
-    'LIMITED',
-    '/TN',
-    WINDOWS_TASK,
-    '/TR',
-    [cmd.program, ...cmd.args].map(windowsWord).join(' ')
-  ]
+/** The command line the Windows login entry starts. */
+export function windowsCommandLine(cmd: DaemonCommand): string {
+  return [cmd.program, ...cmd.args].map(windowsWord).join(' ')
+}
+
+/**
+ * The `reg` arguments that write the login entry (Windows): a value under the current
+ * user's Run key, which a standard user may write (a Task Scheduler logon trigger made
+ * from the command line applies to every user, and needs an administrator).
+ */
+export function windowsRunKeyArgs(cmd: DaemonCommand): string[] {
+  return ['add', WINDOWS_RUN_KEY, '/v', WINDOWS_TASK, '/t', 'REG_SZ', '/d', windowsCommandLine(cmd), '/f']
+}
+
+/** The Run key value `reg query` printed, or null when there is none. */
+export function parseRunKeyValue(stdout: string): string | null {
+  const name = WINDOWS_TASK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const m = new RegExp(`^\\s*${name}\\s+REG_(?:EXPAND_)?SZ\\s+(.*?)\\s*$`, 'm').exec(stdout)
+  return m ? m[1]! : null
+}
+
+const NOT_FOUND = /cannot find|does not exist|unable to find/i
+
+/**
+ * The installed login entry's text (the plist, the unit, or the Windows command line;
+ * an older Windows install's task, as Task Scheduler exports it), or null when there is
+ * none.
+ */
+export async function installedLoginAgent(deps: LoginAgentDeps): Promise<string | null> {
+  const path = loginAgentPath(deps.platform, deps.home)
+  if (path) return deps.readFile(path)
+  if (deps.platform !== 'win32') return null
+  const q = await deps.exec('reg', ['query', WINDOWS_RUN_KEY, '/v', WINDOWS_TASK])
+  const value = q.code === 0 ? parseRunKeyValue(q.stdout) : null
+  if (value !== null) return value
+  const task = await deps.exec('schtasks', ['/Query', '/TN', WINDOWS_TASK, '/XML'])
+  return task.code === 0 ? task.stdout : null
+}
+
+/**
+ * Whether a login entry starts the desktop app's daemon (`Houston --schedule-daemon`)
+ * rather than the terminal's (`houston schedule-daemon run`). Both install under the
+ * same name, so each can tell the other's entry apart and leave it alone.
+ */
+export function startsAppDaemon(entry: string): boolean {
+  return /(?:^|[\s>"])--schedule-daemon(?=$|[\s<"])/.test(entry)
 }
 
 function failed(what: string, r: { code: number; stderr: string; stdout: string }): LoginAgentResult {
@@ -153,21 +204,48 @@ function failed(what: string, r: { code: number; stderr: string; stdout: string 
   return { ok: false, error: `${what} failed${detail ? `: ${detail}` : ` (exit ${r.code})`}` }
 }
 
+/** Polls for launchd to finish unloading a booted-out job, and bootstrap attempts. */
+const LAUNCHD_UNLOAD_POLLS = 10
+const LAUNCHD_UNLOAD_POLL_MS = 200
+const LAUNCHD_BOOTSTRAP_ATTEMPTS = 3
+const LAUNCHD_BOOTSTRAP_RETRY_MS = 500
+
 /**
- * Install (or reinstall) the login agent and start it now. A failure leaves nothing
- * behind, so "installed" never describes an agent the OS refused.
+ * Install (or reinstall) the login agent and start it now. A failed first install
+ * leaves nothing behind, so "installed" never describes an agent the OS refused; a
+ * failed reinstall on macOS puts the previous agent back.
  */
 export async function installLoginAgent(cmd: DaemonCommand, deps: LoginAgentDeps): Promise<LoginAgentResult> {
   const path = loginAgentPath(deps.platform, deps.home)
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   if (deps.platform === 'darwin') {
     if (deps.uid === undefined) return { ok: false, error: 'Unknown user id.' }
     const domain = `gui/${deps.uid}`
+    const service = `${domain}/${LOGIN_AGENT_LABEL}`
+    const previous = deps.readFile(path!)
     deps.writeFile(path!, launchAgentPlist(cmd))
-    // A previous copy is replaced: unload it first (it may not be loaded).
-    await deps.exec('launchctl', ['bootout', `${domain}/${LOGIN_AGENT_LABEL}`])
-    const r = await deps.exec('launchctl', ['bootstrap', domain, path!])
+    // A previous copy is replaced: unload it first (it may not be loaded), and give
+    // launchd time to finish tearing it down, or bootstrap fails while it is still there.
+    await deps.exec('launchctl', ['bootout', service])
+    if (previous !== null) {
+      for (let i = 0; i < LAUNCHD_UNLOAD_POLLS; i++) {
+        if ((await deps.exec('launchctl', ['print', service])).code !== 0) break
+        await sleep(LAUNCHD_UNLOAD_POLL_MS)
+      }
+    }
+    let r = await deps.exec('launchctl', ['bootstrap', domain, path!])
+    for (let i = 1; i < LAUNCHD_BOOTSTRAP_ATTEMPTS && r.code !== 0; i++) {
+      await sleep(LAUNCHD_BOOTSTRAP_RETRY_MS)
+      r = await deps.exec('launchctl', ['bootstrap', domain, path!])
+    }
     if (r.code === 0) return { ok: true }
-    deps.removeFile(path!)
+    if (previous !== null) {
+      // Keep the agent that worked before rather than leaving none.
+      deps.writeFile(path!, previous)
+      await deps.exec('launchctl', ['bootstrap', domain, path!])
+    } else {
+      deps.removeFile(path!)
+    }
     return failed('launchctl bootstrap', r)
   }
   if (deps.platform === 'linux') {
@@ -192,12 +270,23 @@ export async function installLoginAgent(cmd: DaemonCommand, deps: LoginAgentDeps
     return { ok: true }
   }
   if (deps.platform === 'win32') {
-    const r = await deps.exec('schtasks', windowsTaskArgs(cmd))
-    if (r.code !== 0) return failed('schtasks /Create', r)
-    const run = await deps.exec('schtasks', ['/Run', '/TN', WINDOWS_TASK])
-    if (run.code === 0) return { ok: true }
+    // A Run value is a bare command line: it can't carry environment, so a daemon for a
+    // moved profile would start against the default one. Say so instead.
+    if (Object.keys(cmd.env ?? {}).length) {
+      return {
+        ok: false,
+        error: `A login entry on Windows can't keep ${Object.keys(cmd.env!).join(', ')}. Run \`houston schedule-daemon run\` from your own service manager instead.`
+      }
+    }
+    if (!deps.spawnDetached) return { ok: false, error: "Can't start the daemon on this system." }
+    const r = await deps.exec('reg', windowsRunKeyArgs(cmd))
+    if (r.code !== 0) return failed('reg add', r)
+    // An earlier version's logon task, if it was ever created, would start a second copy.
     await deps.exec('schtasks', ['/Delete', '/F', '/TN', WINDOWS_TASK])
-    return failed('schtasks /Run', run)
+    const run = await deps.spawnDetached(cmd.program, cmd.args, cmd.env)
+    if (run.ok) return { ok: true }
+    await deps.exec('reg', ['delete', WINDOWS_RUN_KEY, '/v', WINDOWS_TASK, '/f'])
+    return run
   }
   return { ok: false, error: `Running scheduled runs while Houston is closed isn't supported on ${deps.platform}.` }
 }
@@ -217,10 +306,16 @@ export async function uninstallLoginAgent(deps: LoginAgentDeps): Promise<LoginAg
     return { ok: true }
   }
   if (deps.platform === 'win32') {
+    // The daemon itself is stopped by the caller (disableScheduleDaemon): a Run value
+    // has no process of its own to end.
+    const r = await deps.exec('reg', ['delete', WINDOWS_RUN_KEY, '/v', WINDOWS_TASK, '/f'])
+    // An earlier version's logon task.
     await deps.exec('schtasks', ['/End', '/TN', WINDOWS_TASK])
-    const r = await deps.exec('schtasks', ['/Delete', '/F', '/TN', WINDOWS_TASK])
+    const task = await deps.exec('schtasks', ['/Delete', '/F', '/TN', WINDOWS_TASK])
     // Not found is fine: there was nothing to remove.
-    return r.code === 0 || /cannot find|does not exist/i.test(`${r.stderr}${r.stdout}`) ? { ok: true } : failed('schtasks /Delete', r)
+    if (r.code !== 0 && !NOT_FOUND.test(`${r.stderr}${r.stdout}`)) return failed('reg delete', r)
+    if (task.code !== 0 && !NOT_FOUND.test(`${task.stderr}${task.stdout}`)) return failed('schtasks /Delete', task)
+    return { ok: true }
   }
   return { ok: true }
 }
@@ -233,10 +328,11 @@ export async function loginAgentMatches(cmd: DaemonCommand, deps: LoginAgentDeps
   const path = loginAgentPath(deps.platform, deps.home)
   if (deps.platform === 'darwin') return deps.readFile(path!) === launchAgentPlist(cmd)
   if (deps.platform === 'linux') return deps.readFile(path!) === systemdUnit(cmd)
-  // Task Scheduler's own export is awkward to compare (UTF-16 XML), and the caller
-  // points the task at a launcher path that stays put across updates, so on Windows
-  // the task existing is enough.
-  if (deps.platform === 'win32') return (await deps.exec('schtasks', ['/Query', '/TN', WINDOWS_TASK])).code === 0
+  // An earlier version's logon task never matches, so it is moved to the Run key.
+  if (deps.platform === 'win32') {
+    const q = await deps.exec('reg', ['query', WINDOWS_RUN_KEY, '/v', WINDOWS_TASK])
+    return q.code === 0 && parseRunKeyValue(q.stdout) === windowsCommandLine(cmd)
+  }
   return false
 }
 
@@ -250,6 +346,8 @@ export interface ScheduleDaemonState {
   supported: boolean
   /** The login agent is installed. */
   installed: boolean
+  /** The installed agent starts the desktop app's daemon (not the terminal's). */
+  byApp: boolean
   /** The daemon's pid, when one is running for this profile. */
   pid: number | null
 }
@@ -259,13 +357,8 @@ export async function scheduleDaemonState(
   runningPid: () => number | null
 ): Promise<ScheduleDaemonState> {
   const supported = loginAgentSupported(deps.platform)
-  const path = loginAgentPath(deps.platform, deps.home)
-  const installed = !supported
-    ? false
-    : path
-      ? deps.readFile(path) !== null
-      : (await deps.exec('schtasks', ['/Query', '/TN', WINDOWS_TASK])).code === 0
-  return { supported, installed, pid: runningPid() }
+  const entry = supported ? await installedLoginAgent(deps) : null
+  return { supported, installed: entry !== null, byApp: entry !== null && startsAppDaemon(entry), pid: runningPid() }
 }
 
 /**
@@ -315,6 +408,24 @@ export function realLoginAgentDeps(): LoginAgentDeps {
     },
     removeFile: (path) => {
       if (existsSync(path)) unlinkSync(path)
-    }
+    },
+    spawnDetached: (file, args, env) =>
+      new Promise((resolve) => {
+        try {
+          const child = spawn(file, args, {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+            env: { ...process.env, ...env }
+          })
+          child.once('error', (e) => resolve({ ok: false, error: `Couldn't start ${file}: ${e.message}` }))
+          child.once('spawn', () => {
+            child.unref()
+            resolve({ ok: true })
+          })
+        } catch (e) {
+          resolve({ ok: false, error: `Couldn't start ${file}: ${(e as Error).message}` })
+        }
+      })
   }
 }

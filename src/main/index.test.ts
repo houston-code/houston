@@ -161,6 +161,17 @@ describe('main entry app identity', () => {
       process.argv = argv
     }
     expect(on.mock.calls.map((c) => c[0])).not.toContain('before-quit')
+
+    // The windowless schedule daemon doesn't either: a logout's quit must stop it.
+    vi.resetModules()
+    on.mockClear()
+    process.argv = [...argv, '--schedule-daemon']
+    try {
+      await import('./index')
+    } finally {
+      process.argv = argv
+    }
+    expect(on.mock.calls.map((c) => c[0])).not.toContain('before-quit')
   })
 
   it('quits without opening a window when another process holds the lock', async () => {

@@ -21,7 +21,7 @@ function deps(over: Partial<ScheduleDaemonCliDeps> = {}, state: Partial<Schedule
       removed++
       return { ok: true }
     },
-    state: async () => ({ supported: true, installed: false, pid: null, ...state }),
+    state: async () => ({ supported: true, installed: false, byApp: false, pid: null, ...state }),
     command: () => ({ program: '/usr/bin/node', args: ['/opt/houston/cli.js', 'schedule-daemon', 'run'] }),
     out: (s) => out.push(s),
     err: (s) => err.push(s),
@@ -53,6 +53,18 @@ describe('houston schedule-daemon', () => {
     expect(await runScheduleDaemonCommand(['install'], unsupported.d)).toBe(1)
     expect(unsupported.installed).toEqual([])
     expect(unsupported.err.join('')).toMatch(/not supported on this platform/)
+  })
+
+  it("leaves the desktop app's login agent in place instead of replacing it, and repairs its own", async () => {
+    const app = deps({}, { installed: true, byApp: true })
+    expect(await runScheduleDaemonCommand(['install'], app.d)).toBe(1)
+    expect(app.installed).toEqual([])
+    expect(app.err.join('')).toMatch(/desktop app's schedule daemon is already installed/)
+    await runScheduleDaemonCommand(['status'], app.d)
+    expect(app.out[0]).toBe('Login agent: installed by the desktop app.\n')
+    const own = deps({}, { installed: true, byApp: false })
+    expect(await runScheduleDaemonCommand(['install'], own.d)).toBe(0)
+    expect(own.installed.length).toBe(1)
   })
 
   it('uninstalls, and reports status', async () => {

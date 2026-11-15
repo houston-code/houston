@@ -10,7 +10,7 @@ import {
   runScheduleDaemonEntry,
   stdinIsPiped
 } from '../main/terminalEntry'
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   disableScheduleDaemon,
@@ -139,18 +139,43 @@ export function wireCliHost(): { trustCertificatesNow: () => void } {
 }
 
 /**
+ * A Homebrew keg path (`<prefix>/Cellar/<formula>/<version>/...`) as the formula's
+ * stable link (`<prefix>/opt/<formula>/...`), which follows upgrades while the keg is
+ * removed by them. Any other path, or a keg whose link is missing, is kept as it is.
+ */
+export function stableLauncherPath(p: string, exists: (p: string) => boolean = existsSync): string {
+  const m = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/(.+)$/.exec(p)
+  if (!m) return p
+  const stable = `${m[1]}/opt/${m[2]}/${m[3]}`
+  return exists(stable) ? stable : p
+}
+
+export interface CliDaemonCommandDeps {
+  execPath?: string
+  /** The script this CLI was started with (argv[1]). */
+  script?: string
+  env?: NodeJS.ProcessEnv
+  realpath?: (p: string) => string
+  exists?: (p: string) => boolean
+}
+
+/**
  * What the terminal daemon's login agent starts: this same CLI (the Node binary and
  * the script it runs, resolved through any npm symlink) in `schedule-daemon run` mode,
- * with the profile override when one is set.
+ * with the profile override when one is set. Both paths are recorded through a
+ * Homebrew formula's stable link when they resolve into a versioned keg, so the agent
+ * survives `brew upgrade`.
  */
-export function cliDaemonCommand(): DaemonCommand {
-  const script = realpathSync(process.argv[1]!)
-  const dataDir = process.env.HOUSTON_DATA_DIR?.trim()
+export function cliDaemonCommand(deps: CliDaemonCommandDeps = {}): DaemonCommand {
+  const exists = deps.exists ?? existsSync
+  const script = stableLauncherPath((deps.realpath ?? realpathSync)(deps.script ?? process.argv[1]!), exists)
+  const env = deps.env ?? process.env
+  const dataDir = env.HOUSTON_DATA_DIR?.trim()
   return {
-    program: process.execPath,
+    program: stableLauncherPath(deps.execPath ?? process.execPath, exists),
     args: [script, 'schedule-daemon', 'run'],
     ...(dataDir ? { env: { HOUSTON_DATA_DIR: dataDir } } : {}),
-    logFile: join(resolveUserDataDir(), 'schedule-daemon.out.log')
+    logFile: join(resolveUserDataDir({ env }), 'schedule-daemon.out.log')
   }
 }
 
@@ -189,7 +214,7 @@ export async function runCli(argv: string[], { version, usage, argvProblem }: Ru
       install: (cmd) => installLoginAgent(cmd, loginDeps),
       uninstall: () => disableScheduleDaemon(loginDeps, () => runningDaemonPid()),
       state: () => scheduleDaemonState(loginDeps, () => runningDaemonPid()),
-      command: cliDaemonCommand,
+      command: () => cliDaemonCommand(),
       out: (s) => void process.stdout.write(s),
       err: (s) => void process.stderr.write(s)
     })

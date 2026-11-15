@@ -1,46 +1,68 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   LOGIN_AGENT_LABEL,
   SYSTEMD_UNIT,
+  WINDOWS_RUN_KEY,
   WINDOWS_TASK,
   disableScheduleDaemon,
   installLoginAgent,
   launchAgentPlist,
   loginAgentMatches,
   loginAgentPath,
+  parseRunKeyValue,
   scheduleDaemonState,
+  startsAppDaemon,
   systemdUnit,
   uninstallLoginAgent,
-  windowsTaskArgs,
+  windowsCommandLine,
+  windowsRunKeyArgs,
   type DaemonCommand,
   type LoginAgentDeps
 } from './loginAgent'
+import { PID_STALE_MS, daemonPidPath, runningDaemonPid } from './scheduleDaemon'
 
 /** Fake OS seams: an in-memory file map and a scripted command runner. */
+type Result = { code: number; stdout?: string; stderr?: string }
+
 function fakeDeps(
   platform: NodeJS.Platform,
-  results: Record<string, { code: number; stdout?: string; stderr?: string }> = {}
-): LoginAgentDeps & { files: Map<string, string>; calls: string[] } {
+  results: Record<string, Result | Result[]> = {}
+): LoginAgentDeps & { files: Map<string, string>; calls: string[]; spawned: string[][] } {
   const files = new Map<string, string>()
   const calls: string[] = []
+  const spawned: string[][] = []
   return {
     platform,
     home: '/home/u',
     uid: 501,
     files,
     calls,
+    spawned,
     exec: async (file, args) => {
       const line = [file, ...args].join(' ')
       calls.push(line)
-      const hit = Object.entries(results).find(([prefix]) => line.startsWith(prefix))?.[1]
+      const entry = Object.entries(results).find(([prefix]) => line.startsWith(prefix))?.[1]
+      // A list answers successive calls in turn, then repeats its last answer.
+      const hit = Array.isArray(entry) ? (entry.length > 1 ? entry.shift() : entry[0]) : entry
       return { code: hit?.code ?? 0, stdout: hit?.stdout ?? '', stderr: hit?.stderr ?? '' }
     },
     writeFile: (p, c) => void files.set(p, c),
     readFile: (p) => files.get(p) ?? null,
-    removeFile: (p) => void files.delete(p)
+    removeFile: (p) => void files.delete(p),
+    spawnDetached: async (file, args) => {
+      spawned.push([file, ...args])
+      return { ok: true }
+    },
+    sleep: async () => {}
   }
 }
+
+/** What `reg query` prints for the Run value. */
+const regQuery = (value: string): string =>
+  `\r\n${WINDOWS_RUN_KEY}\r\n    ${WINDOWS_TASK}    REG_SZ    ${value}\r\n\r\n`
 
 const cmd: DaemonCommand = {
   program: '/Applications/Houston.app/Contents/MacOS/Houston',
@@ -69,10 +91,36 @@ describe('login agent files', () => {
     expect(systemdUnit({ ...cmd, env: { HOUSTON_DATA_DIR: '/d' } })).toContain('Environment="HOUSTON_DATA_DIR=/d"')
   })
 
-  it('quotes the Windows task command line by the C runtime rules', () => {
-    const args = windowsTaskArgs({ program: 'C:\\Users\\A B\\Houston.exe', args: ['--schedule-daemon', 'say "hi"', 'dir\\'] })
-    expect(args.slice(0, 9)).toEqual(['/Create', '/F', '/SC', 'ONLOGON', '/RL', 'LIMITED', '/TN', WINDOWS_TASK, '/TR'])
-    expect(args[9]).toBe('"C:\\Users\\A B\\Houston.exe" --schedule-daemon "say \\"hi\\"" dir\\')
+  it('keeps a $ as it is in Environment=, which systemd does not expand, while ExecStart still doubles it', () => {
+    const unit = systemdUnit({ program: '/opt/a$b/houston', args: [], env: { HOUSTON_DATA_DIR: '/home/u/my$data 50%' } })
+    expect(unit).toContain('Environment="HOUSTON_DATA_DIR=/home/u/my$data 50%%"')
+    expect(unit).toContain('ExecStart="/opt/a$$b/houston"')
+  })
+
+  it("writes the Windows entry to the current user's Run key, quoted by the C runtime rules", () => {
+    const args = windowsRunKeyArgs({ program: 'C:\\Users\\A B\\Houston.exe', args: ['--schedule-daemon', 'say "hi"', 'dir\\'] })
+    expect(args.slice(0, 7)).toEqual(['add', WINDOWS_RUN_KEY, '/v', WINDOWS_TASK, '/t', 'REG_SZ', '/d'])
+    expect(WINDOWS_RUN_KEY).toMatch(/^HKCU\\/)
+    expect(args[7]).toBe('"C:\\Users\\A B\\Houston.exe" --schedule-daemon "say \\"hi\\"" dir\\')
+    expect(args[8]).toBe('/f')
+    // Nothing that needs an administrator: no Task Scheduler logon trigger.
+    expect(args.join(' ')).not.toMatch(/ONLOGON|HKLM/)
+  })
+
+  it("reads the Run value back from reg's output", () => {
+    expect(parseRunKeyValue(regQuery('"C:\\A B\\Houston.exe" --schedule-daemon'))).toBe('"C:\\A B\\Houston.exe" --schedule-daemon')
+    expect(parseRunKeyValue('ERROR: The system was unable to find the specified registry key or value.')).toBeNull()
+  })
+
+  it("tells the desktop app's entry from the terminal's", () => {
+    expect(startsAppDaemon(launchAgentPlist(cmd))).toBe(true)
+    expect(startsAppDaemon(systemdUnit(cmd))).toBe(true)
+    expect(startsAppDaemon(windowsCommandLine({ program: 'C:\\H\\Houston.exe', args: ['--schedule-daemon'] }))).toBe(true)
+    expect(startsAppDaemon('<Exec><Command>C:\\H\\Houston.exe</Command><Arguments>--schedule-daemon</Arguments></Exec>')).toBe(true)
+    const cli = { program: '/usr/bin/node', args: ['/opt/houston/cli.cjs', 'schedule-daemon', 'run'] }
+    expect(startsAppDaemon(launchAgentPlist(cli))).toBe(false)
+    expect(startsAppDaemon(systemdUnit(cli))).toBe(false)
+    expect(startsAppDaemon(windowsCommandLine(cli))).toBe(false)
   })
 
   it('keeps each entry in the per-user location', () => {
@@ -109,6 +157,42 @@ describe('installing and removing', () => {
     expect(d.files.size).toBe(0)
   })
 
+  it('macOS: a reinstall waits for the old job to unload, and retries a bootstrap that fails while it goes', async () => {
+    const path = loginAgentPath('darwin', '/home/u')!
+    const d = fakeDeps('darwin', {
+      // Still loaded on the first look, gone on the second.
+      'launchctl print': [{ code: 0 }, { code: 113 }],
+      'launchctl bootstrap': [{ code: 5, stderr: 'Bootstrap failed: 5: Input/output error' }, { code: 0 }]
+    })
+    d.files.set(path, launchAgentPlist({ ...cmd, program: '/old/Houston' }))
+    expect(await installLoginAgent(cmd, d)).toEqual({ ok: true })
+    expect(d.files.get(path)).toBe(launchAgentPlist(cmd))
+    expect(d.calls).toEqual([
+      `launchctl bootout gui/501/${LOGIN_AGENT_LABEL}`,
+      `launchctl print gui/501/${LOGIN_AGENT_LABEL}`,
+      `launchctl print gui/501/${LOGIN_AGENT_LABEL}`,
+      `launchctl bootstrap gui/501 ${path}`,
+      `launchctl bootstrap gui/501 ${path}`
+    ])
+  })
+
+  it('macOS: a reinstall that keeps failing puts the previous agent back instead of leaving none', async () => {
+    const path = loginAgentPath('darwin', '/home/u')!
+    const old = launchAgentPlist({ ...cmd, program: '/old/Houston' })
+    const d = fakeDeps('darwin', {
+      'launchctl print': { code: 113 },
+      'launchctl bootstrap': { code: 5, stderr: 'Bootstrap failed: 5: Input/output error' }
+    })
+    d.files.set(path, old)
+    expect(await installLoginAgent(cmd, d)).toEqual({
+      ok: false,
+      error: 'launchctl bootstrap failed: Bootstrap failed: 5: Input/output error'
+    })
+    expect(d.files.get(path)).toBe(old)
+    // Three tries with the new plist, then the old one is loaded again.
+    expect(d.calls.filter((c) => c.startsWith('launchctl bootstrap')).length).toBe(4)
+  })
+
   it('Linux: writes the unit, reloads, enables and starts it, and restarts a running copy', async () => {
     const d = fakeDeps('linux')
     expect(await installLoginAgent(cmd, d)).toEqual({ ok: true })
@@ -138,19 +222,55 @@ describe('installing and removing', () => {
     expect(d.calls).toContain(`systemctl --user disable ${SYSTEMD_UNIT}`)
   })
 
-  it('Windows: deletes the task when it will not start', async () => {
-    const d = fakeDeps('win32', { 'schtasks /Run': { code: 1, stderr: 'ERROR: Access is denied.' } })
-    expect(await installLoginAgent(cmd, d)).toEqual({ ok: false, error: 'schtasks /Run failed: ERROR: Access is denied.' })
-    expect(d.calls.at(-1)).toBe(`schtasks /Delete /F /TN ${WINDOWS_TASK}`)
+  it('Windows: removes the Run value when the daemon will not start', async () => {
+    const d = fakeDeps('win32')
+    d.spawnDetached = async () => ({ ok: false, error: "Couldn't start C:\\H\\Houston.exe: spawn ENOENT" })
+    expect(await installLoginAgent(cmd, d)).toEqual({ ok: false, error: "Couldn't start C:\\H\\Houston.exe: spawn ENOENT" })
+    expect(d.calls.at(-1)).toBe(`reg delete ${WINDOWS_RUN_KEY} /v ${WINDOWS_TASK} /f`)
   })
 
-  it('Windows: creates a logon task and starts it; removing a missing one is fine', async () => {
-    const d = fakeDeps('win32', { 'schtasks /Delete': { code: 1, stderr: 'ERROR: The system cannot find the file specified.' } })
+  it('Windows: writes the Run value, removes an older logon task, and starts the daemon; removing a missing one is fine', async () => {
+    const missing = { code: 1, stderr: 'ERROR: The system cannot find the file specified.' }
+    const d = fakeDeps('win32', {
+      'schtasks /Delete': missing,
+      'reg delete': { code: 1, stderr: 'ERROR: The system was unable to find the specified registry key or value.' }
+    })
     expect(await installLoginAgent(cmd, d)).toEqual({ ok: true })
-    expect(d.calls[0]).toBe(['schtasks', ...windowsTaskArgs(cmd)].join(' '))
-    expect(d.calls[1]).toBe(`schtasks /Run /TN ${WINDOWS_TASK}`)
+    expect(d.calls).toEqual([['reg', ...windowsRunKeyArgs(cmd)].join(' '), `schtasks /Delete /F /TN ${WINDOWS_TASK}`])
+    expect(d.spawned).toEqual([[cmd.program, ...cmd.args]])
     expect(await uninstallLoginAgent(d)).toEqual({ ok: true })
-    expect(d.calls.slice(-2)).toEqual([`schtasks /End /TN ${WINDOWS_TASK}`, `schtasks /Delete /F /TN ${WINDOWS_TASK}`])
+    expect(d.calls.slice(-3)).toEqual([
+      `reg delete ${WINDOWS_RUN_KEY} /v ${WINDOWS_TASK} /f`,
+      `schtasks /End /TN ${WINDOWS_TASK}`,
+      `schtasks /Delete /F /TN ${WINDOWS_TASK}`
+    ])
+  })
+
+  it('Windows: refuses a profile override it has no way to pass on, rather than run the default profile', async () => {
+    const d = fakeDeps('win32')
+    expect(await installLoginAgent({ ...cmd, env: { HOUSTON_DATA_DIR: 'D:\\p' } }, d)).toEqual({
+      ok: false,
+      error: expect.stringMatching(/can't keep HOUSTON_DATA_DIR/)
+    })
+    expect(d.calls).toEqual([])
+    expect(d.spawned).toEqual([])
+  })
+
+  it('Windows: matches the Run value against the command, and reports the entry installed', async () => {
+    const line = windowsCommandLine(cmd)
+    const d = fakeDeps('win32', { 'reg query': { code: 0, stdout: regQuery(line) } })
+    expect(await loginAgentMatches(cmd, d)).toBe(true)
+    expect(await loginAgentMatches({ ...cmd, program: 'C:\\elsewhere\\Houston.exe' }, d)).toBe(false)
+    expect(await scheduleDaemonState(d, () => null)).toEqual({ supported: true, installed: true, byApp: true, pid: null })
+    // An older version's logon task counts as installed, but never as matching.
+    const legacy = fakeDeps('win32', {
+      'reg query': { code: 1, stderr: 'ERROR: The system was unable to find the specified registry key or value.' },
+      'schtasks /Query': { code: 0, stdout: '<Task><Actions><Exec><Arguments>--schedule-daemon</Arguments></Exec></Actions></Task>' }
+    })
+    expect(await scheduleDaemonState(legacy, () => null)).toEqual({ supported: true, installed: true, byApp: true, pid: null })
+    expect(await loginAgentMatches(cmd, legacy)).toBe(false)
+    const none = fakeDeps('win32', { 'reg query': { code: 1 }, 'schtasks /Query': { code: 1 } })
+    expect((await scheduleDaemonState(none, () => null)).installed).toBe(false)
   })
 
   it('refuses a platform without a login agent', async () => {
@@ -163,10 +283,34 @@ describe('installing and removing', () => {
 describe('daemon state and turning it off', () => {
   it('reports installed and running from the entry and the pid file', async () => {
     const d = fakeDeps('linux')
-    expect(await scheduleDaemonState(d, () => null)).toEqual({ supported: true, installed: false, pid: null })
+    expect(await scheduleDaemonState(d, () => null)).toEqual({ supported: true, installed: false, byApp: false, pid: null })
     await installLoginAgent(cmd, d)
-    expect(await scheduleDaemonState(d, () => 4242)).toEqual({ supported: true, installed: true, pid: 4242 })
-    expect(await scheduleDaemonState(fakeDeps('freebsd'), () => null)).toEqual({ supported: false, installed: false, pid: null })
+    expect(await scheduleDaemonState(d, () => 4242)).toEqual({ supported: true, installed: true, byApp: true, pid: 4242 })
+    await installLoginAgent({ program: '/usr/bin/node', args: ['/opt/houston/cli.cjs', 'schedule-daemon', 'run'] }, d)
+    expect(await scheduleDaemonState(d, () => null)).toEqual({ supported: true, installed: true, byApp: false, pid: null })
+    expect(await scheduleDaemonState(fakeDeps('freebsd'), () => null)).toEqual({
+      supported: false,
+      installed: false,
+      byApp: false,
+      pid: null
+    })
+  })
+
+  it('does not signal a pid named by a pid file its holder stopped refreshing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-agent-'))
+    try {
+      writeFileSync(daemonPidPath(dir), '4242')
+      const alive = (pid: number): boolean => pid === 4242
+      const later = (): number => Date.now() + PID_STALE_MS + 1000
+      const d = fakeDeps('darwin')
+      const killed: number[] = []
+      await disableScheduleDaemon(d, () => runningDaemonPid(dir, alive, later), (pid) => killed.push(pid))
+      expect(killed).toEqual([])
+      await disableScheduleDaemon(d, () => runningDaemonPid(dir, alive), (pid) => killed.push(pid))
+      expect(killed).toEqual([4242])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('removes the entry and stops a daemon still running, never this process', async () => {
