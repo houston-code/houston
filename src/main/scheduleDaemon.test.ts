@@ -105,7 +105,8 @@ describe('pid files', () => {
       writeFileSync(path, '200')
       utimesSync(path, old, old)
       vi.advanceTimersByTime(PID_HEARTBEAT_MS)
-      expect(statSync(path).mtimeMs).toBe(old.getTime())
+      // Filesystems store sub-millisecond times, so compare to the millisecond.
+      expect(Math.round(statSync(path).mtimeMs)).toBe(old.getTime())
       if (held.ok) held.release()
       expect(readFileSync(path, 'utf8')).toBe('200')
     } finally {
