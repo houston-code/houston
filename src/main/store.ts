@@ -111,6 +111,31 @@ export function canSetKey(): boolean {
 }
 
 /**
+ * Injected "forget this stored API key" writer, the delete-side companion to
+ * {@link configureSetKey} (safeStorage on the desktop, cli-credentials.json on the
+ * CLI). Returns true when a stored key was removed. Optional, like the writer.
+ */
+let removeKeyFn: ((id: string) => boolean) | null = null
+
+/** Bind the API-key remover. Hosts that can't persist keys leave it unset. */
+export function configureRemoveKey(fn: (id: string) => boolean): void {
+  removeKeyFn = fn
+}
+
+/** True when a key remover is wired (so the TUI can offer `/login forget-key`). */
+export function canRemoveKey(): boolean {
+  return removeKeyFn !== null
+}
+
+/** Forget the stored API key for `id`; true if one was removed. Guard with {@link canRemoveKey}. */
+export function removeProviderKey(id: string): boolean {
+  if (!removeKeyFn) {
+    throw new Error('No writable key store configured: call configureRemoveKey() during startup.')
+  }
+  return removeKeyFn(id)
+}
+
+/**
  * Injected "is an MCP OAuth token set stored for this server?" check, used to
  * attach the derived `hasOAuth` flag on MCP server configs. A seam for the same
  * reason as {@link configureHasKey}. Optional: hosts without an MCP OAuth store

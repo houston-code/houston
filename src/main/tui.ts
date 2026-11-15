@@ -189,6 +189,7 @@ import {
   type PermissionsOp
 } from './tui-permissions'
 import { parseScheduleArgs, runScheduleCommand, type ScheduleBackend, type ScheduleOp } from './tui-schedules'
+import { parseLoginArgs, refreshProviderModels, runLoginOp, type LoginOp, type ProviderCommandDeps } from './tui-providers'
 import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import {
@@ -1965,6 +1966,8 @@ export type SlashResult =
   | { kind: 'set-approval'; policy: ApprovalPolicy; asDefault?: boolean }
   /** Choose a model from the ready ones (/model with no model named). */
   | { kind: 'pick-model'; asDefault?: boolean }
+  /** Fetch a provider's model list again (/model refresh [provider]). */
+  | { kind: 'model-refresh'; provider?: string }
   /** Run the last message again after its turn failed (/retry), as the desktop's Retry does. */
   | { kind: 'retry' }
   | { kind: 'set-model'; providerId: string; model: string; asDefault?: boolean }
@@ -2036,6 +2039,8 @@ export type SlashResult =
   | { kind: 'schedule'; op: ScheduleOp }
   /** Set or replace a provider API key, or add a host (/login, /providers). */
   | { kind: 'login' }
+  /** Edit or remove a provider, or forget its key (/login edit|remove|forget-key <provider>). */
+  | { kind: 'login-op'; op: Exclude<LoginOp, { op: 'menu' }> }
   /**
    * A template command (custom `.houston/commands` or first-party `/review`) or
    * `/agent`: run the prompt as a turn, recorded as the command the user typed.
@@ -2238,8 +2243,10 @@ export function parseSlashCommand(
       return { kind: 'trust', op: 'usage' }
     }
     case 'login':
-    case 'providers':
-      return { kind: 'login' }
+    case 'providers': {
+      const op = parseLoginArgs(arg)
+      return op.op === 'menu' ? { kind: 'login' } : { kind: 'login-op', op }
+    }
     case 'theme': {
       const t = resolveTheme(arg)
       if (t) return { kind: 'set-theme', theme: t }
@@ -2276,6 +2283,8 @@ export function parseSlashCommand(
       // Bare /model: pick from a list (the desktop's model picker), or list them
       // when the terminal can't show a picker.
       if (!rest) return { kind: 'pick-model', ...(asDefault ? { asDefault } : {}) }
+      const refresh = /^refresh(?:\s+(\S+))?$/i.exec(rest)
+      if (refresh) return { kind: 'model-refresh', ...(refresh[1] ? { provider: refresh[1] } : {}) }
       const resolved = resolveModelArg(rest, settings)
       if (resolved) return { kind: 'set-model', ...resolved, ...(asDefault ? { asDefault } : {}) }
       return { kind: 'handled' }
@@ -2316,7 +2325,10 @@ export const HELP_TEXT = [
   'Commands:',
   '  /help                 show this help',
   '  /model [id]           pick this chat\'s model from a list, or switch to one by id (--default: new chats too)',
+  "  /model refresh [p]    fetch a provider's model list again (default: this chat's provider)",
   '  /login                set or replace a provider API key, or add a host',
+  "  /login edit <p>       change a provider's base URL, region, endpoint or custom headers",
+  '  /login remove <p>     remove an added provider · /login forget-key <p>: forget its stored key',
   '  /approval [policy]    show or set this chat\'s approval mode (--default: new chats too)',
   '  /plan                 plan mode: read-only research & propose',
   '  /ask /auto /full      ask every time · auto-approve edits · full auto (sandboxed)',
@@ -3266,6 +3278,22 @@ async function selectHost(
   return { providerId: provider.id, model }
 }
 
+/** The slice of the terminal's deps that /login edit|remove|forget-key and /model refresh use. */
+function providerCommandDeps(deps: TuiDeps, providerId: string | null, model: string | null): ProviderCommandDeps {
+  return {
+    getSettings: deps.getSettings,
+    ...(deps.updateSettings ? { updateSettings: deps.updateSettings } : {}),
+    ...(deps.removeKey ? { removeKey: deps.removeKey } : {}),
+    ...(deps.fetchModels ? { fetchModels: deps.fetchModels } : {}),
+    readLine: deps.io.readLine,
+    ...(deps.io.readSecret ? { readSecret: deps.io.readSecret } : {}),
+    ...(deps.canStoreHeaderSecrets !== undefined ? { canStoreHeaderSecrets: deps.canStoreHeaderSecrets } : {}),
+    ...(providerId ? { activeProviderId: providerId } : {}),
+    ...(model ? { activeModel: model } : {}),
+    out: (t) => deps.io.out(t)
+  }
+}
+
 /**
  * The /login driver: pick a provider (or add a host), paste a key (hidden), and have
  * it take effect immediately. Returns the provider+model to switch to when setup
@@ -3624,6 +3652,13 @@ export interface TuiDeps {
   ruleUsage?: () => Record<string, number>
   /** The scheduler service the host wired, for /schedule. Absent ⇒ the command says it's unavailable. */
   schedules?: ScheduleBackend
+  /** Forget a stored API key (`/login forget-key`); true if one was removed. Absent ⇒ unavailable. */
+  removeKey?: (id: string) => boolean
+  /**
+   * Ask a provider for its full model list (`/model refresh`), with a longer wait
+   * than the setup menu's quick `listModels` probe. Absent ⇒ the verb says it's unavailable.
+   */
+  fetchModels?: (provider: ProviderConfig) => Promise<ModelOption[]>
   /** Whether the host is macOS — filters the provider catalog (e.g. oMLX). Defaults to the current platform. */
   isMac?: boolean
   /** Absolute path to settings.json, shown by /settings, /hooks, and /mcp. */
@@ -6005,6 +6040,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           providerId = setup.providerId
           model = setup.model
         }
+        continue
+      }
+      if (result.kind === 'login-op' || result.kind === 'model-refresh') {
+        const pdeps = providerCommandDeps(deps, providerId, model)
+        if (result.kind === 'login-op') await runLoginOp(result.op, pdeps, paint)
+        else await refreshProviderModels(result.provider, pdeps, paint)
         continue
       }
       if (result.kind === 'paste-image') {

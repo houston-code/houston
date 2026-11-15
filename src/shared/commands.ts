@@ -298,7 +298,12 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'auto', group: 'Modes', description: 'Approval: auto-approve edits, ask for commands', clients: ['gui', 'tui'] },
   { name: 'full', group: 'Modes', description: 'Approval: full auto (sandboxed)', clients: ['gui', 'tui'] },
   { name: 'model', group: 'Modes', args: '[name]', description: 'List or switch the active model', clients: ['gui', 'tui'] },
-  { name: 'login', group: 'Setup', description: 'Set or update an API key (also: /providers)', clients: ['gui', 'tui'] },
+  {
+    name: 'login', group: 'Setup', args: '[edit|remove|forget-key <provider>]',
+    description: 'Set or update an API key; edit or remove a provider (also: /providers)',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Set or update an API key (also: /providers)', args: null }
+  },
   {
     name: 'settings', group: 'Setup', args: '[page]',
     description: 'Show a summary of your current settings',

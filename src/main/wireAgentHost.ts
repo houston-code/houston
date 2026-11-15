@@ -5,6 +5,7 @@ import {
   configureHasKey,
   configureHeaderSecrets,
   configureMcpOAuthPresence,
+  configureRemoveKey,
   configureSetKey,
   getProvider,
   getSettings,
@@ -12,6 +13,7 @@ import {
 } from './store'
 import {
   collectSecretValues,
+  deleteKey,
   deleteSecretHeaders,
   getKey,
   getMcpOAuthTokens,
@@ -49,6 +51,11 @@ export function wireAgentHost(): void {
   configureSetKey((id, key) => {
     setKey(id, key)
     return { shadowedByEnv: null }
+  })
+  configureRemoveKey((id) => {
+    if (!hasStoredKey(id)) return false
+    deleteKey(id)
+    return true
   })
   configureHeaderSecrets({ get: getSecretHeaders, set: setSecretHeaders, remove: deleteSecretHeaders })
   // The derived `hasOAuth` flag on MCP server configs (drives the Sign in/out UI).
