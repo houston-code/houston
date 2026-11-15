@@ -776,7 +776,12 @@ the model.
   by default (your messages, the replies, each tool call, and tool output cut to 40
   lines), or JSON with every message as saved. Without a path it is named after the
   chat and the time. It never overwrites a file.
-- `/delete` deletes the chat after asking, then starts a new one.
+- `/delete` deletes the chat after asking, then starts a new one. Like the desktop app's
+  delete, it stops the chat's run and background shells. When the chat has its own git
+  worktree you choose: `k` deletes the chat and keeps the worktree, `r` also removes it
+  (uncommitted or unmerged work is kept); anything else cancels. A worktree with no
+  changes and no unmerged commits goes with the chat, and one another chat still uses
+  always stays.
 - `/permissions` lists your saved permission rules, numbered; `/permissions remove <n>`
   deletes one. Rules in a project's `.houston/settings.json` are edited in that file.
 - `/resume [search]` (or `/sessions`) opens a picker of this folder's saved chats,
@@ -789,7 +794,8 @@ the model.
     the filter)
   - Ctrl-R renames the chat (type the title, Enter saves)
   - Ctrl-D, or `x` while the filter is empty, deletes it after a y/N question; deleting
-    the chat you're in says so first, and you carry on in a new chat
+    the chat you're in says so first, and you carry on in a new chat. A worktree that
+    holds work is kept (use `/delete` inside the chat to remove it)
   - Ctrl-A switches between this folder and all folders; all folders shows each chat's
     folder
   Off a terminal that can't show the picker, it prints a numbered list to answer by

@@ -87,7 +87,9 @@ import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { assertNever } from '@shared/assert'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
 import { parseShellEscape, renderShellEscapeRecord } from '@shared/shellEscape'
-import type { ConversationSettingsPatch, ProposalState } from '@shared/agent'
+import type { ConversationSettingsPatch, DeleteConversationResult, ProposalState } from '@shared/agent'
+import type { DeletePlan } from './deleteChat'
+import { deletePromptText, deleteWorktreeOutcome, parseDeleteAnswer } from './tui-delete'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, deniedPromptText, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
@@ -1309,8 +1311,20 @@ export interface TuiPersist {
   fork: (id: string) => { id: string } | null
   /** Give a conversation a title of the user's choosing. Absent ⇒ /rename is unavailable. */
   rename?: (id: string, title: string) => void
-  /** Delete a conversation for good. Absent ⇒ /delete is unavailable. */
-  remove?: (id: string) => void
+  /**
+   * Delete a conversation for good, stopping its live run, background shells and
+   * queued input. With a `choice` (from `planDelete`), also tears down its worktree
+   * when asked. Absent ⇒ /delete is unavailable.
+   */
+  remove?: (
+    id: string,
+    choice?: { plan: DeletePlan; removeWorktree: boolean }
+  ) => void | Promise<DeleteConversationResult | void>
+  /**
+   * What deleting the chat would do to its worktree, so /delete can offer the desktop's
+   * keep/remove choice. Absent ⇒ every chat is deleted as a plain one (worktree kept).
+   */
+  planDelete?: (id: string) => Promise<DeletePlan>
 }
 
 /**
@@ -4588,7 +4602,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           ...(all && c.workspace ? { folder: sessionFolder(c.workspace) } : {})
         })
       },
-      onAction: (req) => {
+      onAction: async (req) => {
         if (req.id === 'scope') {
           all = !all
           // The hint names the other scope, so it changes too.
@@ -4609,14 +4623,30 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           return { options: rows(req.query.trim()), notice: `renamed to "${next}"` }
         }
         if (req.id === 'delete') {
-          persist.remove!(id)
+          // The picker asks one yes/no, so a worktree holding work is kept (the safe
+          // choice; /delete inside the chat offers removal) and a clean, merged one goes
+          // with the chat, as in the desktop app.
+          let plan: DeletePlan = { kind: 'plain', shared: false }
+          try {
+            if (persist.planDelete) plan = await persist.planDelete(id)
+          } catch {
+            // No plan: a plain delete, which keeps any worktree.
+          }
+          let removed: DeleteConversationResult | void
+          try {
+            removed = await persist.remove!(id, { plan, removeWorktree: plan.kind === 'disposableWorktree' })
+          } catch (e) {
+            return { notice: `couldn't delete: ${(e as Error).message}` }
+          }
+          const wtNote = deleteWorktreeOutcome(plan, removed)
+          const tail = wtNote ? `; ${stripControlChars(wtNote)}` : ''
           read.delete(id)
           if (id === conversationId) {
             forgetDeletedChat()
             deletedCurrent = title
-            return { options: rows(req.query.trim()), notice: `deleted "${title}", the chat you were in` }
+            return { options: rows(req.query.trim()), notice: `deleted "${title}", the chat you were in${tail}` }
           }
-          return { options: rows(req.query.trim()), notice: `deleted "${title}"` }
+          return { options: rows(req.query.trim()), notice: `deleted "${title}"${tail}` }
         }
         return {}
       }
@@ -5009,23 +5039,35 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         const title = terminalText(currentTitle() ?? 'this chat', { lines: false })
+        const deleting = conversationId
+        let plan: DeletePlan = { kind: 'plain', shared: false }
+        try {
+          if (deps.persist.planDelete) plan = await deps.persist.planDelete(deleting)
+        } catch {
+          // No plan: a plain delete, which keeps any worktree.
+        }
         // discardPending: type-ahead must not answer a question about deleting.
         const ans = await deps.io.readLine(
-          paint(`Delete "${title}" and its ${plural(messages.length, 'message')}? This cannot be undone. [y/N] `, 'yellow'),
+          paint(deletePromptText(plan, title, plural(messages.length, 'message')), 'yellow'),
           { discardPending: true }
         )
-        if (!/^y(es)?$/i.test(ans?.trim() ?? '')) {
+        const choice = parseDeleteAnswer(plan, ans)
+        if (!choice.delete) {
           deps.io.out(paint('· kept\n', 'dim'))
           continue
         }
+        let removed: DeleteConversationResult | void
         try {
-          deps.persist.remove(conversationId)
+          removed = await deps.persist.remove(deleting, { plan, removeWorktree: choice.removeWorktree })
         } catch (e) {
           deps.io.out(paint(`· couldn't delete: ${(e as Error).message}\n`, 'yellow'))
           continue
         }
         forgetDeletedChat()
-        deps.io.out(paint(`· deleted "${title}"; this is a new chat\n`, 'dim'))
+        const wtNote = deleteWorktreeOutcome(plan, removed)
+        deps.io.out(
+          paint(`· deleted "${title}"${wtNote ? `; ${terminalText(wtNote, { lines: false })}` : ''}; this is a new chat\n`, 'dim')
+        )
         continue
       }
       if (result.kind === 'permissions') {

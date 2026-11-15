@@ -17,6 +17,7 @@ import type {
 } from '@shared/agent'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import type { PagerSource } from './tui-pager'
+import type { DeletePlan } from './deleteChat'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
 import type { RegistryServer } from '@shared/mcpRegistry'
@@ -7889,6 +7890,101 @@ describe('session commands', () => {
     expect(after).toContain('No context yet')
     expect(after).not.toMatch(/Tool results/)
     expect(after).toContain('no changes from this chat to undo')
+  })
+
+  describe('/delete of a chat with a worktree', () => {
+    const wt = { path: '/repo/.houston/worktrees/feat', branch: 'houston/feat', repoRoot: '/repo' }
+    const withPlan = (plan: DeletePlan) => {
+      const st = withStore()
+      const choices: Array<{ removeWorktree: boolean } | undefined> = []
+      st.persist.planDelete = async () => plan
+      st.persist.remove = async (id, choice) => {
+        st.removed.push(id)
+        choices.push(choice ? { removeWorktree: choice.removeWorktree } : undefined)
+        return {
+          deleted: true,
+          worktree: choice?.removeWorktree ? { removed: true, branchDeleted: true } : null
+        }
+      }
+      return { st, choices }
+    }
+
+    it('offers keep or remove, and a blank answer deletes nothing', async () => {
+      const { d } = deps(done)
+      const { st } = withPlan({ kind: 'worktree', worktree: wt, shared: false })
+      d.persist = st.persist
+      const t = fakeIo(['hi', '/delete', '', null])
+      d.io = t.io
+      await runTui(opts, d)
+      const ask = t.reads.find((r) => r.prompt.includes('[k/r/N]'))
+      expect(ask?.prompt).toContain('branch "houston/feat"')
+      expect(ask?.discardPending).toBe(true)
+      expect(st.removed).toEqual([])
+      expect(t.text()).toContain('· kept')
+    })
+
+    it('a "y" is not an answer to the keep/remove question', async () => {
+      const { d } = deps(done)
+      const { st } = withPlan({ kind: 'worktree', worktree: wt, shared: false })
+      d.persist = st.persist
+      const t = fakeIo(['hi', '/delete', 'y', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(st.removed).toEqual([])
+    })
+
+    it('k deletes the chat and keeps the worktree on disk', async () => {
+      const { d } = deps(done)
+      const { st, choices } = withPlan({ kind: 'worktree', worktree: wt, shared: false })
+      d.persist = st.persist
+      const t = fakeIo(['hi', '/delete', 'k', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(st.removed).toEqual(['conv-1'])
+      expect(choices).toEqual([{ removeWorktree: false }])
+      expect(t.text()).toContain('kept its worktree at /repo/.houston/worktrees/feat')
+    })
+
+    it('r deletes the chat and removes the worktree', async () => {
+      const { d } = deps(done)
+      const { st, choices } = withPlan({ kind: 'worktree', worktree: wt, shared: false })
+      d.persist = st.persist
+      const t = fakeIo(['hi', '/delete', 'r', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(choices).toEqual([{ removeWorktree: true }])
+      expect(t.text()).toContain('removed its worktree and branch "houston/feat"')
+    })
+
+    it('a worktree another chat uses is never offered for removal', async () => {
+      const { d } = deps(done)
+      const { st, choices } = withPlan({ kind: 'plain', worktree: wt, shared: true })
+      d.persist = st.persist
+      const t = fakeIo(['hi', '/delete', 'y', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.reads.some((r) => r.prompt.includes('another chat still uses it. [y/N]'))).toBe(true)
+      expect(choices).toEqual([{ removeWorktree: false }])
+    })
+
+    it('the resume picker keeps a worktree that holds work', async () => {
+      const { d } = deps(done)
+      const { st, choices } = withPlan({ kind: 'worktree', worktree: wt, shared: false })
+      d.persist = st.persist
+      const notices: string[] = []
+      const t = fakeIo(['hi', '/resume', null])
+      t.io.select = async (spec) => {
+        if (spec.onAction) {
+          const r = await spec.onAction({ id: 'delete', value: 'conv-1', query: '' })
+          notices.push(r.notice ?? '')
+        }
+        return { kind: 'cancel' }
+      }
+      d.io = t.io
+      await runTui(opts, d)
+      expect(choices).toEqual([{ removeWorktree: false }])
+      expect(notices[0]).toContain('kept its worktree')
+    })
   })
 
   it('/export writes Markdown by default, and JSON on request', async () => {
