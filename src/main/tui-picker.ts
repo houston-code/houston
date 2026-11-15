@@ -1,5 +1,5 @@
 import type { Painter } from './tui'
-import { stripControlChars, truncateVisible } from './tui-wrap'
+import { stripControlChars, truncateVisible, visibleWidth } from './tui-wrap'
 
 /**
  * Arrow-key selectable picker for tool approvals and `ask_user` questions — the
@@ -435,18 +435,47 @@ export function renderPicker(
 ): string[] {
   if (isRichPicker(s.spec)) return renderRichPicker(s, paint, size)
   const lines = s.spec.title ? [paint(s.spec.title, 'bold')] : []
-  s.spec.options.forEach((o, i) => {
+  const esc = `esc ${s.spec.escLabel ?? 'cancel'}`
+  const hint = paint(
+    s.spec.multiSelect
+      ? `↑/↓ move · space toggle · enter confirm · type for a custom answer · ${esc}`
+      : `↑/↓ move · enter confirm · type for a custom answer · ${esc}`,
+    'dim'
+  )
+  const row = (o: PickerOption, i: number): string => {
     const pointer = i === s.cursor ? paint('›', 'cyan') : ' '
     const box = s.spec.multiSelect ? (s.checked.has(i) ? '[x] ' : '[ ] ') : ''
     const label = i === s.cursor ? paint(o.label, 'cyan') : o.label
     const desc = o.description ? paint(`  (${o.description})`, 'dim') : ''
-    lines.push(`${pointer} ${box}${label}${desc}`)
-  })
-  const esc = `esc ${s.spec.escLabel ?? 'cancel'}`
-  const hint = s.spec.multiSelect
-    ? `↑/↓ move · space toggle · enter confirm · type for a custom answer · ${esc}`
-    : `↑/↓ move · enter confirm · type for a custom answer · ${esc}`
-  lines.push(paint(hint, 'dim'))
+    return `${pointer} ${box}${label}${desc}`
+  }
+  const options = s.spec.options
+  // With a height, a list taller than the screen shows the same window as a rich
+  // picker: the redraw moves up over the region and can't pass the top of the screen,
+  // so a longer list copied its top into the scrollback on every arrow press. Rows
+  // are counted as drawn (a line wider than the screen wraps), and nothing is cut, so
+  // a list that fits renders exactly as before.
+  const width = size.width && size.width > 0 ? size.width : 0
+  const height = size.height && size.height > 0 ? size.height : 0
+  const rowsOf = (l: string): number => (width ? Math.max(1, Math.ceil(visibleWidth(l) / width)) : 1)
+  const all = options.map(row)
+  // A row of slack under the region for the cursor.
+  const fixed = lines.reduce((n, l) => n + rowsOf(l), 0) + rowsOf(hint) + 1
+  const total = all.reduce((n, l) => n + rowsOf(l), 0)
+  if (!height || fixed + total <= height) {
+    lines.push(...all, hint)
+    return lines
+  }
+  // Leave two rows for the "more" markers; size the window by the tallest row so it
+  // fits whichever rows it lands on.
+  const tallest = Math.max(1, ...all.map(rowsOf))
+  const maxRows = Math.max(1, Math.floor((height - fixed - 2) / tallest))
+  const start = pickerWindowStart(s.cursor, options.length, maxRows)
+  const end = Math.min(options.length, start + maxRows)
+  if (start > 0) lines.push(paint(`  ↑ ${start} more`, 'dim'))
+  lines.push(...all.slice(start, end))
+  if (end < options.length) lines.push(paint(`  ↓ ${options.length - end} more`, 'dim'))
+  lines.push(hint)
   return lines
 }
 

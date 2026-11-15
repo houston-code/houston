@@ -18,6 +18,7 @@ import {
   type PickerSpec,
   type PickerState
 } from './tui-picker'
+import { visibleWidth } from './tui-wrap'
 
 const spec: PickerSpec = {
   title: 'Approve run_shell?',
@@ -137,6 +138,29 @@ describe('renderPicker', () => {
     expect(lines[0]).toContain('› Allow')
     expect(lines).toHaveLength(4) // 3 options + hint, no blank heading row
   })
+  it('windows a plain list taller than the screen, and leaves one that fits as it was', () => {
+    const long: PickerSpec = {
+      title: 'Which?',
+      options: Array.from({ length: 40 }, (_, i) => ({ label: `opt-${i}`, value: String(i) }))
+    }
+    const at = (cursor: number) => renderPicker({ ...initialPickerState(long), cursor }, paint, { width: 80, height: 12 })
+    for (const c of [0, 20, 39]) {
+      const lines = at(c)
+      expect(lines.length).toBeLessThanOrEqual(11) // one row spare for the cursor under it
+      expect(lines.some((l) => l.includes(`› opt-${c}`))).toBe(true)
+    }
+    const mid = at(20)
+    const shown = mid.filter((l) => /opt-\d+/.test(l)).length
+    const count = (re: RegExp) => Number(mid.find((l) => re.test(l))?.match(/(\d+) more/)?.[1])
+    expect(count(/↑ \d+ more/) + shown + count(/↓ \d+ more/)).toBe(40)
+    expect(at(0).some((l) => /↑ \d+ more/.test(l))).toBe(false)
+    expect(at(39).some((l) => /↓ \d+ more/.test(l))).toBe(false)
+    // Short enough for the screen: exactly the unsized rendering.
+    expect(renderPicker(initialPickerState(spec), paint, { width: 80, height: 12 })).toEqual(
+      renderPicker(initialPickerState(spec), paint)
+    )
+  })
+
   it('shows checkboxes in multi-select', () => {
     let s = initialPickerState(multi)
     s = reducePicker(s, { type: 'space' }).state // check A
@@ -260,6 +284,26 @@ describe('filtering and action pickers', () => {
     for (const k of text('zzz')) s = reducePicker(s, k).state
     expect(reducePicker(s, { type: 'ctrl', name: 'd' }).state.notice).toBe('nothing selected')
     expect(reducePicker(s, { type: 'ctrl', name: 'a' }).outcome).toEqual({ kind: 'action', id: 'scope', value: null })
+  })
+
+  // The /model picker: dozens of fetched models on a short screen, filtered by provider.
+  it('a model list filtered on its provider keyword stays within the screen and commits the match', async () => {
+    const models: PickerSpec = {
+      title: 'Model:',
+      filter: true,
+      options: Array.from({ length: 40 }, (_, i) => {
+        const provider = i % 3 === 0 ? 'OpenAI' : 'Anthropic'
+        return { label: `model-${i}`, value: String(i), description: provider, keywords: provider }
+      })
+    }
+    const keys: PickerKey[] = [...'openai'].map((ch) => ({ type: 'text', ch }) as PickerKey)
+    keys.push({ type: 'down' }, { type: 'enter' })
+    const { outcome, frames } = await drivePicker(models, keys, paint, { width: 60, height: 12 })
+    for (const f of frames) {
+      expect(f.length).toBeLessThanOrEqual(11) // one row spare for the cursor under it
+      for (const l of f) expect(visibleWidth(l)).toBeLessThanOrEqual(59)
+    }
+    expect(outcome).toEqual({ kind: 'commit', value: '3' }) // the second OpenAI model
   })
 
   it('windows long lists around the cursor, with counts of the rest', () => {

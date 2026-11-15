@@ -99,6 +99,7 @@ import {
   osc8Link,
   terminalText,
   filterTerminalOutput,
+  takeStreamedRows,
   visibleWidth,
   wrapAnsi
 } from './tui-wrap'
@@ -3171,6 +3172,12 @@ export interface TuiIo {
   /** Erase the current terminal line (the abandoned composer input on Ctrl-C). */
   clearLine?: () => void
   /**
+   * Draw the adapter's own parts (the spinner, the picker, the composer's marks and
+   * menus) with the session's theme. Called at startup and on `/theme`; absent in
+   * tests and off-TTY, where those parts are not drawn.
+   */
+  setPaint?: (paint: Painter) => void
+  /**
    * Read one line, showing `prompt`. Resolves null on end-of-input (Ctrl-D),
    * which ends the session. Used for the composer, approvals, and questions
    * alike — the driver only ever has one read outstanding at a time.
@@ -3858,11 +3865,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.io.out(`${opts.usageError}\n`)
     return 2
   }
-  // Reassigned by /theme (takes effect from the next output); the spinner keeps
-  // the initial theme since its painter lives in the terminal adapter.
   const settings = deps.getSettings()
-  // Reassigned by /theme (takes effect from the next output); the spinner keeps the
-  // initial theme since its painter lives in the terminal adapter.
+  // Reassigned by /theme (takes effect from the next output). The terminal adapter
+  // draws the spinner, picker and menus itself, so it is handed the same painter
+  // (through setPaint, whenever it is rebuilt here).
   // Screen-reader mode drops color: nothing may depend on it, and the escapes are noise.
   let screenReader = opts.screenReader === true
   let theme: ThemeName = resolveTheme(settings.tuiTheme ?? '') ?? opts.detectedTheme ?? 'default'
@@ -3876,6 +3882,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   const applyAccessibility = (): void =>
     deps.io.setAccessibility?.({ screenReader, reduceMotion: reduceMotion || screenReader })
   applyAccessibility()
+  deps.io.setPaint?.(paint)
   const newId = deps.newId ?? randomUUID
 
   // Trusted-folders gate: if this project's .houston/settings.json ELEVATES
@@ -5164,6 +5171,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.updateSettings?.({ tuiScreenReader: screenReader })
         applyAccessibility()
         paint = makeSessionPainter()
+        deps.io.setPaint?.(paint)
         deps.io.out(
           paint(
             screenReader
@@ -5522,8 +5530,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         const r = await deps.io.select!({
           title: 'Model:',
-          options: choices.map((c, i) => ({ label: c.label, value: String(i), description: c.description }))
+          // A fetched provider list runs to dozens of models: typing narrows it, on the
+          // name, the provider or the id.
+          filter: true,
+          options: choices.map((c, i) => ({
+            label: c.label,
+            value: String(i),
+            description: c.description,
+            keywords: c.description
+          }))
         })
+        if (r.kind === 'cancel') deps.io.out(paint('· cancelled\n', 'dim'))
         if (r.kind !== 'commit') continue
         const picked = choices[Number(r.value)]
         if (!picked) continue
@@ -5552,6 +5569,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (result.kind === 'set-theme') {
         theme = result.theme
         paint = makeSessionPainter()
+        deps.io.setPaint?.(paint)
         // Persist it: a theme you have to re-pick on every launch is not a setting,
         // it is a party trick.
         deps.updateSettings?.({ tuiTheme: result.theme })
@@ -5929,7 +5947,6 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         roundShown = true
       }
     }
-    flushStreamedText = flushMd
     // The streaming round's reasoning: when it began and what it said, for the
     // one-line summary ('summary') printed when the next thing arrives.
     let thought: { start: number; text: string } | null = null
@@ -5945,6 +5962,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       const label = screenReader ? '\nhouston, thinking:\n' : ''
       deps.io.out(`${freshLine()}${label}${renderThoughtSummary(t.text, nowFn() - t.start, columns(), paint)}\n`)
       roundShown = true
+    }
+    // Shown in full ('show'), reasoning streams in fragments that seldom end a line
+    // ("I need", " to check how"). Printed as they came, the spinner's next frame
+    // wiped the half-written line, and the reply ran on from the end of it. So the
+    // unfinished line is held and printed a row at a time, and whatever comes next
+    // prints it first.
+    let reasoningTail = ''
+    const flushReasoning = (): void => {
+      if (reasoningTail) deps.io.out(`${paint(reasoningTail, 'dim')}\n`)
+      reasoningTail = ''
+    }
+    flushStreamedText = () => {
+      flushReasoning()
+      flushMd()
     }
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
@@ -5967,8 +5998,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (e.type === 'done' && sig?.alert && notifyMode !== 'off') {
         deps.io.remindIfIdle?.(idleReminderSpec(workspaceName), notifyMode)
       }
-      // Anything but more reasoning ends the thought in progress.
+      // Anything but more reasoning ends the thought in progress: the rest of its
+      // last line first (shown in full), then its summary line (summary mode).
       if (e.type !== 'reasoning') {
+        flushReasoning()
         endThought(e.type === 'turn_discarded')
         thoughtLineOpen = false
       }
@@ -6018,8 +6051,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             deps.io.out(`${freshLine()}\nhouston, thinking:\n`)
             speaking = 'thinking'
           }
-          deps.io.out(paint(safe, 'dim'))
-          thoughtLineOpen = !safe.endsWith('\n')
+          if (screenReader) {
+            // Appended as it comes: there is no spinner line to protect, and a screen
+            // reader wants the words, not rows wrapped to the window.
+            deps.io.out(paint(safe, 'dim'))
+            thoughtLineOpen = !safe.endsWith('\n')
+            break
+          }
+          // Then held to whole rows, so the line under the spinner is never half written.
+          const { rows, rest } = takeStreamedRows(reasoningTail + safe, columns())
+          reasoningTail = rest
+          if (rows) deps.io.out(paint(rows, 'dim'))
           roundShown = true
           break
         }
@@ -6480,7 +6522,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // can't crash the run (a throw here has no catch on the startRun side).
       persistMessages(m)
     })
-    // A run that ended mid-thought (no event after it) still gets its line.
+    // A run that ended mid-thought (no event after it) still gets the rest of its
+    // last line and its summary line.
+    flushReasoning()
     endThought(false)
     flushStreamedText = () => {}
     deps.io.stopSpinner?.()
