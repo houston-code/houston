@@ -24,6 +24,7 @@ import { runScheduleDaemonCommand } from './scheduleDaemon'
 import { configureAgentHost } from '../main/agentHost'
 import {
   addPermissionRule,
+  updateSettings,
   configureFreshInstallApprovalPolicy,
   configureHasKey,
   configureHeaderSecrets,
@@ -53,6 +54,21 @@ import {
   cliSetMcpOAuth
 } from './credentials'
 import { runProvidersCommand, type ProvidersDeps } from './providers'
+import { runDoctorCommand } from './doctor'
+import { runMcpCliCommand } from './mcp'
+import { runUpdateCommand, type UpgradeStep } from './update'
+import { terminalDoctorFacts } from '../main/terminalEntry'
+import { disconnectAllMcp, reconnectMcpServers } from '../main/mcp/manager'
+import { runMcpOAuthFlow } from '../main/mcp/oauth'
+import { canStoreMcpOAuth, setMcpOAuth } from '../main/agentHost'
+import { checkForUpdate, checkForUpdateNow } from '../main/update-check'
+import { currentInstallMethod, upgradeHint } from '../main/install-method'
+import { renderDoctor } from '../main/tui-doctor'
+import { makePainter, type Painter } from '../main/tui'
+import { resolveColor } from '../main/tui-io'
+import { plainText, resolveAccessibility } from '../main/tui-a11y'
+import { spawn } from 'node:child_process'
+import type { McpServerConfig } from '@shared/types'
 import { deferTrustSystemCertificates } from '../main/system-ca'
 import { configureOutboundProxy } from '../main/outbound-proxy'
 import { noteRuleUsed } from '../main/ruleUsage'
@@ -150,6 +166,13 @@ export interface RunCliOptions {
 export async function runCli(argv: string[], { version, usage, argvProblem }: RunCliOptions): Promise<number> {
   const { trustCertificatesNow } = wireCliHost()
 
+  // `houston doctor|mcp|update …`: matched only as the very first argument, like
+  // `open`, so a prompt that is one of these words (`-p doctor`) still runs as a prompt.
+  const first = argv[2]
+  if (first === 'doctor') return runDoctorCommand(argv.slice(3), doctorDeps(version))
+  if (first === 'mcp') return runMcpCliCommand(argv.slice(3), mcpDeps())
+  if (first === 'update') return runUpdateCommand(argv.slice(3), updateDeps(version))
+
   // `houston providers …` — manage providers/keys before the run-mode parsers,
   // which only match `-i`/`-p`. Matched as the first positional so flags before it
   // don't hide it.
@@ -189,6 +212,121 @@ export async function runCli(argv: string[], { version, usage, argvProblem }: Ru
 
   process.stderr.write(usage)
   return 2
+}
+
+/**
+ * Output for the subcommands that print reports (`doctor`, `mcp`, `update`): color only
+ * at a terminal that wants it, and in screen-reader mode (the flag's env var or the
+ * saved setting) plain lines with status marks spoken as words. Progress goes to
+ * stderr, and only at a terminal, so a script reading stdout gets the report alone.
+ */
+function subcommandIo(): {
+  paint: Painter
+  color: boolean
+  text: (s: string) => string
+  out: (s: string) => void
+  err: (s: string) => void
+  progress?: (message: string) => void
+} {
+  const { screenReader } = resolveAccessibility({}, process.env, getSettings())
+  const color = !screenReader && resolveColor(process.env, Boolean(process.stdout.isTTY))
+  const text = (s: string): string => (screenReader ? plainText(s) : s)
+  return {
+    paint: makePainter(color),
+    color,
+    text,
+    out: (s) => void process.stdout.write(text(s)),
+    err: (s) => void process.stderr.write(text(s)),
+    ...(process.stderr.isTTY ? { progress: (m: string) => void process.stderr.write(text(`${m}\n`)) } : {})
+  }
+}
+
+/** Connect each named server now, and close every connection once it has answered. */
+async function connectOnce(all: McpServerConfig[], ids: string[]): ReturnType<typeof reconnectMcpServers> {
+  try {
+    return await reconnectMcpServers(all, ids)
+  } finally {
+    disconnectAllMcp()
+  }
+}
+
+/** Host wiring for `houston doctor`: the interactive /doctor's facts, with MCP servers connected first. */
+function doctorDeps(version: string): Parameters<typeof runDoctorCommand>[1] {
+  const io = subcommandIo()
+  return {
+    facts: async () => {
+      const servers = getSettings().mcpServers ?? []
+      const enabled = servers.filter((m) => m.enabled && m.id && (m.command || m.url)).map((m) => m.id)
+      try {
+        const [update] = await Promise.all([
+          checkForUpdate(version),
+          enabled.length ? reconnectMcpServers(servers, enabled) : null
+        ])
+        const hint = upgradeHint(currentInstallMethod()).fix
+        // Read while the connections are up: closing them forgets their statuses.
+        return terminalDoctorFacts(process.cwd(), version, io.color, update ? { ...update, hint } : null)
+      } finally {
+        disconnectAllMcp()
+      }
+    },
+    // JSON goes out untouched; the painted report gets the screen-reader treatment.
+    render: (report) => io.text(renderDoctor(report, io.paint)),
+    out: (s) => void process.stdout.write(s),
+    err: io.err,
+    ...(io.progress ? { progress: io.progress } : {})
+  }
+}
+
+/** Host wiring for `houston mcp`: the shared settings, the manager, and the OAuth store. */
+function mcpDeps(): Parameters<typeof runMcpCliCommand>[1] {
+  const io = subcommandIo()
+  return {
+    servers: () => getSettings().mcpServers ?? [],
+    save: (mcpServers) => void updateSettings({ mcpServers }),
+    connect: (servers) => connectOnce(getSettings().mcpServers ?? [], servers.map((s) => s.id)),
+    ...(canStoreMcpOAuth()
+      ? {
+          login: async (server: McpServerConfig, onStatus: (m: string) => void) => {
+            const tokens = await runMcpOAuthFlow(server.url ?? '', { onStatus })
+            setMcpOAuth(server.id, tokens)
+          },
+          logout: (serverId: string) => setMcpOAuth(serverId, null)
+        }
+      : {}),
+    paint: io.paint,
+    out: io.out,
+    err: io.err,
+    ...(io.progress ? { progress: io.progress } : {})
+  }
+}
+
+/**
+ * Run one upgrade step with the terminal attached. No shell: the program and its fixed
+ * arguments go straight to the OS. Windows runs npm and bun through `.cmd` shims, which
+ * only a shell can start, so there (and only there) it goes through cmd with the same
+ * fixed words, none of which come from the network or the user.
+ */
+export function runUpgradeStep(step: UpgradeStep): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(step.program, step.args, { stdio: 'inherit', shell: process.platform === 'win32' })
+    child.on('error', reject)
+    child.on('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0)))
+  })
+}
+
+/** Host wiring for `houston update`. */
+function updateDeps(version: string): Parameters<typeof runUpdateCommand>[1] {
+  const io = subcommandIo()
+  const method = currentInstallMethod()
+  return {
+    version,
+    method,
+    hint: upgradeHint(method),
+    check: () => checkForUpdateNow(version),
+    run: runUpgradeStep,
+    out: io.out,
+    err: io.err
+  }
 }
 
 /** Host wiring for the `providers` subcommand (real store + credential file). */

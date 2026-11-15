@@ -509,15 +509,6 @@ export function wireTerminalSessionBackends(opts: {
   }
 }
 
-/**
- * Locate an external binary the agent shells out to. `which`/`where` is the same
- * lookup the shell itself does, so "found" here matches what a tool call sees.
- */
-/**
- * Probe the environment for `/doctor`. The shared gatherer collects the facts
- * common to every client; the terminal adds its own `terminal` group (tty, color,
- * width) that the desktop app has no analogue for.
- */
 /** How long the setup menu waits for a host to list its models. */
 const HOST_PROBE_MS = 2500
 
@@ -556,14 +547,21 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   })
 }
 
-function probeDoctor(
+/**
+ * Probe the environment for `/doctor` and `houston doctor`. The shared gatherer collects
+ * the facts common to every client; the terminal adds how this copy was installed and
+ * its own `terminal` group (tty, color, width), which the desktop app has no analogue for.
+ */
+export function terminalDoctorFacts(
   cwd: string,
   version: string,
   color: boolean,
   update: { latest: string; url: string; hint?: string } | null
 ): DoctorFacts {
+  const method = currentInstallMethod()
   return {
     ...gatherDoctorFacts(cwd, { version, update }),
+    install: { method, upgrade: upgradeHint(method).fix },
     terminal: {
       tty: Boolean(process.stdin.isTTY),
       color,
@@ -804,7 +802,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           removed: c.removed
         }
       },
-      doctor: async () => probeDoctor(tui.cwd, version, tui.color, latestUpdate),
+      doctor: async () => terminalDoctorFacts(tui.cwd, version, tui.color, latestUpdate),
       runUserShell: (command, onOutput) => runUserShell(tui.cwd, command, onOutput),
       saveMemory: (scope, text) => saveMemory(tui.cwd, scope, text),
       memoryStore: () => memoryStore({ workspace: tui.cwd }),

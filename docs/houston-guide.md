@@ -342,6 +342,23 @@ desktop app and no browser engine.
 
 - Runs on headless Linux servers.
 - API keys come from environment variables.
+- Commands besides the sessions, each its own word after `houston`:
+
+  | Command | What it does |
+  |---|---|
+  | `houston doctor [--json]` | the `/doctor` checks without a session; exits 1 when one fails (see "Checking your setup") |
+  | `houston mcp ...` | lists, adds, removes, and signs in to MCP servers (see "MCP servers") |
+  | `houston update [--yes]` | checks for a newer release and prints the command that upgrades this install (see "Version and updates") |
+  | `houston completion bash\|zsh\|fish` | prints a shell completion script for every flag and command |
+  | `houston providers ...` | manages model providers and their API keys |
+  | `houston open [dir]` | opens a folder in the desktop app |
+
+- **Shell completion.** Save the script where your shell looks for completions:
+  `houston completion bash > ~/.local/share/bash-completion/completions/houston`,
+  `houston completion zsh > "${fpath[1]}/_houston"`, or
+  `houston completion fish > ~/.config/fish/completions/houston.fish`. It completes
+  commands, flags, and the values some flags take (folders, files, approval policies,
+  effort levels), and runs nothing while you type.
 
 ### GitHub Action
 
@@ -1907,6 +1924,12 @@ spend. The cost reminder is set with `costCeilingUsd` in settings.json there.
   (offline, timed out, rate limited) is silent, keeps the last known result, and is
   retried after an hour.
 - **Turn it off:** set `HOUSTON_NO_UPDATE_CHECK=1` (or `NO_UPDATE_NOTIFIER`).
+- **Check now:** `houston update` asks for the latest release right away (the daily
+  limit and the setting above don't apply to it, since you asked) and prints the
+  command that upgrades this copy. `houston update --yes` also runs that command for
+  an npm, bun, or Homebrew install, and never with `sudo`: if the package manager
+  needs more permissions, it says so and stops. Other installs (the install script,
+  the AUR, a source checkout) get the command to run yourself.
 
 The desktop app updates itself separately.
 
@@ -1919,6 +1942,8 @@ The desktop app updates itself separately.
 - the active model (in the terminal, the one this session runs on, however it was
   chosen) and every provider's key status
 - whether the shell sandbox is actually enforced on this host
+- in the terminal, how this copy was installed (npm, Homebrew, the install script, ...)
+  and the command that upgrades it
 - which external tools (`git`, `gh`, `rg`) are on `PATH`
 - which language servers are installed, and whether servers are off on this host
 - each MCP server's connection state
@@ -1928,6 +1953,15 @@ Each row is marked healthy, worth knowing, or broken, and anything not healthy c
 with what to do about it. The fixes fit where you are: the terminal names its slash
 commands (`/login`, `/model`), the desktop app names its own Settings pages and the
 model menu.
+
+**From a shell:** `houston doctor` prints the same report without starting a session
+(after connecting each switched-on MCP server, so its row says whether it really
+connects) and exits 1 when a check is broken, 0 otherwise. `houston doctor --json`
+prints it as one JSON object for a script or a bug report: `schemaVersion`, `version`,
+`ok`, `counts` of each status, and the `groups` of checks, each with a `label`,
+`status` (`ok`, `warn`, or `fail`), `detail`, and `fix` where there is one. The shape
+is documented in `docs/schemas/doctor.schema.json`. Keys never appear in either form,
+only whether each provider has one.
 
 **Questions it answers:** "is my shell really sandboxed here?" and, in the terminal,
 "why did setting my API key change nothing?" (an environment variable silently
@@ -3183,15 +3217,31 @@ In the terminal, `/mcp` lists the servers, numbered, and edits them:
   leaves a failed server alone.
 - `/mcp remove <n>` deletes one.
 
+From a shell, without a session, `houston mcp` does the same with server names instead
+of numbers:
+
+| Command | What it does |
+|---|---|
+| `houston mcp` (or `houston mcp list`) | lists the servers, connecting each switched-on one to say whether it works; exits 1 when one fails to connect |
+| `houston mcp add <name> -- <command> [args...]` | adds a local (stdio) server, switched on; everything after `--` is the command and its arguments, as typed |
+| `houston mcp add --url <url> [name] [--sse]` | adds a remote server, switched on (`--sse` for the older transport); http(s) only, with no user name or password in the URL |
+| `houston mcp remove <name>` | deletes one |
+| `houston mcp login <name>` / `houston mcp logout <name>` | signs in to (or out of) a remote server, the same way as `/mcp login` |
+
+Changes are saved to the same settings the desktop app and every session read, and
+apply from the next message.
+
 ### Signing in
 
 Remote servers take custom headers (such as a static `Authorization: Bearer` token),
 or **OAuth** for servers that need a sign-in:
 
 - **Sign in:** click *Sign in (OAuth)* on the server in Settings (desktop), or run
-  `/mcp login <n>` (terminal). Houston discovers the server's authorization server,
-  registers itself as an OAuth client automatically, and opens the browser to
-  authorize.
+  `/mcp login <n>` (terminal) or `houston mcp login <name>` (a shell). Houston
+  discovers the server's authorization server, registers itself as an OAuth client
+  automatically, and opens the browser to authorize. In the terminal it also prints
+  the sign-in address, for when no browser opens: open it in a browser on the same
+  machine, since the sign-in finishes at a local address there.
 - **Tokens** are stored encrypted, sent as the bearer on every connection, and
   refreshed automatically when they expire. If the server rejects a token in the
   middle of a session, Houston refreshes it and reconnects, and the agent retries the

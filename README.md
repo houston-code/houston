@@ -1149,6 +1149,32 @@ task; `uninstall` removes it, `status` reports it). It reads keys the same way a
 every CLI command. Desktop users turn the same thing on from Settings > Scheduled
 runs, where it runs as the app and uses the app's saved keys.
 
+`houston doctor` runs the `/doctor` checks without a session (keys, the sandbox,
+`git`/`gh`/`rg`, language servers, each switched-on MCP server, how this copy was
+installed, and whether a newer release is out) and exits 1 when one fails; `--json`
+prints the report in the shape documented in
+[`docs/schemas/doctor.schema.json`](docs/schemas/doctor.schema.json), with no key
+ever in it. `houston mcp` manages MCP servers from a shell:
+
+```bash
+houston mcp                                          # list servers and whether each connects
+houston mcp add fs -- npx -y @modelcontextprotocol/server-filesystem .   # a local (stdio) server
+houston mcp add --url https://mcp.example.com/mcp docs                   # a remote one (--sse for the older transport)
+houston mcp login docs                               # OAuth sign-in; prints the URL when no browser opens
+houston mcp remove fs
+```
+
+`houston update` checks for a newer release and prints the command that upgrades this
+install; `houston update --yes` runs it for npm, bun, and Homebrew installs (never
+with `sudo`). `houston completion bash|zsh|fish` prints a completion script for every
+flag and command, generated from the same table as `--help`:
+
+```bash
+houston completion bash > ~/.local/share/bash-completion/completions/houston
+houston completion zsh > "${fpath[1]}/_houston"
+houston completion fish > ~/.config/fish/completions/houston.fish
+```
+
 `houston open [dir]` hands a folder (the current one by default) to the desktop
 app as a new chat, through a `houston://open` link. The app also opens
 `houston://chat/<id>` and `houston://settings/<page>` links; it asks before opening

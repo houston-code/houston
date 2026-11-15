@@ -1,6 +1,8 @@
 import type * as CliRun from './run'
 import { launchDetached, resolveDirectory, runOpenCommand } from './openInApp'
 import { drainStdio } from '../main/stdioDrain'
+import { flagNames, renderOptions, renderSubcommands } from './flags'
+import { runCompletionCommand } from './completion'
 
 /**
  * Standalone CLI entry — the interactive TUI (`-i`) and one-shot headless (`-p`)
@@ -61,59 +63,10 @@ Usage:
   houston --acp                        serve the Agent Client Protocol on stdio, for editors
                                        (--approval, --effort, --max-turns set its defaults)
 
-  houston providers [...]              manage model providers and their API keys
-  houston schedule-daemon [...]        fire scheduled runs while Houston is closed
-  houston open [dir]                   open a folder in the Houston desktop app
+${renderSubcommands().trimEnd()}
 
 Options:
-  -C, --cwd <dir>       project folder (default: the current directory)
-  --add-dir <dir>       another folder the agent may read and edit this session
-                        (repeatable; like Settings' additional directories, not saved)
-  --provider <id>       provider id from your settings (default: your selection)
-  --model <id>          model id (default: your selection)
-  --approval <policy>   plan | ask | auto-edit | full-auto
-                        (-p defaults to plan, which changes nothing)
-  --full-auto           same as --approval full-auto
-  --on-approval <mode>  (-p) approval prompts with no human: allow | deny | fail
-                        (default: deny, or allow under full-auto)
-  --allow-shell-network (-p) let shell commands reach the network this run
-                        (default: offline, except under full-auto with
-                        --on-approval allow)
-  --json                (-p) machine-readable: an init line, one JSON event per
-                        line, then a {"type":"result",...} summary line
-  --effort <level>      starting reasoning effort (also -p and --acp): off | low | medium | high | xhigh
-                        (interactive: change it later with /reasoning)
-  --max-turns <n>       (-p, --acp) hard cap on model steps for each turn
-  --unattended          (--acp) nobody answers while a prompt runs: the agent asks
-                        no questions and keeps going until the work is done
-  --max-cost <usd>      (-p) stop the run once its estimated cost reaches this (exit 3)
-  --verify <command>    (-p) after the agent edits, run this check and send failures back
-  --no-memory           (-p) run without the memories saved in earlier sessions
-  --allowed-tools <list>
-                        only these tools: names, name*, or name(pattern),
-                        comma-separated, e.g. 'read_file,run_shell(git *)'
-  --disallowed-tools <list>
-                        never these tools (wins over --allowed-tools)
-  --append-system-prompt <text|@file>
-                        add instructions to the system prompt for this session
-  --output-schema <file|json>
-                        (-p) the final answer must be JSON matching this schema
-                        (--json puts it in the result line's structured_output)
-  --mcp-config <file>   extra MCP servers for this session only
-  -n, --name <title>    title the session's chat
-  -w, --worktree [name] start in a new git worktree on a new branch from the
-                        current HEAD (default name: generated); interactive
-                        exit removes it if unused, -p keeps it
-  --input-format stream-json
-                        (with --json) read one {"type":"user","content":"..."}
-                        line per turn from stdin until end of input
-  --continue            reopen the folder's most recent session
-  --resume <id>         reopen a specific session
-  --screen-reader       interactive: plain lines for a screen reader (no spinner,
-                        redraws or color; numbered choices). Also
-                        HOUSTON_SCREEN_READER=1, or /screen-reader on to keep it
-  -h, --help            this help
-  -v, --version         print the version
+${renderOptions().trimEnd()}
 
 One-shot exit codes:
   0  the agent finished              1  error, stall, or --on-approval fail
@@ -143,8 +96,21 @@ Credentials (checked in this order):
 Custom provider/MCP auth headers (optional):
   <profile>/cli-headers.json: {"provider:<id>"|"mcp:<id>": {"<Header>": "<value>"}} with 0600 perms
 
-MCP OAuth (remote servers that require sign-in):
-  run /mcp login <n> in an interactive session; tokens land in <profile>/cli-mcp-oauth.json (0600)
+MCP servers:
+  houston mcp [list]                   list servers and whether each connects
+  houston mcp add <name> -- <command> [args...]
+                                       add a local (stdio) server
+  houston mcp add --url <url> [name] [--sse]
+                                       add a remote server (http, or --sse)
+  houston mcp remove <name>            remove a server
+  houston mcp login <name>             sign in to a remote server that asks for it
+  houston mcp logout <name>            forget its sign-in
+  sign-in tokens land in <profile>/cli-mcp-oauth.json (0600)
+
+Shell completion (add to your shell's startup or completion folder):
+  houston completion bash > ~/.local/share/bash-completion/completions/houston
+  houston completion zsh > "\${fpath[1]}/_houston"
+  houston completion fish > ~/.config/fish/completions/houston.fish
 
 Profile: shared with the desktop app; override with HOUSTON_DATA_DIR.
 `
@@ -157,50 +123,13 @@ export function shortUsage(): string {
 }
 
 /** Flags that take a value (`--flag value` or `--flag=value`). */
-const VALUE_FLAGS = new Set([
-  '-C',
-  '--cwd',
-  '--provider',
-  '--model',
-  '--approval',
-  '--resume',
-  '--on-approval',
-  '--effort',
-  '--max-turns',
-  '--max-cost',
-  '--verify',
-  '--allowed-tools',
-  '--disallowed-tools',
-  '--append-system-prompt',
-  '--output-schema',
-  '--mcp-config',
-  '--input-format',
-  '-n',
-  '--name',
-  '--add-dir'
-])
+const VALUE_FLAGS = flagNames('value')
 /** Flags that stand alone. */
-const SWITCH_FLAGS = new Set([
-  '-i',
-  '--interactive',
-  '--tui',
-  '--acp',
-  '--unattended',
-  '--full-auto',
-  '--continue',
-  '--screen-reader',
-  '--json',
-  '--allow-shell-network',
-  '--no-memory',
-  '-h',
-  '--help',
-  '-v',
-  '--version'
-])
+const SWITCH_FLAGS = flagNames('switch')
 /** `-p` takes the prompt, or nothing (then the prompt comes from piped stdin). */
-const PROMPT_FLAGS = new Set(['-p', '--prompt'])
+const PROMPT_FLAGS = flagNames('prompt')
 /** `-w` takes a branch name, or nothing (then one is generated). A name never starts with `-`. */
-const OPTIONAL_VALUE_FLAGS = new Set(['-w', '--worktree'])
+const OPTIONAL_VALUE_FLAGS = flagNames('optional')
 
 function flagName(arg: string): string {
   const eq = arg.indexOf('=')
@@ -266,13 +195,25 @@ export async function main(
   argv: string[] = process.argv,
   load: () => Promise<typeof CliRun> = loadProgram
 ): Promise<number> {
-  if (argv.includes('-h') || argv.includes('--help')) {
+  // Words after `--` belong to someone else (`houston mcp add x -- server --help`).
+  const end = argv.indexOf('--')
+  const own = end >= 0 ? argv.slice(0, end) : argv
+  if (own.includes('-h') || own.includes('--help')) {
     process.stdout.write(USAGE)
     return 0
   }
-  if (argv.includes('-v') || argv.includes('--version')) {
+  if (own.includes('-v') || own.includes('--version')) {
     process.stdout.write(`${VERSION}\n`)
     return 0
+  }
+
+  // `houston completion <shell>` prints a script built from the flag table: no
+  // profile, no program, so a shell that runs it at startup pays nothing.
+  if (argv[2] === 'completion') {
+    return runCompletionCommand(argv.slice(3), {
+      out: (s) => void process.stdout.write(s),
+      err: (s) => void process.stderr.write(s)
+    })
   }
 
   // `houston open [dir]` hands a folder to the desktop app. Matched only as the very

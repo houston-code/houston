@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Houston doctor --json output",
+  "description": "The object `houston doctor --json` prints (schemaVersion 1): the same graded checks the interactive /doctor shows. The exit code is 1 when `ok` is false (a check failed), else 0. Groups and checks may be added in later releases, and objects may carry fields not listed here; a consumer should ignore what it does not know. API keys never appear: a provider's row says only whether a key is set.",
+  "type": "object",
+  "required": ["schemaVersion", "version", "ok", "counts", "groups"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "Raised only for a breaking change to this shape."
+    },
+    "version": {
+      "type": "string",
+      "description": "The running Houston version."
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "False when any check has status fail."
+    },
+    "counts": {
+      "type": "object",
+      "required": ["ok", "warn", "fail"],
+      "properties": {
+        "ok": { "type": "integer", "minimum": 0 },
+        "warn": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "groups": {
+      "type": "array",
+      "description": "Report sections in display order, such as Houston, Model, Sandbox, Tools, Language servers, MCP and Terminal. A section with no checks is left out.",
+      "items": {
+        "type": "object",
+        "required": ["title", "checks"],
+        "properties": {
+          "title": { "type": "string" },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["label", "status", "detail"],
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "What was checked: a provider id, a tool name, an MCP server id, version, node, install, and so on."
+                },
+                "status": {
+                  "enum": ["ok", "warn", "fail"],
+                  "description": "ok is healthy, warn works but is worth knowing, fail is broken."
+                },
+                "detail": { "type": "string" },
+                "fix": {
+                  "type": "string",
+                  "description": "What to do about it. Present only on warn or fail rows that have a known fix."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

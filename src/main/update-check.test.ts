@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   checkForUpdate,
+  checkForUpdateNow,
   formatHeadlessUpdateNotice,
   headlessUpdateNoticeAllowed,
   shortenHeadline,
@@ -345,5 +346,43 @@ describe('checkForUpdate timeout', () => {
 
   it('takes a caller-supplied timeout', async () => {
     expect(await timeoutOf({ timeoutMs: 10_000 })).toBe(10_000)
+  })
+})
+
+describe('checkForUpdateNow (houston update)', () => {
+  it('asks the feed even when a fresh cached answer exists, and refreshes the cache', async () => {
+    const path = tmpCache()
+    writeFileSync(path, JSON.stringify({ checkedAt: Date.now(), latest: CURRENT }))
+    const fetch = feed({ tag_name: 'v0.3.0', body: 'Faster startup' })
+    expect(await checkForUpdateNow(CURRENT, { fetch, path })).toEqual({
+      status: 'newer',
+      update: { latest: '0.3.0', url: DOWNLOAD_URL, headline: 'Faster startup' }
+    })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ latest: '0.3.0' })
+  })
+
+  it('is an explicit request, so the automatic-check opt-out does not silence it', async () => {
+    const fetch = feed({ tag_name: `v${CURRENT}` })
+    expect(await checkForUpdateNow(CURRENT, { fetch, path: tmpCache(), env: { HOUSTON_NO_UPDATE_CHECK: '1' } })).toEqual({
+      status: 'current',
+      latest: CURRENT
+    })
+  })
+
+  it('says unknown when the feed fails, keeping the cached answer for the automatic check', async () => {
+    const path = tmpCache()
+    writeFileSync(path, JSON.stringify({ checkedAt: 1, latest: '0.3.0' }))
+    const down = vi.fn(async () => {
+      throw new Error('offline')
+    }) as unknown as typeof globalThis.fetch
+    expect(await checkForUpdateNow(CURRENT, { fetch: down, path })).toEqual({ status: 'unknown' })
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ latest: '0.3.0', failedAt: expect.any(Number) })
+  })
+
+  it('never compares a development build', async () => {
+    const fetch = feed({ tag_name: 'v9.9.9' })
+    expect(await checkForUpdateNow('dev', { fetch, path: tmpCache() })).toEqual({ status: 'unknown' })
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
