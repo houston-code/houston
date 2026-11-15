@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PrStatus } from '@shared/gitActions'
+import { TREE_CHANGED } from './useWorkingTreeStats'
 
 /** How often the chip re-reads the pull request while the window stays open. */
 export const PR_REFRESH_MS = 3 * 60_000
@@ -54,9 +55,12 @@ export function usePrStatus(workspace: string | null, enabled: boolean, running:
     if (!enabled) return
     const onFocus = (): void => void refresh()
     window.addEventListener('focus', onFocus)
+    // A commit, push or revert made from the Changes view: the chip follows at once.
+    window.addEventListener(TREE_CHANGED, onFocus)
     const timer = setInterval(() => void refresh(), PR_REFRESH_MS)
     return () => {
       window.removeEventListener('focus', onFocus)
+      window.removeEventListener(TREE_CHANGED, onFocus)
       clearInterval(timer)
     }
   }, [enabled, refresh])
