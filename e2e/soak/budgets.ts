@@ -13,31 +13,32 @@
  *
  * Measured, 12 turns x 12 steps and a 47 MB, 400-turn chat:
  *   desktopSession  peak 957-1484, main heap after GC 33-34, kept 5-371, window heap
- *                   kept 34-35, page elements kept 7 (macOS laptop and runner, Linux)
+ *                   kept 4 (34-35 before the fix), page elements kept 7 (macOS laptop and runner, Linux)
  *   largeChat       opening +235 to +334, window heap open 74-75, 0.4-1.8 s, kept -5 to
- *                   107, window heap kept 48 (all three)
+ *                   107, window heap kept 2 (48 before the fix) (all three)
  *   cliSession      peak 316-562, growth turn 2 to 12 53-314, idle 117-468 (macOS,
  *                   Windows; a runner may not have handed pages back 15 s after the run); Linux idle 446, since glibc keeps the freed heap and the
  *                   idle size stays at the peak. The save-buffer regression fixed earlier
  *                   grew ~65 MB per turn, over 600 MB across this session.
  *
- * Window heap kept (35-48 MB) is a known retention: App closures from the render where
- * the chat was open keep that render's scope and the chat's rows. Lower
- * rendererRetainedMB to about 15 once that is fixed.
+ * Window heap kept was 35-48 MB until App stopped letting its closures reach the
+ * transcript: closures from the render where the chat was open kept that render's
+ * scope, and with it every row of the chat. Now 2-4 MB. If this check fails, open the
+ * heap snapshot it saves and follow the retainers of a row's text.
  *
  * Totals are the sum of every Electron process's working set (getAppMetrics), and the
  * CLI's are its resident set, so they compare within a platform, not across them.
  */
 const BUDGETS = {
   desktopSession: {
-    darwin: { peakTotalMB: 1800, mainHeapAfterGcMB: 160, retainedMB: 500, rendererRetainedMB: 80, domNodesRetained: 1500 },
-    linux: { peakTotalMB: 1800, mainHeapAfterGcMB: 160, retainedMB: 500, rendererRetainedMB: 80, domNodesRetained: 1500 },
-    win32: { peakTotalMB: 1800, mainHeapAfterGcMB: 160, retainedMB: 500, rendererRetainedMB: 80, domNodesRetained: 1500 }
+    darwin: { peakTotalMB: 1800, mainHeapAfterGcMB: 160, retainedMB: 500, rendererRetainedMB: 15, domNodesRetained: 1500 },
+    linux: { peakTotalMB: 1800, mainHeapAfterGcMB: 160, retainedMB: 500, rendererRetainedMB: 15, domNodesRetained: 1500 },
+    win32: { peakTotalMB: 1800, mainHeapAfterGcMB: 160, retainedMB: 500, rendererRetainedMB: 15, domNodesRetained: 1500 }
   },
   largeChat: {
-    darwin: { openTotalGrowthMB: 600, openRendererHeapMB: 150, openSeconds: 20, retainedMB: 400, rendererRetainedMB: 80 },
-    linux: { openTotalGrowthMB: 600, openRendererHeapMB: 150, openSeconds: 20, retainedMB: 400, rendererRetainedMB: 80 },
-    win32: { openTotalGrowthMB: 600, openRendererHeapMB: 150, openSeconds: 20, retainedMB: 400, rendererRetainedMB: 80 }
+    darwin: { openTotalGrowthMB: 600, openRendererHeapMB: 150, openSeconds: 20, retainedMB: 400, rendererRetainedMB: 15 },
+    linux: { openTotalGrowthMB: 600, openRendererHeapMB: 150, openSeconds: 20, retainedMB: 400, rendererRetainedMB: 15 },
+    win32: { openTotalGrowthMB: 600, openRendererHeapMB: 150, openSeconds: 20, retainedMB: 400, rendererRetainedMB: 15 }
   },
   cliSession: {
     darwin: { peakResidentMB: 800, lateGrowthMB: 450, idleResidentMB: 650 },
