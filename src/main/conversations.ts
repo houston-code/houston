@@ -17,8 +17,8 @@ import {
 import { basename, join } from 'node:path'
 import { writeFileAtomicStampedSync, writeStringChunked } from './atomic-write'
 import { buildUsageReport, type UsageInput, type UsageReport } from '@shared/usageReport'
-import { externalizeMedia, hydrateMedia, pruneMedia, readMediaFile, viewMedia } from './conversationMedia'
-import { parseMediaUrl, type ImageAttachment } from '@shared/images'
+import { externalizeMedia, hydrateMedia, pruneMedia, readMediaFile, storeImageFile, viewMedia } from './conversationMedia'
+import { mediaUrl, parseMediaUrl, type ImageAttachment } from '@shared/images'
 import {
   COMPACTION_SUMMARY_PREFIX,
   CONVERSATION_SCHEMA_VERSION,
@@ -683,6 +683,12 @@ function allRefs(shellRefs: Iterable<string>, msgRefs: string[][]): Set<string> 
   return keep
 }
 
+/** `keep` plus the files a live run has shown the window for chat `id` (see liveMedia). */
+function withLiveMedia(id: string, keep: Set<string>): Set<string> {
+  for (const ref of liveMedia.get(id) ?? []) keep.add(ref)
+  return keep
+}
+
 /** After any write: the list and search caches learn of it. */
 function afterWrite(id: string, entry: WrittenChat): void {
   // Fresh metadata under the new stamp, built from what was just written, so listing
@@ -729,7 +735,7 @@ function fold(id: string, shellIn: ConversationShell, messages: readonly unknown
   }
   rememberWritten(id, entry)
   afterWrite(id, entry)
-  pruneMedia(media, allRefs(shellExt.refs, msgs.refs))
+  pruneMedia(media, withLiveMedia(id, allRefs(shellExt.refs, msgs.refs)))
   return entry
 }
 
@@ -823,7 +829,7 @@ function save(id: string, entry: WrittenChat, shellIn: ConversationShell, messag
   rememberWritten(id, entry)
   afterWrite(id, entry)
   // Only a change can drop a reference, and only with every message's refs known.
-  if (removed && entry.msgs) pruneMedia(media, allRefs(shellExt.refs, entry.msgs.refs))
+  if (removed && entry.msgs) pruneMedia(media, withLiveMedia(id, allRefs(shellExt.refs, entry.msgs.refs)))
   ensureFoldOnExit()
 }
 
@@ -875,6 +881,45 @@ function write(conv: Conversation): void {
   const ours = stillWritten(conv.id)
   if (ours) save(conv.id, ours, shell, messages)
   else fold(conv.id, shell, messages)
+}
+
+/**
+ * Image files written for a live run's window (see liveImagesForView), per
+ * conversation. A save keeps them even before the message log names them: the window
+ * may show an image a moment before the tool result carrying it is saved, and may
+ * still be showing it after a rewind or compaction drops it from the log. Held for
+ * the life of the process (a few dozen bytes per image); the first save after a
+ * restart prunes any the log no longer names.
+ */
+const liveMedia = new Map<string, Set<string>>()
+
+/**
+ * Images a running chat just produced (a screenshot, a read image), for the window:
+ * each is stored as a file beside the conversation now and handed over as a
+ * `houston-media://` URL, so a run full of screenshots is not held in the window as
+ * base64 until the chat is reopened. Anything that cannot be stored (not an image,
+ * no bytes, a write failure) passes through unchanged. Never hand the result to a
+ * provider or back to the store.
+ */
+export function liveImagesForView(conversationId: string, images: ImageAttachment[]): ImageAttachment[] {
+  if (!isConversationId(conversationId)) return images
+  const media = mediaDir(conversationId)
+  let changed = false
+  const out = images.map((img) => {
+    let ref: string | null
+    try {
+      ref = storeImageFile(media, img)
+    } catch {
+      ref = null
+    }
+    if (!ref) return img
+    let pinned = liveMedia.get(conversationId)
+    if (!pinned) liveMedia.set(conversationId, (pinned = new Set()))
+    pinned.add(ref)
+    changed = true
+    return { mediaType: img.mediaType, data: '', src: mediaUrl(conversationId, ref) }
+  })
+  return changed ? out : images
 }
 
 /**
@@ -1330,6 +1375,7 @@ export function deleteConversation(id: string): void {
   written.delete(id)
   dropSearchEntry(id)
   rmSync(mediaDir(id), { recursive: true, force: true })
+  liveMedia.delete(id)
   // Drop any in-memory "Allow for run" consent so a future conversation can't inherit it.
   clearConversationOverride(id)
   // And its resumable subagent transcripts, which nothing can reach any more.

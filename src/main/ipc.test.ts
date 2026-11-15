@@ -139,7 +139,7 @@ vi.mock('./agent/compact', () => ({
 // Don't touch the real filesystem for the `#`-capture handler.
 vi.mock('./memory', () => ({ saveMemory: h.saveMemory }))
 
-import { MAX_QUESTION_ANSWER_LEN, noteRetryThrottle, registerIpc, resolveDeleteAction } from './ipc'
+import { MAX_QUESTION_ANSWER_LEN, eventForView, noteRetryThrottle, registerIpc, resolveDeleteAction } from './ipc'
 import { _resetRateLimits } from './rateLimitStore'
 import { UNTRUSTED_SENDER_ERROR, configureIpcSenderPolicy } from './ipcSender'
 import { log } from './logger'
@@ -1612,5 +1612,29 @@ describe('IPC sender check', () => {
     expect(trustedOnce).not.toHaveBeenCalled()
     viewing({ sender, senderFrame: sender.mainFrame }, 'chat-1', true)
     expect(trustedOnce).toHaveBeenCalled()
+  })
+})
+
+describe('eventForView', () => {
+  const PNG = Buffer.from('\x89PNG\r\n\x1a\nlive shot').toString('base64')
+
+  it('sends a tool result\'s images to the window as stored-file URLs', () => {
+    const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const ev = { runId: 'r', type: 'tool_result' as const, callId: 'c', name: 'view_localhost', ok: true, output: 'ok', images: [{ mediaType: 'image/png', data: PNG }] }
+    const shown = eventForView(conv.id, ev)
+    expect(shown).not.toBe(ev)
+    expect(JSON.stringify(shown)).not.toContain(PNG)
+    expect(shown.type === 'tool_result' && shown.images?.[0].src).toMatch(/^houston-media:\/\//)
+    // The run's own event is left alone.
+    expect(ev.images[0].data).toBe(PNG)
+  })
+
+  it('does the same for a queued turn\'s images and leaves other events as they are', () => {
+    const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const start = { runId: 'r', type: 'turn_start' as const, conversationId: conv.id, userText: 'hi', images: [{ mediaType: 'image/png', data: PNG }] }
+    const shown = eventForView(conv.id, start)
+    expect(shown.type === 'turn_start' && shown.images?.[0].data).toBe('')
+    const text = { runId: 'r', type: 'tool_result' as const, callId: 'c', name: 'read_file', ok: true, output: 'x' }
+    expect(eventForView(conv.id, text)).toBe(text)
   })
 })

@@ -211,6 +211,7 @@ import {
   conversationForView,
   readStoredImage,
   resolveStoredImages,
+  liveImagesForView,
 } from './conversations'
 import { createSpawnBackend } from './spawnSession'
 import { setSpawnBackend } from './agent/spawn'
@@ -382,10 +383,23 @@ export function noteRetryThrottle(conversationId: string, e: AgentEvent): void {
   noteThrottle(peekConversation(conversationId)?.providerId, e.throttle)
 }
 
+/**
+ * An event as the window gets it: images a tool produced, or that a queued turn
+ * starts with, go as URLs to their stored files rather than base64 (see
+ * liveImagesForView). Other events pass through as they are.
+ */
+export function eventForView(conversationId: string, ev: AgentEvent): AgentEvent {
+  if ((ev.type === 'tool_result' || ev.type === 'turn_start') && ev.images?.length) {
+    const images = liveImagesForView(conversationId, ev.images)
+    return images === ev.images ? ev : { ...ev, images }
+  }
+  return ev
+}
+
 /** Stream one agent event to the renderers, persisting usage totals along the way. */
 function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
   noteRetryThrottle(conversationId, e)
-  const ev = applyRunningUsage(conversationId, e)
+  const ev = eventForView(conversationId, applyRunningUsage(conversationId, e))
   for (const wc of runOutputTargets(sender)) wc.send(IPC.agentEvent, ev)
   maybeNotify(sender, conversationId, ev)
   attention?.noteEvent(conversationId, ev)
@@ -509,7 +523,7 @@ function makeBroadcastIo(): DrainIO {
     liveShellOutput: true,
     emit: coalescedEmit((conversationId, e) => {
       noteRetryThrottle(conversationId, e)
-      const ev = applyRunningUsage(conversationId, e)
+      const ev = eventForView(conversationId, applyRunningUsage(conversationId, e))
       toEach((wc) => wc.send(IPC.agentEvent, ev))
       const notifyVia = (windowShowing(conversationId) ?? targetWindow())?.webContents
       if (notifyVia) maybeNotify(notifyVia, conversationId, ev)
