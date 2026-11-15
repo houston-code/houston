@@ -200,4 +200,99 @@ describe('htmlToMarkdown main content', () => {
     expect(out).toContain('Item 19999')
     expect(Date.now() - start).toBeLessThan(5_000)
   })
+
+  it('stays linear on long whitespace runs inside emphasis and code', () => {
+    const n = 100_000
+    const start = Date.now()
+    const a = htmlToMarkdown(`<body><p><b>x${'<br>'.repeat(n)}y</b></p></body>`)
+    const b = htmlToMarkdown(`<body><pre>${' '.repeat(n)}x</pre></body>`)
+    expect(a).toContain('**x')
+    expect(b).toContain(`${' '.repeat(n)}x`)
+    expect(Date.now() - start).toBeLessThan(3_000)
+  })
+
+  it('keeps content held in a wrapper whose class or id looks like chrome', () => {
+    for (const cls of ['wrapper has-sidebar', 'layout sidebar-right', 'site header-fixed', 'container no-ads']) {
+      const html = `<title>T</title><body><div id="app" class="${cls}"><h1>Guide</h1>${para('Wrapped one.')}${para('Wrapped two.')}</div></body>`
+      const out = htmlToMarkdown(html, { baseUrl: BASE })
+      expect(out).toContain('Wrapped one.')
+      expect(out).toContain('Wrapped two.')
+    }
+  })
+
+  it('keeps a page wrapped in one <form>', () => {
+    const html = `<title>T</title><body><form id="aspnetForm"><div id="wrapper"><h1>Permit rules</h1>${para('Form page.')}</div></form></body>`
+    expect(htmlToMarkdown(html, { baseUrl: BASE })).toContain('Form page.')
+  })
+
+  it('keeps every comment of a discussion page', () => {
+    const comment = (s: string): string =>
+      `<tr><td><div class="comment"><div class="commtext">${s} ${'A thoughtful reply about the story. '.repeat(3)}</div></div></td></tr>`
+    const html = `<body><table class="fatitem"><tr><td><a href="/x">Story title</a></td></tr><tr><td>120 points</td></tr></table>
+      <table class="comment-tree">${comment('First comment.')}${comment('Second comment.')}${comment('Third comment.')}</table></body>`
+    const out = htmlToMarkdown(html, { baseUrl: BASE })
+    expect(out).toContain('First comment.')
+    expect(out).toContain('Second comment.')
+    expect(out).toContain('Third comment.')
+  })
+
+  it('falls back to the unstripped page when stripping would remove most of it', () => {
+    const comments = Array.from({ length: 40 }, (_, i) => `<div class="comment">Reply number ${i} here.</div>`).join('')
+    const out = htmlToMarkdown(`<body><div>${comments}</div></body>`, { baseUrl: BASE })
+    expect(out).toContain('Reply number 0 here.')
+    expect(out).toContain('Reply number 39 here.')
+  })
+
+  it('keeps headings and callouts inside <main> that carry chrome-like class words', () => {
+    const html = `<body><nav><a href="/">Home</a></nav><main>
+      <div class="method-header"><h3>GET /users</h3></div>${para('List users.')}
+      <aside class="warning"><p>Warning: DELETE cannot be undone.</p></aside>
+      <div class="card-header">Rate limits</div><div class="card-body">60 requests per minute.</div></main></body>`
+    const out = htmlToMarkdown(html, { baseUrl: BASE })
+    expect(out).toContain('GET /users')
+    expect(out).toContain('Warning: DELETE cannot be undone.')
+    expect(out).toContain('Rate limits')
+    expect(out).not.toContain('Home')
+  })
+
+  it('survives very deep nesting', () => {
+    const depth = 8_000
+    const nested = `${'<div>'.repeat(depth)}<p>Deep text.</p>${'</div>'.repeat(depth)}`
+    expect(htmlToMarkdown(`<body>${nested}</body>`)).toContain('Deep text.')
+    expect(htmlToMarkdown(`<body><p>${'<b>'.repeat(5_000)}Bold deep.</p></body>`)).toContain('Bold deep.')
+  })
+})
+
+describe('htmlToMarkdown fixes', () => {
+  it('keeps the lines of a code block whose lines are block elements', () => {
+    const html =
+      '<pre data-language="js"><code><div class="ec-line"><div class="code"><span>const a = 1</span></div></div>' +
+      '<div class="ec-line"><div class="code"><span>const b = 2</span></div></div></code></pre>'
+    expect(md(html)).toBe('```js\nconst a = 1\nconst b = 2\n```')
+    // Lines already separated by newline text are not doubled.
+    expect(md('<pre><div class="line">a</div>\n<div class="line">b</div></pre>')).toBe('```\na\nb\n```')
+  })
+
+  it('keeps cells in their columns across rowspan and colspan', () => {
+    const rows =
+      '<table><tr><th>Group</th><th>Name</th><th>Age</th></tr>' +
+      '<tr><td rowspan="2">A</td><td>Ada</td><td>36</td></tr><tr><td>Bob</td><td>40</td></tr></table>'
+    expect(md(rows).split('\n')).toEqual(['| Group | Name | Age |', '| --- | --- | --- |', '| A | Ada | 36 |', '| A | Bob | 40 |'])
+    const cols =
+      '<table><tr><th colspan="2">Name</th><th>Age</th></tr><tr><td>Ada</td><td>Lovelace</td><td>36</td></tr></table>'
+    expect(md(cols).split('\n')).toEqual(['| Name | | Age |', '| --- | --- | --- |', '| Ada | Lovelace | 36 |'])
+  })
+
+  it('resolves relative links against <base href>', () => {
+    const page = 'https://example.com/docs/guide/intro'
+    const abs = '<head><base href="https://example.com/"></head><body><p><a href="api/foo.html">foo</a></p></body>'
+    expect(htmlToMarkdown(abs, { baseUrl: page, fullPage: true })).toBe('[foo](https://example.com/api/foo.html)')
+    const rel = '<head><base href="../"></head><body><p><a href="api/foo.html">foo</a></p></body>'
+    expect(htmlToMarkdown(rel, { baseUrl: page, fullPage: true })).toBe('[foo](https://example.com/docs/api/foo.html)')
+  })
+
+  it('prints the title once on a page with a byte-order mark', () => {
+    const html = '﻿<!doctype html><html><head><title>My Title</title></head><body><p>Body text.</p></body></html>'
+    expect(htmlToMarkdown(html)).toBe('# My Title\n\nBody text.')
+  })
 })

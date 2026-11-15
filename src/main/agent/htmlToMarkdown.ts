@@ -137,16 +137,88 @@ function isDropped(el: Element): boolean {
   return DROP.has(el.tagName) || el.namespaceURI === SVG_NS || isHidden(el)
 }
 
-/** Concatenated text of `n`, skipping dropped elements. `<br>` counts as a newline. */
-function textContent(n: Node): string {
-  if (n.nodeName === '#text') return clean((n as T.TextNode).value)
-  if (isElement(n)) {
-    if (isDropped(n)) return ''
-    if (n.tagName === 'br') return '\n'
-  }
+/** Elements a browser lays out on their own line, for text collected without the renderer. */
+const LINE_BLOCK = new Set([
+  ...BLOCK,
+  'li',
+  'tr',
+  'ul',
+  'ol',
+  'table',
+  'blockquote',
+  'pre',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'dt',
+  'dd'
+])
+
+/**
+ * Concatenated text of `n`, skipping dropped elements. `<br>` counts as a newline;
+ * with `blockLines`, so does the edge of a block element (a highlighter that puts
+ * each code line in its own `<div>`). Iterative, so nesting depth can't overflow
+ * the stack.
+ */
+function textContent(n: Node, blockLines = false): string {
   let out = ''
-  for (const c of children(n)) out += textContent(c)
+  let pendingBreak = false
+  const emit = (text: string): void => {
+    if (!text) return
+    if (pendingBreak && out && !out.endsWith('\n') && !text.startsWith('\n')) out += '\n'
+    pendingBreak = false
+    out += text
+  }
+  // Entries are nodes to visit, or `null` marking the end of a block element.
+  const stack: (Node | null)[] = [n]
+  while (stack.length) {
+    const cur = stack.pop()!
+    if (cur === null) {
+      pendingBreak = true
+      continue
+    }
+    if (cur.nodeName === '#text') {
+      emit(clean((cur as T.TextNode).value))
+      continue
+    }
+    if (isElement(cur)) {
+      if (isDropped(cur)) continue
+      if (cur.tagName === 'br') {
+        emit('\n')
+        continue
+      }
+      if (blockLines && cur !== n && LINE_BLOCK.has(cur.tagName)) {
+        pendingBreak = true
+        stack.push(null)
+      }
+    }
+    const kids = children(cur)
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i])
+  }
   return out
+}
+
+/**
+ * Past this depth the tree is flattened to its text. Real pages stay far below it
+ * (browsers stop nesting at 512); the cap keeps the recursive walks below from
+ * overflowing the stack on a page nested thousands deep.
+ */
+const MAX_DEPTH = 256
+
+function flattenDeep(root: Node): void {
+  const stack: [Node, number][] = [[root, 0]]
+  while (stack.length) {
+    const [n, depth] = stack.pop()!
+    if (depth >= MAX_DEPTH && isElement(n) && n.childNodes.some(isElement)) {
+      const text: T.TextNode = { nodeName: '#text', value: textContent(n, true), parentNode: n }
+      n.childNodes = [text]
+      continue
+    }
+    for (const c of children(n)) stack.push([c, depth + 1])
+  }
 }
 
 /** Per-element text measures, gathered in one pass so scoring stays linear in page size. */
@@ -226,24 +298,58 @@ function classAndId(el: Element): string {
   return `${attr(el, 'class') ?? ''} ${attr(el, 'id') ?? ''}`
 }
 
-function isChrome(el: Element): boolean {
+function isContentRoot(el: Element): boolean {
+  return el.tagName === 'main' || el.tagName === 'article' || attr(el, 'role') === 'main'
+}
+
+/**
+ * Whether `el` looks like page chrome. Inside the marked content (`<main>`,
+ * `<article>`) only navigation counts: an `<aside>` there is a callout and a
+ * `*-header` class is a heading, not the site's masthead.
+ */
+function isChrome(el: Element, inContent: boolean): boolean {
+  if (inContent) return el.tagName === 'nav' || attr(el, 'role') === 'navigation'
   if (CHROME_TAGS.has(el.tagName) || CHROME_ROLES.has(attr(el, 'role') ?? '')) return true
-  if (el.tagName === 'body' || el.tagName === 'main' || el.tagName === 'article') return false
+  if (el.tagName === 'body' || isContentRoot(el)) return false
   const ci = classAndId(el)
   return UNLIKELY.test(ci) && !LIKELY.test(ci)
 }
 
-/** Drop navigation, footers, sidebars and similar chrome, unless they hold the content itself. */
+/** An element holding this share of the page's text is content, whatever its tag or class says. */
+const CONTENT_SHARE = 0.25
+/** Or this much text outside links. */
+const CONTENT_CHARS = 500
+/** When the chrome to remove adds up to more than this share of the page, the guess is wrong: remove none. */
+const MAX_STRIPPED_SHARE = 0.75
+
+/**
+ * Drop navigation, footers, sidebars and similar chrome, unless they hold the
+ * content itself. Tags and class words are only a hint: an element carrying a
+ * real share of the page's text is kept, and when the chrome found adds up to
+ * most of the page nothing is removed at all.
+ */
 function stripChrome(root: Element): void {
   const stats = measure(root)
-  const walk = (el: Element): void => {
-    for (const c of [...el.childNodes]) {
+  const total = stats.get(root)?.len ?? 0
+  const substantial = (el: Element): boolean => {
+    const s = stats.get(el)
+    if (!s) return false
+    return s.holdsContent || s.len >= total * CONTENT_SHARE || s.len - s.linkLen >= CONTENT_CHARS
+  }
+  const doomed: Element[] = []
+  let removed = 0
+  const walk = (el: Element, inContent: boolean): void => {
+    for (const c of el.childNodes) {
       if (!isElement(c) || isDropped(c)) continue
-      if (isChrome(c) && !stats.get(c)?.holdsContent) remove(c)
-      else walk(c)
+      if (isChrome(c, inContent) && !substantial(c)) {
+        doomed.push(c)
+        removed += stats.get(c)?.len ?? 0
+      } else walk(c, inContent || isContentRoot(c))
     }
   }
-  walk(root)
+  walk(root, false)
+  if (total > 0 && removed > total * MAX_STRIPPED_SHARE) return
+  for (const el of doomed) remove(el)
 }
 
 /**
@@ -354,9 +460,24 @@ function oneLine(text: string): string {
 
 /** Wrap inline content in a marker, keeping surrounding whitespace outside it. */
 function wrapInline(inner: string, marker: string): string {
-  const m = inner.match(/^(\s*)([\s\S]*?)(\s*)$/)!
-  if (!m[2]) return inner
-  return `${m[1]}${marker}${m[2]}${marker}${m[3]}`
+  // By length, not a regex: a lazy match against a long whitespace run is quadratic.
+  const body = inner.trim()
+  if (!body) return inner
+  const lead = inner.length - inner.trimStart().length
+  const trail = inner.length - inner.trimEnd().length
+  return `${inner.slice(0, lead)}${marker}${body}${marker}${inner.slice(inner.length - trail)}`
+}
+
+/** Strip trailing spaces and tabs from every line, with a linear scan. */
+function trimLineEnds(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => {
+      let end = line.length
+      while (end > 0 && (line[end - 1] === ' ' || line[end - 1] === '\t')) end--
+      return end === line.length ? line : line.slice(0, end)
+    })
+    .join('\n')
 }
 
 function longestRun(text: string, ch: string): number {
@@ -385,12 +506,52 @@ function closestTable(el: Element): Element | null {
   return null
 }
 
+const MAX_TABLE_COLS = 100
+const MAX_ROWSPAN = 1000
+const MAX_GRID_CELLS = 1_000_000
+
+function span(raw: string | undefined, fallback: number): number {
+  const n = Number.parseInt(raw ?? '', 10)
+  return Number.isFinite(n) && n >= 0 ? n : fallback
+}
+
+/**
+ * Lay a table's cells out on a grid the way a browser does, so a value stays
+ * under its column: each cell takes the next free column of its row, `colspan`
+ * leaves the extra columns blank, and `rowspan` repeats the cell in the rows
+ * below. Null when the spans would make the grid unreasonably large.
+ */
+function spanGrid(rows: Element[][]): (Element | null)[][] | null {
+  const grid: (Element | null | undefined)[][] = rows.map(() => [])
+  let budget = MAX_GRID_CELLS
+  for (let r = 0; r < rows.length; r++) {
+    const line = grid[r]
+    let col = 0
+    for (const cell of rows[r]) {
+      while (line[col] !== undefined) col++
+      if (col >= MAX_TABLE_COLS) break
+      const colspan = Math.min(Math.max(span(attr(cell, 'colspan'), 1), 1), MAX_TABLE_COLS - col)
+      const rawRows = span(attr(cell, 'rowspan'), 1)
+      // rowspan="0" runs to the end of the table.
+      const rowspan = Math.min(rawRows === 0 ? rows.length - r : rawRows, rows.length - r, MAX_ROWSPAN)
+      budget -= colspan * rowspan
+      if (budget < 0) return null
+      for (let dr = 0; dr < rowspan; dr++) {
+        for (let dc = 0; dc < colspan; dc++) grid[r + dr][col + dc] = dc === 0 ? cell : null
+      }
+      col += colspan
+    }
+  }
+  return grid.map((line) => Array.from(line, (c) => c ?? null))
+}
+
 function codeLanguage(el: Element): string {
   const codeChild = el.childNodes.find((c): c is Element => isElement(c) && c.tagName === 'code')
   const cls = `${attr(el, 'class') ?? ''} ${codeChild ? (attr(codeChild, 'class') ?? '') : ''}`
   const m = cls.match(/(?:^|\s)(?:language|lang|highlight-source)-([\w+#.-]+)/i)
   if (m) return m[1].toLowerCase()
-  const dataLang = attr(el, 'data-lang') ?? (codeChild ? attr(codeChild, 'data-lang') : undefined)
+  const dataAttr = (e: Element): string | undefined => attr(e, 'data-lang') ?? attr(e, 'data-language')
+  const dataLang = dataAttr(el) ?? (codeChild ? dataAttr(codeChild) : undefined)
   return dataLang && /^[\w+#.-]+$/.test(dataLang) ? dataLang.toLowerCase() : ''
 }
 
@@ -401,9 +562,7 @@ class Renderer {
 
   /** Render `root` to markdown. */
   document(root: Node): string {
-    return this.restoreCode(this.blockContent(root))
-      .replace(new RegExp(INDENT, 'g'), ' ')
-      .replace(/[ \t]+$/gm, '')
+    return trimLineEnds(this.restoreCode(this.blockContent(root)).replace(new RegExp(INDENT, 'g'), ' '))
   }
 
   /** Render children as blocks, normalized, with code blocks still as placeholders. */
@@ -502,7 +661,7 @@ class Renderer {
   }
 
   private pre(el: Element): string {
-    let code = textContent(el)
+    let code = textContent(el, true)
     if (code.endsWith('\n')) code = code.slice(0, -1)
     if (!code.trim()) return ''
     const fence = '`'.repeat(Math.max(3, longestRun(code, '`') + 1))
@@ -547,23 +706,29 @@ class Renderer {
 
   private table(el: Element): string {
     const rows = findAll(el, (e) => e.tagName === 'tr').filter((tr) => closestTable(tr) === el)
-    const grid = rows.map((tr) =>
+    const rowCells = rows.map((tr) =>
       tr.childNodes.filter((c): c is Element => isElement(c) && (c.tagName === 'td' || c.tagName === 'th'))
     )
-    const cols = Math.max(0, ...grid.map((r) => r.length))
+    const grid = spanGrid(rowCells)
+    const cols = grid ? Math.max(0, ...grid.map((r) => r.length)) : 0
     // A layout table (one column, or cells holding blocks) reads better as its content.
     const blocky = (e: Element): boolean =>
       e.tagName === 'pre' || e.tagName === 'table' || e.tagName === 'ul' || e.tagName === 'ol'
-    if (cols < 2 || grid.some((r) => r.some((cell) => contains(cell, blocky)))) {
-      const cells = grid
+    if (!grid || cols < 2 || rowCells.some((r) => r.some((cell) => contains(cell, blocky)))) {
+      const cells = rowCells
         .flat()
         .map((cell) => this.blockContent(cell))
         .filter(Boolean)
       return cells.length ? `\n\n${cells.join('\n\n')}\n\n` : ''
     }
+    const rendered = new Map<Element, string>()
+    const text = (cell: Element): string => {
+      let t = rendered.get(cell)
+      if (t === undefined) rendered.set(cell, (t = oneLine(this.inline(cell)).replace(/\|/g, '\\|')))
+      return t
+    }
     const lines = grid.map((r) => {
-      const cells = r.map((cell) => oneLine(this.inline(cell)).replace(/\|/g, '\\|'))
-      while (cells.length < cols) cells.push('')
+      const cells = Array.from({ length: cols }, (_, i) => (r[i] ? text(r[i]!) : ''))
       return `| ${cells.join(' | ')} |`
     })
     const sep = `| ${Array.from({ length: cols }, () => '---').join(' | ')} |`
@@ -585,9 +750,30 @@ function escapeBrackets(text: string): string {
   return text.replace(/[[\]]/g, '\\$&')
 }
 
+/** The URL relative links resolve against: the document's first `<base href>`, else the page URL. */
+function documentBase(doc: Node, pageUrl: string | undefined): string | undefined {
+  const stack: Node[] = [doc]
+  let href: string | undefined
+  while (stack.length && href === undefined) {
+    const n = stack.pop()!
+    if (isElement(n) && n.tagName === 'base' && attr(n, 'href')?.trim()) href = attr(n, 'href')!.trim()
+    const kids = children(n)
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i])
+  }
+  if (href === undefined) return pageUrl
+  try {
+    const url = pageUrl ? new URL(href, pageUrl) : new URL(href)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : pageUrl
+  } catch {
+    return pageUrl
+  }
+}
+
 /** Convert an HTML document to markdown: the main content, with code, links and structure kept. */
 export function htmlToMarkdown(html: string, opts: HtmlToMarkdownOptions = {}): string {
-  const doc = parse(html)
+  // A leading byte-order mark would push the parser out of <head>, printing the title twice.
+  const doc = parse(html.startsWith('﻿') ? html.slice(1) : html)
+  flattenDeep(doc)
   const titleEl = findFirst(doc, 'title')
   const title = titleEl ? oneLine(textContent(titleEl)) : ''
   const body = findFirst(doc, 'body')
@@ -598,7 +784,7 @@ export function htmlToMarkdown(html: string, opts: HtmlToMarkdownOptions = {}): 
     stripChrome(body)
     root = pickContent(body)
   }
-  const md = new Renderer(opts.baseUrl).document(root)
+  const md = new Renderer(documentBase(doc, opts.baseUrl)).document(root)
   // The <title> is often the only statement of what the page is; lead with it when
   // the content has no top heading of its own.
   if (title && !findFirst(root, 'h1')) return md ? `# ${title}\n\n${md}` : `# ${title}`
