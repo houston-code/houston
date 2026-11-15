@@ -563,6 +563,8 @@ interface RunState {
       sensitiveRead?: boolean
       sensitiveWrite?: boolean
       protectedWrite?: boolean
+      discardsWork?: boolean
+      escapesWorkspace?: boolean
       networkScope?: string
     }
   >
@@ -1064,6 +1066,8 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       ...(a.sensitiveRead ? { sensitiveRead: true } : {}),
       ...(a.sensitiveWrite ? { sensitiveWrite: true } : {}),
       ...(a.protectedWrite ? { protectedWrite: true } : {}),
+      ...(a.discardsWork ? { discardsWork: true } : {}),
+      ...(a.escapesWorkspace ? { escapesWorkspace: true } : {}),
       ...(a.networkScope ? { networkScope: a.networkScope } : {})
     })
   }
@@ -2574,6 +2578,9 @@ export async function startRun(
       sensitiveWrite?: boolean
       /** A change to an in-project control file (see isProtectedWrite): likewise. */
       protectedWrite?: boolean
+      /** A shell command that can throw away work, or reaches outside the workspace: likewise. */
+      discardsWork?: boolean
+      escapesWorkspace?: boolean
       /** A write's per-file diffs, for the approval card and the live row. */
       preview?: FileDiffPreview[] | null
       /** A network call's destination (see networkDestination): what "Allow for run" grants. */
@@ -2591,6 +2598,8 @@ export async function startRun(
         sensitiveRead,
         sensitiveWrite,
         protectedWrite,
+        discardsWork,
+        escapesWorkspace,
         preview,
         networkDest,
         denyNote,
@@ -2611,6 +2620,8 @@ export async function startRun(
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
           ...(protectedWrite ? { protectedWrite: true } : {}),
+          ...(discardsWork ? { discardsWork: true } : {}),
+          ...(escapesWorkspace ? { escapesWorkspace: true } : {}),
           ...(networkScope ? { networkScope } : {})
         })
         // Register the resolver before emitting: a host that answers inside its
@@ -2629,6 +2640,8 @@ export async function startRun(
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
           ...(protectedWrite ? { protectedWrite: true } : {}),
+          ...(discardsWork ? { discardsWork: true } : {}),
+          ...(escapesWorkspace ? { escapesWorkspace: true } : {}),
           ...(networkScope ? { networkScope } : {})
         })
         const { decision, note } = await approval
@@ -2730,6 +2743,8 @@ export async function startRun(
           sensitiveRead,
           sensitiveWrite,
           protectedWrite,
+          ...(discardsWork ? { discardsWork: true } : {}),
+          ...(shellEscapesWorkspace ? { escapesWorkspace: true } : {}),
           preview: kind === 'write' ? await previewWrite(name, gateArgs, roots) : null,
           denyNote: `${APPROVAL_DENIED} Do not retry this call; work around it or note it in your report.`,
           runCall
@@ -5672,6 +5687,8 @@ export async function startRun(
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
                 ...(protectedWrite ? { protectedWrite: true } : {}),
+                ...(discardsWork ? { discardsWork: true } : {}),
+                ...(shellEscapesWorkspace ? { escapesWorkspace: true } : {}),
                 ...(networkScope ? { networkScope } : {})
               })
               // Registered before the emit so a synchronous answer (headless resolves
@@ -5690,6 +5707,8 @@ export async function startRun(
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
                 ...(protectedWrite ? { protectedWrite: true } : {}),
+                ...(discardsWork ? { discardsWork: true } : {}),
+                ...(shellEscapesWorkspace ? { escapesWorkspace: true } : {}),
                 ...(networkScope ? { networkScope } : {})
               })
               const { decision, note: denyGuidance } = await approval

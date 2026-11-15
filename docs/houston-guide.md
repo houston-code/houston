@@ -2193,6 +2193,11 @@ only when it is exact for the command, or its pattern names the destructive part
 (`git push --force*`): a prefix like `git push` doesn't. The "Always allow" choice on
 the prompt saves an exact rule for that command.
 
+The prompt says when this is why it is asking, and likewise when a command reaches
+outside the project folder (which also asks in every mode), in the app, the terminal,
+and an editor. An unattended `houston -p` run names the reason on the line where it
+denies the command.
+
 ### Which mode a new install starts in
 
 - **Full auto** where the sandbox confines shell commands: macOS, and Linux with

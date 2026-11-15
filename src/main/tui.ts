@@ -113,6 +113,7 @@ import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
 import { SHARE_MESSAGE } from '@shared/share'
 import { MarkdownStream, renderMarkdownAnsi } from './markdown-ansi'
 import { describeToolCall } from '@shared/toolLabel'
+import { approvalAskReasons } from '@shared/approvalReasons'
 import { renderPreviewView } from './tui-diff'
 import {
   chatToJson,
@@ -745,6 +746,11 @@ export function renderApprovalPrompt(
   const offline = ev.shellOffline
     ? `\n${paint('  Runs without network. If it needs the network, Houston asks before allowing it.', 'dim')}`
     : ''
+  // A command that can throw away work or leaves the workspace asks in every mode; say so,
+  // so a prompt in full auto doesn't read as a bug.
+  const reasons = approvalAskReasons(ev)
+    .map((r) => `\n${paint(`  ${r}`, 'dim')}`)
+    .join('')
   // A network grant reaches one destination; say which before the user picks it.
   const scope = ev.networkScope
     ? `\n${paint(`  "Allow for this chat" covers ${terminalText(ev.networkScope, { lines: false })} only, for the rest of this chat.`, 'dim')}`
@@ -762,7 +768,7 @@ export function renderApprovalPrompt(
   const head = paint(`Approve ${terminalText(describeToolCall(ev.name, ev.args).verb, { lines: false })}`, 'bold')
   const kind = paint(`[${ev.kind}]${extent ? ` · ${extent}` : ''}`, 'dim')
   const keys = opts.picker ? '' : `\n${renderApprovalKeys(ev, paint)}`
-  return `\n${head} ${kind}${background}\n${subject}${warn}${offline}${scope}${keys}`
+  return `\n${head} ${kind}${background}\n${subject}${warn}${reasons}${offline}${scope}${keys}`
 }
 
 /**

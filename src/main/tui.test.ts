@@ -485,6 +485,13 @@ describe('approval prompt', () => {
     expect(p).not.toContain('UNSANDBOXED')
   })
 
+  it('says why a command asks in every mode when it can throw away work or leaves the workspace', () => {
+    const p = renderApprovalPrompt(ev({ discardsWork: true, escapesWorkspace: true }), makePainter(false))
+    expect(p).toContain('It can throw away work in the project')
+    expect(p).toContain('It reaches outside the project folder, so Houston asks in every mode.')
+    expect(renderApprovalPrompt(ev(), makePainter(false))).not.toContain('asks in every mode')
+  })
+
   it('says a shell command runs offline and that network is asked separately', () => {
     const p = renderApprovalPrompt(ev({ shellOffline: true }), makePainter(false))
     expect(p).toContain('Runs without network. If it needs the network, Houston asks before allowing it.')

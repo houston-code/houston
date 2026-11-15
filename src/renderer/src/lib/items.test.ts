@@ -696,6 +696,32 @@ describe('reduceEvent — prompt replay on re-adopt (upsert by callId)', () => {
     expect(reduceEvent([], plain).find((i): i is ToolItem => i.kind === 'tool')!.networkScope).toBeUndefined()
   })
 
+  it('carries why a shell command asks in every mode onto its approval row', () => {
+    const ev = {
+      runId: 'r',
+      type: 'tool_approval' as const,
+      callId: 'c1',
+      name: 'run_shell',
+      summary: 'git reset --hard',
+      args: { command: 'git reset --hard' },
+      kind: 'shell' as const,
+      discardsWork: true,
+      escapesWorkspace: true
+    }
+    const live = reduceEvent([], ev).find((i): i is ToolItem => i.kind === 'tool')!
+    expect(live.discardsWork).toBe(true)
+    expect(live.escapesWorkspace).toBe(true)
+    const fromLog = itemsFromMessages([
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'run_shell', arguments: ev.args }] }
+    ])
+    const replayed = reduceEvent(fromLog, ev).filter((i): i is ToolItem => i.kind === 'tool' && i.id === 'c1')
+    expect(replayed[0].discardsWork).toBe(true)
+    const { discardsWork: _d, escapesWorkspace: _e, ...plain } = ev
+    const row = reduceEvent([], plain).find((i): i is ToolItem => i.kind === 'tool')!
+    expect(row.discardsWork).toBeUndefined()
+    expect(row.escapesWorkspace).toBeUndefined()
+  })
+
   it('updates an existing question card instead of duplicating it', () => {
     const fromLog = itemsFromMessages([
       {

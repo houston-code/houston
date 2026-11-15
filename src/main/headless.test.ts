@@ -604,6 +604,16 @@ describe('runHeadless', () => {
     expect(approvals).toEqual([['run-1', 'c1', 'deny']])
     expect(err.join('')).toContain('denying run_shell')
     expect(err.join('')).toContain('--on-approval allow')
+    expect(err.join('')).not.toContain('throw away work')
+  })
+
+  it('says why a denied command was asking when it can throw away work', async () => {
+    const { d, err } = deps([
+      { runId: 'run-1', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'x', kind: 'shell', discardsWork: true },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless({ ...baseOpts, approvalPolicy: 'full-auto', onApproval: 'deny' }, d)
+    expect(err.join('')).toContain('denying run_shell (it can throw away work)')
   })
 
   it('denies AND exits non-zero under --on-approval fail so a script sees the permission wall', async () => {
