@@ -42,6 +42,13 @@ export interface DraftSnapshot {
   row: number
   col: number
   blobs: PasteBlob[]
+  /**
+   * Where history browsing stood, and the live draft it had put aside. Undo and redo
+   * put these back: a recalled entry's edits are undoable, and the draft Up set aside
+   * must still be what Down returns to.
+   */
+  histIndex?: number | null
+  stash?: string[] | null
 }
 
 /**
@@ -145,12 +152,18 @@ export function editorEmpty(s: EditorState): boolean {
 }
 
 function snapshotOf(s: EditorState): DraftSnapshot {
-  return { lines: [...s.lines], row: s.row, col: s.col, blobs: [...s.blobs] }
+  return { lines: [...s.lines], row: s.row, col: s.col, blobs: [...s.blobs], histIndex: s.histIndex, stash: s.stash }
 }
 
-/** Put a snapshot back into the buffer. Leaves history browsing: this is a live draft. */
-function restoreSnapshot(s: EditorState, snap: DraftSnapshot): EditorState {
-  return { ...s, lines: [...snap.lines], row: snap.row, col: snap.col, blobs: [...snap.blobs], histIndex: null, stash: null }
+/**
+ * Put a snapshot back into the buffer. Undo and redo (`browsing`) return to the
+ * history position it was taken at, with its held draft; anything else (the Ctrl-S
+ * stash) leaves history browsing: this is a live draft.
+ */
+function restoreSnapshot(s: EditorState, snap: DraftSnapshot, browsing = false): EditorState {
+  const histIndex = browsing ? (snap.histIndex ?? null) : null
+  const stash = browsing ? (snap.stash ?? null) : null
+  return { ...s, lines: [...snap.lines], row: snap.row, col: snap.col, blobs: [...snap.blobs], histIndex, stash }
 }
 
 /** An empty buffer (history, kill ring and undo history untouched). */
@@ -203,13 +216,13 @@ function reduceDraftKey(s: EditorState, key: EditorKey): { state: EditorState; o
     case 'undo': {
       const prev = s.undo[s.undo.length - 1]
       if (!prev) return { state: { ...s, lastEdit: null } }
-      const back = restoreSnapshot(s, prev)
+      const back = restoreSnapshot(s, prev, true)
       return { state: { ...back, undo: s.undo.slice(0, -1), redo: [...s.redo, snapshotOf(s)], lastEdit: null } }
     }
     case 'redo': {
       const next = s.redo[s.redo.length - 1]
       if (!next) return { state: { ...s, lastEdit: null } }
-      const fwd = restoreSnapshot(s, next)
+      const fwd = restoreSnapshot(s, next, true)
       return { state: { ...fwd, undo: [...s.undo, snapshotOf(s)].slice(-UNDO_LIMIT), redo: s.redo.slice(0, -1), lastEdit: null } }
     }
     case 'stash': {
@@ -787,6 +800,30 @@ export function renderEditor(
   // The menu goes after that guard: it must never be mistaken for a buffer line.
   if (opts.below?.length) rows.push(...opts.below)
   return { rows, cursorRow, cursorCol }
+}
+
+/**
+ * Fit a rendered composer to a screen `height` rows tall: a draft taller than that is
+ * shown as the window of its rows around the cursor, with the `below` rows (the last
+ * `belowCount` of `v.rows`) kept under it while they fit. The in-place redraw climbs
+ * to the region's top, which a terminal clamps at the top of the screen: a taller
+ * region reprinted every row into the scrollback on each key, and its top could not
+ * be reached. `height` 0 (unknown) leaves the view as it is. Pure.
+ */
+export function windowEditorView(v: EditorView, belowCount: number, height: number): EditorView {
+  // One row spare, as the picker keeps: the cursor's row must not scroll the screen.
+  const room = height - 1
+  if (height <= 0 || v.rows.length <= room) return v
+  const draftRows = v.rows.slice(0, v.rows.length - belowCount)
+  const below = v.rows.slice(v.rows.length - belowCount)
+  const keepBelow = room - below.length >= 1 ? below : []
+  const size = Math.max(1, room - keepBelow.length)
+  const start = Math.max(0, Math.min(v.cursorRow - size + 1, draftRows.length - size))
+  return {
+    rows: [...draftRows.slice(start, start + size), ...keepBelow],
+    cursorRow: v.cursorRow - start,
+    cursorCol: v.cursorCol
+  }
 }
 
 /** Extensions a pasted or dropped path must end in to be taken as an image. */

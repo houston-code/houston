@@ -99,14 +99,32 @@ const OSC8_CLOSE = new Set([`${ESC}]8;;${ESC}\\`, `${ESC}]8;;\x07`])
 
 // The exact OSC sequences Houston itself built (osc8Link, osc52Copy), which the output
 // filter lets through. Matching the whole sequence means text that copies one can
-// only repeat Houston's own link or copy, never aim it elsewhere. Bounded: oldest go first.
-const trustedOsc = new Set<string>()
-const MAX_TRUSTED_OSC = 512
-function trustOsc(seq: string): string {
-  trustedOsc.delete(seq)
-  trustedOsc.add(seq)
-  if (trustedOsc.size > MAX_TRUSTED_OSC) trustedOsc.delete(trustedOsc.values().next().value as string)
+// only repeat Houston's own link or copy, never aim it elsewhere. Bounded: oldest go
+// first. Links and clipboard writes are kept apart, so a block full of links cannot
+// push out a copy waiting to be written. A block is rendered whole (every link
+// trusted) before it is filtered, so the link bound must exceed the links any one
+// block can hold: at 512, a long file list printed its first links as escape text.
+const trustedLinks = new Set<string>()
+const trustedCopies = new Set<string>()
+const MAX_TRUSTED_LINKS = 65536
+const MAX_TRUSTED_COPIES = 512
+function trustIn(set: Set<string>, max: number, seq: string): string {
+  set.delete(seq)
+  set.add(seq)
+  if (set.size > max) set.delete(set.values().next().value as string)
   return seq
+}
+const isTrustedOsc = (seq: string): boolean => trustedLinks.has(seq) || trustedCopies.has(seq)
+
+const OSC52 = new RegExp(`${ESC}\\]52;[^\\x07${ESC}]*(?:\\x07|${ESC}\\\\)`, 'g')
+
+/**
+ * The clipboard writes in `s` that Houston built itself (osc52Copy), in order. A
+ * display path that strips every escape (screen-reader mode) sends these on
+ * untouched: the mode changes what is read aloud, not whether a copy happens.
+ */
+export function trustedClipboardWrites(s: string): string[] {
+  return (s.match(OSC52) ?? []).filter((seq) => trustedCopies.has(seq))
 }
 
 /**
@@ -114,7 +132,7 @@ function trustOsc(seq: string): string {
  * through its output seam passes here, so a string that skipped {@link terminalText}
  * still can't move the cursor, rewrite the lines above, set the title, write the
  * clipboard or query the terminal. Houston's own styling passes untouched: SGR colour
- * codes, plus the hyperlinks and clipboard writes it built itself (see `trustOsc`).
+ * codes, plus the hyperlinks and clipboard writes it built itself (see `trustIn`).
  * Anything else has its control characters shown as `<U+XXXX>`, like
  * {@link terminalText}; newlines and tabs stay, and CRLF becomes a newline.
  */
@@ -127,7 +145,7 @@ export function filterTerminalOutput(s: string): string {
   for (const m of s.matchAll(ESCAPE_UNIT)) {
     const seq = m[0]
     out += plain(s.slice(last, m.index))
-    out += SGR_ONLY.test(seq) || OSC8_CLOSE.has(seq) || trustedOsc.has(seq) ? seq : revealControls(seq)
+    out += SGR_ONLY.test(seq) || OSC8_CLOSE.has(seq) || isTrustedOsc(seq) ? seq : revealControls(seq)
     last = m.index + seq.length
   }
   return out + plain(s.slice(last))
@@ -140,7 +158,7 @@ export function filterTerminalOutput(s: string): string {
  * output filter lets this exact sequence through because Houston built it.
  */
 export function osc52Copy(text: string): string {
-  return trustOsc(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`)
+  return trustIn(trustedCopies, MAX_TRUSTED_COPIES, `\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`)
 }
 
 /**
@@ -296,6 +314,36 @@ export function truncateVisible(s: string, max: number, ellipsis = '…'): strin
   return `${out}${ellipsis}${hadColor ? `${ESC}[0m` : ''}${openLink ? `${ESC}]8;;${ESC}\\` : ''}`
 }
 
+// One OSC 8 sequence, capturing its URL (empty for the one that ends a link).
+const OSC8_URL = new RegExp(`^${ESC}\\]8;[^;${ESC}\\x07]*;([^${ESC}\\x07]*)`)
+
+/**
+ * Lines cut from one styled string (a table cell wrapped inside its column), each made
+ * to stand on its own: a colour or hyperlink still open at a line's end is closed
+ * there and opened again at the start of the next. Laid side by side with other
+ * cells, an open one ran on over its neighbours (the next cell's text became part of
+ * the link) and the rest of it lost its colour at the next cell's reset. Pure.
+ */
+export function closeEachLine(lines: string[]): string[] {
+  let carry = ''
+  return lines.map((line) => {
+    const full = carry + line
+    let sgr: string[] = []
+    let link = ''
+    for (const m of full.matchAll(ZERO_WIDTH)) {
+      const seq = m[0]
+      if (seq.startsWith(`${ESC}[`)) {
+        if (seq === `${ESC}[0m` || seq === `${ESC}[m`) sgr = []
+        else sgr.push(seq)
+      } else {
+        link = OSC8_URL.exec(seq)?.[1] ? seq : ''
+      }
+    }
+    carry = sgr.join('') + link
+    return `${full}${sgr.length ? `${ESC}[0m` : ''}${link ? `${ESC}]8;;${ESC}\\` : ''}`
+  })
+}
+
 /**
  * Keep the last `max` visible columns of `s`, with `ellipsis` in front when cut: for
  * text whose end is what matters, like a draft being typed (the cursor is at its end).
@@ -446,5 +494,5 @@ function hardSplit(word: string, width: number): string[] {
  * characters, or a crafted label could end the link early and inject its own.
  */
 export function osc8Link(url: string, text: string): string {
-  return `${trustOsc(`\x1b]8;;${url}\x1b\\`)}${text}\x1b]8;;\x1b\\`
+  return `${trustIn(trustedLinks, MAX_TRUSTED_LINKS, `\x1b]8;;${url}\x1b\\`)}${text}\x1b]8;;\x1b\\`
 }

@@ -198,6 +198,12 @@ export interface PagerState {
   input: string | null
   /** A one-off note for the status line, cleared by the next key. */
   message: string
+  /**
+   * The line of the match last shown (search Enter, n, N). n and N step from it while
+   * it is on screen: one in the last screenful sits below `top`, so stepping from the
+   * scroll position found the same match again forever.
+   */
+  match?: number | null
 }
 
 export type PagerOutcome = { kind: 'close' } | { kind: 'edit' }
@@ -251,7 +257,7 @@ export function reducePager(
         const hits = searchMatches(ctx.doc, query)
         const next = hits.find((i) => i >= s.top) ?? hits[0]
         if (next === undefined) return { state: { ...s, input: null, query: null, message: `no match for "${query}"` } }
-        return { state: { ...s, input: null, query, top: clamp(next), message: matchNote(hits, next) } }
+        return { state: { ...s, input: null, query, top: clamp(next), match: next, message: matchNote(hits, next) } }
       }
       case 'escape':
       case 'interrupt':
@@ -333,15 +339,20 @@ function pagerChar(
       if (!s.query) return at(s.top, 'no search yet: press / to search')
       const hits = searchMatches(doc, s.query)
       if (!hits.length) return at(s.top, `no match for "${s.query}"`)
+      const shown = s.match ?? null
+      const from = shown !== null && shown >= s.top && shown < s.top + height ? shown : s.top
+      const go = (line: number, message: string): { state: PagerState } => ({
+        state: { ...s, top: clamp(line), match: line, message }
+      })
       if (ch === 'n') {
-        const next = hits.find((i) => i > s.top)
-        if (next === undefined) return at(hits[0], `${matchNote(hits, hits[0])}, from the top`)
-        return at(next, matchNote(hits, next))
+        const next = hits.find((i) => i > from)
+        if (next === undefined) return go(hits[0], `${matchNote(hits, hits[0])}, from the top`)
+        return go(next, matchNote(hits, next))
       }
-      const prev = [...hits].reverse().find((i) => i < s.top)
+      const prev = [...hits].reverse().find((i) => i < from)
       const end = hits[hits.length - 1]
-      if (prev === undefined) return at(end, `${matchNote(hits, end)}, from the bottom`)
-      return at(prev, matchNote(hits, prev))
+      if (prev === undefined) return go(end, `${matchNote(hits, end)}, from the bottom`)
+      return go(prev, matchNote(hits, prev))
     }
     case '{': {
       const prev = [...doc.prompts].reverse().find((i) => i < s.top)

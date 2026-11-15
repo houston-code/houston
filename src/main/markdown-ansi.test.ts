@@ -74,6 +74,25 @@ describe('renderMarkdownAnsi', () => {
     expect(out).toContain('2')
   })
 
+  // A link or colour cut across two lines of a cell ran on over the cell beside it.
+  it('closes a link and colour at the end of each wrapped cell line and reopens them', () => {
+    const ESC = '\x1b'
+    const out = renderMarkdownAnsi(
+      '| File | Purpose |\n| - | - |\n| `src/main/agent/a/very/long/path/to/tools.ts` | the tool implementations |',
+      { paint: makePainter(true), width: 50, links: { href: () => null, path: (p) => `file:///repo/${p}` } }
+    )
+    const lines = out.split('\n')
+    const opens = (l: string): number => (l.match(new RegExp(`${ESC}\\]8;;[^${ESC}]+${ESC}\\\\`, 'g')) ?? []).length
+    const closes = (l: string): number => l.split(`${ESC}]8;;${ESC}\\`).length - 1
+    const linked = lines.filter((l) => opens(l) > 0)
+    expect(linked.length).toBeGreaterThan(1) // the path did wrap
+    for (const l of lines) expect(opens(l)).toBe(closes(l))
+    // The neighbouring cell's text sits outside the link.
+    const first = linked[0]
+    const close = first.indexOf(`${ESC}]8;;${ESC}\\`)
+    expect(first.indexOf('the tool')).toBeGreaterThan(close)
+  })
+
   it('keeps wrapped list items inside the width, indent included', () => {
     const long = 'another nested bullet with a very long line that should wrap inside the column'
     for (const src of [`- ${long}`, `1. ${long}`, `- top\n  - ${long}`, `1. top\n2. second\n   - ${long}`]) {

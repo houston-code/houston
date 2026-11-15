@@ -11,6 +11,7 @@ import {
   searchPosition,
   parseImagePaths,
   PASTE_COLLAPSE_LINES,
+  windowEditorView,
   type EditorState,
   type EditorOutcome
 } from './tui-editor'
@@ -438,6 +439,35 @@ describe('renderEditor', () => {
 // A paste placeholder is substituted back on submit, so text that happens to spell
 // a token must not be able to hijack that substitution — what the user reviewed has
 // to be what gets sent.
+describe('windowEditorView', () => {
+  const big = Array.from({ length: 300 }, (_, i) => `line ${i}`).join('\n')
+
+  it('shows a draft taller than the screen as the rows around the cursor, menu kept under it', () => {
+    const v = renderEditor(initialEditorState([], big), { prompt: '> ', width: 80, paint, below: ['  menu'] })
+    expect(v.rows).toHaveLength(301)
+    const w = windowEditorView(v, 1, 24)
+    expect(w.rows).toHaveLength(23)
+    expect(w.rows.at(-1)).toBe('  menu')
+    expect(w.rows[w.cursorRow]).toContain('line 299')
+    expect(w.cursorCol).toBe(v.cursorCol)
+    // At the top of the draft the window starts at its first row.
+    const top = windowEditorView({ ...v, cursorRow: 0 }, 1, 24)
+    expect(top.rows[0]).toBe('> line 0')
+    expect(top.cursorRow).toBe(0)
+  })
+
+  it('leaves a draft that fits, or an unknown height, alone', () => {
+    const v = renderEditor(initialEditorState([], 'a\nb'), { prompt: '> ', width: 80, paint })
+    expect(windowEditorView(v, 0, 24)).toBe(v)
+    const tall = renderEditor(initialEditorState([], big), { prompt: '> ', width: 80, paint })
+    expect(windowEditorView(tall, 0, 0)).toBe(tall)
+    // A screen too short for the menu drops it before the draft.
+    const short = windowEditorView({ ...tall, rows: [...tall.rows, 'm1', 'm2'] }, 2, 3)
+    expect(short.rows).toHaveLength(2)
+    expect(short.rows).not.toContain('m1')
+  })
+})
+
 describe('paste placeholders cannot be forged', () => {
   const big = (n: number): string => Array.from({ length: n }, (_, i) => `l${i}`).join('\n')
 
@@ -468,6 +498,16 @@ describe('reduceEditor: undo and redo', () => {
   const draft = (s: EditorState): string => s.lines.join('\n')
   const undo: EditorKey = { type: 'undo' }
   const redo: EditorKey = { type: 'redo' }
+
+  // Undo once dropped the draft Up had put aside: Down then had nothing to return to.
+  it('undo after editing a recalled entry keeps the draft Up set aside', () => {
+    const { state } = run([type('my long draft'), { type: 'up' }, type('x'), undo, { type: 'down' }], initialEditorState(['older']))
+    expect(draft(state)).toBe('my long draft')
+    expect(state.histIndex).toBeNull()
+    const again = run([type('my long draft'), { type: 'up' }, type('x'), undo], initialEditorState(['older']))
+    expect(draft(again.state)).toBe('older')
+    expect(again.state.histIndex).toBe(0)
+  })
 
   it('takes back a run of typing as one step', () => {
     const { state } = run([type('h'), type('e'), type('llo'), undo])

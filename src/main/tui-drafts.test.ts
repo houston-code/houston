@@ -73,6 +73,35 @@ describe('createDraftStore', () => {
     expect(store.load('chat-a')).toBeNull()
   })
 
+  // Two terminals on new chats in one folder shared one file: the second opened with
+  // the first one's half-typed text, and either one sending deleted the other's draft.
+  it('keeps a new chat draft per terminal, and takes over only one whose terminal has gone', () => {
+    const live = new Set([101, 202])
+    const alive = (pid: number): boolean => live.has(pid)
+    const one = createDraftStore(dir, { pid: 101, alive })
+    const two = createDraftStore(dir, { pid: 202, alive })
+    one.save('new:/w', { text: 'terminal one typing', queued: [] })
+    // Terminal one is still running: terminal two does not get its draft.
+    expect(two.load('new:/w')).toBeNull()
+    two.save('new:/w', { text: 'terminal two typing', queued: [] })
+    // Terminal two sends its first message: terminal one's draft is untouched.
+    two.save('new:/w', null)
+    expect(one.load('new:/w')).toEqual({ text: 'terminal one typing', queued: [] })
+    // Terminal one quits; the next launch in the folder takes its draft over, once.
+    live.delete(101)
+    const three = createDraftStore(dir, { pid: 303, alive })
+    expect(three.load('new:/w')).toEqual({ text: 'terminal one typing', queued: [] })
+    expect(readdirSync(dir)).toHaveLength(1)
+    const four = createDraftStore(dir, { pid: 404, alive: (p) => p === 303 })
+    expect(four.load('new:/w')).toBeNull()
+    // A draft saved before slots were per terminal (no writer recorded) is taken over too.
+    rmSync(dir, { recursive: true, force: true })
+    one.save('chat-x', { text: 'unused', queued: [] })
+    const [file] = readdirSync(dir)
+    writeFileSync(join(dir, file), JSON.stringify({ v: 1, key: 'new:/old', text: 'from before', queued: [] }))
+    expect(four.load('new:/old')).toEqual({ text: 'from before', queued: [] })
+  })
+
   it('reports a failed write instead of throwing', () => {
     const warnings: string[] = []
     writeFileSync(join(dir, '..', 'blocker'), '')

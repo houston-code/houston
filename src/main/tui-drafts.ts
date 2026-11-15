@@ -3,7 +3,10 @@
  * Ctrl-C, a quit, a crash, or a `/resume` to another chat. The desktop app keeps its
  * drafts in the renderer's storage; the terminal keeps them here, one small file per
  * chat under userData (0600, in a 0700 folder), so two terminals on different chats
- * never write the same file.
+ * never write the same file. A new chat has no id yet, so each terminal on one keeps
+ * its own file for the folder, named for its process; a later launch takes over the
+ * newest one whose terminal has gone (the draft of a quit or a crash), never one
+ * still being typed in.
  *
  * A record holds the text being typed and the messages typed mid-run that the turn
  * has not taken yet (queued, or steers that have not landed). Those were already
@@ -74,7 +77,20 @@ function fileFor(dir: string, key: string): string {
   return join(dir, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`)
 }
 
-function parse(raw: string, key: string): DraftRecord | null {
+/** A new chat's slot: until the chat has an id, every new chat in a folder shares its key. */
+const isNewChatKey = (key: string): boolean => key.startsWith('new:')
+
+/** Whether process `pid` is still running (a process we may not signal still is). */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+function parseFile(raw: string, key: string): { record: DraftRecord | null; pid: number | null } | null {
   let v: unknown
   try {
     v = JSON.parse(raw)
@@ -87,16 +103,64 @@ function parse(raw: string, key: string): DraftRecord | null {
   if (o.key !== key || typeof o.text !== 'string') return null
   const queued = Array.isArray(o.queued) ? o.queued.filter((q): q is string => typeof q === 'string') : []
   const r = capDraft({ text: o.text, queued })
-  return draftIsEmpty(r) ? null : r
+  const pid = typeof o.pid === 'number' && Number.isInteger(o.pid) && o.pid > 0 ? o.pid : null
+  return { record: draftIsEmpty(r) ? null : r, pid }
 }
+
+const parse = (raw: string, key: string): DraftRecord | null => parseFile(raw, key)?.record ?? null
 
 /** The file-backed store. Every failure is logged by the caller's `warn` and survived. */
 export function createDraftStore(
   dir: string,
-  opts: { max?: number; warn?: (msg: string) => void } = {}
+  opts: {
+    max?: number
+    warn?: (msg: string) => void
+    /** This terminal's process id, which names its new-chat slot. Default: this process. */
+    pid?: number
+    /** Whether a slot's writer is still running. Default: a signal-0 probe. */
+    alive?: (pid: number) => boolean
+  } = {}
 ): DraftStore {
   const max = opts.max ?? MAX_SAVED_DRAFTS
   const warn = opts.warn ?? (() => {})
+  const pid = opts.pid ?? process.pid
+  const alive = opts.alive ?? processAlive
+  // Where this terminal keeps a key's draft: a new chat's slot is its own.
+  const ownFile = (key: string): string => fileFor(dir, isNewChatKey(key) ? `${key}\0${pid}` : key)
+  /**
+   * The newest new-chat draft for `key` whose terminal has gone (or that predates
+   * per-terminal slots), taken over as this terminal's own. One still being typed in
+   * another terminal is never opened here.
+   */
+  const adoptOrphan = (key: string): DraftRecord | null => {
+    let best: { file: string; at: number; record: DraftRecord } | null = null
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.json')) continue
+      const file = join(dir, f)
+      if (file === ownFile(key)) continue
+      let parsed: ReturnType<typeof parseFile>
+      let at: number
+      try {
+        parsed = parseFile(readFileSync(file, 'utf8'), key)
+        at = statSync(file).mtimeMs
+      } catch {
+        continue
+      }
+      if (!parsed?.record || (parsed.pid !== null && parsed.pid !== pid && alive(parsed.pid))) continue
+      if (!best || at > best.at) best = { file, at, record: parsed.record }
+    }
+    if (!best) return null
+    // Ours now: written under this terminal's slot, so the next launch does not take it too.
+    const record = capDraft(best.record)
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    writeFileAtomicSync(ownFile(key), JSON.stringify({ v: 1, key, pid, text: record.text, queued: record.queued }), 0o600)
+    try {
+      unlinkSync(best.file)
+    } catch {
+      /* another terminal took it over first; it holds the same text */
+    }
+    return record
+  }
   const prune = (): void => {
     const files = readdirSync(dir).filter((f) => f.endsWith('.json'))
     if (files.length <= max) return
@@ -120,13 +184,19 @@ export function createDraftStore(
   return {
     load: (key) => {
       try {
-        return parse(readFileSync(fileFor(dir, key), 'utf8'), key)
+        const own = parse(readFileSync(ownFile(key), 'utf8'), key)
+        if (own || !isNewChatKey(key)) return own
+      } catch {
+        if (!isNewChatKey(key)) return null
+      }
+      try {
+        return adoptOrphan(key)
       } catch {
         return null
       }
     },
     save: (key, record) => {
-      const file = fileFor(dir, key)
+      const file = ownFile(key)
       try {
         if (draftIsEmpty(record)) {
           try {
@@ -138,7 +208,7 @@ export function createDraftStore(
         }
         mkdirSync(dir, { recursive: true, mode: 0o700 })
         const r = capDraft(record!)
-        writeFileAtomicSync(file, JSON.stringify({ v: 1, key, text: r.text, queued: r.queued }), 0o600)
+        writeFileAtomicSync(file, JSON.stringify({ v: 1, key, pid, text: r.text, queued: r.queued }), 0o600)
         prune()
       } catch (e) {
         warn(`failed to save the composer draft: ${String(e)}`)

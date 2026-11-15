@@ -1,7 +1,7 @@
 import { parseMarkdown, type Block, type Inline, type ListItem } from '@shared/markdown'
 import type { Painter } from './tui'
 import { PROSE_PATH, type MarkdownLinks } from './tui-links'
-import { osc8Link, wrapAnsi, visibleWidth, terminalText } from './tui-wrap'
+import { closeEachLine, osc8Link, wrapAnsi, visibleWidth, terminalText } from './tui-wrap'
 
 /**
  * Render markdown to ANSI for the terminal, reusing the same parser the GUI uses
@@ -174,7 +174,7 @@ function renderTable(
   const fmtRow = (row: string[]): string => {
     const wrapped = widths.map((w, c) => {
       const cell = row[c] ?? ''
-      return visibleWidth(cell) > w ? wrapAnsi(cell, w).split('\n') : [cell]
+      return visibleWidth(cell) > w ? closeEachLine(wrapAnsi(cell, w).split('\n')) : [cell]
     })
     const height = Math.max(1, ...wrapped.map((l) => l.length))
     const lines: string[] = []

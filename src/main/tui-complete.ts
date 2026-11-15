@@ -165,7 +165,9 @@ export function renderMentionMenu(
 ): string[] {
   if (!files.length) return [paint('  (no matching file)', 'dim')]
   const shown = files.slice(0, MENU_LIMIT)
-  const rows = shown.map((f) => `  ${paint(`@${f}`, 'cyan')}`)
+  // A file's name is the repository's text: nothing in it reaches the terminal as an
+  // escape sequence (any byte but `/` and NUL is legal in one).
+  const rows = shown.map((f) => `  ${paint(`@${stripControlChars(f)}`, 'cyan')}`)
   if (files.length > shown.length) rows.push(paint(`  … ${files.length - shown.length} more`, 'dim'))
   rows.push(paint('  Up/Down to choose, Tab completes', 'dim'))
   return rows
