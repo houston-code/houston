@@ -801,7 +801,7 @@ safe subset in place. In the desktop app:
 
 **Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/vim`, `/notify`, `/screen-reader`,
 `/reduce-motion`, `/verbose`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
-`/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/permissions`, and
+`/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/permissions`, `/schedule`, and
 `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
@@ -2975,6 +2975,14 @@ it runs (checked as you type, showing the first run time), the folder, the model
 approval mode (Plan mode by default). A run that needs your approval waits in its chat
 until you answer. As with schedules the agent creates, a run never uses a looser mode
 than your default at the time it runs.
+
+**In the terminal,** `/schedule` (or `/schedules`) shows the same list, numbered, with
+each run's schedule, next run, folder, model, approval mode, and how its last run went.
+`/schedule pause <n>`, `resume <n>`, `run <n>` (run now), and `delete <n>` (asks first) act
+on one, and `show <n>` prints its whole task. `/schedule add` asks the same questions as
+the form, one at a time, with the same defaults (this folder, this chat's model, Plan
+mode) and the same checks, re-asking a schedule it can't read, and confirms before
+saving. Full auto gets a warning first, since no one is there to approve.
 
 The agent manages the same list:
 
