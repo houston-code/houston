@@ -187,6 +187,7 @@ import {
   getConversation,
   conversationRunOutcome,
   peekConversation,
+  peekConversationHeader,
   conversationExists,
   createConversation,
   forkConversation,
@@ -2111,7 +2112,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
     store: readState,
     liveStatus: chatStatusSnapshot,
     activeRun: activeRunForConversation,
-    messageCount: (id) => peekConversation(id)?.messages.length,
+    messageCount: (id) => peekConversationHeader(id)?.messageCount,
     replyIndexes: (id) => replyMessageIndexes(peekConversation(id)?.messages ?? []),
     exists: conversationExists,
     // Broadcast (not sender-scoped): a run can block or finish while a different

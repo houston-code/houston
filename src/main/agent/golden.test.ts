@@ -137,6 +137,7 @@ vi.mock('./promptSnapshot', async (importActual) => ({
 vi.mock('../conversations', () => ({
   getConversation: () => null,
   peekConversation: () => null,
+  peekConversationHeader: () => null,
   setAnnouncedPolicy: () => {},
   setCompaction: () => {},
   setConversationError: () => {},

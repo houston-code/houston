@@ -35,6 +35,10 @@ import {
   takeChildReports,
   deriveTitle,
   getConversation,
+  setGeneratedTitle,
+  conversationTitleSettled,
+  peekConversationHeader,
+  peekConversation,
   mergeRunningTotals,
   needsGeneratedTitle,
   organizeConversation,
@@ -1241,5 +1245,150 @@ describe('searchableText', () => {
         invokedAs: { kind: 'spawned', label: 'Spawned session' }
       })
     ).toBe('Fix the flaky login test')
+  })
+})
+describe('header peeks', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+    resetConversationListCache()
+    resetConversationWriteCache()
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  const onDisk = (id: string): Conversation => peekConversation(id)!
+  /** What a full read says about the fields a header carries. */
+  const fromFullRead = (id: string) => {
+    const conv = peekConversation(id)!
+    return {
+      id: conv.id,
+      title: conv.title,
+      workspace: conv.workspace,
+      providerId: conv.providerId,
+      model: conv.model,
+      titleCustom: conv.titleCustom,
+      titleGenerated: conv.titleGenerated,
+      worktree: conv.worktree,
+      promptSnapshot: conv.promptSnapshot,
+      announcedPolicy: conv.announcedPolicy,
+      compaction: conv.compaction,
+      messageCount: conv.messages.length
+    }
+  }
+
+  /** A chat that has been through the writes a few turns make. */
+  function busyChat(): string {
+    const c = createConversation({
+      workspace: '/ws',
+      providerId: 'p',
+      model: 'm',
+      worktree: { path: '/wt', branch: 'b', repoRoot: '/repo' } as never
+    })
+    setMessages(c.id, [{ role: 'user', content: 'first message' }])
+    setPromptSnapshot(c.id, { date: '2026-01-02', context: 'git: main' } as never)
+    setAnnouncedPolicy(c.id, 'plan')
+    setMessages(c.id, [
+      { role: 'user', content: 'first message' },
+      { role: 'assistant', content: 'a reply' },
+      { role: 'user', content: 'more' }
+    ])
+    setCompaction(c.id, { cut: 2, summary: 'what happened', anchor: 1, evictBefore: 1 })
+    addUsage(c.id, { inputTokens: 1, outputTokens: 1, cost: 1 })
+    setConversationError(c.id, { message: 'boom' })
+    organizeConversation(c.id, { title: 'Renamed' })
+    return c.id
+  }
+
+  it('says what a full read says', () => {
+    const id = busyChat()
+    expect(peekConversationHeader(id)).toEqual(fromFullRead(id))
+    // And after a bookkeeping save, which reuses the remembered log.
+    setCompaction(id, { cut: 1, summary: 'shorter', anchor: 1 })
+    expect(peekConversationHeader(id)).toEqual(fromFullRead(id))
+    expect(peekConversationHeader(id)).toMatchObject({ messageCount: 3, compaction: { summary: 'shorter' } })
+  })
+
+  it('answers from the remembered write without reading the file', () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return
+    const id = busyChat()
+    const expected = fromFullRead(id)
+    // Unreadable, but the same file (a mode change leaves inode, mtime and size alone).
+    chmodSync(file(id), 0o000)
+    try {
+      expect(peekConversation(id)).toBeNull()
+      expect(peekConversationHeader(id)).toEqual(expected)
+    } finally {
+      chmodSync(file(id), 0o600)
+    }
+  })
+
+  it('reads the file afresh once another process has written it', () => {
+    const id = busyChat()
+    peekConversationHeader(id)
+    const theirs = onDisk(id)
+    writeFileSync(
+      file(id),
+      JSON.stringify({
+        ...theirs,
+        title: 'From the terminal',
+        announcedPolicy: 'ask',
+        compaction: undefined,
+        messages: [...theirs.messages, { role: 'assistant', content: 'theirs' }]
+      })
+    )
+    expect(peekConversationHeader(id)).toEqual(fromFullRead(id))
+    expect(peekConversationHeader(id)).toMatchObject({ title: 'From the terminal', announcedPolicy: 'ask', messageCount: 4 })
+    expect(peekConversationHeader(id)?.compaction).toBeUndefined()
+  })
+
+  it('drops a mode off the list, as a full read does', () => {
+    const id = busyChat()
+    setAnnouncedPolicy(id, 'bogus' as never)
+    expect(peekConversationHeader(id)?.announcedPolicy).toBeUndefined()
+    expect(peekConversationHeader(id)).toEqual(fromFullRead(id))
+  })
+
+  it('hands back a copy, never the remembered write', () => {
+    const id = busyChat()
+    const header = peekConversationHeader(id)!
+    header.compaction!.summary = 'changed by the caller'
+    header.promptSnapshot!.date = 'changed'
+    expect(peekConversationHeader(id)?.compaction?.summary).toBe('what happened')
+    expect(peekConversation(id)?.compaction?.summary).toBe('what happened')
+    expect(peekConversationHeader(id)?.promptSnapshot?.date).toBe('2026-01-02')
+  })
+
+  it('is null for a missing chat or a non-id', () => {
+    expect(peekConversationHeader('../etc/passwd')).toBeNull()
+    expect(peekConversationHeader('00000000-0000-4000-8000-000000000000')).toBeNull()
+  })
+
+  it('knows a titled chat is titled without a read, and an untitled one is not', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [{ role: 'user', content: 'summarize me' }])
+    expect(conversationTitleSettled(c.id)).toBe(false)
+    expect(setGeneratedTitle(c.id, 'A summary')).toBe(true)
+    expect(conversationTitleSettled(c.id)).toBe(true)
+    const renamed = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    organizeConversation(renamed.id, { title: 'Mine' })
+    expect(conversationTitleSettled(renamed.id)).toBe(true)
+    expect(conversationTitleSettled('not-an-id')).toBe(false)
+  })
+
+  it("says nothing about a chat another process wrote until it is listed, then follows the list", () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [{ role: 'user', content: 'summarize me' }])
+    writeFileSync(file(c.id), JSON.stringify({ ...onDisk(c.id), title: 'Theirs', titleGenerated: true }))
+    // Not this process's write, not listed: unknown, so the caller reads the chat.
+    expect(conversationTitleSettled(c.id)).toBe(false)
+    listConversations()
+    expect(conversationTitleSettled(c.id)).toBe(true)
+    // A later write elsewhere makes the listed entry stale again.
+    writeFileSync(file(c.id), JSON.stringify({ ...onDisk(c.id), titleGenerated: false, title: 'New chat' }))
+    expect(conversationTitleSettled(c.id)).toBe(false)
   })
 })

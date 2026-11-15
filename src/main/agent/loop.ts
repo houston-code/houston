@@ -190,6 +190,7 @@ import { rewindInProgress } from './rewindLock'
 import {
   recordOriginal,
   recordResult,
+  saveRunCheckpoint,
   runFileChanges,
   checkpointFileCount,
   noteConversationRun,
@@ -317,6 +318,7 @@ import {
   conversationFilePath,
   flushConversation,
   peekConversation,
+  peekConversationHeader,
   setAnnouncedPolicy,
   setCompaction,
   setConversationError,
@@ -1827,7 +1829,7 @@ export async function startRun(
     // egress. Resolved before the toolset, which offers recall_memory only when the
     // index lists something.
     const { snapshot: promptSnapshot, fresh: freshSnapshot } = await resolvePromptSnapshot(
-      conversationId ? peekConversation(conversationId)?.promptSnapshot : undefined,
+      conversationId ? peekConversationHeader(conversationId)?.promptSnapshot : undefined,
       localDateStamp(new Date()),
       async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n'),
       memory ? () => memoryIndexOrEmpty(memory) : undefined
@@ -1946,7 +1948,7 @@ export async function startRun(
     // Recorded as told right away, so a failure later in the run can't repeat it.
     const presentPlanOffered = builtinNames.includes(PRESENT_PLAN_NAME)
     if (conversationId) {
-      const before = peekConversation(conversationId)?.announcedPolicy
+      const before = peekConversationHeader(conversationId)?.announcedPolicy
       if (before !== undefined && (before === 'plan') !== (req.approvalPolicy === 'plan')) {
         if (messages[messages.length - 1]?.role === 'user') {
           messages.splice(
@@ -3722,7 +3724,7 @@ export async function startRun(
     // must never kill a run.
     if (conversationId) {
       try {
-        const persisted = peekConversation(conversationId)?.compaction
+        const persisted = peekConversationHeader(conversationId)?.compaction
         if (persisted && isValidCompactionState(persisted, messages)) {
           cut = persisted.cut
           if (cut > 0) {
@@ -6032,6 +6034,10 @@ export async function startRun(
       messages.splice(0, messages.length, ...withRunEndRecord(messages, endRecord))
       persist(messages)
     }
+    // The turn's writes keep what a redo needs in memory as each one finishes (the undo
+    // snapshot was saved before it ran): put it on disk before the run counts as over,
+    // whether it finished, failed, or was stopped. Never rejects.
+    await saveRunCheckpoint(runId)
     if (conversationId && ended && ended.cls !== 'aborted' && ended.message) {
       setConversationError(conversationId, { message: ended.message, ...(ended.cause ? { cause: ended.cause } : {}) })
     }

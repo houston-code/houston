@@ -15,7 +15,7 @@ import { lspManager } from './agent/lsp/manager'
 import { startShellLedger } from './agent/shellLedger'
 import { destroyAllPreviewPanes, destroyPreviewPanesOf, watchPreviewHost } from './preview'
 import { killAllTerminals } from './terminal'
-import { clearCheckpoints } from './agent/checkpoints'
+import { clearCheckpoints, flushCheckpoints, hasUnsavedCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates, setInstallGuard } from './updater'
 import { log } from './logger'
@@ -431,6 +431,7 @@ async function flushBeforeExit(code: number): Promise<number> {
 }
 
 // Don't leave the agent's background shells or terminals running after the app exits.
+let checkpointsSavedForQuit = false
 app.on('will-quit', (e) => {
   // A credential saved just before quitting is still being encrypted: hold the quit
   // until it's on disk, then quit again (this handler runs the cleanup on that pass).
@@ -439,6 +440,15 @@ app.on('will-quit', (e) => {
     void flushSecrets()
       .catch(() => {})
       .finally(() => app.quit())
+    return
+  }
+  // Likewise a turn's latest edits, whose redo snapshots wait a moment in memory before
+  // they are written (see saveRunCheckpoint): save them before the checkpoints are
+  // dropped below. Once, so a turn still writing can't hold the quit.
+  if (hasUnsavedCheckpoints() && !checkpointsSavedForQuit) {
+    checkpointsSavedForQuit = true
+    e.preventDefault()
+    void flushCheckpoints().finally(() => app.quit())
     return
   }
   flushRuleUsage()
