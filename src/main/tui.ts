@@ -93,7 +93,8 @@ import { PROPOSE_SESSION_TOOL } from '@shared/constants'
 import { parseShellEscape, renderShellEscapeRecord } from '@shared/shellEscape'
 import type { ConversationSettingsPatch, DeleteConversationResult, ProposalState } from '@shared/agent'
 import type { DeletePlan } from './deleteChat'
-import { deletePromptText, deleteWorktreeOutcome, parseDeleteAnswer } from './tui-delete'
+import { comeBackCommand } from './sessionWorktree'
+import { deletePromptText, deleteWorktreeOutcome, parseDeleteAnswer, planForSession, type TuiDeletePlan } from './tui-delete'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, deniedPromptText, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
@@ -227,7 +228,7 @@ import {
   type SessionFlags,
   type SessionInputs
 } from './sessionFlags'
-import { isSubagentTool, splitSubagentReport, subagentSpend, SubagentTermLines, type SubagentSpend } from '@shared/subagents'
+import { isSubagentTool, splitSubagentReport, subagentSpend, SubagentTermLines, type SubagentRecord, type SubagentSpend } from '@shared/subagents'
 import { renderSubagentSpend, renderWhatsNew } from './tui-info'
 import { formatElapsed } from '@shared/elapsed'
 import {
@@ -679,7 +680,20 @@ export function renderApprovalText(text: string, paint: Painter, width = 80): st
   const spaced = (l: string): string => l.replace(APPROVAL_SPACE_RUN, (run) => paint(`<${run.length} spaces>`, 'dim'))
   const lines = visibleText(text).split('\n')
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop() // a final newline ends the last line
-  if (lines.length <= 1) return [`  ${spaced(lines[0] ?? '')}`]
+  const cols = Math.max(20, width)
+  if (lines.length <= 1) {
+    // One line can wrap past the limit too (a long run of filler after a short,
+    // dangerous start), so it gets the same reminder of how it starts.
+    const line = spaced(lines[0] ?? '')
+    const only = `  ${line}`
+    const rows = Math.max(1, Math.ceil(visibleWidth(only) / cols))
+    if (rows <= APPROVAL_TEXT_MAX_ROWS) return [only]
+    return [
+      only,
+      paint(`  ↑ one line of ${[...(lines[0] ?? '')].length} characters, shown above. It starts: `, 'dim') +
+        truncateVisible(line, Math.max(20, cols - 40))
+    ]
+  }
   const digits = String(lines.length).length
   const gutter = (n: string): string => paint(`${n.padStart(digits)} │`, 'dim')
   const out: string[] = []
@@ -703,7 +717,6 @@ export function renderApprovalText(text: string, paint: Painter, width = 80): st
     out.push(`  ${gutter(String(i + 1))} ${spaced(l)}`)
   })
   flushBlank(lines.length)
-  const cols = Math.max(20, width)
   const rows = out.reduce((n, l) => n + Math.max(1, Math.ceil(visibleWidth(l) / cols)), 0)
   if (rows > APPROVAL_TEXT_MAX_ROWS) {
     const first = spaced(lines.find((l) => l.trim()) ?? '')
@@ -1399,8 +1412,11 @@ export interface TuiPersist {
    */
   setSettings: (id: string, patch: ConversationSettingsPatch) => void
   list: (workspace: string) => ResumeEntry[]
-  /** The chat's messages, plus its own settings when it has them (restored on resume). */
-  get: (id: string) => ({ messages: ChatMessage[] } & ConversationSettingsPatch) | null
+  /**
+   * The chat's messages, plus its own settings when it has them (restored on resume),
+   * its title and the folder it belongs to.
+   */
+  get: (id: string) => ({ messages: ChatMessage[]; title?: string; workspace?: string } & ConversationSettingsPatch) | null
   /** Recent sessions in this folder whose title/content matches `query`. */
   search: (workspace: string, query: string) => ResumeEntry[]
   /**
@@ -1633,6 +1649,54 @@ function unreadMark(c: ResumeEntry, paint: Painter): string {
 export function sessionFolder(workspace: string | undefined, home = process.env.HOME): string {
   if (!workspace) return ''
   return shortCwd(stripControlChars(workspace).replace(/\\/g, '/'), home)
+}
+
+// An escape sequence cut off at the end of a chunk: a bare ESC, a CSI still missing
+// its final byte, or an OSC (a hyperlink, a title) still missing its terminator.
+// eslint-disable-next-line no-control-regex
+const SHELL_CARRY = /(?:\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*\x1b?)?|\r)$/
+// Held back at most this long: past it, the tail is not a sequence worth waiting for.
+const SHELL_CARRY_MAX = 512
+
+/**
+ * Split a `!command` output chunk into what can be shown now and a tail that may
+ * continue in the next chunk (see SHELL_CARRY), so output filtered chunk by chunk
+ * renders as it would have in one piece. Pure.
+ */
+export function splitShellCarry(s: string): [string, string] {
+  const m = SHELL_CARRY.exec(s)
+  if (!m || m[0].length > SHELL_CARRY_MAX) return [s, '']
+  return [s.slice(0, m.index), m[0]]
+}
+
+/**
+ * Events that belong to another agent (a subagent, a reviewer) or carry no place in
+ * the transcript (a rolled-up usage, whose `inputTokens` is 0): they can arrive in the
+ * middle of the main agent's reply or thought, and must not end it. Pure.
+ */
+export function isSideEvent(e: AgentEvent): boolean {
+  switch (e.type) {
+    case 'subagent_start':
+    case 'subagent_step':
+    case 'subagent_end':
+    case 'subagent':
+    case 'review_finding':
+      return true
+    case 'usage':
+      return e.inputTokens === 0
+    default:
+      return false
+  }
+}
+
+/**
+ * Why a chat of another folder is not opened here, and the command that opens it in
+ * its own folder. Pure.
+ */
+export function otherFolderNote(workspace: string, id: string): string {
+  return `· that chat belongs to another folder (${stripControlChars(workspace)}); open it there with: ${stripControlChars(
+    comeBackCommand(workspace, id)
+  )}`
 }
 
 /**
@@ -1931,7 +1995,12 @@ export async function planDecisionFor(
       return null
     }
     case 'suggest': {
-      const note = (await deps.io.readLine('Suggest changes: ', { discardPending: true })) ?? ''
+      const read = await deps.io.readLine('Suggest changes: ', { discardPending: true })
+      // A cancelled read (Ctrl-C, which also stops the run, or end of input) ends the
+      // prompt, as it does at the action prompt: asking again would be for a run that
+      // is already over.
+      if (read === null) return { kind: 'reject' }
+      const note = read
       if (note.trim()) return { kind: 'suggest', note: note.trim() }
       // An empty note decides nothing: ask again rather than rejecting the plan.
       deps.io.out(paint('· no note given; pick an action\n', 'dim'))
@@ -2122,7 +2191,10 @@ export function parseSlashCommand(
   const name = typed.toLowerCase()
   // A project's own /commit (or /push, /ship, /pr) keeps running as it did: these
   // built-ins arrived after such commands were common, so they yield to them.
-  const git = YIELDS_TO_CUSTOM.has(name) && !resolveCommand(commands, name) ? parseGitCommand(name, arg) : null
+  // A commit message is free text: its line breaks (subject, blank line, body) are
+  // kept, where every other argument is rebuilt from its words.
+  const gitArg = name === 'commit' ? line.slice(1).trim().replace(/^\S+/, '').trim() : arg
+  const git = YIELDS_TO_CUSTOM.has(name) && !resolveCommand(commands, name) ? parseGitCommand(name, gitArg) : null
   if (git) return { kind: 'git', op: git }
   switch (name) {
     case 'exit':
@@ -4670,6 +4742,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     saveDraft({ text: [restoreDraft, keptDraft, halfDraft].filter(Boolean).join('\n\n'), queued: pendingQueued }, true)
   // A chat's saved draft, read when the chat is opened: the next composer starts with it.
   let savedDraft: DraftRecord | null = null
+  // Leaving this chat for another (/clear, /resume, /spawned, /fork, a delete): what
+  // the driver still holds (follow-ups queued during the last turn) is session state
+  // that goes on to the next chat, so the old chat keeps no record of it. Saved under
+  // the old key, it came back later as an unsent draft of text already sent elsewhere.
+  const leaveChatDraft = (): void => saveDraft(null, true)
   const loadSavedDraft = (): void => {
     draftSaver?.flush()
     savedDraft = deps.drafts?.load(draftKey(conversationId, opts.cwd)) ?? null
@@ -4681,6 +4758,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Per-model tallies for /cost. The aggregate above still drives the status line;
   // this is what makes "which model spent it, and how much was cached?" answerable.
   let modelCosts: ModelCost[] = []
+  // The subagents this session's runs dispatched, as their start and end events
+  // described them: /cost lists what they spent beside the tallies above, which hold
+  // this session's spend only (a resumed chat's earlier subagents are not in them).
+  const sessionAgents = new Map<string, SubagentRecord>()
   // Image attachments staged via /image, attached to (and cleared by) the next turn.
   let pendingImages: ImageAttachment[] = []
   // Stage an image for the next turn, from the clipboard or a file. Each returns the
@@ -5108,6 +5189,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // After the chat you're in is deleted (/delete, or from the /resume picker): what
   // was this chat's is dropped, and the next turn starts a fresh one.
   const forgetDeletedChat = (): void => {
+    leaveChatDraft()
     messages = []
     conversationId = null
     persistedSettings = null
@@ -5257,9 +5339,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // The picker asks one yes/no, so a worktree holding work is kept (the safe
           // choice; /delete inside the chat offers removal) and a clean, merged one goes
           // with the chat, as in the desktop app.
-          let plan: DeletePlan = { kind: 'plain', shared: false }
+          let plan: TuiDeletePlan = { kind: 'plain', shared: false }
           try {
-            if (persist.planDelete) plan = await persist.planDelete(id)
+            // Never the worktree this session runs in: it would go from under the session.
+            if (persist.planDelete) plan = planForSession(await persist.planDelete(id), opts.cwd)
           } catch {
             // No plan: a plain delete, which keeps any worktree.
           }
@@ -5559,17 +5642,25 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.io.out(paint(`$ ${shellCmd}\n`, 'dim'))
       let captured = ''
       let code: number
+      // The tail of a chunk that may continue in the next one (an escape sequence cut
+      // by a pipe read, or a carriage return before its line feed): held back so the
+      // filter sees it whole, rather than showing it as `<U+001B>[3` or `<U+000D>`.
+      let carry = ''
       try {
         code = await deps.runUserShell(shellCmd, (chunk) => {
           // Stream it: a build or a test run should look alive, not hung. Its colours
           // stay, but nothing else in it (a file it printed, say) can drive the terminal.
-          deps.io.out(filterTerminalOutput(chunk))
+          const [ready, held] = splitShellCarry(carry + chunk)
+          carry = held
+          if (ready) deps.io.out(filterTerminalOutput(ready))
           captured += chunk
         })
       } catch (e) {
+        if (carry) deps.io.out(filterTerminalOutput(carry))
         deps.io.out(paint(`· couldn't run it: ${(e as Error).message}\n`, 'yellow'))
         continue
       }
+      if (carry) deps.io.out(filterTerminalOutput(carry))
       if (code !== 0) deps.io.out(paint(`· exited ${code}\n`, 'yellow'))
       // Record it in the conversation, so "now fix those failures" works without
       // pasting the output back in — the whole reason to run it HERE rather than in
@@ -5584,6 +5675,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (result.kind === 'exit') break
       if (result.kind === 'clear') {
         subagentTracker.forget(conversationId)
+        leaveChatDraft()
         messages = []
         conversationId = null // next turn starts (and persists) a fresh conversation
         persistedSettings = null // stored meta belongs to the old conversation
@@ -5638,6 +5730,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· that session could not be loaded\n', 'dim'))
           continue
         }
+        // A chat from another folder (Ctrl-A lists every folder, a worktree chat among
+        // them) runs in its own folder: continued here, its turns would read and edit
+        // this folder's files under that chat's history and approval mode.
+        if (conv.workspace && resolvePath(conv.workspace) !== resolvePath(opts.cwd)) {
+          deps.io.out(paint(`${otherFolderNote(conv.workspace, id)}\n`, 'yellow'))
+          continue
+        }
+        leaveChatDraft()
         conversationId = id
         messages = conv.messages
         resetChatState()
@@ -5706,9 +5806,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         const title = terminalText(currentTitle() ?? 'this chat', { lines: false })
         const deleting = conversationId
-        let plan: DeletePlan = { kind: 'plain', shared: false }
+        let plan: TuiDeletePlan = { kind: 'plain', shared: false }
         try {
-          if (deps.persist.planDelete) plan = await deps.persist.planDelete(deleting)
+          // The worktree this session runs in stays: removing it would leave the session
+          // (its next turn, `!` commands, the next new chat) in a folder that is gone.
+          if (deps.persist.planDelete) plan = planForSession(await deps.persist.planDelete(deleting), opts.cwd)
         } catch {
           // No plan: a plain delete, which keeps any worktree.
         }
@@ -5788,6 +5890,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· could not fork this session\n', 'dim'))
           continue
         }
+        leaveChatDraft()
         conversationId = forked.id
         // The fork is a fresh conversation whose stored model we don't track; mark it
         // stale so the next turn re-syncs the meta to the active model.
@@ -5954,6 +6057,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // so far while its own run keeps going and keeps persisting. That is how you
         // check on parallel work without stopping it.
         const stillRunning = list.find((x) => x.id === id)?.running
+        leaveChatDraft()
         conversationId = id
         messages = conv.messages
         resetChatState()
@@ -6201,6 +6305,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'mcp') {
         await runMcpCommand(result.action, deps, paint, opts.cwd)
+        if (result.action.op === 'reconnect') {
+          // A line sent while "Reconnecting" spun was queued (no run to steer): send it
+          // next, as after /compact and /btw, and a line still being typed stays a draft.
+          const typedWhile = deps.io.takeQueued?.() ?? []
+          const halfTyped = deps.io.takeDraft?.() ?? ''
+          pendingQueued = [...pendingQueued, ...typedWhile]
+          if (halfTyped) halfDraft = [halfDraft, halfTyped].filter(Boolean).join('\n\n')
+          if (typedWhile.length || halfTyped) saveHeldDraft()
+        }
         continue
       }
       if (result.kind === 'trust') {
@@ -6601,7 +6714,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             modelCosts,
             contextParts,
             contextTokens,
-            agents: subagentSpend(messages.flatMap((m) => m.subagents ?? []))
+            agents: subagentSpend(sessionAgents.values())
           },
           deps,
           paint,
@@ -6639,11 +6752,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     messages = appendUserTurn(messages, {
       role: 'user',
       content: text,
-      ...(pendingImages.length ? { images: pendingImages } : {}),
+      // Staged images wait for the user's own message: an automated wake turn takes none.
+      ...(pendingImages.length && !wakeTurn ? { images: pendingImages } : {}),
       ...(invokedAs ? { invokedAs } : {}),
       ...(wakeTurn && wakeTaint ? { taintSource: wakeTaint } : {})
     })
-    pendingImages = [] // consumed by this turn
+    if (!wakeTurn) pendingImages = [] // consumed by this turn
     // Lazily open a persisted conversation on the first turn so the session
     // survives restarts and is resumable. Ephemeral when no store is injected, or
     // when the store can't be written (degrade rather than crash the REPL).
@@ -6697,10 +6811,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     let prompts: Promise<void> = Promise.resolve()
     // Once a prompt is answered the agent is working again, so the tab stops saying it
     // needs you (the title is set back to idle when the run returns).
+    // A prompt still queued when the run is interrupted is dropped unshown: stopping
+    // the run already settled every approval, question and plan it was waiting on, so
+    // asking would only answer a call that never runs.
+    const interruptedNow = (): boolean => interruptedQueued !== null
     const enqueue = (task: () => Promise<void>): void => {
       prompts = prompts
-        .then(task)
-        .then(() => deps.io.signal?.({ title: workingTitle('working', workspaceName) }))
+        .then(async () => {
+          if (interruptedNow()) return
+          await task()
+          if (!interruptedNow()) deps.io.signal?.({ title: workingTitle('working', workspaceName) })
+        })
         .catch(() => {})
     }
     // Args captured at tool_start, so a write approval can show the actual diff
@@ -6860,9 +6981,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // Held-back reads print before anything that isn't another read (or a hidden
       // tool, or bookkeeping), so the transcript keeps its order.
       if (!foldsIntoReads(e)) flushReads()
+      // A background subagent's line (or a rolled-up usage with no transcript place)
+      // can land while the main agent is mid-reply or mid-thought. It prints between
+      // the reply's finished blocks without ending the round: flushing the half-received
+      // block there split words across paragraphs and turned the rest of a code fence
+      // into prose (and the prose after it into code).
+      const side = isSideEvent(e)
+      if (side) {
+        flushReasoning()
+        const nl = freshLine()
+        if (nl) deps.io.out(nl)
+      }
       // Anything but more reasoning ends the thought in progress: the rest of its
       // last line first (shown in full), then its summary line (summary mode).
-      if (e.type !== 'reasoning') {
+      if (!side && e.type !== 'reasoning') {
         flushReasoning()
         endThought(e.type === 'turn_discarded')
         thoughtLineOpen = false
@@ -6886,18 +7018,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(s)
         return
       }
-      saysResponding = false
-      if (e.type !== 'reasoning' && e.type !== 'usage') speaking = null
-      // A discarded round's unfinished block is dropped unrendered, never flushed:
-      // its redo will print the whole reply again.
-      if (e.type === 'turn_discarded') md.discard()
-      else flushMd()
-      // Any event but reasoning means the streaming round is over (or gone).
       const roundWasShown = roundShown
-      if (e.type !== 'reasoning') roundShown = false
-      // Usage and a discarded partial round belong to the retry they surround.
-      if (e.type !== 'retry' && e.type !== 'error' && e.type !== 'usage' && e.type !== 'turn_discarded') {
-        retryStreak = 0
+      if (!side) {
+        saysResponding = false
+        if (e.type !== 'reasoning' && e.type !== 'usage') speaking = null
+        // A discarded round's unfinished block is dropped unrendered, never flushed:
+        // its redo will print the whole reply again.
+        if (e.type === 'turn_discarded') md.discard()
+        else flushMd()
+        // Any event but reasoning means the streaming round is over (or gone).
+        if (e.type !== 'reasoning') roundShown = false
+        // Usage and a discarded partial round belong to the retry they surround.
+        if (e.type !== 'retry' && e.type !== 'error' && e.type !== 'usage' && e.type !== 'turn_discarded') {
+          retryStreak = 0
+        }
       }
       switch (e.type) {
         case 'reasoning': {
@@ -7041,6 +7175,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'subagent_step':
         case 'subagent_end': {
           subagentTracker.apply(e, conversationId)
+          if (e.type === 'subagent_start') sessionAgents.set(e.record.id, e.record)
+          else if (e.type === 'subagent_end') {
+            const r = sessionAgents.get(e.recordId)
+            if (r) sessionAgents.set(e.recordId, { ...r, ...e.update })
+          }
           const line = subagentLines.line(e)
           if (line) {
             const text = `  ${'  '.repeat(line.depth)}${truncate(terminalText(line.text, { lines: false }), Math.max(40, columns() - 6))}\n`

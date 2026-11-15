@@ -178,7 +178,13 @@ export function normalizeConfigValue(
   const values = spec.values(ctx)
   if (values === 'model') {
     const resolved = v ? resolveModelArg(v, ctx.settings) : null
-    if (!resolved) return { error: `no configured model "${stripControlChars(v)}": use provider/model, a provider id, or a model id from /model` }
+    // Only a model the provider lists can be the default: saving settings re-points
+    // any other one to the provider's default, so "provider/<unlisted>" would confirm
+    // a default that is not what gets saved.
+    const listed =
+      resolved &&
+      ctx.settings.providers.some((p) => p.id === resolved.providerId && p.models.some((m) => m.id === resolved.model))
+    if (!resolved || !listed) return { error: `no configured model "${stripControlChars(v)}": use provider/model, a provider id, or a model id from /model` }
     return { value: `${resolved.providerId}/${resolved.model}` }
   }
   const lower = v.toLowerCase()

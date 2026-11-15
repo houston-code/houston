@@ -45,7 +45,22 @@ describe('renderSettingsPage', () => {
   })
 
   it('says when a page is edited only in the desktop app', () => {
-    expect(renderSettingsPage('schedules', plain)).toContain('Edited in the desktop app: scheduled runs.')
+    expect(renderSettingsPage('agent', plain)).toContain('Edited in the desktop app: turn limits')
+  })
+
+  it('lists the terminal commands a page has, and calls none of them desktop-only', () => {
+    const schedules = renderSettingsPage('schedules', plain)
+    expect(schedules).toContain('/schedule add')
+    expect(schedules).toContain('/schedule show|pause|resume|run|delete <n>')
+    expect(schedules).not.toContain('desktop app')
+    const permissions = renderSettingsPage('permissions', plain)
+    expect(permissions).toContain('/permissions add')
+    expect(permissions).toContain('/trust list|forget <n>')
+    expect(permissions).not.toMatch(/desktop app only: adding|trusted folders other than this one/)
+    expect(renderSettingsPage('mcp', plain)).toContain('/mcp edit <n>')
+    expect(renderSettingsPage('mcp', plain)).not.toContain('desktop app')
+    expect(renderSettingsPage('hooks', plain)).toContain('/hooks [add|edit|remove n]')
+    expect(renderSettingsPage('hooks', plain)).not.toContain('desktop app')
   })
 
   it('lists the pages for an unknown word, without its control characters', () => {
@@ -70,7 +85,7 @@ describe('renderSettingsOverview', () => {
     for (const cmd of [
       '/login', '/model', '/reasoning', '/approval', '/permissions', '/trust', '/mcp', '/hooks', '/memory',
       '/add-dir', '/theme', '/thoughts', '/verbose', '/screen-reader', '/reduce-motion', '/vim', '/notify',
-      '/config', '/status'
+      '/config', '/status', '/schedule', '/permissions add', '/trust list', '/mcp edit'
     ]) {
       expect(out, cmd).toContain(cmd)
     }
