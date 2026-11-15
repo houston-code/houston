@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { version as PKG_VERSION } from '../../../package.json'
 import { MAX_MCP_MESSAGE_CHARS } from './sse-client'
@@ -11,6 +11,19 @@ import {
   type SpawnFn
 } from './client'
 import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
+
+// Watch how close() stops a server tree, while still doing the real thing.
+const treeSignals = vi.hoisted(() => ({ calls: [] as Array<{ pid: number | undefined; signal: string }> }))
+vi.mock('../sandbox/shared', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../sandbox/shared')>()
+  return {
+    ...real,
+    signalProcessTree: (child: Parameters<typeof real.signalProcessTree>[0], signal: NodeJS.Signals) => {
+      treeSignals.calls.push({ pid: child.pid, signal })
+      real.signalProcessTree(child, signal)
+    }
+  }
+})
 
 interface ToolDecl {
   name: string
@@ -651,6 +664,69 @@ describe('McpClient (real stdio process)', () => {
     ).rejects.toThrow('MCP server process exited: Error: missing API_TOKEN')
     client.close()
   }, 15_000)
+})
+
+describe('McpClient close after the server exited on its own', () => {
+  /** A fake server whose child has a pid (one that may since belong to another process). */
+  function pidServer(pid: number): { spawn: SpawnFn; child: () => EventEmitter } {
+    const inner = fakeServer([{ name: 'echo' }], () => ({}))
+    let child: EventEmitter | undefined
+    const spawn: SpawnFn = (command, args, options) => {
+      const c = inner(command, args, options)
+      child = Object.assign(c, { pid })
+      return c
+    }
+    return { spawn, child: () => child! }
+  }
+
+  it.skipIf(process.platform === 'win32')('does not signal a process group whose id was reused', async () => {
+    const pid = 4_000_123
+    let groupState: 'live' | 'gone' | 'reused' = 'live'
+    const signals: Array<[number, string | number | undefined]> = []
+    const kill = vi.spyOn(process, 'kill').mockImplementation(((target: number, signal?: string | number) => {
+      if (target !== -pid) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
+      signals.push([target, signal])
+      if (groupState === 'gone') throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
+      return true
+    }) as typeof process.kill)
+    try {
+      const server = pidServer(pid)
+      const client = new McpClient(server.spawn)
+      await client.connect({ command: 'fake' })
+      // The server exits and its group is empty; later the system gives the id away.
+      groupState = 'gone'
+      server.child().emit('exit', 1, null)
+      groupState = 'reused'
+      signals.length = 0
+      treeSignals.calls.length = 0
+      client.close()
+      expect(signals).toEqual([])
+      expect(treeSignals.calls).toEqual([])
+    } finally {
+      kill.mockRestore()
+    }
+  })
+
+  it('on Windows, runs no taskkill for a server that already exited', async () => {
+    const pid = 4_000_124
+    const kill = vi.spyOn(process, 'kill').mockImplementation((() => {
+      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
+    }) as typeof process.kill)
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    try {
+      const server = pidServer(pid)
+      const client = new McpClient(server.spawn)
+      await client.connect({ command: 'fake' })
+      server.child().emit('exit', 1, null)
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+      treeSignals.calls.length = 0
+      client.close()
+      expect(treeSignals.calls).toEqual([])
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      kill.mockRestore()
+    }
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('McpClient close (POSIX process group)', () => {
