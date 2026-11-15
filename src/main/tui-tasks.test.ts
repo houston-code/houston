@@ -4,6 +4,8 @@ import type { SubagentRecord } from '@shared/subagents'
 import { makePainter } from './tui'
 import {
   chatSubagents,
+  liveAgentLines,
+  liveAgentPanel,
   parseTasksArgs,
   renderShellDetail,
   renderSubagentDetail,
@@ -310,5 +312,57 @@ describe('chatSubagents', () => {
     const stale = all.find((a) => a.key === 'call0:sa9')!
     expect(stale.status).toBe('aborted')
     expect(stale.runId).toBeUndefined()
+  })
+})
+
+describe('the live agent panel and view', () => {
+  const agent = (over: Partial<TrackedSubagent> = {}): TrackedSubagent => ({ ...agentRow(over).agent })
+  const step = (index: number, summary: string, ok?: boolean) => ({ index, turn: index + 1, kind: 'tool' as const, summary, ...(ok === undefined ? {} : { ok }) })
+
+  it('names each running agent with its steps, time and the step it is on, then how to watch', () => {
+    const rows = liveAgentPanel(
+      [
+        agent({ steps: [step(0, 'read a.ts', true), step(1, 'search config')] }),
+        agent({ key: 'k2', label: 'finished one', status: 'done' })
+      ],
+      NOW,
+      paint,
+      80
+    )
+    expect(rows).toEqual(['  ▸ find the config loader  1 step · 30s  … search config', '    Enter watches it live'])
+  })
+
+  it('is empty when nothing runs, counts what does not fit, and keeps every row inside the width', () => {
+    expect(liveAgentPanel([agent({ status: 'done' })], NOW, paint)).toEqual([])
+    const many = Array.from({ length: 6 }, (_, i) =>
+      agent({ key: `k${i}`, label: `agent ${i} ${'y'.repeat(80)}`, steps: [step(0, 'z'.repeat(200), true)] })
+    )
+    const rows = liveAgentPanel(many, NOW, paint, 50)
+    expect(rows).toHaveLength(5)
+    expect(rows.at(-1)).toContain('+2 more · Enter watches them live')
+    for (const r of rows) expect(r.length).toBeLessThanOrEqual(49)
+  })
+
+  it('strips control characters an agent wrote', () => {
+    const rows = liveAgentPanel([agent({ label: 'evil\x1b[2J', steps: [step(0, 'x\x1b]52;c;aGk=\x07', true)] })], NOW, paint)
+    expect(rows.join('')).not.toContain('\x1b')
+  })
+
+  it('the live view lists every agent with its task and steps, oldest first', () => {
+    const lines = liveAgentLines(
+      [agent({ steps: [step(0, 'read a.ts', true), step(1, 'grep config', false)] }), agent({ key: 'k2', label: 'second', status: 'done', endedAt: NOW - 5_000 })],
+      NOW
+    )
+    expect(lines).toEqual([
+      'find the config loader  (running, 30s, claude-test)',
+      '  task: Where is the config loaded?',
+      '  1. ✓ read a.ts',
+      '  2. ✗ grep config',
+      '',
+      'second  (done, 25s, claude-test)',
+      '  task: Where is the config loaded?',
+      '  (no steps yet)'
+    ])
+    expect(liveAgentLines([], NOW)).toEqual(['No subagents in this turn yet.'])
   })
 })

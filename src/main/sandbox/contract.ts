@@ -69,6 +69,21 @@ export interface SandboxRunOptions {
    * /dev/null as before. Changes nothing about confinement.
    */
   stdin?: string
+  /**
+   * Aborting this hands the still-running command back to the caller instead of
+   * waiting for it: the run resolves at once with {@link SandboxRunResult.detached}
+   * set, its timeout and abort-kill dropped, and the caller owns the process from
+   * then on (the terminal's Ctrl-B moves a foreground command to the background).
+   */
+  detach?: AbortSignal
+}
+
+/** A command handed back while still running (see {@link SandboxRunOptions.detach}). */
+export interface DetachedProcess {
+  child: ChildProcess
+  /** What it printed on each stream before it was handed back. */
+  stdout: string
+  stderr: string
 }
 
 export interface SandboxRunResult {
@@ -81,6 +96,8 @@ export interface SandboxRunResult {
    * False means the command ran unconfined (no enforceable sandbox on this host).
    */
   sandboxed: boolean
+  /** Set when the run was detached while the command was still running; exitCode is null. */
+  detached?: DetachedProcess
 }
 
 /** Launch a command WITHOUT awaiting it (background shells the caller polls). */

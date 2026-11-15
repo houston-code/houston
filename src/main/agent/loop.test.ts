@@ -66,6 +66,7 @@ import { memoryStore } from './memoryStore'
 import { allowRulesForDenial, listRecentDenials, resetRecentDenials } from './recentDenials'
 import { COMPACTION_SUMMARY_PREFIX } from './compaction'
 import { applyCompaction } from './compact'
+import { backgroundForegroundShells, hasForegroundShell } from './foregroundShells'
 import {
   restoreCheckpoint,
   reapplyCheckpoint,
@@ -499,10 +500,12 @@ async function run(
     syncReplies?: boolean
     liveShellOutput?: boolean
     turnAllowRules?: AgentRunRequest['turnAllowRules']
+    /** A fixed run id, for a test that reaches the run from outside (as a client does). */
+    runId?: string
   }
 ): Promise<RunResult> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
-  const runId = `run-${Math.round(Math.random() * 1e9)}`
+  const runId = opts.runId ?? `run-${Math.round(Math.random() * 1e9)}`
   const events: AgentEvent[] = []
   let messages: ChatMessage[] = []
   // Respond on a later tick by default, as the real renderer replies async;
@@ -2129,6 +2132,70 @@ describe('startRun', () => {
     ])
     expect(existsSync(join(ws, 'other.txt'))).toBe(false)
     expect(existsSync(join(ws, 'src', 'deep.ts'))).toBe(false)
+  })
+
+  describe('moving a running command to the background', () => {
+    // A stand-in run_shell that says whether it was offered, and what moving it did.
+    const offers: string[] = []
+    const probe = (): void => {
+      h.probeTools = [
+        {
+          kind: 'shell',
+          summarize: () => 'probe run_shell',
+          schema: {
+            name: 'run_shell',
+            description: 'probe run_shell',
+            parameters: {
+              type: 'object',
+              properties: { command: { type: 'string' }, background: { type: 'boolean' } },
+              required: ['command'],
+              additionalProperties: false
+            }
+          },
+          execute: async (a, ctx) => {
+            if (!ctx.offerBackground) {
+              offers.push(`not offered: ${String(a.command)}`)
+              return 'ran'
+            }
+            let moved = false
+            const done = ctx.offerBackground(() => {
+              moved = true
+            })
+            // The client presses Ctrl-B while the command runs.
+            offers.push(`moved ${backgroundForegroundShells('run-move')}`)
+            done()
+            return moved ? 'moved to the background as shell s1' : 'ran'
+          }
+        }
+      ]
+    }
+
+    it('offers a foreground command to the client, and a press reaches it by run id', async () => {
+      offers.length = 0
+      probe()
+      const r = await run({
+        runId: 'run-move',
+        policy: 'full-auto',
+        // Shell commands prompt on hosts without a sandbox (Linux CI); answer it.
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'npm run build' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [
+            { type: 'tool_call', call: { id: 's2', name: 'run_shell', arguments: { command: 'npm run dev', background: true } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(offers).toEqual(['moved 1', 'not offered: npm run dev'])
+      const results = r.events.filter((e) => e.type === 'tool_result')
+      expect(results[0]).toMatchObject({ ok: true, output: expect.stringContaining('moved to the background') })
+      // Nothing is left registered once the command ended.
+      expect(hasForegroundShell('run-move')).toBe(false)
+    })
   })
 
   describe('live shell output', () => {

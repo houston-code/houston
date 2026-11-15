@@ -72,6 +72,9 @@ import {
   renderPreviewDiff,
   colorizeDiff,
   renderToolResult,
+  renderFoldedCalls,
+  foldedCall,
+  printsBetweenCalls,
   renderImageLinks,
   parseAgentInvocation,
   agentInvocationPrompt,
@@ -8825,8 +8828,9 @@ describe('todo list rendering', () => {
     const t = fakeIo(['go', null])
     d.io = t.io
     await runTui(opts, d)
-    expect(t.text()).toContain('Read  a.ts')
-    expect(t.text()).toContain('contents')
+    // A lone read prints its row and the start of what it read, as reads always have.
+    expect(t.text()).toContain('· Read  a.ts')
+    expect(t.text()).toContain('↳ contents')
   })
 })
 
@@ -11396,6 +11400,16 @@ describe('/config, /status and /feedback', () => {
     expect(t.text()).not.toContain(ESC)
   })
 
+  it('/config focus=on runs the /focus switch and saves it', async () => {
+    const { d, saved } = liveDeps()
+    const t = fakeIo(['/config focus=on', '/config focus', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([{ tuiFocus: true }])
+    expect(t.text()).toContain('· focus: only your messages')
+    expect(t.text()).toContain('focus: on')
+  })
+
   it('/config with no picker prints the list', async () => {
     const { d } = liveDeps()
     const t = fakeIo(['/config', null])
@@ -11831,5 +11845,447 @@ describe('namespaced custom commands and /review targets', () => {
     expect(review).toMatchObject({ kind: 'prompt', invokedAs: { label: '/review', detail: 'Changes since main' } })
     expect(review.kind === 'prompt' && review.text).toContain('base "main..."')
     expect(parseSlashCommand('/review', settings(), BUILTIN_TEMPLATE_COMMANDS)).toMatchObject({ kind: 'prompt', text: REVIEW_TEMPLATE })
+  })
+})
+
+describe('folded tool lines', () => {
+  const done: AgentEvent = { runId: 'x', type: 'done', stopReason: 'end_turn' }
+  const read = (id: string, path: string, output: string): AgentEvent[] => [
+    { runId: 'x', type: 'tool_start', callId: id, name: 'read_file', args: { path }, kind: 'read' },
+    { runId: 'x', type: 'tool_result', callId: id, name: 'read_file', ok: true, output }
+  ]
+
+  it('prints a read still in flight as its start line alone, after the finished ones, and never loses it', async () => {
+    const start = (id: string, path: string): AgentEvent => ({ runId: 'x', type: 'tool_start', callId: id, name: 'read_file', args: { path }, kind: 'read' })
+    const result = (id: string, output: string): AgentEvent => ({ runId: 'x', type: 'tool_result', callId: id, name: 'read_file', ok: true, output })
+    // Something else prints while b is still being read; b's result lands after it.
+    const { d } = deps([
+      start('a', 'a.ts'),
+      start('b', 'b.ts'),
+      start('c', 'c.ts'),
+      result('a', 'A'),
+      result('c', 'C'),
+      { runId: 'x', type: 'notice', message: 'a note in between' } as AgentEvent,
+      result('b', 'B first line'),
+      done
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    const fold = text.indexOf('· Read 2 files  a.ts, c.ts')
+    const row = text.indexOf('· Read  b.ts')
+    expect(fold).toBeGreaterThan(-1)
+    expect(row).toBeGreaterThan(fold)
+    expect(text.indexOf('a note in between')).toBeGreaterThan(row)
+    expect(text.indexOf('↳ B first line')).toBeGreaterThan(text.indexOf('a note in between'))
+    // The turn ends with a read that never returned: its row still prints, once.
+    const cut = deps([start('a', 'a.ts'), start('b', 'b.ts'), result('a', 'A'), done])
+    const t2 = fakeIo(['go', null])
+    cut.d.io = t2.io
+    await runTui(opts, cut.d)
+    const text2 = t2.text()
+    expect(text2.match(/· Read {2}b\.ts/g)).toHaveLength(1)
+    expect(text2.indexOf('· Read  a.ts')).toBeLessThan(text2.indexOf('· Read  b.ts'))
+    expect(text2).toContain('↳ A')
+  })
+
+  it('prints a result for a call it does not hold as normal, without disturbing held reads', async () => {
+    const { d } = deps([
+      ...read('a', 'a.ts', 'A'),
+      ...read('b', 'b.ts', 'B'),
+      // A result no fold is holding (its start never came): printed as it always was.
+      { runId: 'x', type: 'tool_result', callId: 'zz', name: 'run_shell', ok: false, output: 'stray failure\n[exit code: 1]' },
+      ...read('c', 'c.ts', 'C'),
+      ...read('e', 'e.ts', 'E'),
+      done
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    const first = text.indexOf('· Read 2 files  a.ts, b.ts')
+    const stray = text.indexOf('stray failure')
+    expect(first).toBeGreaterThan(-1)
+    expect(stray).toBeGreaterThan(first)
+    expect(text.indexOf('· Read 2 files  c.ts, e.ts')).toBeGreaterThan(stray)
+    expect(text.match(/Read 2 files/g)).toHaveLength(2)
+  })
+
+  it('/focus wins over /verbose: one line a call, reads included, and no directory listings', async () => {
+    const { d } = deps(
+      [
+        ...read('r1', 'a.ts', 'one'),
+        ...read('r2', 'b.ts', 'one\ntwo'),
+        { runId: 'x', type: 'tool_start', callId: 'l1', name: 'list_dir', args: { path: 'src' }, kind: 'read' },
+        { runId: 'x', type: 'tool_result', callId: 'l1', name: 'list_dir', ok: true, output: 'a.ts\nb.ts' },
+        done
+      ],
+      { tuiVerbose: true, tuiFocus: true }
+    )
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text).toContain('· Read  a.ts · 1 line\n· Read  b.ts · 2 lines\n')
+    expect(text).not.toContain('Read 2 files')
+    expect(text).not.toContain('List')
+    expect(text).not.toContain('↳')
+  })
+
+  it('prints a call and its outcome as one line, and calls of one kind in a row share it', async () => {
+    const { d } = deps([
+      ...read('r1', 'a.ts', 'one'),
+      ...read('r2', 'b.ts', 'one\ntwo'),
+      { runId: 'x', type: 'tool_start', callId: 's1', name: 'run_shell', args: { command: 'npm test' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_result', callId: 's1', name: 'run_shell', ok: true, output: 'ok\n[exit code: 0]' },
+      { runId: 'x', type: 'tool_start', callId: 's2', name: 'run_shell', args: { command: 'npm run lint' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_result', callId: 's2', name: 'run_shell', ok: true, output: 'ok\n[exit code: 0]' },
+      done
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    // Reads fold into "Read N files" as the desktop folds them; other calls of one kind
+    // share a line with each one's outcome.
+    expect(text).toContain('· Read 2 files  a.ts, b.ts\n· Run  npm test · exit 0, npm run lint · exit 0\n')
+    expect(text).not.toContain('↳')
+  })
+
+  it('prints the waiting row first when something has to show before the result', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 's1', name: 'run_shell', args: { command: 'npm ci' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_progress', callId: 's1', message: 'downloading' },
+      { runId: 'x', type: 'tool_result', callId: 's1', name: 'run_shell', ok: true, output: 'added 3\n[exit code: 0]' },
+      done
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text.indexOf('· Run  npm ci')).toBeLessThan(text.indexOf('… downloading'))
+    expect(text).toContain('↳ added 3')
+  })
+
+  it("keeps a failure's first lines under its row", async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 's1', name: 'run_shell', args: { command: 'npm test' }, kind: 'shell' },
+      { runId: 'x', type: 'tool_result', callId: 's1', name: 'run_shell', ok: false, output: 'boom\n[exit code: 1]' },
+      done
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toMatch(/· Run {2}npm test\n {2}✗ Run failed\n {4}boom/)
+  })
+
+  it('under /verbose, and in screen-reader mode, each row prints as its call starts', async () => {
+    const cases: Array<[Partial<AppSettings>, typeof opts & { screenReader?: boolean }]> = [
+      [{ tuiVerbose: true }, opts],
+      [{}, { ...opts, screenReader: true }]
+    ]
+    for (const [over, o] of cases) {
+      // A command, not a read: reads are held to fold even for a screen reader.
+      const start: AgentEvent = { runId: 'x', type: 'tool_start', callId: 's1', name: 'run_shell', args: { command: 'npm test' }, kind: 'shell' }
+      const result: AgentEvent = { runId: 'x', type: 'tool_result', callId: 's1', name: 'run_shell', ok: true, output: 'ok\n[exit code: 0]' }
+      const { d } = deps([], over)
+      const t = fakeIo(['go', null])
+      d.io = t.io
+      d.startRun = async (req, send, onMessages) => {
+        send({ ...start, runId: req.runId } as AgentEvent)
+        // The row is on screen before the result exists.
+        expect(t.text()).toMatch(o.screenReader ? /Using tool Run: npm test/ : /· Run {2}npm test/)
+        send({ ...result, runId: req.runId } as AgentEvent)
+        send({ ...done, runId: req.runId } as AgentEvent)
+        onMessages?.(req.messages)
+      }
+      await runTui(o, d)
+    }
+  })
+
+  it('fits the shared line to the width, counting what did not fit', () => {
+    const items = Array.from({ length: 30 }, (_, i) => ({ target: `src/file${i}.ts`, hint: '10 lines', ok: true }))
+    const line = renderFoldedCalls('Read', items, makePainter(false), { width: 80 })
+    expect(line.startsWith('· Read  src/file0.ts · 10 lines, src/file1.ts')).toBe(true)
+    expect(line).toMatch(/\+\d+ more$/)
+    expect(line.length).toBeLessThanOrEqual(79)
+    expect(renderFoldedCalls('Read', items.slice(0, 2), makePainter(false), { sentence: true })).toBe(
+      'Used tool Read: src/file0.ts, 10 lines; src/file1.ts, 10 lines'
+    )
+  })
+
+  it("names the outcome: size, exit code, a moved command's shell, with control characters stripped", () => {
+    expect(foldedCall('read_file', { path: 'a.ts' }, true, 'x\ny').hint).toBe('2 lines')
+    expect(foldedCall('run_shell', { command: 'make' }, false, 'err\n[exit code: 2]').hint).toBe('exit 2')
+    expect(foldedCall('run_shell', { command: 'make' }, true, '[exit code: 0]', { durationMs: 3000 }).hint).toBe('exit 0 · 3s')
+    const moved = 'The user moved this command to the background while it ran; it is still running as background shell ab12cd34. Read'
+    expect(foldedCall('run_shell', { command: 'npm run dev' }, true, moved).hint).toBe('in the background as ab12cd34')
+    const evil = foldedCall('run_shell', { command: 'ls\x1b[2J' }, true, 'out\x1b]52;c;aGk=\x07')
+    expect(evil.target).not.toContain('\x1b')
+    expect(evil.hint).not.toContain('\x1b')
+  })
+
+  it("holds a subagent's steps for the panel when there is one, and prints them otherwise", () => {
+    const step: AgentEvent = {
+      runId: 'x',
+      type: 'subagent_step',
+      parentCallId: 'c',
+      recordId: 'sa1',
+      step: { index: 0, turn: 1, kind: 'tool', summary: 'read a', ok: true }
+    }
+    expect(printsBetweenCalls(step, { focus: false, panel: true, verbose: false })).toBe(false)
+    expect(printsBetweenCalls(step, { focus: false, panel: false, verbose: false })).toBe(true)
+    expect(printsBetweenCalls(step, { focus: true, panel: false, verbose: false })).toBe(false)
+    expect(
+      printsBetweenCalls({ runId: 'x', type: 'tool_progress', callId: 'c', message: '' }, { focus: false, panel: false, verbose: false })
+    ).toBe(false)
+    expect(printsBetweenCalls(done, { focus: false, panel: false, verbose: false })).toBe(true)
+  })
+})
+
+describe('/focus', () => {
+  const done: AgentEvent = { runId: 'x', type: 'done', stopReason: 'end_turn' }
+  const preview: FileDiffPreview[] = [
+    {
+      path: 'src/a.ts',
+      diff: [
+        { type: 'del', text: 'old' },
+        { type: 'add', text: 'new' },
+        { type: 'add', text: 'more' }
+      ]
+    }
+  ]
+  const busyTurn: AgentEvent[] = [
+    { runId: 'x', type: 'reasoning', delta: 'secret plan' },
+    { runId: 'x', type: 'text', delta: 'Let me look around first.\n\n' },
+    { runId: 'x', type: 'tool_start', callId: 'r1', name: 'read_file', args: { path: 'a.ts' }, kind: 'read' },
+    { runId: 'x', type: 'tool_progress', callId: 'r1', message: 'reading' },
+    { runId: 'x', type: 'tool_result', callId: 'r1', name: 'read_file', ok: true, output: 'x' },
+    { runId: 'x', type: 'tool_start', callId: 's1', name: 'run_shell', args: { command: 'npm test' }, kind: 'shell' },
+    { runId: 'x', type: 'tool_result', callId: 's1', name: 'run_shell', ok: false, output: 'boom\n[exit code: 1]' },
+    {
+      runId: 'x',
+      type: 'subagent_start',
+      parentCallId: 's1',
+      record: { id: 'sa1', kind: 'research', label: 'scan', model: 'm', modelSource: 'run', prompt: 'p', tools: [], status: 'running', startedAt: 0, steps: [] }
+    },
+    { runId: 'x', type: 'notice', message: 'budget extended' },
+    { runId: 'x', type: 'tool_start', callId: 'w1', name: 'edit_file', args: { path: 'src/a.ts' }, kind: 'write', preview },
+    { runId: 'x', type: 'tool_result', callId: 'w1', name: 'edit_file', ok: true, output: 'Edited src/a.ts' },
+    { runId: 'x', type: 'text', delta: 'All fixed.\n\n' },
+    done
+  ]
+
+  it('shows one line per tool call, edits with their counts, and only the final reply', async () => {
+    const { d } = deps(busyTurn, { tuiFocus: true, reasoningDisplay: 'show' })
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text).toContain('· Read  a.ts · 1 line\n')
+    expect(text).toContain('· Run  ✗ npm test · exit 1\n')
+    expect(text).toContain('· Edit  src/a.ts · +2 −1\n')
+    expect(text).toContain('All fixed.')
+    for (const hidden of ['secret plan', 'Let me look around', 'reading', 'boom', 'scan', 'budget extended', '↳']) {
+      expect(text).not.toContain(hidden)
+    }
+    // The reply comes after every tool line.
+    expect(text.indexOf('All fixed.')).toBeGreaterThan(text.indexOf('· Edit'))
+  })
+
+  it('is toggled by /focus, remembered, and parsed with on and off', async () => {
+    const { d } = deps(busyTurn)
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (patch) => saved.push(patch)
+    const t = fakeIo(['/focus', 'go', '/focus off', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([{ tuiFocus: true }, { tuiFocus: false }])
+    expect(t.text()).toContain('· focus: only your messages, one line per tool call, and the final reply')
+    expect(t.text()).toContain('· focus off')
+    expect(t.text()).not.toContain('Let me look around')
+    const s = settings()
+    expect(parseSlashCommand('/focus', s)).toEqual({ kind: 'focus' })
+    expect(parseSlashCommand('/focus on', s)).toEqual({ kind: 'focus', on: true })
+    expect(parseSlashCommand('/focus OFF', s)).toEqual({ kind: 'focus', on: false })
+  })
+
+  it('in screen-reader mode, says each call as a plain sentence and labels the reply', async () => {
+    const { d } = deps(busyTurn, { tuiFocus: true })
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui({ ...opts, color: true, screenReader: true }, d)
+    const text = t.text()
+    expect(text).not.toContain(String.fromCharCode(27))
+    expect(text).toContain('Used tool Read: a.ts, 1 line\n')
+    expect(text).toContain('Used tool Run: npm test, failed (exit 1)\n')
+    expect(text).toMatch(/houston:\n+All fixed\./)
+    expect(text).not.toContain('Let me look around')
+  })
+
+  it('a turn cut off before it ends still prints the reply it had', async () => {
+    const { d } = deps([{ runId: 'x', type: 'text', delta: 'Partial answer.\n\n' }], { tuiFocus: true })
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('Partial answer.')
+  })
+})
+
+describe('Ctrl-B: move the running command to the background', () => {
+  it("moves the live run's command and says where to find it; says so when nothing runs", async () => {
+    const r = deps([])
+    let press: (() => void) | null = null
+    const t = fakeIo(['go', null])
+    r.d.io = { ...t.io, onBackground: (h) => (press = h) }
+    const asked: string[] = []
+    let moved = 1
+    r.d.backgroundShells = (runId) => {
+      asked.push(runId)
+      return moved
+    }
+    r.d.startRun = async (req, send, onMessages) => {
+      send({ runId: req.runId, type: 'tool_start', callId: 's1', name: 'run_shell', args: { command: 'npm run build' }, kind: 'shell' } as AgentEvent)
+      press!()
+      moved = 0
+      press!()
+      send({
+        runId: req.runId,
+        type: 'tool_result',
+        callId: 's1',
+        name: 'run_shell',
+        ok: true,
+        output: 'The user moved this command to the background while it ran; it is still running as background shell ab12cd34.'
+      } as AgentEvent)
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' } as AgentEvent)
+      onMessages?.(req.messages)
+    }
+    await runTui(opts, r.d)
+    expect(asked).toEqual(['run-1', 'run-1'])
+    const text = t.text()
+    // The waiting row prints before the note, so the note reads as being about it.
+    expect(text.indexOf('· Run  npm run build')).toBeLessThan(
+      text.indexOf('· moved the running command to the background; /tasks lists it')
+    )
+    expect(text).toContain('· no command is running to move to the background')
+    expect(text).toContain('↳ The user moved this command to the background')
+  })
+
+  it('between turns it only says there is nothing to move', async () => {
+    const r = deps([])
+    let press: (() => void) | null = null
+    const t = fakeIo(['/help', null])
+    r.d.io = { ...t.io, onBackground: (h) => (press = h) }
+    let asked = 0
+    r.d.backgroundShells = () => ++asked
+    await runTui(opts, r.d)
+    press!()
+    expect(asked).toBe(0)
+    expect(t.text()).toContain('· no command is running to move to the background')
+  })
+})
+
+describe('live subagent panel', () => {
+  const record = (id: string, label: string) => ({
+    id,
+    kind: 'research' as const,
+    label,
+    model: 'm',
+    modelSource: 'run' as const,
+    prompt: `task for ${label}`,
+    tools: [],
+    status: 'running' as const,
+    startedAt: 1_000,
+    steps: []
+  })
+  const step = (recordId: string, index: number, summary: string): AgentEvent => ({
+    runId: 'x',
+    type: 'subagent_step',
+    parentCallId: 'c1',
+    recordId,
+    step: { index, turn: index + 1, kind: 'tool', tool: 'read_file', summary, ok: true }
+  })
+  const turn: AgentEvent[] = [
+    { runId: 'x', type: 'tool_start', callId: 'c1', name: 'dispatch_agent', args: { prompt: 'p' }, kind: 'read' },
+    { runId: 'x', type: 'subagent_start', parentCallId: 'c1', record: record('sa1', 'scan the repo') },
+    step('sa1', 0, 'read config.ts'),
+    {
+      runId: 'x',
+      type: 'subagent_end',
+      parentCallId: 'c1',
+      recordId: 'sa1',
+      update: { status: 'done', outcome: 'done', endedAt: 9_000, report: 'Found it.' }
+    },
+    { runId: 'x', type: 'tool_result', callId: 'c1', name: 'dispatch_agent', ok: true, output: 'Found it.' },
+    { runId: 'x', type: 'done', stopReason: 'end_turn' }
+  ]
+
+  it('shows each running agent under the spinner, its steps there instead of in the transcript', async () => {
+    const { d } = deps(turn)
+    const t = fakeIo(['go', null])
+    const panels: Array<string[] | null> = []
+    d.now = () => 13_000
+    d.io = { ...t.io, setLivePanel: (render) => void panels.push(render ? render(80) : null) }
+    await runTui(opts, d)
+    const shown = panels.filter((p): p is string[] => p !== null)
+    expect(shown[0][0]).toMatch(/▸ scan the repo {2}0 steps · 12s {2}starting/)
+    expect(shown.at(-1)?.[0]).toMatch(/1 step · 12s {2}✓ read config\.ts/)
+    expect(shown.at(-1)?.at(-1)).toContain('Enter watches it live')
+    // Gone once the agent ends, and cleared with the turn.
+    expect(panels.at(-1)).toBeNull()
+    const text = t.text()
+    expect(text).toContain('▷ scan the repo')
+    expect(text).not.toContain('✓ read config.ts')
+    expect(text).toContain('✓ scan the repo: finished with a report (1 step, 8s)')
+  })
+
+  it('in screen-reader mode there is no panel: each step prints as a plain line', async () => {
+    const { d } = deps(turn)
+    const t = fakeIo(['go', null])
+    let panelCalls = 0
+    d.io = { ...t.io, setLivePanel: (render) => void (render && panelCalls++) }
+    await runTui({ ...opts, color: true, screenReader: true }, d)
+    expect(panelCalls).toBe(0)
+    const text = t.text()
+    expect(text).toContain('✓ read config.ts')
+    expect(text).not.toContain(String.fromCharCode(27))
+  })
+
+  it("Enter under the panel opens the agents' steps live, redrawn as new ones arrive", async () => {
+    const r = deps([])
+    const t = fakeIo(['go', null])
+    let open: (() => Promise<void>) | null = null
+    let source: PagerSource | null = null
+    let redraws = 0
+    r.d.io = {
+      ...t.io,
+      setLivePanel: () => {},
+      onOpenLivePanel: (h) => (open = h),
+      pager: async (s) => {
+        source = s
+        s.subscribe?.(() => redraws++)
+        return true
+      }
+    }
+    r.d.startRun = async (req, send, onMessages) => {
+      const e = (x: AgentEvent): void => send({ ...x, runId: req.runId } as AgentEvent)
+      e(turn[0])
+      e(turn[1])
+      await open!()
+      expect(source!.title).toBe('Subagents at work (live)')
+      expect(source!.render(80).lines.join('\n')).toContain('task: task for scan the repo')
+      e(step('sa1', 0, 'read config.ts\x1b[2J'))
+      expect(redraws).toBe(1)
+      const doc = source!.render(80).lines.join('\n')
+      expect(doc).toContain('1. ✓ read config.ts')
+      expect(doc).not.toContain('\x1b')
+      e(turn[3])
+      e(turn[4])
+      e(turn[5])
+      onMessages?.(req.messages)
+    }
+    await runTui(opts, r.d)
+    expect(redraws).toBeGreaterThan(1)
   })
 })

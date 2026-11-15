@@ -243,6 +243,7 @@ import {
 } from './subagent'
 import { SubagentRecorder, type SubagentHandle } from './subagentRecorder'
 import { USER_SUBAGENT_STOP, isUserSubagentStop, registerSubagentStop } from './subagentStops'
+import { registerForegroundShell } from './foregroundShells'
 import {
   limitSubagentHistory,
   resumeNote,
@@ -6035,6 +6036,11 @@ export async function startRun(
                         ? {
                             ...ctx,
                             ...(live ? { onShellOutput: live.push } : {}),
+                            // A client can move a running foreground command to the
+                            // background (Ctrl-B in the terminal, see foregroundShells.ts).
+                            ...(call.name === 'run_shell' && execArgs.background !== true
+                              ? { offerBackground: (move: () => void) => registerForegroundShell(runId, call.id, move) }
+                              : {}),
                             recordEvidence: (e) => {
                               if (e.kind === 'shell' && e.blocked === 'network') networkBlocked = true
                               if (treeBefore) heldEvidence.push(e)
