@@ -71,6 +71,17 @@ describe('/commit', () => {
     expect(h.text()).toContain('committed abc1234 on feat/x; /push sends it')
   })
 
+  it('says when the list leaves out untracked files the commit will take', async () => {
+    const h = harness({ tree: async () => tree({ truncated: true }) }, ['n'])
+    await runGitCommand({ op: 'commit', message: 'Fix it' }, h.ctx)
+    expect(h.text()).toContain('and more untracked files not listed here')
+    expect(h.asked[0]).toContain('Stage and commit the files listed and the untracked files not listed?')
+    const full = harness({}, ['n'])
+    await runGitCommand({ op: 'commit', message: 'Fix it' }, full.ctx)
+    expect(full.text()).not.toContain('not listed')
+    expect(full.asked[0]).toContain('Stage and commit this file?')
+  })
+
   it('a declined or cut-off answer commits nothing', async () => {
     for (const answer of ['n', '', 'sure', null]) {
       const h = harness({}, [answer])

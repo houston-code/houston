@@ -1,18 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Provider, ProviderStreamEvent } from '@shared/agent'
 import { GIT_ENV } from './gitRead'
+import { collectWorkingTreeChanges } from './workingTree'
 
 const host = vi.hoisted(() => ({
   provider: { id: 'p', kind: 'openai-compatible', models: [{ id: 'm' }] } as unknown,
-  selected: { providerId: 'p', model: 'm' } as { providerId: string; model: string } | null
+  selected: { providerId: 'p', model: 'm' } as { providerId: string; model: string } | null,
+  secrets: [] as string[]
 }))
 vi.mock('../agentHost', () => ({
   getProvider: (id: string) => (id === 'p' ? host.provider : undefined),
-  getSettings: () => ({ selected: host.selected })
+  getSettings: () => ({ selected: host.selected }),
+  collectSecrets: () => host.secrets
 }))
 vi.mock('../conversations', () => ({ peekConversation: () => null }))
 
@@ -24,6 +27,7 @@ import {
   pushBranch,
   pushEnv,
   pushTargetProblem,
+  repoFilterDrivers,
   riskyRepoConfig,
   sanitizeCommitMessage,
   suggestCommitMessage
@@ -36,6 +40,7 @@ try {
   gitOk = false
 }
 const maybe = gitOk ? it : it.skip
+const posix = gitOk && process.platform !== 'win32' ? it : it.skip
 const TIMEOUT = 30_000
 
 const dirs: string[] = []
@@ -81,6 +86,20 @@ describe('riskyRepoConfig', () => {
     const keys = ['core.alternateRefsCommand', 'remote.origin.vcs', 'push.recurseSubmodules', 'submodule.recurse']
     const out = [...keys.flatMap((k) => ['local', `${k}\nx`]), 'global', 'submodule.recurse\ntrue', ''].join('\0')
     expect(riskyRepoConfig(out)).toEqual(keys.map((k) => k.toLowerCase()))
+  })
+})
+
+describe('repoFilterDrivers', () => {
+  it('names the filter drivers the repository defines, not the user’s own', () => {
+    const out = [
+      'local', 'filter.vault.clean\nx',
+      'local', 'filter.vault.smudge\ny',
+      'global', 'filter.lfs.process\ngit-lfs filter-process',
+      'worktree', 'filter.a.b.process\nz',
+      'local', 'filter.c.required\ntrue',
+      ''
+    ].join('\0')
+    expect(repoFilterDrivers(out)).toEqual(['vault', 'a.b'])
   })
 })
 
@@ -163,6 +182,87 @@ describe('commitAll', () => {
   )
 
   maybe(
+    'refuses a repository that defines its own filter driver, instead of committing unfiltered bytes',
+    async () => {
+      const r = repo()
+      git(r, 'config', 'filter.vault.clean', "sed 's/hunter2/ENCRYPTED/'")
+      git(r, 'config', 'filter.vault.required', 'true')
+      writeFileSync(join(r, '.gitattributes'), 'secrets.env filter=vault\n')
+      writeFileSync(join(r, 'secrets.env'), 'DB_PASSWORD=ENCRYPTED\n')
+      git(r, 'add', '.')
+      git(r, 'commit', '-qm', 'secrets')
+      writeFileSync(join(r, 'secrets.env'), 'DB_PASSWORD=hunter2\n')
+      const res = await commitAll(r, 'Rotate', deps([r]))
+      expect(res).toMatchObject({ ok: false, error: expect.stringMatching(/own git filter \(vault\)/) })
+      expect(git(r, 'rev-list', '--count', 'HEAD')).toBe('2')
+      expect(git(r, 'show', 'HEAD:secrets.env')).toBe('DB_PASSWORD=ENCRYPTED')
+    },
+    TIMEOUT
+  )
+
+  posix(
+    'refuses when the repository config is too large to list, so a planted signing program never runs',
+    async () => {
+      const r = repo()
+      writeFileSync(join(r, 'a.txt'), 'two\n')
+      const marker = join(r, 'gpg-ran')
+      const prog = join(r, 'evil.sh')
+      writeFileSync(prog, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`)
+      chmodSync(prog, 0o755)
+      appendFileSync(join(r, '.git', 'config'), `[pad]\n\tx = ${'A'.repeat(17_000_000)}\n[gpg]\n\tprogram = ${prog}\n[commit]\n\tgpgsign = true\n`)
+      const res = await commitAll(r, 'x', deps([r]))
+      expect(res).toMatchObject({ ok: false, error: expect.stringMatching(/Could not read this repository's git config/) })
+      expect(existsSync(marker)).toBe(false)
+      expect(git(r, 'rev-list', '--count', 'HEAD')).toBe('1')
+    },
+    60_000
+  )
+
+  maybe(
+    'in a project folder below the repository root, commits only the changes under it',
+    async () => {
+      const r = repo()
+      mkdirSync(join(r, 'sub'))
+      mkdirSync(join(r, 'other'))
+      writeFileSync(join(r, 'sub', 's.txt'), 's\n')
+      writeFileSync(join(r, 'other', 'o.txt'), 'o\n')
+      writeFileSync(join(r, 'other', 'staged.txt'), 'x\n')
+      git(r, 'add', '.')
+      git(r, 'commit', '-qm', 'layout')
+      writeFileSync(join(r, 'sub', 's.txt'), 's2\n')
+      writeFileSync(join(r, 'sub', 'new.txt'), 'n\n')
+      writeFileSync(join(r, 'other', 'o.txt'), 'o2\n')
+      writeFileSync(join(r, 'other', 'secret-notes.txt'), 'private\n')
+      writeFileSync(join(r, 'other', 'staged.txt'), 'y\n')
+      git(r, 'add', 'other/staged.txt')
+      const sub = join(r, 'sub')
+      // What the Changes list (and /commit's confirmation) shows is what gets committed.
+      expect((await collectWorkingTreeChanges(sub)).files.map((f) => f.path).sort()).toEqual(['new.txt', 's.txt'])
+      expect(await commitAll(sub, 'Sub only', deps([sub]))).toMatchObject({ ok: true })
+      expect(git(r, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort()).toEqual(['sub/new.txt', 'sub/s.txt'])
+      // Everything outside the folder is as it was, the user's own staging included.
+      expect(git(r, 'diff', '--cached', '--name-only')).toBe('other/staged.txt')
+      expect(git(r, 'diff', '--name-only')).toBe('other/o.txt')
+      expect(git(r, 'ls-files', '--others', '--exclude-standard')).toBe('other/secret-notes.txt')
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    'keeps message lines that start with #, as git commit -m does',
+    async () => {
+      const r = repo()
+      writeFileSync(join(r, 'a.txt'), 'two\n')
+      expect(await commitAll(r, '#123 Fix the login redirect', deps([r]))).toMatchObject({ ok: true })
+      expect(git(r, 'log', '-1', '--format=%B')).toBe('#123 Fix the login redirect')
+      writeFileSync(join(r, 'a.txt'), 'three\n')
+      expect(await commitAll(r, 'Fix the login redirect\n\n#123', deps([r]))).toMatchObject({ ok: true })
+      expect(git(r, 'log', '-1', '--format=%B')).toBe('Fix the login redirect\n\n#123')
+    },
+    TIMEOUT
+  )
+
+  maybe(
     'refuses while a merge is in progress, instead of committing its conflict markers',
     async () => {
       const r = repo()
@@ -230,7 +330,6 @@ async function withGlobalConfig<T>(text: string, fn: () => Promise<T>): Promise<
   }
 }
 
-const posix = gitOk && process.platform !== 'win32' ? it : it.skip
 const sshUrl = (path: string): string => `ssh://fake-host${path}`
 const refsOf = (bare: string): string => execFileSync('git', ['-C', bare, 'for-each-ref'], { encoding: 'utf8' })
 
@@ -286,6 +385,27 @@ describe('pushBranch and branchSync', () => {
       git(r, 'remote', 'add', 'origin', join(r, 'nowhere'))
       git(r, 'config', 'core.sshCommand', 'touch pwned')
       expect(await pushBranch(r, deps([r]))).toMatchObject({ ok: false, error: /core\.sshcommand/ })
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    'refuses a repository that uses Git LFS, whose upload hook never runs',
+    async () => {
+      const r = repo()
+      git(r, 'remote', 'add', 'origin', 'https://example.invalid/r.git')
+      mkdirSync(join(r, 'art'))
+      writeFileSync(join(r, 'art', '.gitattributes'), '*.psd filter=lfs diff=lfs merge=lfs -text\n')
+      git(r, 'add', '.')
+      git(r, 'commit', '-qm', 'lfs')
+      writeFileSync(join(r, '.git', 'hooks', 'pre-push'), '#!/bin/sh\ngit lfs pre-push "$@"\n')
+      expect(await pushBranch(r, deps([r]))).toMatchObject({ ok: false, error: expect.stringMatching(/uses Git LFS/) })
+      // Named only in the repository's own info/attributes.
+      const r2 = repo()
+      git(r2, 'remote', 'add', 'origin', 'https://example.invalid/r.git')
+      mkdirSync(join(r2, '.git', 'info'), { recursive: true })
+      writeFileSync(join(r2, '.git', 'info', 'attributes'), '*.bin filter=lfs\n')
+      expect(await pushBranch(r2, deps([r2]))).toMatchObject({ ok: false, error: expect.stringMatching(/uses Git LFS/) })
     },
     TIMEOUT
   )
@@ -459,6 +579,36 @@ describe('suggestCommitMessage', () => {
       } as unknown as Provider
       expect(await suggestCommitMessage(r, null, deps([r]), () => provider)).toEqual({ ok: true, detail: 'Change a to two' })
       expect(seen).toMatch(/\+two/)
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    'leaves credential file contents and secret values out of the request',
+    async () => {
+      const r = repo()
+      const key = `sk-${'a1B2'.repeat(12)}`
+      host.secrets = ['stored-provider-secret-value']
+      writeFileSync(join(r, '.env'), `OPENAI_API_KEY=${key}\nDB_HOST=localhost\n`)
+      writeFileSync(join(r, 'a.txt'), `two ${key}\nstored-provider-secret-value\n`)
+      let seen = ''
+      const provider = {
+        async *streamChat(req: { messages: { content: string }[] }): AsyncGenerator<ProviderStreamEvent> {
+          seen = req.messages[0].content
+          yield { type: 'text', text: 'Add config' } as ProviderStreamEvent
+        }
+      } as unknown as Provider
+      try {
+        expect(await suggestCommitMessage(r, null, deps([r]), () => provider)).toEqual({ ok: true, detail: 'Add config' })
+      } finally {
+        host.secrets = []
+      }
+      expect(seen).toContain('new file: .env')
+      expect(seen).toContain('Sensitive file, contents not shown')
+      expect(seen).not.toContain('DB_HOST')
+      expect(seen).not.toContain(key)
+      expect(seen).not.toContain('stored-provider-secret-value')
+      expect(seen).toMatch(/\+two /)
     },
     TIMEOUT
   )

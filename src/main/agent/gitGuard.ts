@@ -46,6 +46,25 @@ const MAX_PARALLEL_PARSES = 8
 const MAX_PARALLEL_READS = 16
 /** Config files whose parse {@link parsedConfigs} keeps; the least recently used go first. */
 const MAX_PARSED_CONFIGS = 4096
+/** A config file larger than this is reported as too large to check, never parsed. */
+const MAX_CONFIG_BYTES = 1024 * 1024
+
+/**
+ * A config file the guard could not fully read (too large, or the parse was cut off or
+ * timed out). It may hold any key, so it is reported as an exec-capable entry under
+ * this key whenever its bytes change. Not a real git key: undo leaves it alone.
+ */
+export const UNREADABLE_CONFIG_KEY = '(unreadable config)'
+/** {@link GitGuardDeps.readConfigEntries}'s answer for a file it could not fully read. */
+export const UNREADABLE = 'unreadable' as const
+/** Parsed entries, null when git itself can't parse the file, or {@link UNREADABLE}. */
+type ConfigEntries = Array<[string, string]> | null | typeof UNREADABLE
+
+/**
+ * Stands for the hooks beyond {@link MAX_HOOK_FILES}: their names and metadata
+ * fingerprinted together, so a hook added or changed among them is still reported.
+ */
+export const HOOKS_OVERFLOW = '(more hook files than Houston reads)'
 
 /** Config keys whose value is, or leads git to, a command it runs on its own. Lowercase. */
 const EXEC_KEY_PATTERNS: RegExp[] = [
@@ -186,8 +205,11 @@ export type GitChange =
 
 /** Injectable seams, real implementations by default. */
 export interface GitGuardDeps {
-  /** Parse `bytes`, read from config file `file`, into all its entries; null when git can't. */
-  readConfigEntries?: (file: string, bytes: Buffer) => Promise<Array<[string, string]> | null>
+  /**
+   * Parse `bytes`, read from config file `file`, into all its entries; null when git
+   * can't parse them, {@link UNREADABLE} when the read did not finish.
+   */
+  readConfigEntries?: (file: string, bytes: Buffer) => Promise<ConfigEntries>
   /** Submodule entries (path → object id) in the index of the repo at `dir`. */
   listGitlinks?: (dir: string) => Promise<Map<string, string>>
 }
@@ -222,14 +244,24 @@ async function commondirTarget(file: string, text: string): Promise<string | nul
  * follows no includes, runs nothing. `--no-includes` is spelled out because, unlike a
  * named file, stdin otherwise follows them.
  */
-export function defaultReadConfigEntries(_file: string, bytes: Buffer): Promise<Array<[string, string]> | null> {
+export function defaultReadConfigEntries(_file: string, bytes: Buffer): Promise<ConfigEntries> {
+  // Real config files are a few KB. A huge one is read as unreadable without parsing:
+  // padding is how a planted key would be pushed past any output buffer or timeout.
+  if (bytes.length > MAX_CONFIG_BYTES) return Promise.resolve(UNREADABLE)
   return new Promise((done) => {
     const child = execFile(
       gitExecutable(GIT_ENV),
       ['config', '--no-includes', '--file', '-', '-z', '--list'],
       // Outside any repository, so git does no discovery and reads no repo config.
-      { cwd: tmpdir(), env: GIT_ENV, timeout: 5_000, maxBuffer: 4_000_000, windowsHide: true },
-      (err, stdout) => done(err ? null : parseConfigList(String(stdout)))
+      // The listing repeats each section name per key, so it can outgrow the input.
+      { cwd: tmpdir(), env: GIT_ENV, timeout: 5_000, maxBuffer: 64_000_000, windowsHide: true },
+      (err, stdout, stderr) => {
+        if (!err) done(parseConfigList(String(stdout)))
+        // Only git's own parse error means "git can't read it, so git runs nothing".
+        // A cut-off or timed-out read could have missed any key.
+        else if (err.code === 128 && /bad config/i.test(String(stderr))) done(null)
+        else done(UNREADABLE)
+      }
     )
     // git can exit (a parse error) before reading it all; the exit status already says so.
     child.stdin?.on('error', () => {})
@@ -307,6 +339,10 @@ function execEntries(read: ReadConfigEntries, file: string, bytes: Buffer): Prom
     // A file git can't parse makes git itself refuse to run, so it runs nothing either.
     if (!entries) return null
     const out: ExecEntries = new Map()
+    if (entries === UNREADABLE) {
+      out.set(UNREADABLE_CONFIG_KEY, [`${bytes.length} bytes, sha256 ${digest.slice(0, 12)}`])
+      return out
+    }
     for (const [key, value] of entries) {
       if (isExecConfigEntry(key, value)) out.set(key, [...(out.get(key) ?? []), value])
     }
@@ -400,8 +436,20 @@ class Snapshotter {
     } catch {
       return out
     }
-    for (const name of names.sort().slice(0, MAX_HOOK_FILES)) {
-      if (name.endsWith('.sample')) continue
+    // Samples first, then the cap: git never runs a `.sample`, so they must not use up
+    // the window and push a real hook out of it.
+    const real = names.filter((n) => !n.endsWith('.sample')).sort()
+    const overflow = real.slice(MAX_HOOK_FILES)
+    if (overflow.length) {
+      // Fingerprinted by name and metadata only, never read.
+      const h = createHash('sha256')
+      for (const name of overflow) {
+        const st = await stat(join(hooksDir, name)).catch(() => null)
+        h.update(`${name}\0${st ? `${st.size}:${st.mtimeMs}:${st.ino}:${st.mode}` : '-'}\0`)
+      }
+      out.set(HOOKS_OVERFLOW, { hash: h.digest('hex'), mode: 0 })
+    }
+    for (const name of real.slice(0, MAX_HOOK_FILES)) {
       const p = join(hooksDir, name)
       try {
         const st = await stat(p)
@@ -563,10 +611,16 @@ export function describeChange(c: GitChange, workspace: string): string {
   const f = shown(c.file, workspace)
   switch (c.kind) {
     case 'config':
+      if (c.key === UNREADABLE_CONFIG_KEY) {
+        return `${f}: changed, and too large or slow to check for settings that run a command`
+      }
       return c.after.length === 0
         ? `${f}: removed ${c.key}`
         : `${f}: ${c.key} set to "${clip(c.after.join(', '))}"${c.before.length ? ` (was "${clip(c.before.join(', '))}")` : ''}`
     case 'hook': {
+      if (basename(c.file) === HOOKS_OVERFLOW) {
+        return `${shown(dirname(c.file), workspace)}: hook files changed beyond the ${MAX_HOOK_FILES} Houston reads`
+      }
       const first = c.after.content ? clip(c.after.content.toString('utf8').split('\n').slice(0, 3).join(' | '), 100) : ''
       return `${c.before ? 'changed' : 'new'} hook ${f}${first ? `: ${first}` : ''}`
     }
@@ -582,10 +636,12 @@ export function manualUndo(c: GitChange): string {
   const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`
   switch (c.kind) {
     case 'config':
+      if (c.key === UNREADABLE_CONFIG_KEY) return `inspect ${q(c.file)} by hand`
       return c.before.length === 0
         ? `git config --file ${q(c.file)} --unset-all ${q(c.key)}`
         : `git config --file ${q(c.file)} --replace-all ${q(c.key)} ${q(c.before[0]!)}`
     case 'hook':
+      if (basename(c.file) === HOOKS_OVERFLOW) return `inspect ${q(dirname(c.file))} by hand`
       return c.before ? `restore ${q(c.file)} from a clean copy of the repository` : `rm ${q(c.file)}`
     case 'commondir':
       return c.before === null ? `rm ${q(c.file)}` : `printf %s ${q(c.before)} > ${q(c.file)}`
@@ -634,6 +690,8 @@ export async function undoChange(c: GitChange): Promise<boolean> {
   try {
     switch (c.kind) {
       case 'config': {
+        // Not a key git knows: nothing Houston can put back by itself.
+        if (c.key === UNREADABLE_CONFIG_KEY) return false
         // git writes config through a symlink, so a config file swapped for one (say, to
         // the user's global config) is put back whole instead of edited in place.
         if (await isSymlink(c.file)) {
@@ -646,6 +704,7 @@ export async function undoChange(c: GitChange): Promise<boolean> {
         return true
       }
       case 'hook': {
+        if (basename(c.file) === HOOKS_OVERFLOW) return false
         if (!c.before) {
           await unlink(c.file)
           return true

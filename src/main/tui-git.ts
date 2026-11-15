@@ -75,7 +75,8 @@ export function renderCommitFiles(tree: WorkingTreeChanges, paint: Painter): str
     (f, i) => `  ${paint(mark[f.status] ?? 'M', 'yellow')} ${paths[i].padEnd(width)}  ${paint(`+${f.added}`, 'green')} ${paint(`-${f.removed}`, 'red')}`
   )
   const head = paint(`Commit${tree.branch ? ` on ${oneLine(tree.branch)}` : ''}:`, 'bold')
-  return [head, ...rows, paint(`  ${plural(tree.files.length, 'file')}, +${tree.added} -${tree.removed}`, 'dim')].join('\n')
+  const more = tree.truncated ? [paint('  and more untracked files not listed here', 'yellow')] : []
+  return [head, ...rows, ...more, paint(`  ${plural(tree.files.length, 'file')}, +${tree.added} -${tree.removed}`, 'dim')].join('\n')
 }
 
 /** Whether the desktop would offer Push for this branch state. */
@@ -193,7 +194,16 @@ async function commit(given: string, deps: GitDeps, ctx: GitContext): Promise<vo
     .join('\n')
   out(`${paint('Message:', 'bold')}\n${shown}\n`)
   const answer = await ctx.ask(
-    paint(`Stage and commit ${tree.files.length === 1 ? 'this file' : `these ${tree.files.length} files`}? Repository hooks don't run. [y/N] `, 'yellow')
+    paint(
+      `Stage and commit ${
+        tree.truncated
+          ? 'the files listed and the untracked files not listed'
+          : tree.files.length === 1
+            ? 'this file'
+            : `these ${tree.files.length} files`
+      }? Repository hooks don't run. [y/N] `,
+      'yellow'
+    )
   )
   if (!/^y(es)?$/i.test(answer?.trim() ?? '')) {
     out(paint('· not committed\n', 'dim'))
