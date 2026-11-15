@@ -166,7 +166,7 @@ import { loadWorkspaceSlashCommands, workspaceMcpPromptCommands, workspaceMcpPro
 import { loadSkills } from './agent/skills'
 import { prepareCommandRun, workspaceTrusted } from './agent/commandRun'
 import { describeContextConsent } from './agent/commandContext'
-import { putCommandGrant, takeCommandGrant } from './commandGrants'
+import { putCommandGrant, rememberTurnGrant, retryTurnGrant, takeCommandGrant } from './commandGrants'
 import { resolveCommand } from '@shared/commands'
 import type { CommandPrepareResult } from '@shared/promptInvocation'
 import { loadAgents } from './agent/agents'
@@ -1764,16 +1764,30 @@ export function registerIpc(ready?: Promise<unknown>): void {
     }
 
     // A custom command's per-turn model, effort and pre-approved tools, and an MCP
-    // prompt's taint, from main's own record (the chat keeps the settings recorded below).
+    // prompt's taint, from main's own record (the chat keeps the settings recorded
+    // below). A worktree chat's command was prepared for its repository, before the
+    // worktree existed.
     let grant: ReturnType<typeof takeCommandGrant> = null
     if (req.commandGrant) {
-      let root = conv.workspace
-      try {
-        root = realpathSync(conv.workspace)
-      } catch {
-        // A folder that's gone matches no grant.
+      const folders: string[] = []
+      for (const dir of [conv.workspace, conv.worktree?.repoRoot]) {
+        if (!dir) continue
+        try {
+          folders.push(realpathSync(dir))
+        } catch {
+          // A folder that's gone matches no grant.
+        }
       }
-      grant = takeCommandGrant(req.commandGrant, root)
+      grant = takeCommandGrant(req.commandGrant, folders)
+      if (!grant) {
+        // Running it without the options it asked for would run it differently.
+        emitEvent(event.sender, conv.id, {
+          runId: req.runId,
+          type: 'error',
+          message: "That command's options are no longer available. Send it again."
+        })
+        return
+      }
     }
 
     const images = sanitizeAttachments(resolveStoredImages(req.images))
@@ -1808,6 +1822,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
     } catch (e) {
       log.warn(`could not record the recent model: ${(e as Error).message}`)
     }
+
+    // Retry of this turn runs it with the same options.
+    rememberTurnGrant(conv.id, userMessage.at, grant)
 
     void runAndDrain(
       makeIo(event.sender),
@@ -1868,6 +1885,18 @@ export function registerIpc(ready?: Promise<unknown>): void {
       // Same boundary validation as agentStart: an unknown policy fails open, so coerce.
       const approvalPolicy = isApprovalPolicy(req.approvalPolicy) ? req.approvalPolicy : 'plan'
       const reasoningEffort = isReasoningEffort(req.reasoningEffort) ? req.reasoningEffort : undefined
+      // A custom command's turn retries on the options it was sent with.
+      const lastTurnAt = [...conv.messages].reverse().find((m) => m.role === 'user')?.at
+      const retryGrant = retryTurnGrant(conv.id, lastTurnAt)
+      if (retryGrant.kind === 'expired') {
+        emitEvent(event.sender, conv.id, {
+          runId: req.runId,
+          type: 'error',
+          message: "That command's options are no longer available. Send it again."
+        })
+        return
+      }
+      const grant = retryGrant.kind === 'grant' ? retryGrant.grant : null
       // Persist the (possibly switched) settings like agentStart does, so a retry after
       // changing provider isn't run under the new one while the conversation's stored
       // meta still names the old — which mis-attributes the turn in the scorecard.
@@ -1883,10 +1912,11 @@ export function registerIpc(ready?: Promise<unknown>): void {
         {
           runId: req.runId,
           workspace: conv.workspace,
-          providerId: req.providerId,
-          model: req.model,
+          providerId: grant?.model?.providerId ?? req.providerId,
+          model: grant?.model?.model ?? req.model,
           approvalPolicy,
-          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(grant?.effort ? { reasoningEffort: grant.effort } : reasoningEffort ? { reasoningEffort } : {}),
+          ...(grant?.turnAllowRules?.length ? { turnAllowRules: grant.turnAllowRules } : {}),
           messages: conv.messages
         },
         // Record the starting window so only it can approve/answer/cancel this run.

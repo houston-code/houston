@@ -1,5 +1,5 @@
-import { promises as fs, realpathSync } from 'node:fs'
-import { relative, sep } from 'node:path'
+import { promises as fs, lstatSync, realpathSync, statSync } from 'node:fs'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { expandTemplate } from '@shared/commands'
 import { CONTEXT_SENTINEL_RE, findContext, lineRangeLabel, type LineRange } from '@shared/commandContext'
 import { captureUserShell, type ShellCapture } from '../userShell'
@@ -29,7 +29,7 @@ import { resolveInRoots } from './tools'
  * with a message, so the model never gets a half-filled prompt. The arguments the
  * user typed are filled in after the context and never reach a shell command, so
  * `/deploy "; rm -rf ~"` can't turn into one. A path-like `@word` that names no file
- * (`npm i @types/node`) stays text.
+ * (`npm i @types/node`, an `@/alias` import) or names a folder (`@src/`) stays text.
  */
 
 /** Largest part of one file put into the prompt. */
@@ -190,7 +190,8 @@ export type ResolvedContextFile =
 
 /**
  * Resolve a mentioned path inside the workspace roots, through symlinks, exactly
- * as `read_file` requires. `missing` (it names no file) means the word stays text.
+ * as `read_file` requires. `missing` (it names no file, or names a folder) means the
+ * word stays text.
  * `sensitive` is judged by the name written, where it points and what it really is,
  * so an innocent-looking link to `.env` still asks.
  */
@@ -199,6 +200,17 @@ export function resolveContextFile(roots: string[], workspace: string, path: str
   try {
     abs = resolveInRoots(roots, path)
   } catch {
+    // Outside the roots: refused only when it names something that is there (a
+    // real file, or a link that leads out). `@/components/x` (an import alias) or
+    // `@../x` that names nothing stays text.
+    const base = roots[0] ?? workspace
+    const outside = isAbsolute(path) ? resolve(path) : resolve(base, path)
+    try {
+      lstatSync(outside)
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'missing' }
+    }
     return { kind: 'outside' }
   }
   let real: string
@@ -207,6 +219,8 @@ export function resolveContextFile(roots: string[], workspace: string, path: str
   } catch {
     return { kind: 'missing' }
   }
+  // A folder (`@src/`) is a mention, not a file to put in the prompt.
+  if (statSync(real).isDirectory()) return { kind: 'missing' }
   // Shown with forward slashes on every platform, the way the template names it.
   const shown = relative(workspace, abs).split(sep).join('/') || path
   return { kind: 'file', abs, shown, sensitive: isSensitivePath(path) || isSensitivePath(abs) || isSensitivePath(real) }

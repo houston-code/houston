@@ -1008,6 +1008,9 @@ describe('custom command preparation IPC', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     h.activeRun.mockReturnValue(null)
+    // A refused send emits an error event; keep it off the native notifier.
+    updateSettings({ desktopNotifications: false })
+    configureHasKey(() => false)
     ws = realpathSync(mkdtempSync(join(tmpdir(), 'houston-ipc-cmd-')))
     mkdirSync(join(ws, '.houston/commands'), { recursive: true })
     writeFileSync(join(ws, '.houston/commands/quick.md'), '---\ndescription: Quick\neffort: low\nallowed-tools: glob\n---\nLook at $ARGUMENTS')
@@ -1031,12 +1034,53 @@ describe('custom command preparation IPC', () => {
     expect(runReq()).toMatchObject({ reasoningEffort: 'low' })
     expect(runReq().turnAllowRules).toBeUndefined()
     expect(getConversation(conv.id)?.reasoningEffort).toBe('high')
-    // Spent: sending the same token again runs on the chat's own effort.
-    await handler(IPC.agentStart)(from, {
+    // Spent: sending the same token again is refused, never run without its options.
+    h.runAndDrain.mockClear()
+    const send = vi.fn()
+    await handler(IPC.agentStart)({ sender: { id: 5, send, isDestroyed: () => false } }, {
       runId: 'r2', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', reasoningEffort: 'high',
       userText: 'again', commandGrant: res.turn.grant
     })
-    expect(runReq()).toMatchObject({ reasoningEffort: 'high' })
+    expect(h.runAndDrain).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledWith(IPC.agentEvent, expect.objectContaining({ type: 'error', message: expect.stringContaining('Send it again') }))
+    expect(getConversation(conv.id)?.messages.map((m) => m.content)).toEqual(['Look at the logs'])
+    deleteConversation(conv.id)
+  })
+
+  it("runs a worktree chat's first command on the options prepared for its repository", async () => {
+    const res = await prepare(ws, 'quick')
+    if (!res.ok) throw new Error(res.error)
+    const wt = realpathSync(mkdtempSync(join(tmpdir(), 'houston-ipc-wt-')))
+    const conv = createConversation({ workspace: wt, providerId: 'p', model: 'm', worktree: { path: wt, branch: 'b', repoRoot: ws } })
+    try {
+      await handler(IPC.agentStart)(from, {
+        runId: 'rw', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', reasoningEffort: 'high',
+        userText: res.turn.text, commandGrant: res.turn.grant
+      })
+      expect(runReq()).toMatchObject({ reasoningEffort: 'low', workspace: wt })
+    } finally {
+      deleteConversation(conv.id)
+      rmSync(wt, { recursive: true, force: true })
+    }
+  })
+
+  it("retries a command turn on the command's options, and a later plain turn on the chat's", async () => {
+    const res = await prepare(ws, 'quick')
+    if (!res.ok) throw new Error(res.error)
+    const conv = createConversation({ workspace: ws, providerId: 'p', model: 'm' })
+    const retry = (runId: string): unknown =>
+      handler(IPC.agentRetry)(from, { runId, conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', reasoningEffort: 'high' })
+    await handler(IPC.agentStart)(from, {
+      runId: 'r6', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', reasoningEffort: 'high',
+      userText: res.turn.text, commandGrant: res.turn.grant
+    })
+    await retry('r7')
+    expect(runReq()).toMatchObject({ runId: 'r7', reasoningEffort: 'low' })
+    await handler(IPC.agentStart)(from, {
+      runId: 'r8', conversationId: conv.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', reasoningEffort: 'high', userText: 'plain'
+    })
+    await retry('r9')
+    expect(runReq()).toMatchObject({ runId: 'r9', reasoningEffort: 'high' })
     deleteConversation(conv.id)
   })
 
@@ -1048,10 +1092,11 @@ describe('custom command preparation IPC', () => {
     if (!res.ok) throw new Error(res.error)
     expect(res.turn.grant).toMatch(/^[0-9a-f]{32}$/)
     const other = createConversation({ workspace: tmpdir(), providerId: 'p', model: 'm' })
-    await handler(IPC.agentStart)(from, {
+    h.runAndDrain.mockClear()
+    await handler(IPC.agentStart)({ sender: { id: 5, send: vi.fn(), isDestroyed: () => false } }, {
       runId: 'r3', conversationId: other.id, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: 'x', commandGrant: res.turn.grant
     })
-    expect(runReq().turnAllowRules).toBeUndefined()
+    expect(h.runAndDrain).not.toHaveBeenCalled()
     const again = await prepare(ws, 'quick')
     if (!again.ok) throw new Error(again.error)
     const conv = createConversation({ workspace: ws, providerId: 'p', model: 'm' })

@@ -38,6 +38,26 @@ describe('lintPermissionRules', () => {
     expect(twice.get(1)).toEqual([{ kind: 'shadowed', by: 0, conflicting: false }])
   })
 
+  it('flags a specific allow above a broader deny, which the deny now overrides', () => {
+    expect(lintPermissionRules([r('allow', 'run_shell', 'git push origin*'), r('deny', 'run_shell', 'git push*')]).get(0)).toEqual([
+      { kind: 'shadowed', by: 1, conflicting: true }
+    ])
+    expect(lintPermissionRules([r('allow', 'write_file', 'docs/README.md', true), r('deny', 'write_file', 'docs')]).get(0)).toEqual([
+      { kind: 'shadowed', by: 1, conflicting: true }
+    ])
+    expect(lintPermissionRules([r('allow', 'run_shell', 'git push origin main'), r('deny', 'run_shell', 'git')]).get(0)).toEqual([
+      { kind: 'shadowed', by: 1, conflicting: true }
+    ])
+  })
+
+  it('does not read a narrower or merely overlapping deny as covering', () => {
+    expect(lintPermissionRules([r('allow', 'run_shell', 'git push*'), r('deny', 'run_shell', 'git push origin*')]).size).toBe(0)
+    expect(lintPermissionRules([r('allow', 'run_shell', 'git*'), r('deny', 'run_shell', '*push')]).size).toBe(0)
+    expect(lintPermissionRules([r('allow', 'run_shell', 'gitk'), r('deny', 'run_shell', 'git')]).size).toBe(0)
+    // An exact deny covers only its own text.
+    expect(lintPermissionRules([r('allow', 'write_file', 'docs/a.md'), r('deny', 'write_file', 'docs', true)]).size).toBe(0)
+  })
+
   it('reads a deny or ask on one file-editing tool as covering the others, an allow as not', () => {
     expect(lintPermissionRules([r('deny', 'write_file', '*'), r('allow', 'edit_file', 'src/a.ts')]).get(1)).toEqual([
       { kind: 'shadowed', by: 0, conflicting: true }

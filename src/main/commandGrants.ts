@@ -49,14 +49,62 @@ export function putCommandGrant(grant: CommandGrant, now: number = Date.now()): 
 
 /**
  * Take the grant for `token` (it can't be used again). Null when the token is
- * unknown, expired, or was made for another workspace.
+ * unknown, expired, or was made for none of `workspaces` (a worktree chat passes its
+ * own folder and its repository's, since the command was prepared for the repository
+ * before the worktree existed).
  */
-export function takeCommandGrant(token: unknown, workspace: string, now: number = Date.now()): CommandGrant | null {
+export function takeCommandGrant(
+  token: unknown,
+  workspaces: string | readonly string[],
+  now: number = Date.now()
+): CommandGrant | null {
   if (typeof token !== 'string' || !token) return null
   const g = grants.get(token)
   if (!g) return null
   grants.delete(token)
-  if (g.expires <= now || g.workspace !== workspace) return null
+  const allowed = typeof workspaces === 'string' ? [workspaces] : workspaces
+  if (g.expires <= now || !allowed.includes(g.workspace)) return null
   const { expires: _expires, ...grant } = g
   return grant
+}
+
+/**
+ * The grant a command turn ran with, kept per conversation so Retry of that same
+ * turn runs it the same way. Bound to the user message's timestamp (a new send
+ * replaces or clears it) and to a time limit, after which Retry refuses instead.
+ */
+export const RETRY_GRANT_TTL_MS = 30 * 60_000
+const MAX_RETRY_GRANTS = 100
+const retryGrants = new Map<string, { turnAt: string; grant: CommandGrant; expires: number }>()
+
+/** Remember (or, with no grant, forget) the options the conversation's latest turn ran with. */
+export function rememberTurnGrant(
+  conversationId: string,
+  turnAt: string | undefined,
+  grant: CommandGrant | null,
+  now: number = Date.now()
+): void {
+  retryGrants.delete(conversationId)
+  if (!grant || !turnAt) return
+  while (retryGrants.size >= MAX_RETRY_GRANTS) {
+    const oldest = retryGrants.keys().next().value
+    if (oldest === undefined) break
+    retryGrants.delete(oldest)
+  }
+  retryGrants.set(conversationId, { turnAt, grant, expires: now + RETRY_GRANT_TTL_MS })
+}
+
+/**
+ * The options for retrying the turn sent at `turnAt`: `none` when it ran without any,
+ * `expired` when it had some that can no longer be used, else the grant.
+ */
+export function retryTurnGrant(
+  conversationId: string,
+  turnAt: string | undefined,
+  now: number = Date.now()
+): { kind: 'none' } | { kind: 'expired' } | { kind: 'grant'; grant: CommandGrant } {
+  const r = retryGrants.get(conversationId)
+  if (!r || !turnAt || r.turnAt !== turnAt) return { kind: 'none' }
+  if (r.expires <= now) return { kind: 'expired' }
+  return { kind: 'grant', grant: r.grant }
 }
