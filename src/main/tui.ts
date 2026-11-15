@@ -4693,6 +4693,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       return true
     }
     if (slash.kind !== 'not-a-command' && slash.kind !== 'unknown') return false
+    // A `!` line is a shell escape, never text for the model: declined, it queues and
+    // runs in your shell once the turn ends (it adds its output to the chat, which
+    // can't happen while the turn is writing it).
+    if (parseShellEscape(typed.trim()) !== null) return false
     // The same invisible-character strip as a message sent from the composer.
     const cleaned = stripInvisible(typed)
     if (!cleaned.text.trim()) return false

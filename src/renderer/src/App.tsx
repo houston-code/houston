@@ -161,6 +161,7 @@ import { useAutoOpenPreview } from './hooks/useAutoOpenPreview'
 import { ImportNotice } from './components/ImportNotice'
 import { EnvKeyNotice } from './components/EnvKeyNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
+import { ShellOutputHold, type HeldShellRun } from './lib/shellOutputHold'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { Toast, ToastStack } from './components/Toasts'
 import { UpdateBanner } from './components/UpdateBanner'
@@ -2487,6 +2488,45 @@ export default function App(): JSX.Element {
     },
     [terminals, persistTerminal, chat]
   )
+  // Output that finished while its chat's agent was working: main won't add a turn
+  // mid-run, so it waits here and joins the chat once that turn ends.
+  const heldShellOutput = useRef(new ShellOutputHold())
+  const runningIdsRef = useRef<ReadonlySet<string>>(new Set())
+  const heldShellRetries = useRef(0)
+  const heldShellRetry = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flushHeldShellOutputRef = useRef<() => Promise<void>>(async () => {})
+  runningIdsRef.current = runningIds
+  const recordHeldShell = useCallback(
+    (run: HeldShellRun) => window.api.recordShellCommand(run.conversationId, run.command, run.output, run.exitCode),
+    []
+  )
+  const flushHeldShellOutput = useCallback(async () => {
+    const hold = heldShellOutput.current
+    if (!hold.has()) return
+    const added = await hold.flush((id) => runningIdsRef.current.has(id), recordHeldShell)
+    const open = currentIdRef.current
+    const messages = open ? added.get(open) : undefined
+    if (messages) chat.reset(itemsFromMessages(messages))
+    // Refused although its run looked over (still winding down, or a rewind held the
+    // chat): look again shortly, a bounded number of times, rather than wait for a
+    // run that may never come. A run starting or ending looks again anyway.
+    if (hold.ids().some((id) => !runningIdsRef.current.has(id)) && heldShellRetries.current < 15) {
+      heldShellRetries.current++
+      if (heldShellRetry.current) clearTimeout(heldShellRetry.current)
+      heldShellRetry.current = setTimeout(() => void flushHeldShellOutputRef.current(), 2000)
+    }
+  }, [chat, recordHeldShell])
+  flushHeldShellOutputRef.current = flushHeldShellOutput
+  useEffect(() => {
+    heldShellRetries.current = 0
+    void flushHeldShellOutput()
+  }, [runningIds, flushHeldShellOutput])
+  useEffect(
+    () => () => {
+      if (heldShellRetry.current) clearTimeout(heldShellRetry.current)
+    },
+    []
+  )
   useEffect(() => {
     return window.api.onTerminalExit(({ id, exitCode, output }) => {
       const run = shellEscapes.current.get(id)
@@ -2496,18 +2536,25 @@ export default function App(): JSX.Element {
         chat.notify("Ran in the terminal. Its output wasn't added because this chat hasn't started yet.")
         return
       }
-      void window.api
-        .recordShellCommand(run.conversationId, run.command, output ?? '', exitCode)
+      const held: HeldShellRun = {
+        conversationId: run.conversationId,
+        command: run.command,
+        output: output ?? '',
+        exitCode
+      }
+      void recordHeldShell(held)
         .then((res) => {
           if (res.ok) {
             if (currentIdRef.current === run.conversationId) chat.reset(itemsFromMessages(res.messages))
           } else if (res.reason === 'busy') {
-            chat.notify(`!${run.command} ran in the terminal, but the agent was working, so its output isn't in the chat.`)
+            heldShellOutput.current.hold(held)
+            chat.notify(`!${run.command} finished while the agent was working. Its output joins the chat when this turn ends.`)
+            void flushHeldShellOutput()
           }
         })
         .catch(() => {})
     })
-  }, [chat])
+  }, [chat, recordHeldShell, flushHeldShellOutput])
 
   // The agent's open `ask_user` question, if it is waiting on one. While it is, the
   // run can't read a steer (it is blocked on the answer), so Enter answers it instead.
