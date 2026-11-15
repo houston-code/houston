@@ -426,8 +426,8 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   { name: 'delete', group: 'Chat', description: 'Delete this chat (asks first)', clients: ['tui'] },
   {
-    name: 'permissions', group: 'Setup', args: '[remove n]',
-    description: 'List the saved permission rules, or remove one', clients: ['tui']
+    name: 'permissions', group: 'Setup', args: '[add … | remove n]',
+    description: 'List every permission rule that applies, or add or remove one of yours', clients: ['tui']
   },
   { name: 'cost', group: 'Setup', description: 'Session token and cost totals', clients: ['gui', 'tui'] },
   {
@@ -458,7 +458,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   {
     name: 'trust', group: 'Setup',
-    description: "Show this folder's project-config trust (/trust forget re-decides)",
+    description: "Show this folder's project-config trust (/trust forget re-decides, /trust list shows all)",
     clients: ['gui', 'tui'],
     gui: { description: "Review this folder's project-config trust in Settings (/trust forget asks again)" }
   },

@@ -29,7 +29,8 @@ import {
 import { killAllShells, killShell, listShells, shellTail } from './agent/shells'
 import { stopSubagent } from './agent/subagentStops'
 import { lspManager } from './agent/lsp/manager'
-import { flushRuleUsage } from './ruleUsage'
+import { flushRuleUsage, getRuleUsage } from './ruleUsage'
+import { describePermissionPolicy, defaultPolicyDeps } from './permissionPolicy'
 import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type SignalProcess } from './signalCleanup'
 import { disconnectAllMcp, getMcpStatuses, reconnectMcpServers } from './mcp/manager'
 import { openWithSystemHandler, runMcpOAuthFlow } from './mcp/oauth'
@@ -79,6 +80,7 @@ import { writeExportFile } from './tui-sessions'
 import {
   canPersistHeaderSecrets,
   canSetKey,
+  folderTrustFor,
   getSettings,
   setProviderKey,
   updateSettings
@@ -931,6 +933,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // /mcp reconnect: the user's own servers from settings (the manager reads their
       // header and env values from the secret store itself).
       mcpReconnect: (ids) => reconnectMcpServers(getSettings().mcpServers ?? [], ids),
+      // /permissions: every tier the gate reads, as Settings > Permissions shows them.
+      permissionPolicy: () => describePermissionPolicy(tui.cwd, defaultPolicyDeps(folderTrustFor)),
+      ruleUsage: () => getRuleUsage(),
       ...(canStoreMcpOAuth()
         ? {
             mcpOAuth: {
