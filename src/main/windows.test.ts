@@ -134,6 +134,30 @@ describe('opening chat windows', () => {
     expect(m.openChatWindow('conv-1', a as never)).toBe(b)
   })
 
+  it('drops the launch request of a window closed before its page asked, without reading the destroyed renderer', async () => {
+    const m = await load()
+    let gone = false
+    const destroyed: Array<() => void> = []
+    const w = {
+      id: 20,
+      isDestroyed: () => gone,
+      on: () => {},
+      // Like Electron's WebContents: its properties throw once it is destroyed.
+      webContents: {
+        get id(): number {
+          if (gone) throw new Error('Object has been destroyed')
+          return 120
+        },
+        once: (_e: string, fn: () => void) => destroyed.push(fn)
+      }
+    }
+    m.setWindowOpener(() => w as never)
+    m.openChatWindow('conv-1')
+    gone = true
+    expect(() => destroyed.forEach((fn) => fn())).not.toThrow()
+    expect(m.takeLaunchRequest(120)).toBeUndefined()
+  })
+
   it('opens nothing before an opener is installed', async () => {
     const m = await load()
     expect(m.openChatWindow(null)).toBeUndefined()

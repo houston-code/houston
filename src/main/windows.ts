@@ -117,8 +117,10 @@ export function openChatWindow(
   }
   if (!opener) return undefined
   const win = opener()
-  launchRequests.set(win.webContents.id, conversationId)
-  win.webContents.once('destroyed', () => launchRequests.delete(win.webContents.id))
+  // The id is read now: a WebContents' properties are gone by its 'destroyed' event.
+  const webContentsId = win.webContents.id
+  launchRequests.set(webContentsId, conversationId)
+  win.webContents.once('destroyed', () => launchRequests.delete(webContentsId))
   return win
 }
 

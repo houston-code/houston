@@ -72,6 +72,16 @@ export interface UpdateInstallFailed {
   releaseUrl: string
 }
 
+/**
+ * What the update banner should show right now, for a window that opens or reloads
+ * after the updater announced it (the announcements are one-off broadcasts).
+ */
+export interface UpdateState {
+  available: Extract<UpdateCheckResult, { status: 'available' }> | null
+  downloaded: UpdateDownloaded | null
+  failed: UpdateInstallFailed | null
+}
+
 /** The one-shot payload for the post-restart "What's new" popup. */
 export interface WhatsNew {
   version: string

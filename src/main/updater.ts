@@ -10,6 +10,7 @@ import {
   type UpdateDownloaded,
   type UpdateDownloadProgress,
   type UpdateInstallFailed,
+  type UpdateState,
   type WhatsNew
 } from '@shared/update'
 import { shouldAutoInstallUpdates, shouldAutoUpdate, shouldShowWhatsNew } from './update-policy'
@@ -128,6 +129,42 @@ export function cancelDownload(): boolean {
   return true
 }
 
+/** The update the last check announced, for a window that opens or reloads after it. */
+let lastAvailable: UpdateState['available'] = null
+
+/**
+ * Renderers (webContents ids) whose user closed the banner since the update was last
+ * announced. Every window shows the same banner, so the shared download is cancelled
+ * only once each open window has closed it.
+ */
+const dismissedBy = new Set<number>()
+
+/**
+ * The banner's close button in one window: hide it there, and cancel the download (see
+ * {@link cancelDownload}) once no other open window (`openIds`, webContents ids) still
+ * shows it. Resolves true when the download was cancelled.
+ */
+export function dismissUpdate(senderId: number, openIds: readonly number[]): boolean {
+  dismissedBy.add(senderId)
+  if (openIds.some((id) => !dismissedBy.has(id))) return false
+  return cancelDownload()
+}
+
+/** What the banner shows now, for the window asking (nothing once its user closed it). */
+export function getUpdateState(senderId?: number): UpdateState {
+  if (senderId !== undefined && dismissedBy.has(senderId)) {
+    return { available: null, downloaded: null, failed: null }
+  }
+  // A newer release than the one macOS refused gets its own in-place attempt.
+  const refused =
+    refusedVersion !== null && (!lastAvailable || lastAvailable.latestVersion === refusedVersion)
+  return {
+    available: lastAvailable,
+    downloaded: downloadedVersion ? { version: downloadedVersion } : null,
+    failed: refused && refusedVersion ? { version: refusedVersion, releaseUrl: DOWNLOAD_URL } : null
+  }
+}
+
 /** The in-flight feed check, shared so the periodic timer, launch check, and manual
  *  checks never run two at once. */
 let inflightCheck: Promise<UpdateCheckResult> | null = null
@@ -227,6 +264,8 @@ function acceptVerified(): void {
   downloadedVersion = version
   if (refusedVersion === version) refusedVersion = null
   log.info(`[updater] ${version} verified (ready to install)`)
+  // Ready to install is something to act on: every window's banner shows it again.
+  dismissedBy.clear()
   const payload: UpdateDownloaded = { version }
   broadcast(IPC.updateDownloaded, payload)
   accept()
@@ -241,6 +280,7 @@ function refuseVerified(err: unknown): void {
   refusedVersion = version
   const message = (err as Error)?.message ?? String(err)
   log.error(`[updater] macOS refused to install ${version}: ${message}`)
+  dismissedBy.clear()
   const payload: UpdateInstallFailed = { version, releaseUrl: DOWNLOAD_URL }
   broadcast(IPC.updateInstallFailed, payload)
   refuse(new UpdateRefusedError(message))
@@ -390,9 +430,13 @@ async function runCheck(): Promise<UpdateCheckResult> {
         // A version macOS already refused would only be refused again.
         autoInstall: shouldAutoInstallUpdates() && result.updateInfo.version !== refusedVersion
       }
+      // Announcing it again brings the banner back in every window (see dismissUpdate).
+      lastAvailable = payload
+      dismissedBy.clear()
       broadcast(IPC.updateAvailable, payload)
       return payload
     }
+    lastAvailable = null
     return { status: 'up-to-date', currentVersion }
   } catch (e) {
     const message = (e as Error)?.message ?? String(e)

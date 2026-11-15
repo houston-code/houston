@@ -53,16 +53,36 @@ import {
  * (a panel opening flips its View item between Show and Hide).
  */
 
-/** Whether the integrated terminal currently holds focus in the renderer. The
- * renderer reports this over IPC; the ⌘W handler reads it. */
-let terminalFocused = false
-
-export function setTerminalFocused(focused: boolean): void {
-  terminalFocused = focused
+/** The part of a renderer that reports state to the menu (an Electron WebContents). */
+interface MenuStateSender {
+  id: number
+  once(event: 'destroyed', listener: () => void): unknown
 }
 
-export function isTerminalFocused(): boolean {
-  return terminalFocused
+/**
+ * Which window renderers (webContents ids) have the integrated terminal focused. Each
+ * renderer reports its own over IPC; the ⌘W handler reads the focused window's entry,
+ * so a late blur report from one window can't change what ⌘W does in another.
+ */
+const terminalFocusedIn = new Set<number>()
+const terminalWatched = new Set<number>()
+
+export function setTerminalFocused(focused: boolean, sender: MenuStateSender): void {
+  const id = sender.id
+  if (!terminalWatched.has(id)) {
+    terminalWatched.add(id)
+    sender.once('destroyed', () => {
+      terminalWatched.delete(id)
+      terminalFocusedIn.delete(id)
+    })
+  }
+  if (focused) terminalFocusedIn.add(id)
+  else terminalFocusedIn.delete(id)
+}
+
+/** Whether the terminal holds focus in the renderer with this webContents id. */
+export function isTerminalFocused(webContentsId: number): boolean {
+  return terminalFocusedIn.has(webContentsId)
 }
 
 /** Pure decision for ⌘W, split out so it can be unit-tested without Electron. */
@@ -73,7 +93,7 @@ export function resolveCloseAction(focused: boolean): 'close-tab' | 'close-windo
 function onCloseShortcut(): void {
   const win = BrowserWindow.getFocusedWindow()
   if (!win) return
-  if (resolveCloseAction(terminalFocused) === 'close-tab') {
+  if (resolveCloseAction(isTerminalFocused(win.webContents.id)) === 'close-tab') {
     win.webContents.send(IPC.terminalCloseActive)
   } else {
     win.close()
@@ -104,25 +124,21 @@ export function normalizeMenuState(next: MenuState | undefined): Required<MenuSt
   }
 }
 
-/** The part of a renderer that reports menu state (an Electron WebContents). */
-interface MenuStateSender {
-  id: number
-  once(event: 'destroyed', listener: () => void): unknown
-}
-
 /**
  * Record the menu state one window's renderer reports, and rebuild the menu if that
  * window is the one it reflects. Each window keeps its own state, so the menu follows
  * the focused window rather than whichever one reported last.
  */
 export function setMenuState(next: MenuState, sender: MenuStateSender): void {
-  if (!menuStates.has(sender.id)) {
+  // The id is read now: a WebContents' properties are gone by its 'destroyed' event.
+  const id = sender.id
+  if (!menuStates.has(id)) {
     sender.once('destroyed', () => {
-      menuStates.delete(sender.id)
+      menuStates.delete(id)
       refreshMenuForFocus()
     })
   }
-  menuStates.set(sender.id, normalizeMenuState(next))
+  menuStates.set(id, normalizeMenuState(next))
   refreshMenuForFocus()
 }
 

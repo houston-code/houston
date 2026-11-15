@@ -5,7 +5,8 @@ import type {
   UpdateCheckResult,
   UpdateDownloaded,
   UpdateDownloadProgress,
-  UpdateInstallFailed
+  UpdateInstallFailed,
+  UpdateState
 } from '@shared/update'
 import { useUpdateBanner } from './useUpdateBanner'
 
@@ -34,6 +35,9 @@ function installApi() {
   } = {}
   const unsubscribe = vi.fn()
   const cancelUpdateDownload = vi.fn(async () => true)
+  const getUpdateState = vi.fn(
+    async (): Promise<UpdateState> => ({ available: null, downloaded: null, failed: null })
+  )
   const sub =
     <K extends keyof typeof handlers>(key: K) =>
     (cb: NonNullable<(typeof handlers)[K]>) => {
@@ -45,11 +49,13 @@ function installApi() {
     onUpdateDownloadProgress: vi.fn(sub('progress')),
     onUpdateDownloaded: vi.fn(sub('downloaded')),
     onUpdateInstallFailed: vi.fn(sub('failed')),
-    cancelUpdateDownload
+    cancelUpdateDownload,
+    getUpdateState
   } as unknown as typeof window.api
   return {
     unsubscribe,
     cancelUpdateDownload,
+    getUpdateState,
     available: (u: Available) => act(() => handlers.available!(u)),
     progress: (p: UpdateDownloadProgress) => act(() => handlers.progress!(p)),
     downloaded: (d: UpdateDownloaded) => act(() => handlers.downloaded!(d)),
@@ -58,6 +64,19 @@ function installApi() {
 }
 
 describe('useUpdateBanner', () => {
+  it('shows an update announced before this window opened or reloaded', async () => {
+    const emit = installApi()
+    emit.getUpdateState.mockResolvedValueOnce({
+      available,
+      downloaded: { version: '1.1.0' },
+      failed: null
+    })
+    const { result } = renderHook(() => useUpdateBanner())
+    await act(async () => {})
+    expect(result.current.update).toEqual(available)
+    expect(result.current.downloaded).toEqual({ version: '1.1.0' })
+  })
+
   it('tracks the download through to ready-to-install', () => {
     const emit = installApi()
     const { result } = renderHook(() => useUpdateBanner())

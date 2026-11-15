@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, type WebContents } from 'electron'
+import { app, dialog, ipcMain, type BrowserWindow, type WebContents } from 'electron'
 import { realpathSync, statSync } from 'node:fs'
 import { resolve, win32 } from 'node:path'
 import { DEEP_LINK_SCHEME, deepLinkFromArgv } from '@shared/deepLink'
@@ -19,9 +19,28 @@ import { log } from './logger'
  * and the renderer's "ready" signal. The policy lives in ./deepLinks.
  */
 
+/** The window renderers whose page has its link listeners attached (see wireDeepLinks). */
+const readySenders = new Set<WebContents>()
+
+/**
+ * Where a link goes: the target window when its page is listening, else another
+ * window whose page is (brought forward), else the target window.
+ */
 function send(channel: string, ...args: unknown[]): void {
-  const win = targetWindow()
-  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, ...args)
+  const usable = (w: BrowserWindow | undefined): w is BrowserWindow =>
+    w !== undefined && !w.isDestroyed() && !w.webContents.isDestroyed()
+  const target = targetWindow()
+  let win = usable(target) && readySenders.has(target.webContents) ? target : undefined
+  if (!win) {
+    win = appWindows().find((w) => usable(w) && readySenders.has(w.webContents))
+    if (win) {
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+    }
+  }
+  win ??= target
+  if (usable(win)) win.webContents.send(channel, ...args)
 }
 
 /**
@@ -125,28 +144,34 @@ export function wireDeepLinks(opts: {
     log: (message) => log.info(message)
   })
 
-  // The renderer says when its listeners are attached; until then links are held.
-  // A closed window holds them again until the next one is ready (macOS keeps the
-  // app running with no window).
-  // A reload holds them too: the page that attached the listeners is going away, and
-  // the new one says ready again once its own are attached. Each renderer is watched
-  // once, however many times its page loads.
+  // Each renderer says when its listeners are attached; links are held while no
+  // window's page is listening, and go to a listening one (see send).
+  // A closed window stops counting (macOS keeps the app running with no window).
+  // A reload stops it counting too: the page that attached the listeners is going
+  // away, and the new one says ready again once its own are attached. Each renderer is
+  // watched once, however many times its page loads.
   // The sender check (ipcSender.ts: a chat window's main frame showing the app) runs
   // first; the app-window check below stays as its own guard.
   const watched = new WeakSet<WebContents>()
+  const notReady = (sender: WebContents): void => {
+    readySenders.delete(sender)
+    if (readySenders.size === 0) router.markNotReady()
+  }
   guardIpcOn((channel, listener) => ipcMain.on(channel, listener))(IPC.deepLinkReady, (event) => {
     const sender = event.sender
     if (!appWindows().some((w) => !w.isDestroyed() && w.webContents === sender)) return
     if (!watched.has(sender)) {
       watched.add(sender)
-      sender.once('destroyed', () => {
-        if (appWindows().every((w) => w.isDestroyed() || w.webContents === sender)) router.markNotReady()
-      })
+      sender.once('destroyed', () => notReady(sender))
       sender.on('did-start-navigation', (details) => {
-        if (details.isMainFrame && !details.isSameDocument) router.markNotReady()
+        if (details.isMainFrame && !details.isSameDocument) notReady(sender)
       })
     }
-    void opts.started.then(() => router.markReady())
+    void opts.started.then(() => {
+      if (sender.isDestroyed()) return
+      readySenders.add(sender)
+      return router.markReady()
+    })
   })
 
   // macOS delivers links as an event, at launch and while running.
