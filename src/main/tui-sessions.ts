@@ -149,12 +149,23 @@ export interface ExportMeta {
   at: Date
 }
 
+/** What an export keeps besides the conversation itself. */
+export interface ExportContent {
+  /** The model's reasoning before a reply (`--no-reasoning` leaves it out). */
+  reasoning: boolean
+  /** Tool calls and their output (`--no-tools` leaves them out). */
+  tools: boolean
+}
+
+const FULL_EXPORT: ExportContent = { reasoning: true, tools: true }
+
 /**
  * The chat as Markdown, for reading or sharing: your messages and the replies in full,
- * each tool call as one line with its arguments, and each tool's output in a code block
- * cut to {@link EXPORT_TOOL_LINES} lines. Reasoning is left out.
+ * the reasoning before a reply in a folded block, each tool call as one line with its
+ * arguments, and each tool's output in a code block cut to {@link EXPORT_TOOL_LINES}
+ * lines. `content` leaves the reasoning or the tools out.
  */
-export function chatToMarkdown(messages: ChatMessage[], meta: ExportMeta): string {
+export function chatToMarkdown(messages: ChatMessage[], meta: ExportMeta, content: ExportContent = FULL_EXPORT): string {
   const out: string[] = [`# ${meta.title}`, '']
   const facts = [`Exported from Houston on ${meta.at.toISOString()}`]
   if (meta.providerId && meta.model) facts.push(`model ${meta.providerId} / ${meta.model}`)
@@ -175,17 +186,24 @@ export function chatToMarkdown(messages: ChatMessage[], meta: ExportMeta): strin
       continue
     }
     if (m.role === 'assistant') {
-      if (m.content.trim()) out.push('## Houston', '', m.content, '')
-      for (const call of m.toolCalls ?? []) {
+      const thought = content.reasoning
+        ? (m.reasoning ?? []).map((r) => r.text.trim()).filter(Boolean).join('\n\n')
+        : ''
+      const calls = content.tools ? (m.toolCalls ?? []) : []
+      if (m.content.trim() || thought) out.push('## Houston', '')
+      if (thought) out.push('<details><summary>Reasoning</summary>', '', thought, '', '</details>', '')
+      if (m.content.trim()) out.push(m.content, '')
+      for (const call of calls) {
         const args = JSON.stringify(call.arguments ?? {})
         const shown = args.length > 200 ? `${args.slice(0, 199)}…` : args
         const fence = '`'.repeat(Math.max(1, ...[...shown.matchAll(/`+/g)].map((x) => x[0].length + 1)))
         out.push(`- **${call.name}** ${fence}${shown}${fence}`)
       }
-      if (m.toolCalls?.length) out.push('')
+      if (calls.length) out.push('')
       continue
     }
     if (m.role === 'tool') {
+      if (!content.tools) continue
       const lines = m.content.split('\n')
       const body = lines.slice(0, EXPORT_TOOL_LINES).join('\n')
       const fence = fenceFor(body)
@@ -197,8 +215,33 @@ export function chatToMarkdown(messages: ChatMessage[], meta: ExportMeta): strin
   return `${out.join('\n').trimEnd()}\n`
 }
 
-/** The chat as JSON: the facts above plus every message exactly as saved. */
-export function chatToJson(messages: ChatMessage[], meta: ExportMeta): string {
+/**
+ * The messages an export keeps: all of them as saved, or without the reasoning or the
+ * tool calls and results. A reply left with nothing in it is dropped.
+ */
+export function exportMessages(messages: ChatMessage[], content: ExportContent): ChatMessage[] {
+  if (content.reasoning && content.tools) return messages
+  const out: ChatMessage[] = []
+  for (const m of messages) {
+    if (!content.tools && m.role === 'tool') continue
+    let next: ChatMessage = m
+    if (!content.reasoning && next.reasoning) {
+      const { reasoning: _reasoning, ...rest } = next
+      next = rest
+    }
+    if (!content.tools && next.toolCalls) {
+      const { toolCalls: _toolCalls, ...rest } = next
+      next = rest
+      if (next.role === 'assistant' && !next.content.trim() && !next.reasoning?.length) continue
+    }
+    out.push(next)
+  }
+  return out
+}
+
+/** The chat as JSON: the facts above plus every message as saved (less what `content` leaves out). */
+export function chatToJson(messages: ChatMessage[], meta: ExportMeta, content: ExportContent = FULL_EXPORT): string {
+  messages = exportMessages(messages, content)
   return `${JSON.stringify(
     {
       format: 'houston-chat',
@@ -217,9 +260,45 @@ export function chatToJson(messages: ChatMessage[], meta: ExportMeta): string {
 
 export type ExportFormat = 'md' | 'json'
 
-/** `/export [md|json] [path]`: the format (from the word, else the path's extension) and the path. */
-export function parseExportArgs(arg: string): { format: ExportFormat; path?: string } {
-  let rest = arg.trim()
+/** What `/export` was asked for. */
+export interface ExportArgs {
+  format: ExportFormat
+  path?: string
+  /** `--copy`: put the export on the clipboard (as well as in `path`, when one is given). */
+  copy?: boolean
+  /** `--no-reasoning`: leave the model's reasoning out. */
+  noReasoning?: boolean
+  /** `--no-tools`: leave the tool calls and their output out. */
+  noTools?: boolean
+  /** `--no-redact`: keep secrets as they are (they are masked by default). */
+  noRedact?: boolean
+  /** An option `/export` doesn't know, reported instead of exporting. */
+  bad?: string
+}
+
+const EXPORT_FLAGS: Readonly<Record<string, 'copy' | 'noReasoning' | 'noTools' | 'noRedact'>> = {
+  '--copy': 'copy',
+  '--no-reasoning': 'noReasoning',
+  '--no-tools': 'noTools',
+  '--no-redact': 'noRedact'
+}
+
+/**
+ * `/export [md|json] [path] [--copy] [--no-reasoning] [--no-tools] [--no-redact]`: the
+ * format (from the word, else the path's extension), the path, and the options, which
+ * may come anywhere on the line.
+ */
+export function parseExportArgs(arg: string): ExportArgs {
+  const flags: Omit<ExportArgs, 'format' | 'path'> = {}
+  const words: string[] = []
+  for (const word of arg.trim().split(/\s+/).filter(Boolean)) {
+    const lower = word.toLowerCase()
+    const flag = Object.hasOwn(EXPORT_FLAGS, lower) ? EXPORT_FLAGS[lower] : undefined
+    if (flag) flags[flag] = true
+    else if (word.startsWith('--')) flags.bad ??= word
+    else words.push(word)
+  }
+  let rest = words.join(' ')
   let format: ExportFormat | undefined
   const first = /^(md|markdown|json)(?:\s+|$)/i.exec(rest)
   if (first) {
@@ -227,7 +306,27 @@ export function parseExportArgs(arg: string): { format: ExportFormat; path?: str
     rest = rest.slice(first[0].length).trim()
   }
   if (!format) format = /\.json$/i.test(rest) ? 'json' : 'md'
-  return rest ? { format, path: rest } : { format }
+  return { format, ...(rest ? { path: rest } : {}), ...flags }
+}
+
+/**
+ * Mask the secrets in an export's messages with `redact` (the transcript redacter):
+ * every string in them except attachment bytes and the opaque reasoning signatures a
+ * provider replays, which a pattern could only corrupt.
+ */
+export function redactExport(messages: ChatMessage[], redact: (text: string) => string): ChatMessage[] {
+  const skip = new Set(['images', 'documents', 'signature', 'redactedData'])
+  const walk = (v: unknown): unknown => {
+    if (typeof v === 'string') return redact(v)
+    if (Array.isArray(v)) return v.map(walk)
+    if (v && typeof v === 'object') {
+      const out: Record<string, unknown> = {}
+      for (const [k, x] of Object.entries(v)) out[k] = skip.has(k) ? x : walk(x)
+      return out
+    }
+    return v
+  }
+  return messages.map((m) => walk(m) as ChatMessage)
 }
 
 /** A file name for an export: `houston-<title>-<yyyymmdd-hhmm>.<ext>`, safe on every OS. */

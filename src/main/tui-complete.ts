@@ -3,6 +3,7 @@
  * mentions. The matching logic is pure (this file); the readline `completer`
  * wiring + the async file lookup live at the edges so this stays unit-testable.
  */
+import { isAbsolute, join } from 'node:path'
 import { builtinCommands } from '@shared/commands'
 import { stripControlChars } from './tui-wrap'
 
@@ -76,6 +77,62 @@ export function completeInput(
 /** A file finder for the completer (workspace-bound, injected). */
 export type FileFinder = (query: string) => Promise<string[]>
 
+/** The folder being typed after `/cd` or `/add-dir`, or null when the line is not that. */
+export function folderArgQuery(line: string): string | null {
+  const m = /^\/(?:cd|add-dir)\s+(\S*)$/.exec(line)
+  return m ? m[1] : null
+}
+
+/** Folders that complete a `/cd` or `/add-dir` argument (injected; reads the disk). */
+export type FolderLister = (partial: string) => Promise<string[]>
+
+/** One entry of a folder, as {@link folderCompletions} reads it. */
+export interface FolderEntry {
+  name: string
+  /** A folder, or a link to one. */
+  isDir: boolean
+}
+
+/** Most folders one Tab offers. */
+const FOLDER_COMPLETION_LIMIT = 100
+
+/**
+ * The folders that complete `partial` (`../sh`, `~/work/`, `src`), each written the way
+ * it was typed plus the rest of the name and a `/`. Relative paths start at `cwd`, a
+ * leading `~` at `home`. Hidden folders are offered only once a `.` is typed, and a
+ * name with spaces or control characters is left out (it could not be typed back as
+ * one word, or would reach the terminal as an escape sequence).
+ */
+export async function folderCompletions(
+  partial: string,
+  cwd: string,
+  home: string,
+  readDir: (dir: string) => Promise<FolderEntry[]>
+): Promise<string[]> {
+  const slash = partial.lastIndexOf('/')
+  const head = slash >= 0 ? partial.slice(0, slash + 1) : ''
+  const prefix = slash >= 0 ? partial.slice(slash + 1) : partial
+  if (partial === '~') return home ? ['~/'] : []
+  const expanded = head.startsWith('~/') ? (home ? `${home}${head.slice(1)}` : null) : head
+  if (expanded === null) return []
+  const dir = isAbsolute(expanded) ? expanded : join(cwd, expanded || '.')
+  let entries: FolderEntry[]
+  try {
+    entries = await readDir(dir)
+  } catch {
+    return []
+  }
+  return entries
+    .filter((e) => e.isDir && e.name.startsWith(prefix))
+    .filter((e) => prefix.startsWith('.') || !e.name.startsWith('.'))
+    // eslint-disable-next-line no-control-regex
+    .filter((e) => !/[\s\u0000-\u001f\u007f-\u009f]/.test(e.name))
+    .map((e) => e.name)
+    .sort()
+    .slice(0, FOLDER_COMPLETION_LIMIT)
+    .map((name) => `${head}${name}/`)
+}
+
 /**
  * Build an async readline completer from a command list and a file finder. Only
  * hits the filesystem when the current token is an `@`-mention.
@@ -83,10 +140,19 @@ export type FileFinder = (query: string) => Promise<string[]>
 export function makeCompleter(
   finder: FileFinder,
   /** Read at each Tab, so commands loaded after startup (a workspace's own) complete too. */
-  commands: CommandSpec[] | (() => CommandSpec[]) = COMMANDS
+  commands: CommandSpec[] | (() => CommandSpec[]) = COMMANDS,
+  /** Completes the folder after `/cd` and `/add-dir`; absent, those complete nothing. */
+  folders?: FolderLister
 ) {
   const current = (): CommandSpec[] => (typeof commands === 'function' ? commands() : commands)
   return (line: string, callback: (err: null, result: [string[], string]) => void): void => {
+    const folder = folderArgQuery(line)
+    if (folder !== null && folders) {
+      folders(folder)
+        .then((hits) => callback(null, [hits, folder]))
+        .catch(() => callback(null, [[], line]))
+      return
+    }
     const mention = mentionQuery(line)
     if (mention === null) {
       callback(null, completeInput(line, [], current()))

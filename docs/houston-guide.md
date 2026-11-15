@@ -651,6 +651,16 @@ retries the turn with a growing pause between attempts and tells you it's retryi
   said it would take requests again) stays in the status bar, and the Usage view lists
   it for every provider, until the app quits. Nothing shows before a provider has
   rate limited a request.
+- **Usage limits are waited out.** When a provider stops a turn at a usage or rate
+  limit that says when it resets (a plan's hourly allowance, say), Houston waits for
+  the reset and continues the same turn then, instead of failing it. The terminal says
+  `limit resets at 14:05; continuing then (Esc to cancel)`, and the desktop app shows
+  the same notice in the chat. Stop (Esc in the terminal) cancels the wait. It waits
+  up to three times a turn and at most six hours each, and tries a fallback model
+  first when one is set. Turn it off with **Wait for usage limits to reset** (Settings,
+  Agent Behavior), `/config usage-limit-wait=off` in the terminal, or `"usageLimitWait": false`
+  in `settings.json`; it applies at once, even mid-run. Runs nobody attends
+  (`houston -p`, an unattended editor session) never wait.
 - **Quota is shown before you hit it.** Providers that send rate-limit headers (the
   Claude API, OpenAI and compatible hosts) report what's left on every reply, not only
   on a refusal. The terminal's status line shows it (`rate 45 req · 12k tok left`),
@@ -836,7 +846,7 @@ In the terminal:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/vim`, `/notify`, `/screen-reader`,
+**Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/cd`, `/vim`, `/notify`, `/screen-reader`,
 `/reduce-motion`, `/verbose`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
 `/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/open-in-app`,
 `/permissions`, `/schedule`, and `/exit`. Typed in the
@@ -847,9 +857,13 @@ the model.
 
 - `/rename <title>` gives the chat a title (the desktop sidebar shows it too).
 - `/export [md|json] [path]` writes the chat to a file in the working folder: Markdown
-  by default (your messages, the replies, each tool call, and tool output cut to 40
-  lines), or JSON with every message as saved. Without a path it is named after the
-  chat and the time. It never overwrites a file.
+  by default (your messages, the replies with the reasoning before them folded, each
+  tool call, and tool output cut to 40 lines), or JSON with every message as saved.
+  Without a path it is named after the chat and the time. It never overwrites a file.
+  Secrets are masked by default, the same way tool output is (`--no-redact` keeps
+  them). `--copy` puts the export on the clipboard instead (with a path too, it does
+  both), `--no-reasoning` leaves the model's reasoning out, and `--no-tools` leaves the
+  tool calls and their output out: `/export --copy --no-tools`.
 - `/delete` deletes the chat after asking, then starts a new one. Like the desktop app's
   delete, it stops the chat's run and background shells. When the chat has its own git
   worktree you choose: `k` deletes the chat and keeps the worktree, `r` also removes it
@@ -907,7 +921,8 @@ the model.
 **Terminal settings (/config).** `/config` opens a list of the settings the terminal
 understands, each with its value: `theme`, `vim`, `verbose`, `thoughts`, `notify`,
 `reduce-motion`, `screen-reader`, the defaults new chats start with (`model`, `effort`,
-`approval`), `desktop-notifications`, `background-wake`, and `memory`. Enter changes the
+`approval`), `desktop-notifications`, `background-wake`, `memory`, and `usage-limit-wait`
+(whether a turn stopped at a usage limit waits for the reset and continues). Enter changes the
 highlighted one to its next value (for `model`, it opens the model list) and saves it;
 Esc closes the list. From the prompt:
 
@@ -925,7 +940,8 @@ here; `/login` handles them. `/settings` still prints the settings summary.
 **Session status (/status).** `/status` shows on one screen: the Houston version and
 how it was installed, the model and thinking effort, the approval mode, the shell
 sandbox and whether it confines, whether this chat's shell commands can reach the
-network (and how many hosts you allowed this chat), how many MCP servers are connected
+network (and how many hosts you allowed this chat), whether a turn waits out a usage
+limit, how many MCP servers are connected
 or failed, the settings in effect (your settings file, this folder's
 `.houston/settings.json` and whether it is trusted, and an administrator's managed
 policy if one is installed), and what this session has cost so far. Each item is a
@@ -1917,6 +1933,17 @@ which one and what to rewind, shows the same summary, and asks you to confirm.
 `/rewind 3 code` skips the questions for message 3. The modes are `both`,
 `conversation`, and `code`. After a conversation rewind, the message you rewound to
 is back in the prompt to edit or send again.
+
+The terminal's list also offers three more things to do from the message you picked:
+
+- **Summarize from here** replaces that message and everything after it with a
+  summary, and **Summarize up to here** replaces everything before it. It is the
+  `/compact` summarizer, and it asks what the summary should keep in detail (Enter for
+  nothing in particular). Files stay as they are, and `/rewind undo` brings the
+  original messages back. `/rewind 3 summarize` and `/rewind 3 before` skip the list.
+- **Fork from here** (`/rewind 3 fork`) is `/fork 3` (above): a new chat holding the
+  conversation before that message, with the message back in the prompt to edit or
+  send, as the desktop's **Fork from here** does. The chat you were in stays as it is.
 
 ### Things to know
 
@@ -3594,6 +3621,12 @@ The structured file tools stay confined to the project on every platform.
 tools' allowed roots and to the shell sandbox. In the terminal, `--add-dir <dir>`
 (repeatable, for both `houston` and `houston -p`) and `/add-dir <dir>` do the same
 for the current session only, without saving anything; `/add-dir` alone lists them.
+`/cd <path>` moves the terminal session itself to another folder (Tab completes the
+path; it must already exist): the folder's trust question is asked if it has one, its
+`AGENTS.md`, project settings and commands apply from the next message, the status
+line shows it, and the chat moves with it, so `/resume` and `--continue` find it
+there. Bare `/cd` says where the session is. In the desktop app, open the other folder
+with the project folder button; it starts a new chat there.
 
 **Environment.** Shell commands and local MCP servers inherit your environment minus
 credential-shaped variables (names like `*_TOKEN`, `*_API_KEY`, `*_PASSWORD`, `*_PAT`,

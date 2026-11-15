@@ -13,7 +13,9 @@ const h = vi.hoisted(() => ({
   // The provider's config, when a test needs more than the default (a small model).
   cfg: null as Record<string, unknown> | null,
   // The live run on the chat, if any (the loop's activeRunForConversation).
-  activeRun: null as string | null
+  activeRun: null as string | null,
+  // The last writeRewind, for the part summaries saved as a rewind.
+  rewound: null as { messages: ChatMessage[]; compaction: unknown; lastError: unknown; backup: unknown } | null
 }))
 
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
@@ -30,10 +32,15 @@ vi.mock('../conversations', () => ({
   },
   setCompaction: (_id: string, c: unknown) => {
     h.compactionSet.push(c)
+  },
+  writeRewind: (_id: string, next: NonNullable<typeof h.rewound>) => {
+    h.rewound = next
+    if (h.conv) h.conv = { ...h.conv, messages: next.messages }
   }
 }))
 
-const { applyCompaction, cancelCompaction, compactConversationNow, compactionInProgress } = await import('./compact')
+const { applyCompaction, cancelCompaction, compactConversationNow, compactionInProgress, summarizeConversationPart } =
+  await import('./compact')
 
 afterEach(() => {
   vi.useRealTimers()
@@ -43,7 +50,99 @@ afterEach(() => {
   h.compactionSet = []
   h.provider = null
   h.cfg = null
+  h.rewound = null
   vi.restoreAllMocks()
+})
+
+describe('summarizeConversationPart', () => {
+  const log: ChatMessage[] = [
+    { role: 'user', content: 'one' },
+    { role: 'assistant', content: 'r1' },
+    { role: 'user', content: 'two' },
+    { role: 'assistant', content: 'r2' },
+    { role: 'user', content: 'three' },
+    { role: 'assistant', content: 'r3' }
+  ]
+  function summarizer(seen: ChatMessage[][] = []): Provider {
+    return {
+      async *streamChat(req) {
+        seen.push(req.messages)
+        yield { type: 'text', text: 'PART SUMMARY' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+  }
+
+  it('replaces a message and everything after it, saved as an undoable rewind', async () => {
+    h.conv = { id: 's1', workspace: '/w', messages: log }
+    const seen: ChatMessage[][] = []
+    h.provider = summarizer(seen)
+    const res = await summarizeConversationPart('s1', 'anthropic', 'claude-test', { turn: 1, text: 'two', side: 'from' }, { focus: 'the API' })
+    expect(res).toMatchObject({ ok: true, summarized: 4 })
+    const out = h.rewound?.messages ?? []
+    expect(out.slice(0, 2)).toEqual(log.slice(0, 2))
+    expect(out[2].content).toContain(COMPACTION_SUMMARY_PREFIX)
+    expect(out[2].content).toContain('PART SUMMARY')
+    expect(out).toHaveLength(4)
+    // Only the replaced span went to the summarizer, with the focus.
+    const sent = seen[0].map((m) => m.content).join('\n')
+    expect(sent).toContain('two')
+    expect(sent).not.toContain('one')
+    expect(sent).toContain('the API')
+    // The backup holds the whole original log for /rewind undo.
+    expect(h.rewound?.backup).toMatchObject({ mode: 'conversation', messages: log, afterLength: 4, code: [], detached: [] })
+    // Files are never touched: no compaction-state wipe outside the rewind write.
+    expect(h.saved).toBeNull()
+  })
+
+  it('replaces everything before a message and keeps it and the rest', async () => {
+    h.conv = { id: 's2', workspace: '/w', messages: log }
+    h.provider = summarizer()
+    const res = await summarizeConversationPart('s2', 'anthropic', 'claude-test', { turn: 2, text: 'three', side: 'before' })
+    expect(res).toMatchObject({ ok: true, summarized: 4 })
+    const out = h.rewound?.messages ?? []
+    expect(out[0].content).toContain('PART SUMMARY')
+    expect(out.slice(2)).toEqual(log.slice(4))
+    expect(h.rewound?.compaction).toBeNull()
+  })
+
+  it('has nothing to do before the first message, and refuses a message that changed', async () => {
+    h.conv = { id: 's3', workspace: '/w', messages: log }
+    h.provider = summarizer()
+    expect(await summarizeConversationPart('s3', 'anthropic', 'claude-test', { turn: 0, text: 'one', side: 'before' })).toMatchObject({
+      ok: true,
+      summarized: 0
+    })
+    expect(await summarizeConversationPart('s3', 'anthropic', 'claude-test', { turn: 1, text: 'edited', side: 'from' })).toMatchObject({
+      ok: false,
+      reason: 'changed'
+    })
+    expect(h.rewound).toBeNull()
+  })
+
+  it('writes nothing when cancelled or when a run starts meanwhile', async () => {
+    h.conv = { id: 's4', workspace: '/w', messages: log }
+    const ctl = new AbortController()
+    h.provider = {
+      async *streamChat() {
+        ctl.abort()
+        yield { type: 'text', text: 'late' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const cancelled = await summarizeConversationPart('s4', 'anthropic', 'claude-test', { turn: 1, text: 'two', side: 'from' }, { signal: ctl.signal })
+    expect(cancelled).toMatchObject({ ok: false, reason: 'cancelled' })
+    h.provider = {
+      async *streamChat() {
+        h.activeRun = 'run-9'
+        yield { type: 'text', text: 'S' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const raced = await summarizeConversationPart('s4', 'anthropic', 'claude-test', { turn: 1, text: 'two', side: 'from' })
+    expect(raced).toMatchObject({ ok: false, reason: 'running' })
+    expect(h.rewound).toBeNull()
+  })
 })
 
 const msgs: ChatMessage[] = [

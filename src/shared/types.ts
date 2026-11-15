@@ -808,6 +808,14 @@ export interface AppSettings {
    */
   stallDetection?: boolean
   /**
+   * When the provider stops a turn at a usage or rate limit that names when it resets
+   * (a plan's hourly allowance), wait for the reset and continue the turn then, up to
+   * three times a run and at most six hours each; Stop cancels the wait. Off: the turn
+   * fails with the limit's error, as before. Runs nobody attends (headless, an
+   * unattended editor session) never wait. On by default.
+   */
+  usageLimitWait?: boolean
+  /**
    * When the model ends a turn after making edits and Houston's record of the turn
    * shows a gap (open todo items, no passing check after the last change, a failed
    * last test run, a todo marked done with nothing behind it, a loosened test), send

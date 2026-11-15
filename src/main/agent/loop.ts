@@ -151,8 +151,12 @@ import {
   isQuotaExhaustedError,
   isRetryableError,
   isToolsUnsupportedError,
+  limitResetAt,
+  MAX_LIMIT_WAIT_MS,
+  MAX_LIMIT_WAITS,
   MAX_PROVIDER_RETRIES,
   providerStreamError,
+  RETRY_AFTER_CAP_MS,
   retryDelayMs,
   RetryBudget,
   throttleInfo,
@@ -3962,6 +3966,8 @@ export async function startRun(
     let doneEvidenceNoted = false
     // Times an unattended turn was sent back for ending on undone work (unattended-stop.ts).
     let unattendedStopContinuations = 0
+    // Times this run waited for a usage limit to reset (MAX_LIMIT_WAITS at most).
+    let limitWaits = 0
     // What the ledger says about the turn at a natural stop, for that note. The todo
     // list counts only if this turn wrote it: one left from an earlier turn isn't
     // this turn's plan.
@@ -4658,8 +4664,54 @@ export async function startRun(
             // holds at most one attempt of a reasoning phase that keeps dropping.
             run.transcript.length = attemptMark
           }
+          // A usage or rate limit that resets past the retry cap (a plan's hourly
+          // allowance), or one still in force once the retries ran out: wait for the
+          // reset and carry on with this turn, rather than retry early or fail it. A
+          // fallback model that can take the turn now goes first. Stop (Esc) cancels
+          // the wait like any other; `usageLimitWait: false` turns it off, read live
+          // so it also applies mid-run. An unattended run has nobody to cancel a wait
+          // of hours, so it fails as before.
+          const allowed = retries.allows(e, attempt + 1)
+          const resetAt =
+            req.unattended !== true && getSettings().usageLimitWait !== false && limitWaits < MAX_LIMIT_WAITS
+              ? limitResetAt(e)
+              : undefined
+          const limitWaitMs = resetAt === undefined ? undefined : Math.max(0, resetAt - Date.now())
+          if (
+            resetAt !== undefined &&
+            limitWaitMs !== undefined &&
+            limitWaitMs <= MAX_LIMIT_WAIT_MS &&
+            (limitWaitMs > RETRY_AFTER_CAP_MS || !allowed)
+          ) {
+            if (hopToFallback((e as Error).message, discardPartial)) {
+              sendMessages = buildWindow()
+              attempt = -1 // fresh transient-retry budget for the new model
+              continue streaming
+            }
+            discardPartial()
+            limitWaits++
+            log.info(
+              `run ${runId}: usage limit on ${serving.providerId}/${serving.model}, waiting ${limitWaitMs}ms ` +
+                `for it to reset (${limitWaits}/${MAX_LIMIT_WAITS}): ${redact(reason)}`
+            )
+            const base = throttleInfo(e, limitWaitMs)
+            emit({
+              type: 'retry',
+              attempt: limitWaits,
+              max: MAX_LIMIT_WAITS,
+              message: reason,
+              throttle: { ...(base ?? {}), waitMs: limitWaitMs, resetAt }
+            })
+            await abortableSleep(limitWaitMs, abort.signal)
+            if (abort.signal.aborted) {
+              emit({ type: 'done', stopReason: 'aborted' })
+              return
+            }
+            attempt = -1 // the limit has reset: a fresh transient-retry budget
+            continue streaming
+          }
           // Not transient, or this model is out of attempts.
-          if (!retries.allows(e, attempt + 1)) {
+          if (!allowed) {
             // This model is done for. Before failing the turn, try the next one in
             // the chain — but only for a transient failure the model itself couldn't
             // shake off (overloaded, rate-limited, 5xx). A non-retryable error is a

@@ -334,6 +334,7 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   costCeilingUsd: 'cost reminder',
   maxCostUsd: 'cost limit',
   stallDetection: 'loop detection',
+  usageLimitWait: 'wait for usage limits',
   doneEvidenceNote: 'check before finishing',
   verifyOnStop: 'verify on finish',
   verifyCommand: 'verification command',
