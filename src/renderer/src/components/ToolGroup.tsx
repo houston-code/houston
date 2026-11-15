@@ -762,6 +762,12 @@ function ApprovalPrompt({
           &lt;U+202E&gt;.
         </p>
       )}
+      {item.unsandboxed && (
+        <p className="tool-row__approval-note tool-row__approval-note--warn">
+          This command runs unsandboxed: this computer has no OS confinement for shell
+          commands, so it can read, change, or delete anything your account can.
+        </p>
+      )}
       {item.sensitiveRead && (
         <p className="tool-row__approval-note">
           This reads a credential or secret file. Reads normally run without asking, so

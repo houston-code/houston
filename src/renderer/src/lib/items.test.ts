@@ -658,6 +658,28 @@ describe('reduceEvent — prompt replay on re-adopt (upsert by callId)', () => {
     expect(reduceEvent([], granted).find((i): i is ToolItem => i.kind === 'tool')!.shellOffline).toBeUndefined()
   })
 
+  it('marks an unsandboxed shell approval row, live and on replay', () => {
+    const ev = {
+      runId: 'r',
+      type: 'tool_approval' as const,
+      callId: 'c1',
+      name: 'run_shell',
+      summary: 'rm -rf build',
+      args: { command: 'rm -rf build' },
+      kind: 'shell' as const,
+      sandboxed: false
+    }
+    expect(reduceEvent([], ev).find((i): i is ToolItem => i.kind === 'tool')!.unsandboxed).toBe(true)
+    const fromLog = itemsFromMessages([
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'run_shell', arguments: ev.args }] }
+    ])
+    const replayed = reduceEvent(fromLog, ev).filter((i): i is ToolItem => i.kind === 'tool' && i.id === 'c1')
+    expect(replayed[0].unsandboxed).toBe(true)
+    // Absent (a confining host) means no warning.
+    const { sandboxed: _, ...confined } = ev
+    expect(reduceEvent([], confined).find((i): i is ToolItem => i.kind === 'tool')!.unsandboxed).toBeUndefined()
+  })
+
   it('carries the network scope onto an approval row', () => {
     const ev = {
       runId: 'r',

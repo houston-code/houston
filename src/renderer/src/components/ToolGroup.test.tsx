@@ -738,6 +738,37 @@ describe('ToolGroup', () => {
     expect(onApprove).toHaveBeenCalledWith('r2', 'allow')
   })
 
+  it('warns that a shell command runs unsandboxed, alongside a sensitive-file note', () => {
+    render(
+      <ToolGroup
+        items={[
+          tool({
+            id: 's1',
+            name: 'run_shell',
+            status: 'awaiting-approval',
+            args: { command: 'cp key.pem ~/.ssh/id_rsa' },
+            toolKind: 'shell',
+            unsandboxed: true,
+            sensitiveWrite: true
+          })
+        ]}
+        onApprove={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/This command runs unsandboxed/)).toBeInTheDocument()
+    expect(screen.getByText(/This changes a sensitive file/)).toBeInTheDocument()
+  })
+
+  it('does not warn about the sandbox when the command is confined', () => {
+    render(
+      <ToolGroup
+        items={[tool({ id: 's1', name: 'run_shell', status: 'awaiting-approval', args: { command: 'ls' }, toolKind: 'shell' })]}
+        onApprove={vi.fn()}
+      />
+    )
+    expect(screen.queryByText(/runs unsandboxed/)).not.toBeInTheDocument()
+  })
+
   describe('what an approval asks', () => {
     const request = (container: HTMLElement): string | null =>
       container.querySelector('.tool-row__approval-request')?.textContent ?? null

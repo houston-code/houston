@@ -49,6 +49,7 @@ import { runtimeMissingLine } from '@shared/runtimes'
 import { assertNever } from '@shared/assert'
 import { SubagentTermLines } from '@shared/subagents'
 import { approvalSubject, visibleText, type ApprovalSubjectPart } from '@shared/visibleText'
+import { approvalWarnings, type ApprovalWarning } from '@shared/approvalWarnings'
 import { resolveHeadlessModel } from './headless'
 
 /**
@@ -166,6 +167,15 @@ export const ACP_NO_QUESTION_ANSWER =
 
 /** Answer given to `ask_user` when the user dismissed the question. */
 export const ACP_DECLINED_ANSWER = '[The user dismissed the question without answering. Proceed using your best judgment.]'
+
+/** How each approval warning reads in the editor's permission request. */
+const ACP_WARNING_TEXT: Record<ApprovalWarning, string> = {
+  unsandboxed: 'Runs UNSANDBOXED: this host has no OS confinement for shell commands.',
+  sensitiveRead: 'Reads a credential or secret file (asked even in full auto).',
+  protectedWrite:
+    'Changes a project control file (such as .houston, .vscode, .envrc, or a CI workflow) that can run code outside the sandbox later (asked every time, even in full auto, unless an allow rule covers this path).',
+  sensitiveWrite: 'Changes a credential or secret file (asked even in full auto).'
+}
 
 /** Longest tool output carried back to the editor in one update. */
 const MAX_TOOL_OUTPUT = 20_000
@@ -1763,16 +1773,10 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         warnings.push(
           'Allow shell commands to reach the network for the rest of this prompt? Shell runs in a sandbox that can read your files; declining runs commands offline.'
         )
-      } else if (e.kind === 'shell' && e.sandboxed === false) {
-        warnings.push('Runs UNSANDBOXED: this host has no OS confinement for shell commands.')
-      } else if (e.sensitiveRead) {
-        warnings.push('Reads a credential or secret file (asked even in full auto).')
-      } else if (e.sensitiveWrite && e.protectedWrite) {
-        warnings.push(
-          'Changes a project control file (such as .houston, .vscode, .envrc, or a CI workflow) that can run code outside the sandbox later (asked every time, even in full auto, unless an allow rule covers this path).'
-        )
-      } else if (e.sensitiveWrite) {
-        warnings.push('Changes a credential or secret file (asked even in full auto).')
+      } else {
+        // Every warning that applies: an unsandboxed command that also changes a
+        // credential file must say both.
+        for (const w of approvalWarnings(e)) warnings.push(ACP_WARNING_TEXT[w])
       }
       if (e.shellOffline) warnings.push('The command runs without network access.')
       // What is being approved, whole: the command exactly as it will run, or the memory

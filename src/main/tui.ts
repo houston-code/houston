@@ -103,6 +103,7 @@ import {
   wrapAnsi
 } from './tui-wrap'
 import { approvalSubject, visibleText } from '@shared/visibleText'
+import { approvalWarnings, type ApprovalWarning } from '@shared/approvalWarnings'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -693,16 +694,18 @@ export function renderApprovalPrompt(
     const keys = opts.picker ? '' : `\n${paint('  [y] allow network for this chat   [n] keep offline', 'dim')}`
     return `\n${head}\n${text(ev.summary)}\n${note}${keys}`
   }
-  const warn =
-    ev.kind === 'shell' && ev.sandboxed === false
-      ? `\n${paint('⚠ runs UNSANDBOXED (no OS confinement on this host)', 'yellow', 'bold')}`
-      : ev.sensitiveRead
-        ? `\n${paint('⚠ reads a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
-        : ev.sensitiveWrite && ev.protectedWrite
-          ? `\n${paint('⚠ changes a project control file that can run code outside the sandbox (asks every time; "Allow for this chat" does not cover it)', 'yellow', 'bold')}`
-          : ev.sensitiveWrite
-          ? `\n${paint('⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)', 'yellow', 'bold')}`
-          : ''
+  // Every warning that applies, one per line: an unsandboxed command that also changes a
+  // credential file must say both.
+  const WARNING_TEXT: Record<ApprovalWarning, string> = {
+    unsandboxed: '⚠ runs UNSANDBOXED (no OS confinement on this host)',
+    sensitiveRead: '⚠ reads a credential/secret file (prompting even in full-auto)',
+    protectedWrite:
+      '⚠ changes a project control file that can run code outside the sandbox (asks every time; "Allow for this chat" does not cover it)',
+    sensitiveWrite: '⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)'
+  }
+  const warn = approvalWarnings(ev)
+    .map((w) => `\n${paint(WARNING_TEXT[w], 'yellow', 'bold')}`)
+    .join('')
   // Until the chat has a shell-network grant, every answer runs the command offline;
   // say so before the user picks, and that network is a separate question.
   const offline = ev.shellOffline
