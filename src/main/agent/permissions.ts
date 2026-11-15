@@ -602,7 +602,16 @@ function isScratchTarget(abs: string): boolean {
  */
 function partMayClimb(part: string): boolean {
   if (part === '..') return true
-  return /[*?[{]/.test(part) && part.includes('.') && /^[.[{]/.test(part)
+  if (!(/[*?[{]/.test(part) && part.includes('.') && /^[.[{]/.test(part))) return false
+  // A leading bracket expression matches one character, so a part that starts with
+  // one can spell `..` only when what follows it can still match a `.`: a route
+  // folder like `[...slug]` (one character) or `[[...slug]]` (one, then `]`) can't.
+  if (part.startsWith('[')) {
+    // A `]` right after `[` (or `[!` / `[^`) is a member, not the close.
+    const close = part.indexOf(']', /^\[[!^]/.test(part) ? 3 : 2)
+    if (close !== -1 && !/[.*?[{]/.test(part.slice(close + 1))) return false
+  }
+  return true
 }
 
 /**
@@ -1558,20 +1567,41 @@ function canonicalUrlAuthority(s: string): string {
  * reads it (`https://evil.example\@good.example/` goes to `evil.example`), and the
  * path's `.`/`..` segments resolved. Then {@link canonicalUrlAuthority}. A string the
  * parser rejects just gets the latter.
+ *
+ * An http(s) URL is read through the parser however it is spelled, since fetch reads
+ * it that way too: `https:/host/x`, `https:host/x`, `https:\\host\x`, leading blanks,
+ * and a tab inside the scheme all fetch `https://host/x`, and `https://host\x` fetches
+ * the path `/x`.
  */
 function canonicalUrlSubject(subject: string): string {
-  const auth = URL_AUTHORITY_RE.exec(subject)
-  if (!auth) return subject
+  let u: URL
   try {
-    const u = new URL(subject)
-    // A subject with no path keeps that shape (`https://host`, not `https://host/`) so an
-    // exact rule naming it still matches. Once the parser has a path, its reading stands.
-    const rest = subject.slice(auth[0].length)
-    const tail = rest === '' ? '' : `${u.pathname}${u.search}${u.hash}`
-    return canonicalUrlAuthority(`${u.protocol}//${u.host}${tail}`)
+    u = new URL(subject)
   } catch {
-    return canonicalUrlAuthority(subject)
+    return URL_AUTHORITY_RE.test(subject) ? canonicalUrlAuthority(subject) : subject
   }
+  const web = u.protocol === 'http:' || u.protocol === 'https:'
+  const auth = URL_AUTHORITY_RE.exec(subject)
+  if (!web && !auth) return subject
+  // A subject with no path keeps that shape (`https://host`, not `https://host/`) so an
+  // exact rule naming it still matches. Read on the text the parser reads (blanks around
+  // it and tabs or newlines in it removed): any `/`, `\`, `?`, or `#` after the authority
+  // means it has one, and then the parser's reading stands.
+  const cleaned = trimC0AndSpace(subject).replace(/[\t\n\r]/g, '')
+  const bare = web
+    ? /^[a-z][a-z0-9+.-]*:[/\\]*[^/\\?#]*$/i.test(cleaned)
+    : subject.length === (auth?.[0].length ?? -1)
+  const tail = bare ? '' : `${u.pathname}${u.search}${u.hash}`
+  return canonicalUrlAuthority(`${u.protocol}//${u.host}${tail}`)
+}
+
+/** `s` without the C0 controls and spaces around it, which the URL parser drops. */
+function trimC0AndSpace(s: string): string {
+  let start = 0
+  let end = s.length
+  while (start < end && s.charCodeAt(start) <= 0x20) start++
+  while (end > start && s.charCodeAt(end - 1) <= 0x20) end--
+  return s.slice(start, end)
 }
 
 /**
@@ -2586,22 +2616,74 @@ function tripwireCoverage(
   pathExists?: (p: string) => boolean
 ): 'none' | 'covered' | 'uncovered' {
   let tripped = false
+  const gated: string[] = []
+  const shellAllow = (r: PermissionRule): boolean =>
+    r.action === 'allow' && (!r.tool || r.tool === '*' || r.tool === 'run_shell')
   for (const seg of shellSegments(command)) {
     if (isWorkspaceCwdChange(seg, roots)) continue
-    const escapes = shellReferencesExternalPath(seg.text, roots)
-    const discards = shellDiscardsWork(seg.text, pathExists)
-    if (!escapes && !discards) continue
+    gated.push(seg.text)
+    const t = segmentTripwires(seg.text, roots, pathExists)
+    if (!t.escapes && !t.discards && !t.controlWrite && !t.secretWrite) continue
     tripped = true
     const named = rules.some((r) => {
-      if (r.action !== 'allow' || (r.tool && r.tool !== '*' && r.tool !== 'run_shell')) return false
-      if (!shellAllowHits(r, seg.text)) return false
+      if (!shellAllow(r) || !shellAllowHits(r, seg.text)) return false
       if (r.exact) return true
-      const own = patternWithoutStars(r.match ?? '')
-      return (!escapes || shellReferencesExternalPath(own, roots)) && (!discards || shellDiscardsWork(own, pathExists))
+      const own = segmentTripwires(patternWithoutStars(r.match ?? ''), roots, pathExists)
+      return (
+        (!t.escapes || own.escapes) &&
+        (!t.discards || own.discards) &&
+        (!t.controlWrite || own.controlWrite) &&
+        (!t.secretWrite || own.secretWrite)
+      )
     })
     if (!named) return 'uncovered'
   }
-  return tripped ? 'covered' : 'none'
+  if (tripped) return 'covered'
+  // No sub-command trips on its own, but the whole line does (a destructive statement
+  // piped or fed by a here-document to a database client, see shellDiscardsWork): only
+  // exact rules for every sub-command, which "Always allow" saves for such a line (see
+  // shellRuleEntries), name it.
+  if (lineOnlyTripwire(command, roots, pathExists) && gated.length > 0) {
+    return gated.every((text) => rules.some((r) => shellAllow(r) && r.exact === true && shellAllowHits(r, text)))
+      ? 'covered'
+      : 'uncovered'
+  }
+  return 'none'
+}
+
+/**
+ * The tripwires one shell sub-command (or a rule pattern's own text) sets off by
+ * itself: leaving the workspace, throwing away work, and writing an in-project control
+ * file or a credential file (see {@link shellWritesProtectedPath} and
+ * {@link shellWritesSensitivePath}). Each asks in every mode short of an allow rule that
+ * names it, so a prefix saved from some other command (`npm run`, or `*`) is never
+ * consent to `npm run x > .husky/pre-push` or `cp x .env`.
+ */
+function segmentTripwires(
+  text: string,
+  roots: string[] | undefined,
+  pathExists?: (p: string) => boolean
+): { escapes: boolean; discards: boolean; controlWrite: boolean; secretWrite: boolean } {
+  return {
+    escapes: roots !== undefined && shellReferencesExternalPath(text, roots),
+    discards: shellDiscardsWork(text, pathExists),
+    // Control files are found under the roots; without them none is named.
+    controlWrite: roots !== undefined && roots.length > 0 && shellWritesProtectedPath(text, roots),
+    secretWrite: shellWritesSensitivePath(text)
+  }
+}
+
+/**
+ * Whether a whole command line leaves the workspace or throws away work while none of
+ * its sub-commands does so on its own (see {@link tripwireCoverage}).
+ */
+function lineOnlyTripwire(command: string, roots: string[] | undefined, pathExists?: (p: string) => boolean): boolean {
+  const line = segmentTripwires(command, roots, pathExists)
+  if (!line.escapes && !line.discards) return false
+  return shellSegments(command).every((seg) => {
+    const t = segmentTripwires(seg.text, roots, pathExists)
+    return !t.escapes && !t.discards && !t.controlWrite && !t.secretWrite
+  })
 }
 
 /**
@@ -2806,6 +2888,10 @@ function shellRuleEntries(
   const add = (match: string, exact: boolean): void => {
     patterns.set(match, exact || patterns.get(match) === true)
   }
+  // A line that trips only as a whole (`echo "DROP TABLE x" | psql db`) has each of its
+  // sub-commands saved exact: a `psql db` prefix would allow any script fed to it, and
+  // only exact rules for every piece cover the line (see tripwireCoverage).
+  const wholeLine = lineOnlyTripwire(command, roots, pathExists)
   for (const seg of shellSegments(command)) {
     const text = shellRuleText(seg.text)
     const tokens = tokenizeShellCommand(text)
@@ -2813,8 +2899,8 @@ function shellRuleEntries(
     // An empty program (`'' rm -rf x`) is still a sub-command to cover, not one to drop.
     if (prog === undefined || isWorkspaceCwdChange(seg, roots)) continue
     const verb = tokens[1]
-    const trips =
-      (roots !== undefined && shellReferencesExternalPath(seg.text, roots)) || shellDiscardsWork(seg.text, pathExists)
+    const t = segmentTripwires(seg.text, roots, pathExists)
+    const trips = wholeLine || t.escapes || t.discards || t.controlWrite || t.secretWrite
     if (trips || runsArbitraryCommand(tokens)) {
       add(text, true)
     } else if (CWD_BUILTINS.has(prog)) {
@@ -2851,15 +2937,34 @@ const CONTAINER_RUN_VERBS: Record<string, ReadonlySet<string>> = {
  * words into a command (see {@link JOINED_COMMAND_PROGRAMS}), or a container or pod
  * runner's `run`/`exec` (`docker container run` and `docker compose exec` too). Its
  * two-token prefix would allow any command at all.
+ *
+ * Leading `VAR=value` words are looked past, and behind a command wrapper (`env`,
+ * `sudo`, `timeout 60`, `xargs`, ...; see {@link COMMAND_WRAPPERS}) every later word is
+ * read as the possible program, since the wrapper's own options and arguments
+ * (`timeout 60`, `sudo -u x`, `nice -n 5`) can't be told apart from it without
+ * modelling each one. Reading too many words only saves a rule exact.
  */
 function runsArbitraryCommand(tokens: string[]): boolean {
-  const prog = tokens[0]
+  let i = 0
+  while (i < tokens.length && ENV_ASSIGN.test(tokens[i]!)) i++
+  const base = (t: string): string => t.slice(t.lastIndexOf('/') + 1)
+  if (i < tokens.length && COMMAND_WRAPPERS.has(base(tokens[i]!))) {
+    for (let j = i + 1; j < tokens.length; j++) if (runsArbitraryCommandAt(tokens, j)) return true
+    return false
+  }
+  return runsArbitraryCommandAt(tokens, i)
+}
+
+/** {@link runsArbitraryCommand} for the program at `tokens[i]`. */
+function runsArbitraryCommandAt(tokens: string[], i: number): boolean {
+  const prog = tokens[i]
   if (prog === undefined) return false
   const base = prog.slice(prog.lastIndexOf('/') + 1)
   if (SHELL_PROGRAMS.has(base) || JOINED_COMMAND_PROGRAMS.has(base)) return true
-  const verbs = CONTAINER_RUN_VERBS[base]
+  // Own keys only: every later word is read here, and `constructor` is not a runner.
+  const verbs = Object.hasOwn(CONTAINER_RUN_VERBS, base) ? CONTAINER_RUN_VERBS[base] : undefined
   if (!verbs) return false
-  const [verb, next] = [tokens[1], tokens[2]]
+  const [verb, next] = [tokens[i + 1], tokens[i + 2]]
   if (verb !== undefined && verbs.has(verb)) return true
   return (verb === 'container' || verb === 'compose') && next !== undefined && verbs.has(next)
 }
@@ -2983,15 +3088,30 @@ export function persistedRules(
  * prefix matches `git diff --no-index /dev/null ~/.ssh/id_rsa` but no longer lets it
  * run unasked, so the exact rule "Always allow" saves for it is not redundant. Without
  * `roots` every absolute path reads as outside, which only keeps a rule.
+ *
+ * `line` is the whole `run_shell` command `sample` was taken from. When that line trips
+ * only as a whole (see {@link shellRuleEntries}), only an identical exact allow makes the
+ * sample's exact rule redundant: a `psql db` prefix matches the piece but doesn't cover
+ * the line.
  */
 export function alreadyAllowedAsRule(
   rules: PermissionRule[],
   toolName: string,
   sample: string,
   roots: string[] = [],
-  pathExists?: (p: string) => boolean
+  pathExists?: (p: string) => boolean,
+  line?: string
 ): boolean {
   if (toolName === 'run_shell') {
+    if (line !== undefined && lineOnlyTripwire(line, roots, pathExists)) {
+      return rules.some(
+        (r) =>
+          r.action === 'allow' &&
+          r.exact === true &&
+          (!r.tool || r.tool === '*' || r.tool === 'run_shell') &&
+          shellAllowHits(r, sample)
+      )
+    }
     return matchOneShell(rules, sample) === 'allow' && tripwireCoverage(rules, sample, roots, pathExists) !== 'uncovered'
   }
   return matchOne(rules, toolName, sample, roots) === 'allow'

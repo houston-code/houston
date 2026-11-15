@@ -176,7 +176,9 @@ import {
   shellCwdOutsideRoots,
   isProtectedWrite,
   shellReferencesExternalPath,
-  shellDiscardsWork
+  shellDiscardsWork,
+  shellWritesProtectedPath,
+  shellWritesSensitivePath
 } from './permissions'
 import {
   grantConversationNetworkHost,
@@ -2307,9 +2309,12 @@ export async function startRun(
       const cwdOutside = shellCwdOutsideRoots(session.cwd, roots)
       const escapes = cwdOutside || shellReferencesExternalPath(command, roots)
       const discards = shellDiscardsWork(command, pathExists)
+      // A write to a control or credential file is a tripwire of the same kind: it
+      // asks in every mode, and an allow skips it only when it names that write.
+      const writesGuarded = shellWritesProtectedPath(command, roots) || shellWritesSensitivePath(command)
       const uncovered =
         matched === 'allow' &&
-        (escapes || discards) &&
+        (escapes || discards || writesGuarded) &&
         (cwdOutside || !shellAllowCoversTripwires(permissionRules, command, roots, pathExists))
       return { escapes, discards, ruleAction: uncovered ? null : matched }
     }
@@ -2393,7 +2398,7 @@ export async function startRun(
           // "Allow for run" — auto-approve calls under this grant key (the KIND, or
           // the tool's or MCP server's own key) for the rest of the run, and remember
           // it on the conversation so later turns inherit the consent.
-          const key = grantKey(toolName, kind)
+          const key = grantKey(toolName, kind, execArgs)
           run.override.add(key)
           // "Allow for run" on an unconfined-shell prompt is the conscious consent
           // to keep running unsandboxed; a generic override never sets this.
@@ -2421,7 +2426,8 @@ export async function startRun(
         const action = decision === 'rule-allow' ? 'allow' : 'deny'
         const pathExists = pathExistsFor(shellSession)
         for (const rule of persistedRules(action, toolName, execArgs, roots, pathExists)) {
-          if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, rule.match, roots, pathExists)) {
+          const line = toolName === 'run_shell' && typeof execArgs.command === 'string' ? execArgs.command : undefined
+          if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, rule.match, roots, pathExists, line)) {
             continue
           }
           addPermissionRule(rule)
@@ -2731,7 +2737,7 @@ export async function startRun(
             : ruleAction === 'ask' ||
               ((shellEscapesWorkspace || discardsWork) && ruleAction !== 'allow') ||
               // A control file isn't covered by this run's grant, only by an allow rule.
-              (sensitiveWrite && ruleAction !== 'allow' && (protectedWrite || !run.override.has(grantKey(name, kind))))
+              (sensitiveWrite && ruleAction !== 'allow' && (protectedWrite || !run.override.has(grantKey(name, kind, gateArgs))))
         if (!mustApprove) return runCall()
         return promptGatedCall({
           subCallId: mintSubCallId(callId, kind),
@@ -5606,7 +5612,7 @@ export async function startRun(
                   ? browserSessionDestination(execArgs, browserSession?.currentUrl() ?? null)
                   : networkDestination(call.name, execArgs, ghRepo)
             const kindOverride =
-              netDest !== null ? run.networkHosts.has(netDest) : run.override.has(grantKey(call.name, tool.kind))
+              netDest !== null ? run.networkHosts.has(netDest) : run.override.has(grantKey(call.name, tool.kind, execArgs))
             // An `ask` mandated by the managed policy or the project guardrails can
             // never be skipped by a hook's `approve`: those tiers are tighten-only
             // (see parseTightenOnlyRules) and hooks are user-level config, so honoring
@@ -5621,7 +5627,13 @@ export async function startRun(
             // Only the user's own hooks may approve: a project hook is the repository's
             // config, and letting it clear prompts would let a cloned repo approve its
             // own agent's calls.
-            const userHookApproved = pre.approved && !guardrailAsk && pre.approvedBy.some((h) => !projectHooks.has(h))
+            // When a hook rewrote the input, every hook was handed the original, so only
+            // the rewriting hook's own approve (and only a user hook's) is about what runs.
+            const rewritten = execArgs !== call.arguments
+            const userHookApproved =
+              pre.approved &&
+              !guardrailAsk &&
+              pre.approvedBy.some((h) => !projectHooks.has(h) && (!rewritten || h === pre.rewrittenBy))
             // Taken in outside text? Read once for the memory and session-launch checks.
             const tainted =
               MEMORY_WRITE_TOOL_NAMES.includes(call.name) || launchesSession(call.name)

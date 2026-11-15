@@ -1,5 +1,5 @@
 import type { ApprovalPolicy } from '@shared/types'
-import { parseMcpToolName } from '@shared/mcp'
+import { parseMcpToolName, sanitizeServerId } from '@shared/mcp'
 import type { ToolDef, ToolKind } from './tools'
 
 /**
@@ -12,6 +12,9 @@ import type { ToolDef, ToolKind } from './tools'
  */
 const OWN_GRANT_TOOLS: ReadonlySet<string> = new Set(['schedule_run', 'spawn_session', 'dispatch_writable_agent'])
 
+/** MCP meta-tools whose call acts on the one server its `server` argument names. */
+const MCP_SERVER_META_TOOLS: ReadonlySet<string> = new Set(['mcp_read_resource', 'mcp_get_prompt'])
+
 /**
  * The key an "Allow for run" grant is recorded and checked under (RunState.override,
  * ConversationOverride.grants). One helper for both sides, so a grant always means
@@ -21,13 +24,21 @@ const OWN_GRANT_TOOLS: ReadonlySet<string> = new Set(['schedule_run', 'spawn_ses
  * - An MCP tool (`mcp__<serverId>__<tool>`): `mcp:<serverId>`, per SERVER. Each server
  *   is a separate program the user connected for its own reasons; consenting to one
  *   server's calls never extends to another's.
+ * - The MCP meta-tools that reach one server's resources or prompts
+ *   (`mcp_read_resource`, `mcp_get_prompt`): `mcp:<serverId>` for the server their
+ *   `server` argument names, so `args` is needed for them. Without a server they get
+ *   a key of their own (`tool:<name>`), which no other call shares.
  * - Everything else: its kind (`read`, `write`, `shell`, ...), as before. Network calls
  *   don't reach here: their grant is per destination (see networkDestination).
  */
-export function grantKey(toolName: string, kind: ToolKind): string {
+export function grantKey(toolName: string, kind: ToolKind, args?: Record<string, unknown>): string {
   if (OWN_GRANT_TOOLS.has(toolName)) return `tool:${toolName}`
   const mcp = parseMcpToolName(toolName)
   if (mcp) return `mcp:${mcp.serverId}`
+  if (MCP_SERVER_META_TOOLS.has(toolName)) {
+    const server = typeof args?.server === 'string' ? sanitizeServerId(args.server) : ''
+    return server ? `mcp:${server}` : `tool:${toolName}`
+  }
   return kind
 }
 

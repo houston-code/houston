@@ -239,11 +239,12 @@ describe('runHooks', () => {
     })
 
     it('collects additionalContext across hooks and returns updatedInput (last wins)', async () => {
+      const hooks: Hook[] = [
+        { event: 'PreToolUse', matcher: '*', command: 'a' },
+        { event: 'PreToolUse', matcher: '*', command: 'b' }
+      ]
       const r = await runHooks(
-        [
-          { event: 'PreToolUse', matcher: '*', command: 'a' },
-          { event: 'PreToolUse', matcher: '*', command: 'b' }
-        ],
+        hooks,
         'PreToolUse',
         { tool: 'run_shell', input: { command: 'ls' } },
         '/ws',
@@ -255,6 +256,8 @@ describe('runHooks', () => {
       )
       expect(r.additionalContext).toBe('ctx-a\n\nctx-b')
       expect(r.updatedInput).toEqual({ command: 'ls -la' })
+      // The hook whose rewrite stands is reported, so an approve from another can't ride it.
+      expect(r.rewrittenBy).toBe(hooks[1])
     })
 
     it('returns systemMessage', async () => {

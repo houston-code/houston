@@ -609,6 +609,19 @@ describe('grantKey', () => {
     expect(grantKey('mcp__alpha__other__tool', 'mcp')).toBe('mcp:alpha')
     expect(grantKey('mcp__beta__search', 'mcp')).toBe('mcp:beta')
   })
+
+  it("keys the resource and prompt meta-tools by the server they name, never one shared key", () => {
+    expect(grantKey('mcp_read_resource', 'mcp', { server: 'a', uri: 'x://y' })).toBe('mcp:a')
+    expect(grantKey('mcp_get_prompt', 'mcp', { server: 'a', name: 'p' })).toBe('mcp:a')
+    expect(grantKey('mcp_read_resource', 'mcp', { server: 'b' })).not.toBe(grantKey('mcp_read_resource', 'mcp', { server: 'a' }))
+    expect(grantKey('mcp_get_prompt', 'mcp', { server: 'b' })).not.toBe(grantKey('mcp_read_resource', 'mcp', { server: 'a' }))
+    // The same key as that server's own tools.
+    expect(grantKey('mcp_read_resource', 'mcp', { server: 'alpha' })).toBe(grantKey('mcp__alpha__search', 'mcp'))
+    // No server: a key of its own, not the shared `mcp` kind.
+    expect(grantKey('mcp_read_resource', 'mcp')).toBe('tool:mcp_read_resource')
+    expect(grantKey('mcp_get_prompt', 'mcp', { server: '' })).toBe('tool:mcp_get_prompt')
+    expect(grantKey('mcp_read_resource', 'mcp')).not.toBe('mcp')
+  })
 })
 
 describe('tool classifiers', () => {
