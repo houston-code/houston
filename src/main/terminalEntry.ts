@@ -37,7 +37,7 @@ import { lspManager } from './agent/lsp/manager'
 import { flushRuleUsage, getRuleUsage } from './ruleUsage'
 import { describePermissionPolicy, defaultPolicyDeps } from './permissionPolicy'
 import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type SignalProcess } from './signalCleanup'
-import { disconnectAllMcp, getMcpStatuses, reconnectMcpServers } from './mcp/manager'
+import { connectedMcpResources, disconnectAllMcp, getMcpStatuses, reconnectMcpServers } from './mcp/manager'
 import { openWithSystemHandler, runMcpOAuthFlow } from './mcp/oauth'
 import { canStoreMcpOAuth, collectSecrets, setMcpOAuth } from './agentHost'
 import { activeBackendId, isSandboxed } from './sandbox'
@@ -135,8 +135,6 @@ import { globalRulesDir, legacyRulesNoticeApplies } from './globalRules'
 import { loadUserThemes } from './tui-themes'
 import { progressSupport } from './tui-notify'
 import { maybeGenerateTitle } from './agent/title'
-import { loadProjectConfig } from './agent/projectConfig'
-import { workspaceTrusted } from './agent/commandRun'
 import { takeLegacyRulesTerminalNotice } from './legacyRulesNotice'
 import {
   checkForUpdate,
@@ -165,9 +163,13 @@ import {
   commandMenuView,
   folderCompletions,
   makeMentionMenuView,
+  makeMentionFinder,
   COMMANDS,
   type CommandSpec
 } from './tui-complete'
+import { expandMessageMentions } from './agent/messageMentions'
+import { loadProjectConfig, mergeProjectMcpServers } from './agent/projectConfig'
+import { workspaceTrusted } from './agent/commandRun'
 import { mergeWithBuiltins } from '@shared/commands'
 import { runOutcome, runOutcomePhrase } from '@shared/runEnd'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
@@ -799,8 +801,25 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // The saved theme, else the detected background's: the theme the driver starts on
   // (and hands the adapter again on /theme), so nothing is drawn in the wrong one.
   const paint = makePainter(tui.color, resolveTheme(getSettings().tuiTheme ?? '') ?? tui.detectedTheme ?? 'default')
-  // Typing `@` lists matching files under the composer, as `/` lists commands.
-  const mentionMenu = makeMentionMenuView((q) => findFiles(tui.cwd, q), paint as never)
+  // The MCP servers this folder's chats use: the user's own, plus a trusted folder's
+  // project servers under their `proj-` ids, exactly as a run merges them. An
+  // untrusted folder's servers are never offered or expanded.
+  const chatMcpServerIds = async (): Promise<string[]> => {
+    const s = getSettings()
+    const trusted = await workspaceTrusted(tui.cwd, s.trustedFolders).catch(() => false)
+    const servers = trusted
+      ? mergeProjectMcpServers(s.mcpServers, (await loadProjectConfig(tui.cwd)).elevated.mcpServers)
+      : (s.mcpServers ?? [])
+    return servers.filter((c) => c.enabled).map((c) => c.id)
+  }
+  // Typing `@` lists matching files under the composer, as `/` lists commands, and
+  // agents (`@agent-`), line ranges (`@path#`) and MCP resources (`@server:`) too.
+  const mentionFinder = makeMentionFinder({
+    files: (q) => findFiles(tui.cwd, q),
+    agents: async () => (await loadAgents(tui.cwd)).map((a) => ({ name: a.name, description: a.description })),
+    resources: async () => connectedMcpResources(await chatMcpServerIds())
+  })
+  const mentionMenu = makeMentionMenuView(mentionFinder, paint as never)
 
   // ~/.houston/keybindings.json: read now, and again whenever it changes. What is
   // wrong with it is kept for the driver to say once the banner is up.
@@ -839,7 +858,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     editText: (initial) => editInEditor(initial, 'MESSAGE.md'),
     // Read live, like the menu: the workspace's commands load after startup.
     completer: makeCompleter(
-      (q) => findFiles(tui.cwd, q),
+      mentionFinder,
       allMenuCommands,
       // `/cd` and `/add-dir` complete folder names, a link to a folder included.
       (partial) =>
@@ -1073,6 +1092,21 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           onKeybindingProblems = cb
         },
         count: () => BINDING_CONTEXTS.reduce((n, ctx) => n + keybindings.get()[ctx].size, 0)
+      },
+      // A message's `@path#20-45`, `@server:uri` and `@agent-<name>`, filled in at send.
+      expandMentions: async (text, { confirm, addDirs }) => {
+        const s = getSettings()
+        const [agents, mcpServers] = await Promise.all([
+          loadAgents(tui.cwd).then((list) => list.map((a) => a.name)).catch(() => [] as string[]),
+          chatMcpServerIds().catch(() => [] as string[])
+        ])
+        return expandMessageMentions(text, {
+          workspace: tui.cwd,
+          roots: [tui.cwd, ...(s.additionalRoots ?? []), ...addDirs],
+          agents,
+          mcpServers,
+          confirm
+        })
       },
       persistHistory,
       // /copy: the platform's clipboard helper when this is a local session (never

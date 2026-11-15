@@ -6,7 +6,32 @@
  * src/main/agent/commandContext.ts.
  */
 
-export type ContextPiece = { kind: 'file'; path: string } | { kind: 'shell'; command: string }
+/** A 1-based, inclusive line range: `@path#20-45` (or `#20` for one line). */
+export interface LineRange {
+  start: number
+  end: number
+}
+
+export type ContextPiece = { kind: 'file'; path: string; lines?: LineRange } | { kind: 'shell'; command: string }
+
+/**
+ * Split a `#20-45` (or `#20`) line range off a mentioned path. Plain line numbers
+ * only (no leading zero), so a range that names no file can be written back exactly
+ * as it was. A range that ends before it starts is still returned, so the reader can
+ * say what is wrong with it rather than treating it as part of the name.
+ */
+export function splitLineRange(raw: string): { path: string; lines?: LineRange } {
+  const m = /^(.*[^#])#([1-9]\d{0,8})(?:-([1-9]\d{0,8}))?$/.exec(raw)
+  if (!m) return { path: raw }
+  const start = Number(m[2])
+  const end = m[3] === undefined ? start : Number(m[3])
+  return { path: m[1], lines: { start, end } }
+}
+
+/** How a range reads in a header or a message: `20-45`, or `20` for one line. */
+export function lineRangeLabel(r: LineRange): string {
+  return r.start === r.end ? `${r.start}` : `${r.start}-${r.end}`
+}
 
 /** Placeholder for piece `i` while the template's own arguments are filled in. */
 export const contextSentinel = (i: number): string => `\u0000HOUSTON_CONTEXT_${i}\u0000`
@@ -34,10 +59,11 @@ export function findContext(template: string): { pieces: ContextPiece[]; templat
   })
   out = out.replace(FILE_RE, (m, lead: string, raw: string) => {
     // Sentence punctuation after a path belongs to the sentence ("see @a/b.ts.").
-    const path = raw.replace(/[.,:;!?]+$/, '')
+    const word = raw.replace(/[.,:;!?]+$/, '')
+    const { path, lines } = splitLineRange(word)
     if (!path || !/[./]/.test(path) || path.includes('\u0000')) return m
-    pieces.push({ kind: 'file', path })
-    return `${lead}${contextSentinel(pieces.length - 1)}${raw.slice(path.length)}`
+    pieces.push({ kind: 'file', path, ...(lines ? { lines } : {}) })
+    return `${lead}${contextSentinel(pieces.length - 1)}${raw.slice(word.length)}`
   })
   return { pieces, template: out }
 }

@@ -51,6 +51,19 @@ describe('expandCommandContext', () => {
     expect(r).toEqual({ ok: true, text: 'Review Contents of `src/a.ts`:\n```\nexport const a = 1\n\n``` for bugs' })
   })
 
+  it('fills in only the lines a #range names, under a header naming the range', async () => {
+    writeFileSync(join(ws, 'src/b.ts'), 'l1\nl2\nl3\n')
+    expect(findContext('See @src/b.ts#2-3.').pieces).toEqual([{ kind: 'file', path: 'src/b.ts', lines: { start: 2, end: 3 } }])
+    const r = await expandCommandContext('See @src/b.ts#2-3.', '', opts())
+    expect(r).toEqual({ ok: true, text: 'See Lines 2-3 of `src/b.ts`:\n```\nl2\nl3\n```.' })
+    // A range on a file that isn't there stays text, range and all.
+    expect(await expandCommandContext('See @src/nope.ts#2', '', opts())).toEqual({ ok: true, text: 'See @src/nope.ts#2' })
+    expect(await expandCommandContext('See @src/b.ts#7', '', opts())).toEqual({
+      ok: false,
+      error: '@src/b.ts#7: src/b.ts has only 3 lines'
+    })
+  })
+
   it('keeps a path-like @word that names no file as text', async () => {
     const r = await expandCommandContext('Install @types/node', '', opts())
     expect(r).toEqual({ ok: true, text: 'Install @types/node' })

@@ -859,7 +859,7 @@ In the terminal:
 
 **Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/cd`, `/vim`, `/keybindings`, `/notify`, `/statusline`, `/screen-reader`,
 `/reduce-motion`, `/verbose`, `/focus`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
-`/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/open-in-app`,
+`/tasks`, `/queue`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/open-in-app`,
 `/permissions`, `/schedule`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
@@ -1057,7 +1057,8 @@ and waits for a running turn to end.
 A template can pull facts in when the command runs, so the model starts with them
 instead of going to get them:
 
-- `@path` becomes that file's contents (fenced, with its name). It must be inside the
+- `@path` becomes that file's contents (fenced, with its name), and `@path#20-45` (or
+  `#20`) just those lines, under a header naming the range. It must be inside the
   project, through symlinks too, the same as for `read_file`. A file over 50 KB is cut
   with a marker saying so; a binary file stops the command. Only a word that starts
   with `@` and holds a `/` or a `.` counts, and one that names no file (`npm i
@@ -1117,6 +1118,19 @@ long as it needs to be.
   message forgets it.
 - **Shell commands:** a line starting with `!` runs in your own shell. See "Running
   your own commands".
+- **Mentions:** `@path` names a file for the agent to read. Three richer forms are
+  filled in when you send the message (they stay text if they name nothing real):
+  - `@path#20-45` (or `#20`) adds just those lines, fenced under a header naming the
+    range. The file must be inside the project (symlinks included, as for `read_file`);
+    a binary file stops the send, and a credential file such as `.env` asks first.
+  - `@server:uri` names a resource of one of the chat's MCP servers. The agent is told
+    to read it with `mcp_read_resource`, so your permission rules and the approval
+    mode apply to the read as to any other.
+  - `@agent-<name>` hands the message to that `.houston/agents` subagent, the same as
+    `/agent <name> <message>`. One agent per message.
+  Typing `@` lists matching agents, resources (`@github:`) and files; after a file,
+  `#` lists it ready for a range. The transcript shows the message as you typed it.
+  The desktop app's message box keeps `@path` as a plain reference.
 - **Finding all this:** the startup banner shows two tips about keys and prefixes like
   these, a different pair each time, and `/help` ends with a **Keys** section.
 - **Status line:** above the composer it shows the model, its reasoning level (as
@@ -1162,7 +1176,7 @@ replace the built-in status line above the composer:
 | `Shift-Enter`, `Ctrl-J`, `Alt-Enter` | insert a line break (`Shift-Enter` where the terminal reports it) |
 | `Up` / `Down` | move between lines, then step through past messages |
 | `Ctrl-R` | search past messages: case doesn't matter and every word you type must appear, in any order (the same search as the desktop app). `Ctrl-R` or `Up` steps to an older match, `Ctrl-S` or `Down` to a newer one, and the prompt shows which match of how many; `Enter` accepts, `Esc` cancels |
-| `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`). Typing `@` already lists the matching files under the message, as `/` lists commands. The menu follows the text before the cursor |
+| `Tab` | complete a slash command or an `@` mention (fuzzy: `@tuied` finds `src/tui-editor.ts`; also `@agent-`, `@server:` and `@path#`). Typing `@` already lists the matches under the message, as `/` lists commands. The menu follows the text before the cursor |
 | `Up` / `Down` *(menu open)* | move through the `/` or `@` menu; `Enter` or `Tab` puts the highlighted one in, `Esc` closes the menu until you type again |
 | `Alt-P`, `Ctrl-X Ctrl-P` | expand collapsed pastes (`[#1 pasted 120 lines]`) back to their text in the draft, to read or edit them; undo folds them again |
 | `Ctrl-A` / `Ctrl-E` | start / end of line |
@@ -1761,8 +1775,13 @@ and its context, and waiting lets the agent keep building on the wrong thing.
   it reaches the model, `queued:` until the turn ends. `Up` on an empty line takes the
   newest one back into what you are typing, to edit or drop; a steer the model has
   already read stays where it is.
+- `/queue` lists the queued messages, numbered, and works while the turn runs:
+  `/queue drop <n>` removes one, `/queue send <n>` sends one to the turn now (it shows
+  as `steering next:` until the model reads it), and `/queue clear` removes them all. A
+  `/command` can't go into a running turn: it stays queued and runs once the turn ends.
 - In screen-reader mode nothing is drawn under the activity line: each message is
-  announced once as it is sent or queued, and `Up` says what it took back.
+  announced once as it is sent or queued, `Up` says what it took back, and `/queue`
+  prints the list.
 
 ### Special cases
 

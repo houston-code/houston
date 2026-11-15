@@ -587,6 +587,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'queue', group: 'Terminal', args: '[drop n | send n | clear]',
+    description: 'List the messages waiting for the running turn, remove one, or send one to it now',
+    clients: ['tui']
+  },
+  {
     name: 'proposals', group: 'Terminal',
     description: 'List the sessions the agent proposed, and start, ask here, or dismiss one',
     clients: ['tui']
@@ -742,6 +747,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
   tasks: 'in the app, background commands are in the Background tasks list in the right-hand dock, and subagents show under the tool call that started them',
   proposals: 'in the app, proposed sessions appear as cards in the chat, with Start and Dismiss',
+  queue: 'in the app, queued messages wait as chips above the message box; the × on one removes it',
   image: 'in the app, attach an image with the + button, or paste or drop it into the message box',
   rename: "in the app, rename a chat from its More actions menu in the sidebar",
   export: "in the app, export a chat from its More actions menu in the sidebar, or the File menu",

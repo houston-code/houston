@@ -54,6 +54,25 @@ export function getMcpStatuses(): McpServerStatus[] {
 }
 
 /**
+ * The resources the connected servers among `serverIds` list right now, for the
+ * terminal's `@server:uri` completion. Only the servers named (the user's own), so
+ * another chat's connection is never offered; nothing is read or fetched. The uris
+ * and names are server-written text: callers strip them before showing them.
+ */
+export function connectedMcpResources(serverIds: readonly string[]): { server: string; uri: string; name?: string }[] {
+  const out: { server: string; uri: string; name?: string }[] = []
+  for (const id of [...serverIds].sort(byCodeUnit)) {
+    const conn = connections.get(id)
+    if (!conn || conn.client.isClosed) continue
+    for (const r of conn.client.resources) {
+      if (typeof r.uri !== 'string' || !r.uri) continue
+      out.push({ server: id, uri: r.uri, ...(r.name ? { name: r.name } : {}) })
+    }
+  }
+  return out
+}
+
+/**
  * The elicitation responder of the tool call currently in flight per server —
  * set by callLive from the run's ToolContext and cleared when the call settles.
  * Connections outlive runs, so this is the bridge from a server's mid-call

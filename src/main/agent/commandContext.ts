@@ -1,7 +1,7 @@
 import { promises as fs, realpathSync } from 'node:fs'
 import { relative, sep } from 'node:path'
 import { expandTemplate } from '@shared/commands'
-import { CONTEXT_SENTINEL_RE, findContext } from '@shared/commandContext'
+import { CONTEXT_SENTINEL_RE, findContext, lineRangeLabel, type LineRange } from '@shared/commandContext'
 import { captureUserShell, type ShellCapture } from '../userShell'
 import { isSensitivePath } from './sensitive-paths'
 import { resolveInRoots } from './tools'
@@ -34,6 +34,8 @@ import { resolveInRoots } from './tools'
 
 /** Largest part of one file put into the prompt. */
 export const MAX_CONTEXT_FILE_BYTES = 50_000
+/** Largest file a line range (`@path#20-45`) is taken from: the lines are found by reading it. */
+export const MAX_RANGE_SOURCE_BYTES = 10 * 1024 * 1024
 /** Most output kept from one command. */
 export const MAX_CONTEXT_SHELL_BYTES = 32_000
 /** How long one command may run. */
@@ -108,29 +110,106 @@ function utf8Prefix(buf: Buffer): string {
   return buf.subarray(0, end).toString('utf8')
 }
 
-/** Read one context file, capped. */
-async function readContextFile(abs: string, shown: string): Promise<{ text: string } | { error: string }> {
+/** Cap `text` at {@link MAX_CONTEXT_FILE_BYTES} on a character boundary, with a marker saying so. */
+function capContext(text: string, what: string): string {
+  const buf = Buffer.from(text, 'utf8')
+  if (buf.length <= MAX_CONTEXT_FILE_BYTES) return text
+  const kept = utf8Prefix(buf.subarray(0, MAX_CONTEXT_FILE_BYTES))
+  return `${kept}\n[truncated: ${what} is ${buf.length} bytes; only the first ${Buffer.byteLength(kept)} are shown]`
+}
+
+/**
+ * Read one context file, capped, as a fenced block under a header naming it: the
+ * whole file, or with `lines` only those lines (`Lines 20-45 of \`src/a.ts\`:`).
+ * Shared by a command template's `@file` and a message's `@path#20-45`.
+ */
+export async function readContextFile(
+  abs: string,
+  shown: string,
+  lines?: LineRange
+): Promise<{ text: string } | { error: string }> {
+  const named = lines ? `${shown}#${lineRangeLabel(lines)}` : shown
+  if (lines && lines.end < lines.start) return { error: `@${named}: the range ends before it starts` }
   let handle
   try {
     handle = await fs.open(abs, 'r')
   } catch {
-    return { error: `@${shown}: no such file` }
+    return { error: `@${named}: no such file` }
   }
   try {
     const st = await handle.stat()
-    if (!st.isFile()) return { error: `@${shown} is not a file` }
-    const buf = Buffer.alloc(Math.min(st.size, MAX_CONTEXT_FILE_BYTES))
-    const { bytesRead } = await handle.read(buf, 0, buf.length, 0)
-    const head = buf.subarray(0, bytesRead)
-    if (head.includes(0)) return { error: `@${shown} is not a text file` }
-    let text = utf8Prefix(head)
-    if (st.size > bytesRead) {
-      text += `\n[truncated: ${shown} is ${st.size} bytes; only the first ${bytesRead} are shown]`
+    if (!st.isFile()) return { error: `@${named} is not a file` }
+    if (!lines) {
+      const buf = Buffer.alloc(Math.min(st.size, MAX_CONTEXT_FILE_BYTES))
+      const { bytesRead } = await handle.read(buf, 0, buf.length, 0)
+      const head = buf.subarray(0, bytesRead)
+      if (head.includes(0)) return { error: `@${shown} is not a text file` }
+      let text = utf8Prefix(head)
+      if (st.size > bytesRead) {
+        text += `\n[truncated: ${shown} is ${st.size} bytes; only the first ${bytesRead} are shown]`
+      }
+      return { text: fenced(`Contents of \`${shown}\`:`, text) }
     }
-    return { text }
+    if (st.size > MAX_RANGE_SOURCE_BYTES) {
+      return { error: `@${named}: ${shown} is too large to take lines from (over ${MAX_RANGE_SOURCE_BYTES / 1024 / 1024} MB)` }
+    }
+    const buf = Buffer.alloc(st.size)
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0)
+    const all = buf.subarray(0, bytesRead)
+    if (all.includes(0)) return { error: `@${named}: ${shown} is not a text file` }
+    const rows = utf8Prefix(all).split('\n')
+    // A final newline ends the last line; it does not start one more.
+    if (rows.length > 1 && rows[rows.length - 1] === '') rows.pop()
+    if (lines.start > rows.length) {
+      return { error: `@${named}: ${shown} has only ${rows.length} ${rows.length === 1 ? 'line' : 'lines'}` }
+    }
+    const end = Math.min(lines.end, rows.length)
+    const label = lineRangeLabel({ start: lines.start, end })
+    const header =
+      end < lines.end
+        ? `Lines ${label} of \`${shown}\` (the file ends at line ${rows.length}):`
+        : `${lines.start === end ? 'Line' : 'Lines'} ${label} of \`${shown}\`:`
+    const body = capContext(rows.slice(lines.start - 1, end).join('\n'), `${shown} lines ${label}`)
+    return { text: fenced(header, body) }
   } finally {
     await handle.close()
   }
+}
+
+/** `header`, then `text` in a fence it can't close. */
+function fenced(header: string, text: string): string {
+  const fence = fenceFor(text)
+  return `${header}\n${fence}\n${text}\n${fence}`
+}
+
+/** Where a mentioned path resolves, or why it can't be read. */
+export type ResolvedContextFile =
+  | { kind: 'file'; abs: string; shown: string; sensitive: boolean }
+  | { kind: 'outside' }
+  | { kind: 'missing' }
+
+/**
+ * Resolve a mentioned path inside the workspace roots, through symlinks, exactly
+ * as `read_file` requires. `missing` (it names no file) means the word stays text.
+ * `sensitive` is judged by the name written, where it points and what it really is,
+ * so an innocent-looking link to `.env` still asks.
+ */
+export function resolveContextFile(roots: string[], workspace: string, path: string): ResolvedContextFile {
+  let abs: string
+  try {
+    abs = resolveInRoots(roots, path)
+  } catch {
+    return { kind: 'outside' }
+  }
+  let real: string
+  try {
+    real = realpathSync(abs)
+  } catch {
+    return { kind: 'missing' }
+  }
+  // Shown with forward slashes on every platform, the way the template names it.
+  const shown = relative(workspace, abs).split(sep).join('/') || path
+  return { kind: 'file', abs, shown, sensitive: isSensitivePath(path) || isSensitivePath(abs) || isSensitivePath(real) }
 }
 
 /**
@@ -155,26 +234,14 @@ export async function expandCommandContext(
   const sensitiveFiles: string[] = []
   for (const [i, p] of pieces.entries()) {
     if (p.kind !== 'file') continue
-    let abs: string
-    try {
-      abs = resolveInRoots(opts.roots, p.path)
-    } catch {
-      return { ok: false, error: `@${p.path} is outside this project` }
-    }
-    let real: string
-    try {
-      real = realpathSync(abs)
-    } catch {
+    const r = resolveContextFile(opts.roots, opts.workspace, p.path)
+    if (r.kind === 'outside') return { ok: false, error: `@${p.path} is outside this project` }
+    if (r.kind === 'missing') {
       literal.add(i) // names no file: it stays text
       continue
     }
-    // Shown with forward slashes on every platform, the way the template names it.
-    const shown = relative(opts.workspace, abs).split(sep).join('/') || p.path
-    files.set(i, { abs, shown })
-    // Judged by the name written, where it points and what it really is, so an
-    // innocent-looking link to `.env` still asks.
-    const sensitive = isSensitivePath(p.path) || isSensitivePath(abs) || isSensitivePath(real)
-    if (sensitive && !sensitiveFiles.includes(shown)) sensitiveFiles.push(shown)
+    files.set(i, { abs: r.abs, shown: r.shown })
+    if (r.sensitive && !sensitiveFiles.includes(r.shown)) sensitiveFiles.push(r.shown)
   }
   const commands = pieces.flatMap((p) => (p.kind === 'shell' ? [p.command] : []))
 
@@ -194,15 +261,14 @@ export async function expandCommandContext(
   const filled: string[] = []
   for (const [i, p] of pieces.entries()) {
     if (p.kind === 'file' && literal.has(i)) {
-      filled[i] = `@${p.path}`
+      filled[i] = `@${p.path}${p.lines ? `#${lineRangeLabel(p.lines)}` : ''}`
       continue
     }
     if (p.kind === 'file') {
       const f = files.get(i)!
-      const read = await readContextFile(f.abs, f.shown)
+      const read = await readContextFile(f.abs, f.shown, p.lines)
       if ('error' in read) return { ok: false, error: read.error }
-      const fence = fenceFor(read.text)
-      filled[i] = `Contents of \`${f.shown}\`:\n${fence}\n${read.text}\n${fence}`
+      filled[i] = read.text
       continue
     }
     let run: ShellCapture

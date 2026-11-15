@@ -24,10 +24,11 @@ import {
 import { loadProjectConfig } from './agent/projectConfig'
 import type { ShellCapture } from './userShell'
 import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
-import { describeContextConsent } from './agent/commandContext'
+import { describeContextConsent, type ContextConsent } from './agent/commandContext'
 import { isMcpPromptLine, prepareMcpPromptRun, type McpPromptFetch } from './agent/mcpPromptCommands'
 import type { ScheduledRunInfo } from './agent/scheduler'
 import { loopScheduleName, parseLoopArgs, scheduleWhen } from '@shared/loopCommand'
+import type { MessageMentionResult } from './agent/messageMentions'
 import { HOOK_TIMEOUT_MAX_S, HOOK_TIMEOUT_MIN_S, HOOK_TIMEOUT_MS } from './agent/hooks'
 import { appendUserTurn } from './agent/userTurn'
 import {
@@ -183,6 +184,7 @@ import {
 } from './tui-tasks'
 import { parseGitCommand, runGitCommand, YIELDS_TO_CUSTOM, type GitDeps, type GitOp } from './tui-git'
 import { parseChangesArgs, renderChangeSummary, runChangesCommand, type ChangesDeps, type ChangesOp } from './tui-changes'
+import { parseQueueArgs, renderQueueList, QUEUE_USAGE, type QueueOp } from './tui-queue'
 import {
   signalFor,
   idleTitle,
@@ -2565,6 +2567,8 @@ export type SlashResult =
   | { kind: 'tasks'; op: TasksOp }
   /** List or act on the sessions the agent proposed (/proposals [start|here|dismiss n]). */
   | { kind: 'proposals'; op: 'list' | 'start' | 'here' | 'dismiss'; index?: number }
+  /** The follow-ups waiting for the running turn: list, drop or send one, clear (/queue). */
+  | { kind: 'queue'; op: QueueOp }
   /** Ask a quick side question about this chat without adding it to the chat (/btw). */
   | { kind: 'btw'; question: string }
   /** Edit lifecycle hooks (/hooks [add|remove <n>]). */
@@ -2651,6 +2655,8 @@ export function parseSlashCommand(
     case 'tasks':
     case 'bashes':
       return { kind: 'tasks', op: parseTasksArgs(arg) }
+    case 'queue':
+      return { kind: 'queue', op: parseQueueArgs(arg) }
     case 'proposals':
     case 'proposed': {
       const [op, n] = arg.trim().split(/\s+/)
@@ -2915,6 +2921,7 @@ export const HELP_TEXT = [
   '  /resume [query]       pick a saved session to reopen (also /sessions): type to filter, 1-9 open a row, ctrl-r rename, ctrl-d delete, ctrl-a this folder or all folders',
   '  /spawned              list the background sessions the agent started; open one',
   '  /tasks [n|kill n]     background shells and subagents of this chat: list, show n, or stop n (works mid-turn)',
+  '  /queue [op n]         messages waiting for the running turn: list, drop n, send n (to the turn now), clear',
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
   '  /btw [question]       ask a quick side question; the answer stays out of this chat (alone: latest answers, then asks)',
   '  /btw clear            start this chat\'s side chat over',
@@ -2985,7 +2992,7 @@ export const HELP_TEXT = [
   'Keys:',
   '  Enter                 send the message',
   '  Shift-Enter, Ctrl-J   new line (Alt-Enter too; Shift-Enter where the terminal reports it)',
-  '  @ then Tab            complete a file or folder path into the message',
+  '  @ then Tab            complete a file, @path#20-45 (those lines), @server:uri or @agent-<name>',
   '  !command              run a shell command yourself; its output joins the chat',
   '  #note                 save a standing instruction to AGENTS.md',
   '  Shift-Tab             cycle the approval mode, also while a turn runs',
@@ -4101,6 +4108,14 @@ export interface TuiIo {
    * so they can be saved; `acked` when a message was just shown as queued or steered.
    */
   onPendingInput?: (handler: (p: { draft: string; queued: string[] }, acked: boolean) => void) => void
+  /** /queue: the follow-ups waiting for after the turn, oldest first. */
+  peekQueued?: () => string[]
+  /** /queue drop: remove the n-th (0-based) waiting follow-up; its text, or null. */
+  dropQueued?: (index: number) => string | null
+  /** /queue send: hand the n-th (0-based) follow-up to the running turn now; false if it can't take it. */
+  sendQueuedNow?: (index: number) => boolean
+  /** /queue clear: drop every waiting follow-up; what was dropped. */
+  clearQueued?: () => string[]
   takeQueued?: () => string[]
   /**
    * Take (and clear) the line typed while the agent was working but not yet sent:
@@ -4261,6 +4276,16 @@ export interface TuiDeps {
     part: { turn: number; text: string; side: 'from' | 'before' },
     opts?: CompactOptions
   ) => Promise<CompactResult>
+  /**
+   * Fill in a message's `@path#20-45`, `@server:uri` and `@agent-<name>` mentions
+   * before it is sent (see agent/messageMentions.ts). `confirm` asks before a
+   * credential file is read; `addDirs` are the folders /add-dir added this session,
+   * which a file may also be in. Absent: every mention stays text.
+   */
+  expandMentions?: (
+    text: string,
+    opts: { confirm: (consent: ContextConsent) => Promise<boolean>; addDirs: string[] }
+  ) => Promise<MessageMentionResult>
   /** Compact the given conversation on demand (the `/compact` command). */
   compact?: (id: string, providerId: string, model: string, opts?: CompactOptions) => Promise<CompactResult>
   /** Persist a settings patch (for /hooks and /mcp editing). Absent ⇒ editing disabled. */
@@ -5380,6 +5405,58 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     savedDraft = deps.drafts?.load(draftKey(conversationId, opts.cwd)) ?? null
   }
   deps.io.onPendingInput?.((p, acked) => saveDraft({ text: p.draft, queued: p.queued }, acked))
+  /** /queue: the follow-ups waiting for this turn. Mid-run it only prints, like /tasks. */
+  const runQueue = (op: QueueOp, midRun: boolean): void => {
+    if (midRun) deps.io.out('\n')
+    const items = deps.io.peekQueued?.() ?? []
+    const nth = (index: number): string | null => {
+      const t = items[index - 1]
+      if (t !== undefined) return t
+      deps.io.out(paint(items.length ? `· no queued message ${index}; /queue lists them\n` : '· nothing is queued\n', 'dim'))
+      return null
+    }
+    const quoted = (t: string): string => truncate(stripControlChars(t).replace(/\s+/g, ' '), 60)
+    switch (op.op) {
+      case 'usage':
+        deps.io.out(paint(`${QUEUE_USAGE}\n`, 'dim'))
+        return
+      case 'list': {
+        const [head, ...rest] = renderQueueList(items)
+        deps.io.out(`${paint(head, items.length ? 'bold' : 'dim')}\n`)
+        if (rest.length) {
+          const hint = rest.pop() ?? ''
+          deps.io.out(`${rest.join('\n')}\n${paint(hint, 'dim')}\n`)
+        }
+        return
+      }
+      case 'drop': {
+        const t = nth(op.index)
+        if (t === null) return
+        deps.io.dropQueued?.(op.index - 1)
+        deps.io.out(paint(`· removed: ${quoted(t)}\n`, 'dim'))
+        return
+      }
+      case 'send': {
+        const t = nth(op.index)
+        if (t === null) return
+        if (!activeRunId) {
+          deps.io.out(paint('· no turn is running; queued messages go out when it ends\n', 'dim'))
+          return
+        }
+        if (!(deps.io.sendQueuedNow?.(op.index - 1) ?? false)) {
+          deps.io.out(paint("· that can't go to the running turn (a command, or too long to steer); it stays queued\n", 'dim'))
+          return
+        }
+        deps.io.out(paint(`· sent to the running turn, which reads it at its next step: ${quoted(t)}\n`, 'dim'))
+        return
+      }
+      case 'clear': {
+        const gone = deps.io.clearQueued?.() ?? []
+        deps.io.out(paint(gone.length ? `· cleared ${plural(gone.length, 'queued message')}\n` : '· nothing is queued\n', 'dim'))
+        return
+      }
+    }
+  }
   // Set while a /btw side chat answer is in flight: Ctrl-C / Esc stops it.
   let stopSideChat: (() => void) | null = null
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
@@ -5848,6 +5925,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // waiting for the turn: that is when you want to see what the turn started.
     if (slash.kind === 'tasks') {
       runTasks(slash.op, true).catch(() => {})
+      return 'handled'
+    }
+    // /queue manages what waits for this turn, so it too runs now.
+    if (slash.kind === 'queue') {
+      runQueue(slash.op, true)
       return 'handled'
     }
     if (slash.kind !== 'not-a-command' && slash.kind !== 'unknown') return false
@@ -7061,6 +7143,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         await runTasks(result.op, false)
         continue
       }
+      if (result.kind === 'queue') {
+        runQueue(result.op, false)
+        continue
+      }
       if (result.kind === 'spawned') {
         if (!deps.backgroundSessions) {
           deps.io.out(paint('· background sessions are unavailable here\n', 'dim'))
@@ -7801,6 +7887,33 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           customCommands
         )
         continue
+      }
+    }
+
+    // A message's richer @ mentions (a file's lines, an MCP resource, an agent) are
+    // filled in here, before it is sent; the typed message is what the chat shows.
+    if (!invokedAs && !wakeTurn && deps.expandMentions && text.includes('@')) {
+      const filled = await deps.expandMentions(text, {
+        confirm: async (consent) => {
+          const { lines } = describeContextConsent('This message', consent)
+          deps.io.out(
+            `${paint('This message reads a credential file:', 'cyan')}\n${lines.map((l) => `  ${stripControlChars(l)}`).join('\n')}\n`
+          )
+          const ans = await deps.io.readLine('Send its contents to the model? [y/N] ', { discardPending: true })
+          return /^(y|yes)$/i.test(ans?.trim() ?? '')
+        },
+        addDirs: [...sessionAddDirs]
+      })
+      if (!filled.ok) {
+        // Back in the prompt, so fixing the mention doesn't mean retyping the message.
+        halfDraft = [halfDraft, text].filter(Boolean).join('\n\n')
+        deps.io.out(paint(`· not sent: ${stripControlChars(filled.error)}\n`, 'yellow'))
+        continue
+      }
+      if (filled.turn) {
+        text = filled.turn.text
+        invokedAs = filled.turn.invokedAs
+        for (const note of filled.notes) deps.io.out(paint(`· ${stripControlChars(note)}\n`, 'dim'))
       }
     }
 

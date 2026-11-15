@@ -122,12 +122,13 @@ describe('prompt visibility guard', () => {
     // tui.ts only re-exports agentInvocationPrompt for older importers. In commands.ts
     // the review template is also what reviewPrompt returns for a bare /review, and
     // commandTurn (promptInvocation.ts) recognizes it to read /review's argument as the
-    // review target, sending reviewPrompt's text instead.
+    // review target, sending reviewPrompt's text instead. An `@agent-<name>` mention
+    // sends the same dispatch through mentionTurn.
     expect(
       occurrences(['main', 'renderer/src', 'shared'], /\b(REVIEW_TEMPLATE|agentInvocationPrompt|skillCommandTemplate)\b/)
     ).toEqual({
       'shared/commands.ts': 6,
-      'shared/promptInvocation.ts': 5,
+      'shared/promptInvocation.ts': 6,
       'main/agent/skills.ts': 2,
       'main/tui.ts': 2
     })

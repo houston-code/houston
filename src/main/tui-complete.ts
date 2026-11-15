@@ -45,13 +45,27 @@ export function inlineCommandQuery(line: string): string | null {
 }
 
 /**
+ * One row the `@` mention menu offers: a file, a file with a line range, an agent,
+ * or an MCP resource. `value` is what completes after the `@`; `open` completes it
+ * with no space after (a range still to be typed: `@src/a.ts#`).
+ */
+export interface MentionCandidate {
+  value: string
+  detail?: string
+  open?: true
+}
+
+const asCandidate = (c: string | MentionCandidate): MentionCandidate => (typeof c === 'string' ? { value: c } : c)
+
+/**
  * Produce a readline-style completion tuple `[completions, substring]` for the
- * current line. `files` are workspace-relative paths already matched against the
- * mention query by the caller (via findFiles). Command completion needs no I/O.
+ * current line. `files` are the mention candidates already matched against the
+ * mention query by the caller (paths from findFiles, or {@link makeMentionFinder}'s
+ * rows). Command completion needs no I/O.
  */
 export function completeInput(
   line: string,
-  files: string[],
+  files: (string | MentionCandidate)[],
   commands: CommandSpec[] = COMMANDS
 ): [string[], string] {
   const cmd = commandQuery(line)
@@ -70,13 +84,93 @@ export function completeInput(
   }
   const mention = mentionQuery(line)
   if (mention !== null) {
-    return [files.map((f) => `@${f} `), `@${mention}`]
+    return [files.map(asCandidate).map((c) => `@${c.value}${c.open ? '' : ' '}`), `@${mention}`]
   }
   return [[], line]
 }
 
 /** A file finder for the completer (workspace-bound, injected). */
 export type FileFinder = (query: string) => Promise<string[]>
+/** What the `@` completer and menu ask: files, or any of {@link makeMentionFinder}'s rows. */
+export type MentionFinder = (query: string) => Promise<(string | MentionCandidate)[]>
+
+/** The most agent and resource rows one lookup offers (files are capped by their finder). */
+const MENTION_EXTRA_LIMIT = 50
+
+/** A line range typed after a path: `#20-45` or `#20`. */
+const RANGE_RE = /^[1-9]\d*(?:-[1-9]\d*)?$/
+
+/**
+ * The `@` lookup for the terminal's composer: files as before, plus
+ *  - `@path#` and `@path#20-45`: the matching files with the range, for a few lines;
+ *  - `@agent-`: the `.houston/agents` the message can be handed to;
+ *  - `@server:`: the resources the chat's connected MCP servers list.
+ * Agents and resources come first when the query reads like one. Every value and
+ * detail is stripped of control characters (a file name, an agent's description and
+ * a server's uris are all text Houston didn't write), and a value holding whitespace
+ * is dropped, since it could not be typed back as one mention.
+ */
+export function makeMentionFinder(sources: {
+  files: FileFinder
+  agents?: () => Promise<{ name: string; description?: string }[]>
+  resources?: () => Promise<{ server: string; uri: string; name?: string }[]>
+}): MentionFinder {
+  const clean = (c: MentionCandidate): MentionCandidate | null => {
+    const value = stripControlChars(c.value)
+    if (!value || /\s/.test(value) || value !== c.value) return null
+    const detail = c.detail ? stripControlChars(c.detail).replace(/\s+/g, ' ').trim() : ''
+    return { value, ...(detail ? { detail } : {}), ...(c.open ? { open: true as const } : {}) }
+  }
+  return async (q) => {
+    const hash = q.lastIndexOf('#')
+    if (hash > 0) {
+      const path = q.slice(0, hash)
+      const range = q.slice(hash + 1)
+      const done = RANGE_RE.test(range)
+      const files = (await sources.files(path)).filter((f) => !f.endsWith('/'))
+      return files.flatMap((f) => {
+        const c = clean(
+          done
+            ? { value: `${f}#${range}`, detail: `lines ${range}` }
+            : { value: `${f}#`, detail: 'type a line range, like #20-45', open: true }
+        )
+        return c ? [c] : []
+      })
+    }
+    const out: MentionCandidate[] = []
+    const lower = q.toLowerCase()
+    if (sources.agents && ('agent-'.startsWith(lower) || lower.startsWith('agent-'))) {
+      const name = lower.startsWith('agent-') ? lower.slice('agent-'.length) : ''
+      const agents = await sources.agents().catch(() => [])
+      for (const a of agents) {
+        if (!/^[\w-]+$/.test(a.name) || !a.name.toLowerCase().startsWith(name)) continue
+        const c = clean({ value: `agent-${a.name}`, detail: a.description ? `agent: ${a.description}` : 'agent' })
+        if (c) out.push(c)
+        if (out.length >= MENTION_EXTRA_LIMIT) break
+      }
+      if (lower.startsWith('agent-')) return out
+    }
+    if (sources.resources && lower) {
+      const colon = q.indexOf(':')
+      const resources = await sources.resources().catch(() => [])
+      for (const r of resources) {
+        const id = `${r.server}:${r.uri}`
+        const hit = colon > 0 ? id.startsWith(q) : r.server.toLowerCase().startsWith(lower)
+        if (!hit) continue
+        const c = clean({ value: id, detail: r.name ? `resource: ${r.name}` : 'resource' })
+        if (c) out.push(c)
+        if (out.length >= MENTION_EXTRA_LIMIT) break
+      }
+      // A query naming a server's resource is not a path: no files to add.
+      if (colon > 0 && resources.some((r) => q.startsWith(`${r.server}:`))) return out
+    }
+    for (const f of await sources.files(q)) {
+      const c = clean({ value: f })
+      if (c) out.push(c)
+    }
+    return out
+  }
+}
 
 /** The folder being typed after `/cd` or `/add-dir`, or null when the line is not that. */
 export function folderArgQuery(line: string): string | null {
@@ -140,7 +234,7 @@ export async function folderCompletions(
  * hits the filesystem when the current token is an `@`-mention.
  */
 export function makeCompleter(
-  finder: FileFinder,
+  finder: MentionFinder,
   /** Read at each Tab, so commands loaded after startup (a workspace's own) complete too. */
   commands: CommandSpec[] | (() => CommandSpec[]) = COMMANDS,
   /** Completes the folder after `/cd` and `/add-dir`; absent, those complete nothing. */
@@ -226,16 +320,18 @@ export function renderCommandMenu(
   return rows
 }
 
-/** Render the `@` mention rows: matching paths, capped like the command menu. */
+/** Render the `@` mention rows: matching paths (agents, resources), capped like the command menu. */
 export function renderMentionMenu(
-  files: string[],
+  files: (string | MentionCandidate)[],
   paint: (s: string, ...styles: string[]) => string
 ): string[] {
   if (!files.length) return [paint('  (no matching file)', 'dim')]
-  const shown = files.slice(0, MENU_LIMIT)
-  // A file's name is the repository's text: nothing in it reaches the terminal as an
-  // escape sequence (any byte but `/` and NUL is legal in one).
-  const rows = shown.map((f) => `  ${paint(`@${stripControlChars(f)}`, 'cyan')}`)
+  const shown = files.slice(0, MENU_LIMIT).map(asCandidate)
+  // A file's name is text from disk: nothing in it reaches the terminal as an escape.
+  const rows = shown.map((c) => {
+    const detail = c.detail ? `   ${paint(stripControlChars(c.detail), 'dim')}` : ''
+    return `  ${paint(`@${stripControlChars(c.value)}`, 'cyan')}${detail}`
+  })
   if (files.length > shown.length) rows.push(paint(`  … ${files.length - shown.length} more`, 'dim'))
   rows.push(paint('  Up/Down to choose, Tab completes', 'dim'))
   return rows
@@ -293,10 +389,10 @@ export function markMenuRow(
  * can't be picked: they would replace the token with a path it no longer matches.
  */
 export function makeMentionMenuView(
-  finder: FileFinder,
+  finder: MentionFinder,
   paint: (s: string, ...styles: string[]) => string
 ): (line: string, redraw: () => void, paintNow?: (s: string, ...styles: string[]) => string) => MenuView | null {
-  let shown: { query: string; files: string[] } | null = null
+  let shown: { query: string; files: (string | MentionCandidate)[] } | null = null
   let wanted: string | null = null
   return (line, redraw, paintNow = paint) => {
     const q = mentionQuery(line)
@@ -307,7 +403,11 @@ export function makeMentionMenuView(
     if (shown?.query === q) {
       return {
         rows: renderMentionMenu(shown.files, paintNow),
-        options: shown.files.slice(0, MENU_LIMIT).map((f) => ({ replace: `@${q}`, insert: `@${f} ` }))
+        options: shown.files
+          .slice(0, MENU_LIMIT)
+          .map(asCandidate)
+          // An open row (`@agent-`, `@server:`) takes more typing, so no space after it.
+          .map((c) => ({ replace: `@${q}`, insert: `@${c.value}${c.open ? '' : ' '}` }))
       }
     }
     if (wanted !== q) {
@@ -328,7 +428,7 @@ export function makeMentionMenuView(
 
 /** {@link makeMentionMenuView}, rows only. */
 export function makeMentionMenu(
-  finder: FileFinder,
+  finder: MentionFinder,
   paint: (s: string, ...styles: string[]) => string
 ): (line: string, redraw: () => void, paintNow?: (s: string, ...styles: string[]) => string) => string[] | null {
   const view = makeMentionMenuView(finder, paint)
