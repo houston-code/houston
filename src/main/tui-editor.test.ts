@@ -318,6 +318,15 @@ describe('renderEditor', () => {
     expect(v.cursorCol).toBe(plain.cursorCol)
   })
 
+  it('draws header rows above the prompt and counts them in the cursor row', () => {
+    const { state } = run([type('hi')])
+    const plain = renderEditor(state, { prompt: '> ', width: 40, paint })
+    const v = renderEditor(state, { prompt: '> ', width: 40, paint, above: ['status one', 'status two'] })
+    expect(v.rows).toEqual(['status one', 'status two', '> hi'])
+    expect(v.cursorRow).toBe(plain.cursorRow + 2)
+    expect(v.cursorCol).toBe(plain.cursorCol)
+  })
+
   it('paints both halves of a mark the wrap splits', () => {
     const { state } = run([type('ab ultrathink')])
     // Width 10 with a 2-column prompt: 8 text columns per row.

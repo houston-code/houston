@@ -1,4 +1,4 @@
-import type { ThrottleInfo } from './rateLimit'
+import type { ProviderQuota, ThrottleInfo } from './rateLimit'
 
 /**
  * The last rate-limit state Houston saw for a provider: how much of its current
@@ -33,6 +33,38 @@ export function stateFromThrottle(providerId: string, t: ThrottleInfo, now: numb
     ...(resetAt !== undefined ? { resetAt } : {}),
     source: 'retry'
   }
+}
+
+/** The state a response's rate-limit headers reported, or null when its time is unreadable. */
+export function stateFromQuota(providerId: string, q: ProviderQuota): RateLimitState | null {
+  const observedAt = Date.parse(q.at)
+  if (!Number.isFinite(observedAt)) return null
+  const resetAt = q.resetAt !== undefined ? Date.parse(q.resetAt) : NaN
+  return {
+    providerId,
+    observedAt,
+    ...(q.remainingRequests !== undefined ? { remainingRequests: q.remainingRequests } : {}),
+    ...(q.remainingTokens !== undefined ? { remainingTokens: q.remainingTokens } : {}),
+    ...(Number.isFinite(resetAt) ? { resetAt } : {}),
+    source: 'headers'
+  }
+}
+
+/**
+ * The newest state per provider from both sources: the headers of every reply
+ * (`quotas`, by provider id) and the throttles retries reported (`states`). Sorted by
+ * provider id, so a listing reads the same each time.
+ */
+export function newestRateLimits(quotas: Record<string, ProviderQuota>, states: readonly RateLimitState[]): RateLimitState[] {
+  const best = new Map<string, RateLimitState>()
+  const keep = (s: RateLimitState | null): void => {
+    if (!s) return
+    const have = best.get(s.providerId)
+    if (!have || s.observedAt >= have.observedAt) best.set(s.providerId, s)
+  }
+  for (const [id, q] of Object.entries(quotas)) keep(stateFromQuota(id, q))
+  for (const s of states) keep(s)
+  return [...best.values()].sort((a, b) => a.providerId.localeCompare(b.providerId))
 }
 
 /** "3:42 PM": a clock time as the status bar shows it. */

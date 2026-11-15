@@ -530,6 +530,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'statusline', group: 'Terminal',
+    description: 'Show the custom status line command and the JSON it reads',
+    clients: ['tui']
+  },
+  {
     name: 'screen-reader', group: 'Terminal', args: '[on|off]',
     description: 'Plain lines for a screen reader: no redraws, numbered choices',
     clients: ['tui']
@@ -726,6 +731,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   cd: 'in the app, the project folder button by the message box opens another folder, in a new chat',
   'reduce-motion': 'the app follows your system\'s reduce motion setting',
   notify: 'in the app, notifications and sounds are under Settings > General > Notifications',
+  statusline: 'the app has its own status bar, which a command cannot replace',
   'screen-reader': 'the app works with your screen reader as it is, and Settings has Read replies to screen readers',
   verbose: 'in the app, open a tool row to see its full output',
   focus: 'the app folds each tool call into a row you can open',

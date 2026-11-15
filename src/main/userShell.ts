@@ -17,12 +17,12 @@ import { spawn, type ChildProcess } from 'node:child_process'
  * shown to and approved by) the person the shell belongs to. Their $SHELL is used
  * so familiar syntax works.
  */
-function spawnUserShell(workspace: string, command: string, detached: boolean): ChildProcess {
+function spawnUserShell(workspace: string, command: string, detached: boolean, withInput = false): ChildProcess {
   return spawn(command, {
     cwd: workspace,
     shell: process.platform === 'win32' ? true : (process.env.SHELL ?? '/bin/sh'),
     env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [withInput ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     // Its own process group, so a timeout can stop everything the command started.
     ...(detached && process.platform !== 'win32' ? { detached: true } : {})
   })
@@ -61,15 +61,21 @@ export interface ShellCapture {
 /**
  * Run a command and collect its output, bounded in time and size: a command that
  * hangs is stopped (its whole process group) at `timeoutMs`, and output past
- * `maxBytes` is dropped rather than held.
+ * `maxBytes` is dropped rather than held. `input`, when given, is written to its
+ * stdin, which is then closed (the custom status line's JSON).
  */
 export function captureUserShell(
   workspace: string,
   command: string,
-  opts: { timeoutMs: number; maxBytes: number }
+  opts: { timeoutMs: number; maxBytes: number; input?: string }
 ): Promise<ShellCapture> {
   return new Promise((resolve, reject) => {
-    const child = spawnUserShell(workspace, command, true)
+    const child = spawnUserShell(workspace, command, true, opts.input !== undefined)
+    if (opts.input !== undefined && child.stdin) {
+      // A command that never reads its stdin closes the pipe early: not an error.
+      child.stdin.on('error', () => {})
+      child.stdin.end(opts.input)
+    }
     let stdout = ''
     let stderr = ''
     let truncated = false

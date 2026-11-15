@@ -440,7 +440,7 @@ export type FolderTrustState = 'trusted' | 'untrusted' | 'undecided' | 'changed'
 export interface FolderTrustStatus {
   state: FolderTrustState | 'none'
   /** `commands`: the project's commands that pre-approve tools or run shell commands (absent when none). */
-  counts?: { allowRules: number; hooks: number; mcpServers: number; commands?: number; plugins?: number }
+  counts?: { allowRules: number; hooks: number; mcpServers: number; commands?: number; plugins?: number; statusLine?: number }
   /**
    * The names of the project's plugin files (`.houston/plugins/*.js`) the decision
    * would cover, listed on the prompt so the user sees exactly which code they trust.
@@ -995,6 +995,28 @@ export interface AppSettings {
    * `desktopNotifications` is false.
    */
   tuiNotify?: 'auto' | 'osc' | 'bell' | 'off'
+  /**
+   * Add the clock time a turn finished to the terminal's "done in 1m 6s" note after
+   * each turn ("done in 1m 6s at 3:42 PM"). Absent = off.
+   */
+  tuiTurnClock?: boolean
+  /**
+   * The terminal's progress reporting to the terminal itself while a turn runs: a busy
+   * indicator (OSC 9;4) on terminals known to show one, and the working / waiting /
+   * done state (OSC 7501). 'auto' sends them outside tmux and screen, 'passthrough'
+   * also inside tmux (wrapped for its passthrough; needs `allow-passthrough on`),
+   * 'off' never. Never sent in screen-reader mode. Absent = 'auto'.
+   */
+  tuiProgress?: 'auto' | 'passthrough' | 'off'
+  /**
+   * A command whose output replaces the terminal's built-in status line above the
+   * composer. It runs in your shell with a JSON description of the session on stdin
+   * (see /statusline); the first lines it prints are shown. Refreshed after each turn,
+   * on a mode or model change, and every `refreshSeconds` while the composer is open.
+   * A project's `.houston/settings.json` can set one too, used only once the folder is
+   * trusted; yours wins. Absent = the built-in status line.
+   */
+  statusLine?: { command: string; refreshSeconds?: number }
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /** User-defined chat labels, in display order. */

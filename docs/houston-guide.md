@@ -667,7 +667,11 @@ retries the turn with a growing pause between attempts and tells you it's retryi
 - **Quota is shown before you hit it.** Providers that send rate-limit headers (the
   Claude API, OpenAI and compatible hosts) report what's left on every reply, not only
   on a refusal. The terminal's status line shows it (`rate 45 req · 12k tok left`),
-  in yellow once under a tenth of the window or after a throttle.
+  in yellow once under a tenth of the window or after a throttle, with the time the
+  window refills when the provider says (`rate 2 req left, resets 3:42 PM`). A
+  throttled retry's count and `Retry-After` stay there until a newer reply reports
+  again, and the terminal's `/usage` ends with what every provider last reported this
+  session.
 - **A garbled tool call gets one more try.** When Gemini can't parse the tool call a
   model wrote (`MALFORMED_FUNCTION_CALL`) and the reply is otherwise empty, Houston asks
   again once before treating the reply as empty. A Claude web search the API pauses
@@ -853,7 +857,7 @@ In the terminal:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/cd`, `/vim`, `/keybindings`, `/notify`, `/screen-reader`,
+**Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/cd`, `/vim`, `/keybindings`, `/notify`, `/statusline`, `/screen-reader`,
 `/reduce-motion`, `/verbose`, `/focus`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
 `/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/open-in-app`,
 `/permissions`, `/schedule`, and `/exit`. Typed in the
@@ -980,9 +984,24 @@ terminal that doesn't answer gets `default`.
 | --- | --- |
 | `dark` | bright foregrounds for a dark background |
 | `light` | readable on white: darker yellow and teal instead of colors that wash out |
-| `colorblind` | maps a diff's red and green to orange and blue, for the most common form of color blindness |
+| `colorblind` | maps a diff's red and green to orange and blue, for the most common forms of color blindness (deuteranopia and protanopia), on a dark background (`colorblind-dark` also names it) |
+| `colorblind-light` | the same mapping in darker shades for a light background |
+| `ansi16` | only the 16 colors your terminal's palette defines, with dim text in bright black |
 | `mono` | no color at all |
 | `default` | the default palette |
+
+**Your own themes.** Each `~/.houston/themes/<name>.json` adds a theme called `<name>`:
+a built-in base plus the colors you change. `/theme` lists them after the built-ins, and
+says why it skipped a file it couldn't use.
+
+```json
+{ "base": "dark", "colors": { "green": "#56b4e9", "red": 208, "dim": "bright-black" } }
+```
+
+- **Keys:** `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `dim` and `bold`.
+- **Values:** a color name (`red`, `bright-blue`, `gray`, `default`), a 256-color
+  number from 0 to 255, a `#rrggbb` hex color, or `none` for no color.
+- A file can't reuse a built-in theme's name, and the base must be a built-in theme.
 
 ### Custom commands
 
@@ -1103,7 +1122,37 @@ long as it needs to be.
 - **Status line:** above the composer it shows the model, its reasoning level (as
   `/reasoning` sets it; left out for a model that can't reason), approval mode, folder,
   git branch, session cost and how full the context window is. While a turn runs, the
-  model, branch and context stay on the spinner line.
+  model, branch and context stay on the spinner line. Your own command can replace it:
+  see "Custom status line".
+- **Turn time:** after each turn a dim line says how long it took (`done in 1m 6s`).
+  Set `"tuiTurnClock": true` in settings.json to add the time it finished
+  (`done in 1m 6s at 3:42 PM`).
+
+### Custom status line
+
+Set `statusLine` in settings.json and the first lines your command prints (up to 3)
+replace the built-in status line above the composer:
+
+```json
+{ "statusLine": { "command": "~/bin/houston-status", "refreshSeconds": 10 } }
+```
+
+- **How it runs:** in your shell, like a `!` command, in the session's folder. It reads
+  one JSON object on stdin describing the session: `version`, `sessionId`, `title`,
+  `provider`, `model`, `effort`, `approvalMode`, `cwd`, `branch`, `worktree`,
+  `contextPercent`, `contextTokens`, `cost` (`usd`, `inputTokens`, `outputTokens`,
+  `unknown`), and `vimMode`. `/statusline` lists them with this session's values.
+- **When:** after each turn, when you change the approval mode or model, and every
+  `refreshSeconds` while the prompt is open (leave it out to refresh only on changes).
+- **Limits:** it has 1 second and 8 KB of output. Colors (SGR codes) are kept; any other
+  escape sequence or control character is removed. A run that fails, times out or
+  prints nothing keeps the last good output; until it has printed once, the built-in
+  line shows. `/statusline` says why the last run didn't update it.
+- **In a project:** `.houston/settings.json` can set `statusLine` too. It runs only once
+  you trust the folder (it is one of the things the trust prompt lists), and yours
+  wins when both are set.
+- Off by default: without the setting the built-in line is unchanged.
+
 
 ### Keys
 
@@ -2069,8 +2118,16 @@ A long run can stop on an approval, a question, or a plan, and then it's just
 waiting. The interactive terminal tells you, two ways:
 
 - **The tab title** always shows the state: what it's doing, that it needs approval,
-  or that it's idle, with the project name so you can tell sessions apart. It's
+  or that it's idle, with the chat's title (from its first message, a generated one,
+  `--name`, or `/rename`) and the project name so you can tell sessions apart. It's
   ambient, never interruptive.
+- **Progress for the terminal itself.** While a turn runs, Houston tells the terminal
+  so a tab, taskbar button or session list can show it: a busy indicator (OSC 9;4) on
+  Windows Terminal, Ghostty, WezTerm, ConEmu and iTerm2 3.6 or later, and the
+  working, waiting, done or error state (OSC 7501) to any terminal that reads it. A
+  failed turn shows the error state. Not sent inside tmux or screen, nor in
+  screen-reader mode. Set `"tuiProgress"` in settings.json to `"off"` to stop it, or
+  to `"passthrough"` to send it through tmux (with tmux's `allow-passthrough` on).
 - **A bell and a notification** fire when a run needs you or finishes, but only when
   you've switched away from the terminal. (Houston asks the terminal to report focus.
   If your terminal doesn't, they fire either way rather than staying silent.)
@@ -2234,7 +2291,9 @@ Costs are estimates from each model's list price.
 In the terminal, `/usage` prints the same report as a compact table: the last 7 days
 (one row a day, with cost, replies, and tokens in and out), the top 5 projects of all
 time, and totals for the last 7 days, the last 30 days, and all time, plus the undated
-spend. The cost reminder is set with `costCeilingUsd` in settings.json there.
+spend. It ends with the rate limits each provider reported this session (requests and
+tokens left, and when the window refills). The cost reminder is set with
+`costCeilingUsd` in settings.json there.
 
 ## Version and updates
 

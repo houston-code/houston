@@ -82,7 +82,9 @@ import { buildElicitationContent } from '@shared/mcp'
 import { MAX_ATTACHMENTS, type ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { quotaIsLow, quotaStatusText, resetClock, type ProviderQuota } from '@shared/rateLimit'
-import { providerQuota } from './providers/quota'
+import { providerQuota, providerQuotas } from './providers/quota'
+import { noteThrottle, rateLimitSnapshot } from './rateLimitStore'
+import { newestRateLimits, type RateLimitState } from '@shared/rateLimitState'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities, resolveCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
@@ -147,7 +149,17 @@ import { redactSecrets } from './agent/redact'
 import { htmlToAnsi } from './syntax'
 import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
 import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
-import { renderUsageReport } from './tui-usage'
+import { renderRateLimits, renderUsageReport } from './tui-usage'
+import {
+  linkedWorktreeRoot,
+  resolveStatusLine,
+  STATUS_LINE_FIELDS,
+  StatusLineRunner,
+  type ResolvedStatusLine,
+  type StatusLineConfig,
+  type StatusLineExec,
+  type StatusLinePayload
+} from './tui-statusline'
 import type { UsageReport } from '@shared/usageReport'
 import {
   chatSubagents,
@@ -175,6 +187,8 @@ import {
   signalFor,
   idleTitle,
   workingTitle,
+  progressForEvent,
+  type ProgressState,
   idleReminderSpec,
   resolveNotifyMode,
   describeNotifyMode,
@@ -562,15 +576,60 @@ export const THEMES = {
   mono: {
     reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
     red: '', green: '', yellow: '', blue: '', magenta: '', cyan: ''
+  },
+  /**
+   * `colorblind` for a LIGHT background: the same red→orange, green→blue mapping in
+   * darker shades (vermilion, a deep blue, dark gold) that hold their contrast on white.
+   */
+  'colorblind-light': {
+    reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
+    red: '\x1b[38;5;166m', green: '\x1b[38;5;25m', yellow: '\x1b[38;5;136m',
+    blue: '\x1b[38;5;25m', magenta: '\x1b[38;5;133m', cyan: '\x1b[38;5;30m'
+  },
+  /**
+   * Only the 16 colors the terminal's own palette defines, so every color is the one
+   * you configured there (no 256-color shades), and dim text is bright black rather
+   * than the faint attribute, which some terminals don't draw.
+   */
+  ansi16: {
+    reset: '\x1b[0m', dim: '\x1b[90m', bold: '\x1b[1m',
+    red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m',
+    blue: '\x1b[34m', magenta: '\x1b[35m', cyan: '\x1b[36m'
   }
 } as const
+
+/** A theme's SGR sequence for each style key. */
+export type ThemePalette = { readonly [K in keyof (typeof THEMES)['default']]: string }
+
+/**
+ * Themes loaded from `~/.houston/themes/*.json` (see tui-themes.ts), by name. Set once
+ * at launch by the entry point; a built-in theme's name is never shadowed.
+ */
+const userThemes = new Map<string, ThemePalette>()
+
+/** Replace the user themes (the entry point at launch; tests). */
+export function setUserThemes(themes: ReadonlyMap<string, ThemePalette> | Record<string, ThemePalette>): void {
+  userThemes.clear()
+  const entries = themes instanceof Map ? [...themes.entries()] : Object.entries(themes)
+  for (const [name, palette] of entries) if (!(name in THEMES)) userThemes.set(name, palette)
+}
+
+/** Every theme /theme offers: the built-ins, then the user's own. */
+export function themeNames(): string[] {
+  return [...Object.keys(THEMES), ...[...userThemes.keys()].sort()]
+}
+
+/** A theme's palette, built-in or the user's, or null for an unknown name. */
+export function themePalette(name: string): ThemePalette | null {
+  return (THEMES as Record<string, ThemePalette>)[name] ?? userThemes.get(name) ?? null
+}
 
 /**
  * `bright` was the old name for what is now `dark`. Kept as an alias so a saved
  * setting (or muscle memory) doesn't break — a theme name that used to work and
  * now errors is a worse experience than one extra line here.
  */
-const THEME_ALIASES: Record<string, ThemeName> = { bright: 'dark' }
+const THEME_ALIASES: Record<string, ThemeName> = { bright: 'dark', 'colorblind-dark': 'colorblind' }
 
 /** Resolve a theme name, honoring the aliases. */
 export function resolveTheme(name: string): ThemeName | null {
@@ -579,16 +638,17 @@ export function resolveTheme(name: string): ThemeName | null {
   return THEME_ALIASES[n] ?? null
 }
 
-export type ThemeName = keyof typeof THEMES
+/** A theme's name: a built-in one, or a user theme's. */
+export type ThemeName = keyof typeof THEMES | (string & {})
 export type Painter = (s: string, ...styles: Array<keyof (typeof THEMES)['default']>) => string
 
 export function isThemeName(v: string): v is ThemeName {
-  return v in THEMES
+  return Object.hasOwn(THEMES, v) || userThemes.has(v)
 }
 
 export function makePainter(color: boolean, theme: ThemeName = 'default'): Painter {
   if (!color) return (s) => s
-  const palette = THEMES[theme] ?? THEMES.default
+  const palette = themePalette(theme) ?? THEMES.default
   return (s, ...styles) => {
     const codes = styles.map((k) => palette[k]).filter(Boolean).join('')
     return codes ? `${codes}${s}${palette.reset}` : s
@@ -1555,6 +1615,71 @@ export function shortCwd(cwd: string, home = process.env.HOME ?? process.env.USE
 }
 
 /**
+ * /statusline: where the custom status line stands (its command, refresh interval and
+ * source, or how to set one up), why its last run left the line as it was, and the
+ * fields of the JSON its command reads, with this session's values when one is set.
+ */
+export function renderStatusLineInfo(
+  config: ResolvedStatusLine | null,
+  failure: { at: number; reason: string } | null,
+  payload: string | null,
+  available: boolean,
+  paint: Painter
+): string {
+  const lines = [paint('Status line', 'bold')]
+  if (!available) {
+    lines.push(paint('  a custom status line is unavailable here', 'dim'))
+    return lines.join('\n')
+  }
+  if (config) {
+    lines.push(`  command: ${terminalText(config.command, { lines: false })}`)
+    lines.push(
+      `  refresh: ${config.refreshSeconds ? `every ${config.refreshSeconds}s while the prompt is open, and ` : ''}after each turn and on a mode or model change`
+    )
+    lines.push(`  from:    ${config.source === 'user' ? 'your settings.json' : "this project's .houston/settings.json (trusted)"}`)
+    if (failure) lines.push(paint(`  last run: ${terminalText(failure.reason, { lines: false })}; showing the last good output`, 'yellow'))
+  } else {
+    lines.push(paint('  built in. Set "statusLine": { "command": "...", "refreshSeconds": 5 } in settings.json to', 'dim'))
+    lines.push(paint('  show the first lines your command prints instead (it runs in your shell, 1s limit).', 'dim'))
+  }
+  lines.push('', paint('  The command reads one JSON object on stdin:', 'dim'))
+  const width = Math.max(...STATUS_LINE_FIELDS.map((f) => f.name.length))
+  for (const f of STATUS_LINE_FIELDS) lines.push(`    ${paint(f.name.padEnd(width), 'cyan')}  ${paint(f.about, 'dim')}`)
+  if (payload) lines.push('', paint('  Now:', 'dim'), ...terminalText(payload).split('\n').map((l) => `    ${l}`))
+  return lines.join('\n')
+}
+
+/**
+ * The note after a finished turn: "done in 1m 6s", plus the clock time it finished
+ * ("done in 1m 6s at 3:42 PM") when `finishedAt` is given (the `tuiTurnClock` setting).
+ */
+export function turnDoneText(elapsedMs: number, finishedAt?: number): string {
+  const at = finishedAt !== undefined ? ` at ${new Date(finishedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}` : ''
+  return `done in ${formatElapsed(elapsedMs)}${at}`
+}
+
+/**
+ * The quota the status line shows for a provider: the newer of what its replies'
+ * headers last said and what a throttled retry last reported (which carries the
+ * provider's `Retry-After` as the reset time).
+ */
+export function footerQuota(
+  providerId: string,
+  quota: ProviderQuota | undefined = providerQuota(providerId),
+  throttle: RateLimitState | undefined = rateLimitSnapshot().find((s) => s.providerId === providerId)
+): ProviderQuota | undefined {
+  if (!throttle) return quota
+  if (quota && Date.parse(quota.at) >= throttle.observedAt) return quota
+  return {
+    ...(throttle.remainingRequests !== undefined ? { remainingRequests: throttle.remainingRequests } : {}),
+    ...(throttle.remainingTokens !== undefined ? { remainingTokens: throttle.remainingTokens } : {}),
+    throttled: true,
+    ...(throttle.resetAt !== undefined ? { resetAt: new Date(throttle.resetAt).toISOString() } : {}),
+    at: new Date(throttle.observedAt).toISOString()
+  }
+}
+
+/**
  * A one-line status footer shown above the composer: model, approval policy, cwd,
  * session cost, and context-window fill (a green→yellow→red mini bar + percent).
  * Truncated to `width` so it never wraps.
@@ -2432,6 +2557,8 @@ export type SlashResult =
   | { kind: 'copy'; index: number; bad?: boolean }
   /** Spend and tokens per day and per project, from the saved chats (/usage). */
   | { kind: 'usage' }
+  /** Show the custom status line's setup and the JSON its command reads (/statusline). */
+  | { kind: 'statusline' }
   /** List (and open) the background sessions the agent spawned (/spawned). */
   | { kind: 'spawned' }
   /** This chat's background shells and subagents: list, show one, or stop one (/tasks). */
@@ -2660,6 +2787,8 @@ export function parseSlashCommand(
     }
     case 'usage':
       return { kind: 'usage' }
+    case 'statusline':
+      return { kind: 'statusline' }
     case 'copy': {
       // `/copy` is the last reply; a number counts back from there.
       const a = arg.trim()
@@ -2801,6 +2930,7 @@ export const HELP_TEXT = [
   '  /permissions add …    add a rule of your own: allow|ask|deny <tool> <pattern> [--exact]',
   '  /cost                 show session token + cost totals, by model and by subagent',
   '  /usage                spend and tokens per day (last 7) and per project, from the chats on this computer',
+  '  /statusline           the custom status line: its command, and the JSON that command reads',
   '  /context              what fills the context now, part by part',
   '  /skills /agents       list workspace skills / custom agents',
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
@@ -2844,7 +2974,7 @@ export const HELP_TEXT = [
   "  /mcp edit <n>         change a server's command, arguments, folder, or URL",
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   '  /trust list           every folder you trusted or refused; /trust forget <n> clears one',
-  `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
+  `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')}, or your own)`,
   '  /image [path|clear]   attach an image from your clipboard, or a file; clear drops them',
   '  /cwd                  show the working directory',
   '  /share                copy an invite to Houston to send a friend',
@@ -3871,8 +4001,28 @@ export interface TuiIo {
   readComposer?: (
     prompt: string | (() => string),
     initial?: string,
-    opts?: { ultrathinkEffect?: () => UltrathinkEffect; onDraft?: (text: string) => void }
+    opts?: {
+      ultrathinkEffect?: () => UltrathinkEffect
+      onDraft?: (text: string) => void
+      /**
+       * Rows shown above the prompt and redrawn with it (the custom status line). Off a
+       * raw-mode composer they print once, before the prompt.
+       */
+      header?: () => string[]
+    }
   ) => Promise<string | null>
+  /**
+   * Repaint the open composer so its header is current. No-op when no raw-mode
+   * composer is on screen. Absent off-TTY and in tests.
+   */
+  redrawComposer?: () => void
+  /**
+   * Tell the terminal what the turn is doing (OSC 9;4 progress, OSC 7501 status),
+   * where the session's progress setting and the terminal allow it; never in
+   * screen-reader mode. `label` names the session (its chat title or project).
+   * Absent off-TTY and in tests.
+   */
+  progress?: (state: ProgressState, label?: string) => void
   /**
    * Read a line without echoing it — for pasting an API key in the `/login` flow.
    * Resolves the typed value, or null on cancel (Ctrl-C) / EOF. Optional: off-TTY
@@ -4250,6 +4400,25 @@ export interface TuiDeps {
    * exactly when something is broken and they are reporting it.
    */
   version?: string
+  /** Why theme files under ~/.houston/themes were skipped, listed by /theme. */
+  themeErrors?: string[]
+  /**
+   * Run the custom status line command (the `statusLine` setting) in the user's shell,
+   * with `input` on stdin, bounded in time and output. Absent: the setting is ignored
+   * and the built-in status line shows.
+   */
+  runStatusLine?: StatusLineExec
+  /**
+   * A project's own `statusLine` (from its `.houston/settings.json`), and whether the
+   * folder is trusted to run it. Read once at launch. Absent: no project command.
+   */
+  projectStatusLine?: () => Promise<{ config: StatusLineConfig | null; trusted: boolean }>
+  /**
+   * Ask for a model-written title for a chat still on its placeholder (as the desktop
+   * app does), calling `onTitle` once it is saved. Fire-and-forget; absent: chats keep
+   * the title derived from their first message.
+   */
+  generateTitle?: (conversationId: string, providerId: string, model: string, onTitle: (title: string) => void) => void
   /**
    * Run a command in the USER's shell for `!cmd` — unsandboxed, in the workspace,
    * with their environment. Streams output through `onOutput`; resolves the exit
@@ -4495,6 +4664,7 @@ export function summarizeElevated(c: {
   mcpServers: unknown[]
   commands?: unknown[]
   plugins?: Array<{ name: string }>
+  statusLine?: unknown
 }): string {
   const commands = c.commands?.length ?? 0
   const plugins = c.plugins ?? []
@@ -4508,7 +4678,8 @@ export function summarizeElevated(c: {
     // Each plugin file by name: trusting the folder consents to running exactly these.
     plugins.length
       ? `${plugins.length} plugin${plugins.length === 1 ? '' : 's'} (${plugins.map((p) => p.name).join(', ')})`
-      : ''
+      : '',
+    c.statusLine ? 'a status line command' : ''
   ]
     .filter(Boolean)
     .join(', ')
@@ -4521,8 +4692,9 @@ export function elevatedSource(c: {
   mcpServers: unknown[]
   commands?: unknown[]
   plugins?: unknown[]
+  statusLine?: unknown
 }): string {
-  const settings = c.allowRules.length > 0 || c.hooks.length > 0 || c.mcpServers.length > 0
+  const settings = c.allowRules.length > 0 || c.hooks.length > 0 || c.mcpServers.length > 0 || Boolean(c.statusLine)
   const commands = (c.commands?.length ?? 0) > 0
   const plugins = (c.plugins?.length ?? 0) > 0
   const sources = [
@@ -5864,9 +6036,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Shift-Tab, at the composer or mid-run. Mid-run it also retargets the live run,
   // so you can loosen the mode to get past an approval without killing the turn.
   deps.io.setMode?.(policy)
+  // Set once the custom status line is set up below: a mode change reruns it.
+  let onModeChange = (): void => {}
   deps.io.onCycleMode?.(() => {
     policy = nextPolicy(policy)
     deps.io.setMode?.(policy)
+    onModeChange()
     if (activeRunId) {
       deps.setRunPolicy?.(activeRunId, policy)
       deps.io.out(`${flushPendingOutput()}${paint(`\n· approval → ${APPROVAL_POLICY_LABEL[policy]} (this run too)\n`, 'dim')}`)
@@ -6088,6 +6263,90 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     return null
   }
 
+  // The tab title follows the chat's title (derived from its first message, generated,
+  // or chosen with --name or /rename). Re-read at each prompt and when a generated one
+  // lands; written only when it changed.
+  let tabChatTitle: string | null = null
+  const syncTabTitle = (title: string | null = currentTitle()): void => {
+    if (title === tabChatTitle) return
+    tabChatTitle = title
+    if (!activeRunId) deps.io.signal?.({ title: idleTitle(workspaceName, tabChatTitle) })
+  }
+  const requestGeneratedTitle = (): void => {
+    if (!deps.generateTitle || !conversationId || !providerId || !model) return
+    const id = conversationId
+    deps.generateTitle(id, providerId, model, (title) => {
+      if (id === conversationId) syncTabTitle(title)
+    })
+  }
+
+  // The custom status line (`statusLine`): the user's command, or a trusted project's.
+  // Resolved once at launch; a run that fails keeps the last good output, and before
+  // any good output the built-in line shows.
+  let statusRunner: StatusLineRunner | null = null
+  let statusSource: ResolvedStatusLine | null = null
+  if (deps.runStatusLine) {
+    const user = deps.getSettings().statusLine
+    let project: { config: StatusLineConfig | null; trusted: boolean } = { config: null, trusted: false }
+    if (deps.projectStatusLine && !resolveStatusLine(user, null, () => false)) {
+      try {
+        project = await deps.projectStatusLine()
+      } catch {
+        // An unreadable project config has no status line.
+      }
+    }
+    statusSource = resolveStatusLine(user, project.config, () => project.trusted)
+    if (statusSource) {
+      statusRunner = new StatusLineRunner(
+        statusSource,
+        deps.runStatusLine,
+        () => {
+          if (atComposer) deps.io.redrawComposer?.()
+        },
+        nowFn
+      )
+    }
+  }
+  const worktreeRoot = statusRunner ? linkedWorktreeRoot(opts.cwd) : null
+  onModeChange = () => {
+    if (!activeRunId) void statusRunner?.refresh(statusPayload())
+  }
+  const statusPayload = (): StatusLinePayload => ({
+    version: deps.version ?? null,
+    sessionId: conversationId,
+    title: tabChatTitle,
+    provider: providerId,
+    model,
+    effort,
+    approvalMode: policy,
+    cwd: opts.cwd,
+    branch,
+    worktree: worktreeRoot,
+    contextPercent: model ? contextPercent(contextTokens, contextWindowFor(model)) : null,
+    contextTokens,
+    cost: {
+      usd: sessionCost.cost,
+      inputTokens: sessionCost.inputTokens,
+      outputTokens: sessionCost.outputTokens,
+      unknown: sessionCost.costUnknown === true
+    },
+    vimMode: deps.getSettings().tuiEditor === 'vim' ? 'insert' : null
+  })
+  // Rerun it on an interval while the composer is open, when the setting asks.
+  let stopStatusTimer = (): void => {}
+  if (statusRunner?.config.refreshSeconds) {
+    const timer = setInterval(() => {
+      if (atComposer && !activeRunId) void statusRunner?.refresh(statusPayload())
+    }, statusRunner.config.refreshSeconds * 1000)
+    timer.unref?.()
+    stopStatusTimer = () => clearInterval(timer)
+  }
+  /** The status rows the composer shows: the command's last good output, else the built-in line. */
+  const statusRows = (builtIn: string): string[] => {
+    const rows = statusRunner?.lines() ?? []
+    return rows.length ? rows : [builtIn]
+  }
+
   for (;;) {
     // The update check resolves whenever it resolves; print it HERE, between turns,
     // where nothing else owns the screen. Writing it from the promise would land in
@@ -6124,28 +6383,38 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // context-window fill — so live session state is always visible. Before a
     // provider is set up it shows a "no model" prompt pointing at /login instead.
     refreshBranch()
-    deps.io.out(
-      `${
-        providerId && model
-          ? renderStatusLine(
-              {
-                providerId,
-                model,
-                policy,
-                cwd: opts.cwd,
-                cost: sessionCost,
-                contextTokens,
-                branch,
-                quota: providerQuota(providerId, model),
-                effort,
-                modelReasons: activeModelReasons(deps, providerId, model) ?? modelCapabilities(model).reasoning
-              },
-              columns(),
-              paint
-            )
-          : renderNoModelStatus(policy, opts.cwd, columns(), paint)
-      }\n`
-    )
+    syncTabTitle()
+    const builtInStatus = (): string =>
+      providerId && model
+        ? renderStatusLine(
+            {
+              providerId,
+              model,
+              policy,
+              cwd: opts.cwd,
+              cost: sessionCost,
+              contextTokens,
+              branch,
+              quota: footerQuota(providerId, providerQuota(providerId, model)),
+              effort,
+              modelReasons: activeModelReasons(deps, providerId, model) ?? modelCapabilities(model).reasoning
+            },
+            columns(),
+            paint
+          )
+        : renderNoModelStatus(policy, opts.cwd, columns(), paint)
+    // A custom status line: refreshed now (waited for, up to its timeout, only on its
+    // first run, so a command that keeps failing never slows the prompt; otherwise the
+    // last output shows and the new one redraws in).
+    // With the raw-mode composer it rides in the composer's redraw region, so a refresh
+    // repaints it in place; otherwise it prints here like the built-in line.
+    let statusHeader: (() => string[]) | undefined
+    if (statusRunner) {
+      const refreshing = statusRunner.refresh(statusPayload())
+      if (!statusRunner.lines().length && !statusRunner.lastFailure()) await refreshing
+      if (deps.io.readComposer && !pendingQueued.length) statusHeader = () => statusRows(builtInStatus())
+      else deps.io.out(`${statusRows(builtInStatus()).join('\n')}\n`)
+    } else deps.io.out(`${builtInStatus()}\n`)
     // Read a message. On a real terminal this is the raw-mode editor, which takes a
     // pasted block whole (bracketed paste) and edits multi-line drafts in place.
     // Without one (tests, a pipe) it falls back to reading physical lines, where a
@@ -6199,7 +6468,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             effort,
             activeModelReasons(deps, providerId, model) ?? (model ? modelCapabilities(model).reasoning : false),
             activeModelSendsXhigh(deps, providerId, model)
-          )
+          ),
+        ...(statusHeader ? { header: statusHeader } : {})
       })
       if (text === null && rewindRequested) {
         // Esc Esc on an empty composer: the same picker /rewind opens.
@@ -6852,13 +7122,26 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         runLoopCommand(result.arg)
         continue
       }
+      if (result.kind === 'statusline') {
+        deps.io.out(
+          `${renderStatusLineInfo(
+            statusSource,
+            statusRunner?.lastFailure() ?? null,
+            statusRunner ? JSON.stringify(statusPayload(), null, 2) : null,
+            Boolean(deps.runStatusLine),
+            paint
+          )}\n`
+        )
+        continue
+      }
       if (result.kind === 'usage') {
         if (!deps.usageReport) {
           deps.io.out(paint('· usage totals are unavailable here\n', 'dim'))
           continue
         }
         try {
-          deps.io.out(`${renderUsageReport(deps.usageReport(), paint)}\n`)
+          const limits = renderRateLimits(newestRateLimits(providerQuotas(), rateLimitSnapshot()), nowFn(), paint)
+          deps.io.out(`${renderUsageReport(deps.usageReport(), paint)}${limits ? `\n${limits}` : ''}\n`)
         } catch (e) {
           deps.io.out(paint(`· couldn't read usage: ${(e as Error).message}\n`, 'yellow'))
         }
@@ -7606,18 +7889,33 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Serialize interactive prompts (approvals/questions) so two readLine calls
     // never overlap on the single input stream.
     let prompts: Promise<void> = Promise.resolve()
+    // The terminal's progress state (OSC 9;4 / 7501): blocked while a prompt waits.
+    let progressState: ProgressState = 'working'
+    const progressLabel = (): string => idleTitle(workspaceName, tabChatTitle)
+    // Prompts queued or showing; the run reads as working again only once none waits.
+    let pendingPrompts = 0
     // Once a prompt is answered the agent is working again, so the tab stops saying it
-    // needs you (the title is set back to idle when the run returns).
+    // needs you (the title is set back to idle when the run returns), and so does the
+    // terminal's progress indicator.
     // A prompt still queued when the run is interrupted is dropped unshown: stopping
     // the run already settled every approval, question and plan it was waiting on, so
     // asking would only answer a call that never runs.
     const interruptedNow = (): boolean => interruptedQueued !== null
     const enqueue = (task: () => Promise<void>): void => {
+      pendingPrompts++
       prompts = prompts
         .then(async () => {
           if (interruptedNow()) return
           await task()
-          if (!interruptedNow()) deps.io.signal?.({ title: workingTitle('working', workspaceName) })
+        })
+        .finally(() => {
+          pendingPrompts--
+          if (pendingPrompts > 0 || interruptedNow()) return
+          deps.io.signal?.({ title: workingTitle('working', workspaceName, tabChatTitle) })
+          if (progressState !== 'working') {
+            progressState = 'working'
+            deps.io.progress?.('working', progressLabel())
+          }
         })
         .catch(() => {})
     }
@@ -7798,18 +8096,30 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
-    deps.io.signal?.({ title: workingTitle('working', workspaceName) })
+    // The tab says it is working, and the terminal hears it too (OSC 9;4 / 7501).
+    deps.io.signal?.({ title: workingTitle('working', workspaceName, tabChatTitle) })
+    deps.io.progress?.('working', progressLabel())
+    // The user's message is saved: a model-written title can start alongside the turn.
+    requestGeneratedTitle()
     // Set once a text delta has relabelled the spinner, so the rest of the reply
     // doesn't relabel it on every delta; any other event clears it.
     let saysResponding = false
     const turnStartedAt = nowFn()
+    let turnFailed = false
 
     const send = (e: AgentEvent): void => {
       // Attention signals ride the event stream itself, so anything that blocks the
       // run (approval, question, plan) or ends it can pull the user back. Done once,
       // here, rather than at each case: a signal added to the policy then reaches the
       // terminal without touching the renderer below.
-      const sig = signalFor(e, workspaceName)
+      const sig = signalFor(e, workspaceName, tabChatTitle)
+      // Progress follows the run: blocked on a question or approval, then working again.
+      const progress = progressForEvent(e)
+      if (progress && progress !== progressState) {
+        progressState = progress
+        deps.io.progress?.(progress, progressLabel())
+      }
+      if (e.type === 'error') turnFailed = true
       // The title is ambient (it just describes the tab) so it is always set; the
       // bell and notification follow /notify (which defaults to the "notify me" setting).
       if (sig) deps.io.signal?.(notifyMode !== 'off' ? { ...sig, mode: notifyMode } : sig.title ? { title: sig.title } : {})
@@ -8133,6 +8443,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
           if (retryStreak === 0) {
             const line = retryNoticeText(e)
+            // Kept past the notice: the status line and /usage show it until a newer report.
+            if (e.throttle) noteThrottle(providerId ?? undefined, e.throttle, nowFn())
             deps.io.out(paint(`\n· ${terminalText(line)}\n`, 'yellow'))
           }
           retryStreak = e.attempt
@@ -8657,12 +8969,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // a hook, an MCP server): ask about it now, as the desktop's trust banner does after
     // each run, rather than only at the next launch.
     await promptFolderTrust(opts.cwd, deps, paint, { asked: trustAsked })
-    // The spinner's end, said once (an interrupt already said "interrupted").
-    if (screenReader && interruptedQueued === null) {
-      deps.io.out(`done in ${formatElapsed(nowFn() - turnStartedAt)}\n`)
+    // The terminal's progress: done, failed, or (stopped by the user) idle.
+    deps.io.progress?.(interruptedQueued !== null ? 'idle' : turnFailed ? 'error' : 'done', progressLabel())
+    // A second chance at a generated title, now with the reply to go on.
+    if (interruptedQueued === null && !turnFailed) requestGeneratedTitle()
+    // How long the turn took, said once (an interrupt already said "interrupted"). In
+    // screen-reader mode it is the spinner's end as a plain line; otherwise one dim note.
+    if (interruptedQueued === null) {
+      const took = turnDoneText(nowFn() - turnStartedAt, deps.getSettings().tuiTurnClock === true ? nowFn() : undefined)
+      deps.io.out(screenReader ? `${took}\n` : paint(`· ${took}\n`, 'dim'))
     }
     // However the run ended (a Stop sends no "done" signal), the tab is idle again.
-    deps.io.signal?.({ title: idleTitle(workspaceName) })
+    deps.io.signal?.({ title: idleTitle(workspaceName, tabChatTitle) })
     // Anything typed while that turn ran (steers it never read included) becomes the
     // next one, or after an interrupt, the next prompt's draft.
     const unsent = [...returnedSteers, ...(interruptedQueued ?? []), ...(deps.io.takeQueued?.() ?? [])]
@@ -8692,6 +9010,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Hand the tab back with no title of ours; the shell sets its own at the next
   // prompt, and a lingering "Houston · proj" would be a lie once we're gone.
   deps.io.signal?.({ title: '' })
+  stopStatusTimer()
+  // The session is over: nothing it reported to the terminal still stands.
+  deps.io.progress?.('clear')
   // The way back to this chat, which nothing else on screen names.
   if (conversationId && deps.persist) {
     deps.io.out(paint(comeBackHint(conversationId, opts.cwd, opts.launchCwd), 'dim'))
@@ -8793,7 +9114,9 @@ function handleInfoCommand(
     // A present-but-unrecognized arg reached here (a valid one would have set the
     // theme); say so instead of silently just re-listing.
     if (arg) deps.io.out(paint(`· unknown theme: ${arg}\n`, 'yellow'))
-    deps.io.out(paint(`themes: ${Object.keys(THEMES).join(', ')}  (usage: /theme <name>)\n`, 'dim'))
+    deps.io.out(paint(`themes: ${themeNames().join(', ')}  (usage: /theme <name>)\n`, 'dim'))
+    for (const err of deps.themeErrors ?? []) deps.io.out(paint(`· ${terminalText(err, { lines: false })}\n`, 'yellow'))
+    deps.io.out(paint('  your own: ~/.houston/themes/<name>.json, a base theme plus color overrides\n', 'dim'))
     return
   }
   if (name === 'image') {

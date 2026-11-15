@@ -52,3 +52,21 @@ describe('a usage-limit wait', () => {
     expect(throttleNotice({ waitMs: 3_599_900, resetAt }, '2/3')).toContain('(in 1h)')
   })
 })
+
+describe('quotaStatusText reset time', () => {
+  const now = new Date('2026-11-14T15:40:00').getTime()
+  const at = new Date(now).toISOString()
+  const resetAt = new Date(now + 120_000).toISOString()
+  const clock = new Date(now + 120_000).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+
+  it('adds when the window refills once the quota is low', () => {
+    expect(quotaStatusText({ remainingRequests: 2, limitRequests: 50, resetAt, at }, now)).toBe(`rate 2 req left, resets ${clock}`)
+    expect(quotaStatusText({ throttled: true, resetAt, at }, now)).toBe(`rate limited, resets ${clock}`)
+  })
+
+  it('leaves it out while there is plenty left, or once it has passed', () => {
+    expect(quotaStatusText({ remainingRequests: 40, limitRequests: 50, resetAt, at }, now)).toBe('rate 40 req left')
+    expect(quotaStatusText({ remainingRequests: 2, limitRequests: 50, resetAt, at }, now + 200_000)).toBe('rate 2 req left')
+    expect(quotaStatusText({ throttled: true, at }, now)).toBeNull()
+  })
+})

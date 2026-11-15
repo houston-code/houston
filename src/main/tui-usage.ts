@@ -2,6 +2,7 @@ import type { UsageReport, UsageTotals } from '@shared/usageReport'
 import { formatTokens, formatUsd } from '@shared/usage'
 import type { Painter } from './tui'
 import { stripControlChars } from './tui-wrap'
+import { rateLimitLine, type RateLimitState } from '@shared/rateLimitState'
 
 /**
  * `/usage` in the terminal: the desktop's usage view as a compact text table, from
@@ -97,6 +98,22 @@ export function renderUsageReport(report: UsageReport, paint: Painter): string {
         'dim'
       )
     )
+  }
+  return lines.join('\n')
+}
+
+/**
+ * The rate-limit part of `/usage`: what each provider last reported this session
+ * (requests and tokens left, and when its window refills when it said), from the
+ * headers of its replies or a throttled retry, whichever is newer. Empty when no
+ * provider has reported anything yet.
+ */
+export function renderRateLimits(states: readonly RateLimitState[], now: number, paint: Painter): string {
+  if (!states.length) return ''
+  const lines = ['', paint('Rate limits (this session)', 'bold')]
+  const width = Math.max(...states.map((s) => stripControlChars(s.providerId).length))
+  for (const s of states) {
+    lines.push(`  ${stripControlChars(s.providerId).padEnd(width)}  ${rateLimitLine(s, now)}`)
   }
   return lines.join('\n')
 }

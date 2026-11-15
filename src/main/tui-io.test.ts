@@ -615,6 +615,45 @@ describe('readComposer (raw-mode composer)', () => {
     expect(t.text()).toBe(before)
   })
 
+  it('draws a header above the prompt and repaints it in place when asked', async () => {
+    let rows = ['status v1']
+    const t = harness()
+    const read = t.io.readComposer!('> ', undefined, { header: () => rows })
+    t.stdin.push('hi')
+    expect(t.text()).toContain('status v1\n> hi')
+    rows = ['status v2']
+    t.io.redrawComposer!()
+    const after = t.text()
+    expect(after).toContain('status v2\n> hi')
+    // The cursor climbed back over the header row too before redrawing.
+    expect(after).toContain('\x1b[1A\r\x1b[0Jstatus v2')
+    t.stdin.push('\r')
+    await read
+    // Once the read is over a refresh draws nothing.
+    const before = t.text()
+    t.io.redrawComposer!()
+    expect(t.text()).toBe(before)
+  })
+
+  it('cuts a long header row to one row and strips escapes other than colour', async () => {
+    const t = harness({ columns: () => 20 })
+    const read = t.io.readComposer!('> ', undefined, { header: () => [`${'x'.repeat(40)}`, 'a\x1b[2Jb'] })
+    t.stdin.push('\r')
+    await read
+    expect(t.text()).not.toContain('x'.repeat(20))
+    expect(t.text()).not.toContain('\x1b[2J')
+  })
+
+  it('writes progress sequences only when the terminal gets them', () => {
+    const off = harness()
+    off.io.progress!('working', 'proj')
+    expect(off.text()).toBe('')
+    const on = harness({ progress: { osc94: true, tmux: false } })
+    on.io.progress!('working', 'proj')
+    expect(on.text()).toContain('\x1b]9;4;3\x07')
+    expect(on.text()).toContain('\x1b]7501;state=working:app=houston:title=')
+  })
+
   it('repaints at the new width when the terminal is resized, climbing the rewrapped rows', async () => {
     let cols = 80
     let resize: (() => void) | null = null
@@ -3049,6 +3088,18 @@ describe('screen-reader mode', () => {
     io.setMode!('ask')
     expect(written.length).toBe(before)
     io.stopSpinner!()
+  })
+
+  it('says a status line header once as plain text, and sends no progress sequences', async () => {
+    const t = harness({ progress: { osc94: true, tmux: false } })
+    t.io.progress!('working', 'proj')
+    expect(t.text()).toBe('')
+    const read = t.io.readComposer!('you: ', undefined, { header: () => [`${ESC}[32mmain · 12%${ESC}[0m`] })
+    t.stdin.push('hi\r')
+    await expect(read).resolves.toBe('hi')
+    // Plain: no colour, and the separator read as a comma.
+    expect(t.text().startsWith('main, 12%\n')).toBe(true)
+    expect(t.text()).not.toContain(`${ESC}[32m`)
   })
 
   it('attaches a clipboard image and a pasted image path as plain lines, with no redraw escapes', async () => {
