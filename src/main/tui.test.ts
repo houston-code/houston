@@ -7886,9 +7886,9 @@ describe('steering a running turn', () => {
       steers.push(text)
       return true
     }
-    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    const hold: { steer: ((text: string) => boolean | 'handled') | null } = { steer: null }
     t.io.onSteer = (h) => {
-      hold.steer = h
+      hold.steer = (text) => h(text, 'steer-1')
     }
     d.startRun = async (req, send) => {
       expect(hold.steer?.('!npm test')).toBe(false)
