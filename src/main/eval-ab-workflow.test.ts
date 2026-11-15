@@ -31,9 +31,10 @@ const code = source
   .join('\n')
 
 /**
- * Run one step's script the way the runner would, hermetically: bash with only the system
- * PATH plus `stubs` (executables written to a temp bin dir), a temp GITHUB_OUTPUT, and the
- * given env. Returns the exit status, the outputs it wrote, and its log.
+ * Run one step's script the way the runner would, hermetically: bash with no startup files,
+ * a temp HOME, only the system PATH plus `stubs` (executables written to a temp bin dir), a
+ * temp GITHUB_OUTPUT, and the given env. Returns the exit status, the outputs it wrote, and
+ * its log.
  */
 function runStep(
   script: string,
@@ -54,10 +55,14 @@ function runStep(
       writeFileSync(join(work, rel), body)
     }
     const output = join(dir, 'out')
-    const r = spawnSync('bash', ['-c', script], {
+    // The runner's own bash invocation. Without --norc, bash whose stdin is a socket (as
+    // Node's pipes are on macOS) takes itself for an ssh session and sources ~/.bashrc,
+    // which on some runner images puts the real gh and npm ahead of the stubs.
+    const r = spawnSync('/bin/bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script], {
       cwd: work,
       encoding: 'utf8',
-      env: { PATH: `${bin}:/usr/bin:/bin`, GITHUB_OUTPUT: output, RUNNER_TEMP: dir, ...env }
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir, GITHUB_OUTPUT: output, RUNNER_TEMP: dir, ...env }
     })
     const out = existsSync(output)
       ? Object.fromEntries(
