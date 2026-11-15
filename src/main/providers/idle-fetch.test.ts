@@ -111,6 +111,32 @@ describe('idleTimeoutFetch', () => {
     expect(m.cancelled()).toBe('done with it')
   })
 
+  it('fails a request whose headers never arrive within the window, and aborts it', async () => {
+    let sent: AbortSignal | undefined
+    // A request written into a dropped keep-alive connection: it never answers.
+    const never = (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      sent = init?.signal ?? undefined
+      return new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason)))
+    }
+    const err = await idleTimeoutFetch(50, never)('http://x').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(StreamIdleError)
+    expect(isRetryableError(err)).toBe(true)
+    expect(sent?.aborted).toBe(true)
+  })
+
+  it("still aborts a request on the caller's own signal, as an abort", async () => {
+    const ac = new AbortController()
+    let sent: AbortSignal | undefined
+    const never = (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      sent = init?.signal ?? undefined
+      return new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal!.reason)))
+    }
+    const pending = idleTimeoutFetch(10_000, never)('http://x', { signal: ac.signal }).catch((e: unknown) => e)
+    ac.abort(new Error('stopped'))
+    expect(await pending).toMatchObject({ message: 'stopped' })
+    expect(sent?.aborted).toBe(true)
+  })
+
   it('returns a bodiless response untouched', async () => {
     const res204 = new Response(null, { status: 204 })
     expect(await idleTimeoutFetch(50, async () => res204)('http://x')).toBe(res204)

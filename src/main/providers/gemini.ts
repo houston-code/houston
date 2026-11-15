@@ -5,11 +5,12 @@ import type {
   ChatRequest,
   Provider,
   ProviderStreamEvent,
-  ReasoningBlock
+  ReasoningBlock,
+  TokenUsage
 } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { geminiThinkingConfig, geminiUsesThinkingLevel } from './reasoning'
-import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS } from './idle-fetch'
+import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS, StreamClosedEarlyError } from './idle-fetch'
 
 /** Output floor for models that always think (Gemini 4): Google's recommended minimum. */
 const GEMINI_THINKING_MIN_OUTPUT = 32_768
@@ -202,8 +203,7 @@ export function createGeminiProvider(apiKey: string): Provider {
       if (req.signal) config.abortSignal = req.signal
 
       // Tokens billed by an attempt that was retried (see MALFORMED_FUNCTION_CALL below).
-      let carriedInput = 0
-      let carriedOutput = 0
+      let discarded: TokenUsage | undefined
       for (let attempt = 0; ; attempt++) {
         const stream = await ai.models.generateContentStream({
           model: req.model,
@@ -267,12 +267,19 @@ export function createGeminiProvider(apiKey: string): Provider {
 
         // MALFORMED_FUNCTION_CALL: the model wrote a call Gemini could not parse, and the
         // reply is empty. It is usually a one-off, so ask once more before giving up;
-        // the discarded attempt's tokens were still billed, so they are carried over.
+        // the discarded attempt's tokens were still billed, so they are reported beside
+        // the reply's own usage (added in, they read as a request twice the real size).
         if (finishReason === 'MALFORMED_FUNCTION_CALL' && !yielded && attempt === 0) {
-          carriedInput += inputTokens ?? 0
-          carriedOutput += outputTokens ?? 0
+          if (inputTokens || outputTokens) {
+            discarded = { inputTokens, outputTokens, ...(cacheReadTokens ? { cacheReadTokens } : {}) }
+          }
           continue
         }
+
+        // Every finished Gemini reply names a finish reason in its last chunk; a stream
+        // that ended without one was cut (a proxy or a dropped connection), so the text
+        // so far is not the whole answer and the turn is retried rather than saved.
+        if (!finishReason) throw new StreamClosedEarlyError()
 
         yield {
           type: 'done',
@@ -283,10 +290,11 @@ export function createGeminiProvider(apiKey: string): Provider {
             finishReason === 'MAX_TOKENS' ? 'max_tokens' : sawToolCall ? 'tool_use' : 'end_turn',
           ...(finishReason && GEMINI_BLOCKED.has(finishReason) ? { refusal: finishReason } : {}),
           usage: {
-            inputTokens: carriedInput ? (inputTokens ?? 0) + carriedInput : inputTokens,
-            outputTokens: carriedOutput ? (outputTokens ?? 0) + carriedOutput : outputTokens,
+            inputTokens,
+            outputTokens,
             ...(cacheReadTokens ? { cacheReadTokens } : {})
           },
+          ...(discarded ? { discardedUsage: discarded } : {}),
           ...(signatures.length ? { reasoning: signatures } : {})
         }
         return

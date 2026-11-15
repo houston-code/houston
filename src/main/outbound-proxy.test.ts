@@ -8,6 +8,7 @@ vi.mock('./logger', () => ({ log: { warn: vi.fn(), info: vi.fn() } }))
 
 import { Agent } from 'undici'
 import {
+  bypassesProxy,
   configureOutboundProxy,
   isValidProxyUrl,
   KEEP_ALIVE_TIMEOUT_MS,
@@ -81,6 +82,28 @@ describe('resolveOutboundProxy', () => {
 
   it('ignores an unusable environment proxy', () => {
     expect(resolveOutboundProxy(undefined, { HTTPS_PROXY: 'socks5://p:1080' })).toBeNull()
+  })
+})
+
+describe('bypassesProxy', () => {
+  const config = resolveOutboundProxy('http://proxy.corp:3128', { NO_PROXY: '10.0.0.0/8, 192.168.0.0/16,.corp.example,fd00::/8,bad/99' })!
+
+  it("sends the user's own machine and private network direct", () => {
+    for (const url of ['http://0.0.0.0:11434/v1', 'http://[::]:1234', 'http://172.20.1.2:8000', 'http://nas.local:11434', 'http://127.0.0.1:1'])
+      expect(bypassesProxy(url, config), url).toBe(true)
+  })
+
+  it('honours CIDR ranges in NO_PROXY for IP literals', () => {
+    const wide = resolveOutboundProxy('http://proxy.corp:3128', { NO_PROXY: '100.64.0.0/10,2001:db8::/32' })!
+    expect(bypassesProxy('http://100.100.1.2:8080', wide)).toBe(true)
+    expect(bypassesProxy('http://[2001:db8::5]:8080', wide)).toBe(true)
+    expect(bypassesProxy('http://100.128.0.1:8080', wide)).toBe(false)
+  })
+
+  it('leaves public hosts and names to the proxy agent', () => {
+    expect(bypassesProxy('https://api.anthropic.com/v1/messages', config)).toBe(false)
+    expect(bypassesProxy('https://8.8.8.8/', config)).toBe(false)
+    expect(bypassesProxy('not a url', config)).toBe(false)
   })
 })
 
@@ -234,7 +257,9 @@ describe('outboundFetch through a proxy', () => {
     configureOutboundProxy(() => proxyUrl)
     const res = await outboundFetch(`http://model-host.invalid:${targetPort}/v1/chat`, { method: 'POST', body: '{}' })
     expect(await res.text()).toBe('hello POST /v1/chat')
-    expect(seen).toEqual([`CONNECT model-host.invalid:${targetPort}`])
+    // A plain-http target is forwarded, not tunnelled: proxies commonly refuse CONNECT
+    // to a port other than 443.
+    expect(seen).toEqual([`POST http://model-host.invalid:${targetPort}/v1/chat`])
   })
 
   it('sends a request through HTTP_PROXY from the environment', async () => {
@@ -266,6 +291,23 @@ describe('outboundFetch through a proxy', () => {
     process.env.NO_PROXY = 'bypass.invalid'
     await expect(outboundFetch(`http://bypass.invalid:${targetPort}/x`)).rejects.toThrow()
     expect(seen).toEqual([])
+  })
+
+  it('connects the unspecified address and NO_PROXY CIDR ranges directly', async () => {
+    seen = []
+    configureOutboundProxy(() => proxyUrl)
+    process.env.NO_PROXY = '203.0.113.0/24,2001:db8::/32'
+    // Unroutable documentation addresses: a direct attempt fails or times out, while one
+    // sent to the proxy would be seen (and answered) by it.
+    for (const url of [`http://203.0.113.7:${targetPort}/x`, `http://[2001:db8::7]:${targetPort}/x`, `http://0.0.0.0:${targetPort}/x`]) {
+      await outboundFetch(url, { signal: AbortSignal.timeout(300) })
+        .then((r) => r.text())
+        .catch(() => undefined)
+    }
+    expect(seen).toEqual([])
+    // An address outside the ranges still goes through the proxy.
+    await (await outboundFetch(`http://198.51.100.7:${targetPort}/y`)).text()
+    expect(seen).toEqual([`GET http://198.51.100.7:${targetPort}/y`])
   })
 
   it('does not touch process.env, so shell commands keep their own proxy variables', async () => {

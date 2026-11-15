@@ -80,6 +80,22 @@ describe('recording quota per provider', () => {
     expect(providerQuota('b')?.remainingRequests).toBe(2)
   })
 
+  it("keeps each model's quota apart, so a side request on the small model leaves the chat model's", async () => {
+    let n = 5
+    const p = withQuotaScope('anthropic', fetching(async () => new Response('{}', { headers: headers(n) })))
+    const drain = async (model: string): Promise<void> => {
+      for await (const e of p.streamChat({ model, messages: [] })) void e
+    }
+    await drain('claude-opus-4-8')
+    n = 900
+    await drain('claude-haiku-5-5')
+    expect(providerQuota('anthropic', 'claude-opus-4-8')?.remainingRequests).toBe(5)
+    expect(providerQuota('anthropic', 'claude-haiku-5-5')?.remainingRequests).toBe(900)
+    expect(providerQuota('anthropic', 'other')).toBeUndefined()
+    // Without a model: the provider's latest, whichever model reported it.
+    expect(providerQuota('anthropic')?.remainingRequests).toBe(900)
+  })
+
   it('records nothing outside a provider scope or without headers', async () => {
     recordResponseQuota(headers(3), 200)
     recordResponseQuota(undefined, 200)

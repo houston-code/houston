@@ -257,7 +257,11 @@ describe('gemini function-call thought signatures', () => {
   })
 
   it('passes the request model through, so replayed signatures reach the API', async () => {
-    h.stream.mockResolvedValue((async function* () {})())
+    h.stream.mockResolvedValue(
+      (async function* () {
+        yield { candidates: [{ finishReason: 'STOP' }] }
+      })()
+    )
     const provider = createGeminiProvider('k')
     const messages: ChatMessage[] = [
       { role: 'user', content: 'go' },
@@ -284,7 +288,7 @@ describe('gemini maxOutputTokens', () => {
   async function configFor(req: Partial<ChatRequest>): Promise<Record<string, unknown>> {
     h.stream.mockResolvedValue(
       (async function* () {
-        yield { candidates: [{ content: { parts: [{ text: 'ok' }] } }] }
+        yield { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'ok' }] } }] }
       })()
     )
     const provider = createGeminiProvider('k')
@@ -320,7 +324,7 @@ describe('gemini thinking config', () => {
   async function thinkingFor(model: string, effort: ChatRequest['reasoningEffort']): Promise<unknown> {
     h.stream.mockResolvedValue(
       (async function* () {
-        yield { candidates: [{ content: { parts: [{ text: 'ok' }] } }] }
+        yield { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'ok' }] } }] }
       })()
     )
     for await (const _ of createGeminiProvider('k').streamChat({
@@ -351,7 +355,7 @@ describe('gemini usage reporting', () => {
   async function drainDoneUsage(usageMetadata: Record<string, number>): Promise<Record<string, number>> {
     h.stream.mockResolvedValue(
       (async function* () {
-        yield { usageMetadata, candidates: [{ content: { parts: [{ text: 'ok' }] } }] }
+        yield { usageMetadata, candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'ok' }] } }] }
       })()
     )
     const provider = createGeminiProvider('k')
@@ -393,7 +397,8 @@ describe('gemini stop reason', () => {
   beforeEach(() => h.stream.mockReset())
 
   async function drainStopReason(candidate: Record<string, unknown>): Promise<string | undefined> {
-    h.stream.mockResolvedValue(
+    // A fresh stream per request: a retried attempt must not read an exhausted one.
+    h.stream.mockImplementation(async () =>
       (async function* () {
         yield { candidates: [candidate] }
       })()
@@ -436,7 +441,7 @@ describe('gemini stop reason', () => {
     expect(await doneFor({ finishReason: 'STOP', content: { parts: [{ text: 'ok' }] } })).not.toHaveProperty('refusal')
   })
 
-  it('asks once more after an empty MALFORMED_FUNCTION_CALL reply, carrying its billed tokens', async () => {
+  it('asks once more after an empty MALFORMED_FUNCTION_CALL reply, reporting its billed tokens apart', async () => {
     const malformed = (async function* () {
       yield { candidates: [{ finishReason: 'MALFORMED_FUNCTION_CALL' }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 5 } }
     })()
@@ -458,8 +463,35 @@ describe('gemini stop reason', () => {
     expect(h.stream).toHaveBeenCalledTimes(2)
     expect(events.filter((e) => e.type === 'tool_call')).toHaveLength(1)
     expect(events.filter((e) => e.type === 'done')).toEqual([
-      { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 200, outputTokens: 15 } }
+      {
+        type: 'done',
+        stopReason: 'tool_use',
+        // The reply's own request: its size is the context, not the two attempts added up.
+        usage: { inputTokens: 100, outputTokens: 10 },
+        discardedUsage: { inputTokens: 100, outputTokens: 5 }
+      }
     ])
+  })
+
+  it('treats a stream that ends with no finish reason as cut, not as a finished reply', async () => {
+    h.stream.mockReset()
+    h.stream.mockImplementation(async () =>
+      (async function* () {
+        yield { candidates: [{ content: { parts: [{ text: 'The fix is to change line 12 to' }] } }] }
+      })()
+    )
+    const events: ProviderStreamEvent[] = []
+    await expect(
+      (async () => {
+        for await (const ev of createGeminiProvider('k').streamChat({
+          model: 'gemini-2.5-flash',
+          messages: [{ role: 'user', content: 'hi' }]
+        } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+          events.push(ev)
+        }
+      })()
+    ).rejects.toMatchObject({ name: 'StreamClosedEarlyError' })
+    expect(events.some((e) => e.type === 'done')).toBe(false)
   })
 
   it('retries a malformed call only once, and never after something was shown', async () => {

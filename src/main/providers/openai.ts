@@ -13,9 +13,11 @@ import {
   EXTENDED_STREAM_IDLE_TIMEOUT_MS,
   idleTimeoutFetch,
   LIST_MODELS_TIMEOUT_MS,
+  StreamClosedEarlyError,
   streamIdleTimeoutFor,
   withStreamIdleWindow
 } from './idle-fetch'
+import { effectiveBaseUrl } from './env-base-url'
 import { SDK_MAX_RETRIES } from '../agent/retry'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
@@ -418,6 +420,14 @@ export function createChatCompletionsProvider(
         if (choice.finish_reason) finishReason = choice.finish_reason
       }
 
+      // A finished reply names a finish reason, then (when usage is on) a usage chunk. A
+      // stream that ended with neither was cut (a proxy or a dropped connection), so what
+      // arrived is not the whole reply: retry it rather than save it as the answer. Usage
+      // alone counts as an ending, so a host that skips the finish reason isn't failed.
+      if (finishReason === null && inputTokens === undefined && outputTokens === undefined) {
+        throw new StreamClosedEarlyError()
+      }
+
       // Whatever the <think> splitter still holds: an unterminated block is reasoning,
       // a reply too short to decide on is content.
       const thinkTail = think.flush()
@@ -442,7 +452,8 @@ export function createChatCompletionsProvider(
 
       // No structured tool calls, but the model may have written one as text.
       if (!hadToolCalls && knownToolNames.size && heldContent.trim()) {
-        const recovered = parseTextToolCalls(heldContent, knownToolNames)
+        const schemas = new Map((req.tools ?? []).map((t) => [t.name, t.parameters] as const))
+        const recovered = parseTextToolCalls(heldContent, knownToolNames, schemas)
         if (recovered) {
           for (const c of recovered) {
             yield { type: 'tool_call', call: { id: randomUUID(), name: c.name, arguments: c.arguments } }
@@ -489,6 +500,8 @@ export function createOpenAIProvider(
   baseURL?: string,
   headers?: Record<string, string>
 ): Provider {
+  // A base URL from the environment decides the host exactly as a configured one does.
+  baseURL = effectiveBaseUrl(baseURL, 'OPENAI_BASE_URL')
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
   let clientPromise: Promise<OpenAI> | undefined
@@ -580,6 +593,7 @@ export async function listOpenAIModels(
   baseURL?: string,
   headers?: Record<string, string>
 ): Promise<ModelOption[]> {
+  baseURL = effectiveBaseUrl(baseURL, 'OPENAI_BASE_URL')
   const { default: OpenAI } = await import('openai')
   const client = new OpenAI({
     fetch: idleTimeoutFetch(LIST_MODELS_TIMEOUT_MS),

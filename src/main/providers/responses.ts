@@ -14,6 +14,7 @@ import { imageDataUrl } from '@shared/images'
 import { openaiResponsesReasoning } from './reasoning'
 import { parseToolArguments } from './tool-args'
 import { idleTimeoutFetch, StreamClosedEarlyError } from './idle-fetch'
+import { effectiveBaseUrl } from './env-base-url'
 import { responsesWebSearch, type ResponsesCreateClient } from './native-search'
 import { SDK_MAX_RETRIES } from '../agent/retry'
 
@@ -224,6 +225,9 @@ function withoutSummary(reasoning: ResponsesReasoning): { effort: ResponsesReaso
 }
 
 export function createResponsesProvider(apiKey: string | null, baseURL?: string): Provider {
+  // A base URL from the environment is a gateway like a configured one: no
+  // prompt_cache_key, no hosted search.
+  baseURL = effectiveBaseUrl(baseURL, 'OPENAI_BASE_URL')
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
   let clientPromise: Promise<OpenAI> | undefined

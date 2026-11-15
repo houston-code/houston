@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { outboundFetch } from '../outbound-proxy'
+import { isLocalModelHost, outboundFetch } from '../outbound-proxy'
 import { recordResponseQuota } from './quota'
 
 /**
@@ -55,29 +55,8 @@ export function requestedStreamIdleWindow(): number | undefined {
   return requestedWindow.getStore()
 }
 
-/**
- * Whether a base URL points at the user's own machine or private network: loopback,
- * `localhost` (and `*.localhost`), the unspecified address, a private IPv4 range, an
- * mDNS `.local` name, or an IPv6 unique-local address. That's where self-hosted model
- * servers (Ollama, LM Studio, vLLM, llama.cpp) live. A malformed URL is not local.
- */
-export function isLocalModelHost(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false
-  let host: string
-  try {
-    host = new URL(baseUrl).hostname.toLowerCase()
-  } catch {
-    return false
-  }
-  host = host.replace(/^\[|\]$/g, '')
-  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true
-  if (host === '::1' || host === '::' || host === '0.0.0.0') return true
-  if (/^f[cd][0-9a-f]{2}:/.test(host)) return true
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(host)
-  if (!v4) return false
-  const [a, b] = [Number(v4[1]), Number(v4[2])]
-  return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)
-}
+// Where self-hosted model servers live; the outbound proxy sends those hosts direct too.
+export { isLocalModelHost }
 
 /** The idle window for a provider client talking to `baseUrl`. */
 export function streamIdleTimeoutFor(baseUrl: string | undefined): number {
@@ -144,8 +123,9 @@ export function streamIdleWindowOf(err: unknown): number | undefined {
  * Wrap `base` so every response body errors with {@link StreamIdleError} once it has
  * waited `idleMs` (or the longer window {@link withStreamIdleWindow} asked for around
  * the request) for its next chunk. The clock only runs while a read is pending, so
- * a consumer that's slow to read never trips it. Headers, status and an abort through
- * the request's own signal behave exactly as before.
+ * a consumer that's slow to read never trips it. The wait for the response headers is
+ * bounded by the same window. Status and an abort through the request's own signal
+ * behave exactly as before.
  */
 export function idleTimeoutFetch(
   baseIdleMs: number = STREAM_IDLE_TIMEOUT_MS,
@@ -153,7 +133,36 @@ export function idleTimeoutFetch(
 ): Fetch {
   return async (input, init) => {
     const idleMs = Math.max(baseIdleMs, requestedWindow.getStore() ?? 0)
-    const res = await base(input, init)
+    // The wait for the response headers gets the same window. A pooled keep-alive
+    // connection the network dropped while it sat idle (a Wi-Fi roam, a VPN reconnect,
+    // lost NAT state) takes the request and never answers, and nothing else bounds that
+    // wait short of the five-minute headers timeout. The hosts send stream headers at
+    // once, so a request still unanswered after the idle window is as dead as a stalled
+    // stream: it fails with the same retryable error, and the request is aborted so the
+    // socket is released. The caller's own signal still aborts it as before.
+    const controller = new AbortController()
+    const outer = init?.signal
+    if (outer) {
+      if (outer.aborted) controller.abort(outer.reason)
+      else outer.addEventListener('abort', () => controller.abort(outer.reason), { once: true })
+    }
+    let headersTimer: ReturnType<typeof setTimeout> | undefined
+    const pending = base(input, { ...init, signal: controller.signal })
+    const noHeaders = new Promise<never>((_, reject) => {
+      headersTimer = setTimeout(() => {
+        const err = new StreamIdleError(idleMs)
+        controller.abort(err)
+        reject(err)
+      }, idleMs)
+    })
+    // The request a timeout abandons rejects later; that rejection is expected.
+    pending.catch(() => {})
+    let res: Response
+    try {
+      res = await Promise.race([pending, noHeaders])
+    } finally {
+      clearTimeout(headersTimer)
+    }
     // Every response's rate-limit headers, success or not, for the quota readout.
     recordResponseQuota(res.headers, res.status)
     // Statuses that can never carry a body; wrapping one would make Response throw.

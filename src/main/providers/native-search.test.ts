@@ -75,6 +75,26 @@ describe('parseAnthropicSearch', () => {
     expect(() => parseAnthropicSearch(errReply, 5)).toThrow(/Web search failed: too_many_requests/)
   })
 
+  it('keeps a search that found results when a later try ran past max_uses', () => {
+    const reply = [
+      {
+        type: 'web_search_tool_result',
+        tool_use_id: 'srvtoolu_1',
+        content: [{ type: 'web_search_result', url: 'https://example.test/a', title: 'A' }]
+      },
+      {
+        type: 'web_search_tool_result',
+        tool_use_id: 'srvtoolu_2',
+        content: { type: 'web_search_tool_result_error', error_code: 'max_uses_exceeded' }
+      },
+      { type: 'text', text: 'A says yes.' }
+    ]
+    expect(parseAnthropicSearch(reply, 5)).toEqual({
+      answer: 'A says yes.',
+      hits: [{ url: 'https://example.test/a', title: 'A' }]
+    })
+  })
+
   it('treats an empty result list as no hits, not an error', () => {
     const r = parseAnthropicSearch([{ type: 'web_search_tool_result', tool_use_id: 'x', content: [] }], 5)
     expect(r).toEqual({ hits: [] })

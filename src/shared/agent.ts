@@ -299,7 +299,14 @@ export type ProviderStreamEvent =
   | {
       type: 'done'
       stopReason: StopReason
+      /** The request that produced this reply: what it billed, and how big its context was. */
       usage?: TokenUsage
+      /**
+       * Tokens billed by an earlier attempt the adapter retried on its own and threw away
+       * (Gemini's empty MALFORMED_FUNCTION_CALL reply). Priced as its own request and never
+       * read as the context size, which `usage` alone describes.
+       */
+      discardedUsage?: TokenUsage
       reasoning?: ReasoningBlock[]
       /**
        * Set when the provider ended the reply itself instead of the model finishing it:

@@ -26,7 +26,8 @@ vi.mock('openai', () => {
 function fakeStream(): unknown {
   return {
     async *[Symbol.asyncIterator]() {
-      // no chunks — these tests assert on the request, not the response
+      // Just a finished reply: these tests assert on the request, not the response.
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] }
     }
   }
 }

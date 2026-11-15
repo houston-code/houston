@@ -6,6 +6,7 @@ import { getKey, getSecretHeaders, hasStoredKey } from '../agentHost'
 import { createAnthropicProvider, listAnthropicModels } from './anthropic'
 import { createOpenAIProvider, listOpenAIModels } from './openai'
 import { createResponsesProvider } from './responses'
+import { effectiveBaseUrl } from './env-base-url'
 import { createGeminiProvider, listGeminiModels } from './gemini'
 import { createBedrockProvider, listBedrockModels } from './bedrock'
 import { createVertexProvider, listVertexModels } from './vertex'
@@ -99,8 +100,9 @@ function buildProvider(config: ProviderConfig): Provider {
     case 'openai':
       // Native OpenAI uses the Responses API (GPT-5/o-series path). A custom base
       // URL means a proxy/gateway that may only speak Chat Completions, so fall
-      // back to the Chat Completions adapter there.
-      return config.baseUrl
+      // back to the Chat Completions adapter there, whether the URL is configured or
+      // comes from OPENAI_BASE_URL (the SDK would send to it either way).
+      return effectiveBaseUrl(config.baseUrl, 'OPENAI_BASE_URL')
         ? createOpenAIProvider(key, config.baseUrl, headers)
         : createResponsesProvider(key)
     case 'openai-compatible':
