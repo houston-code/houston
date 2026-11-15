@@ -2063,6 +2063,16 @@ From most to least restrictive:
 The agent researches and proposes a plan; writes and shell commands are blocked. You
 accept the plan, request changes, or reject it.
 
+- **In the terminal**, you can also edit the plan in your editor (`$EDITOR`) before it
+  runs, with edits applied automatically or approving each one. With no editor set, or
+  if you save an empty plan, nothing is accepted and the choices come back; an empty
+  "Suggest changes" note brings them back too, rather than rejecting the plan.
+- **Answering a question in the terminal**: Enter with nothing typed asks again rather
+  than sending an empty answer, and on a list where you tick several options, Enter
+  with nothing ticked says to tick one first (space ticks). Ctrl-D dismisses the
+  question, and the agent is told you did. Answers, notes, and edited plans are capped
+  at the same length as in the app.
+
 - **Checks it can run.** The plan lists the checks it will run, and under them Houston
   shows whether they can run on this machine: whether the runtimes and dependencies
   are installed, and whether shell commands can reach the network to install them

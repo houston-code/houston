@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { capAnswer, capPlanDecision, MAX_QUESTION_ANSWER_LEN } from '@shared/answerCaps'
 import { app, ipcMain, dialog, BrowserWindow, clipboard, ClipboardItem, nativeImage, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
@@ -561,13 +562,8 @@ function wireSpawnSession(): void {
   })
 }
 
-/**
- * Upper bound on an `ask_user` answer accepted over IPC. Real answers are a short
- * option label or a line or two of free text; anything past this is a
- * malformed/hostile renderer, so we cap it before it becomes a tool result the
- * model must carry. Generous but bounded.
- */
-export const MAX_QUESTION_ANSWER_LEN = 100_000
+/** The answer cap lives with the other clients' copy of it; re-exported for callers here. */
+export { MAX_QUESTION_ANSWER_LEN }
 
 /**
  * Authorize a run-control IPC call (approve / answer / set-policy / cancel) against
@@ -1907,7 +1903,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       if (typeof answer !== 'string') return
       // Only the window that started the run may answer its ask_user prompts.
       if (!callerOwnsRun(event, runId)) return
-      resolveQuestion(runId, callId, answer.slice(0, MAX_QUESTION_ANSWER_LEN))
+      resolveQuestion(runId, callId, capAnswer(answer))
     }
   )
 
@@ -1938,17 +1934,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       if (!callerOwnsRun(event, runId)) return
       // Cap the model-facing free text (a suggestion note, or a hand-edited plan) so
       // an unbounded value can't become an oversized tool result.
-      let safe: PlanDecision = decision
-      if (decision.kind === 'suggest') {
-        safe = { kind: 'suggest', note: decision.note.slice(0, MAX_QUESTION_ANSWER_LEN) }
-      } else if (decision.kind === 'accept' && decision.editedBody !== undefined) {
-        safe = {
-          kind: 'accept',
-          mode: decision.mode,
-          editedBody: decision.editedBody.slice(0, MAX_QUESTION_ANSWER_LEN)
-        }
-      }
-      resolvePlan(runId, callId, safe)
+      resolvePlan(runId, callId, capPlanDecision(decision))
     }
   )
 

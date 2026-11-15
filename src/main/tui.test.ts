@@ -1,3 +1,4 @@
+import { MAX_QUESTION_ANSWER_LEN, QUESTION_DISMISSED_ANSWER } from '@shared/answerCaps'
 import { describe, it, expect, vi } from 'vitest'
 import type { FileDiffPreview } from '@shared/diff'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -1736,6 +1737,30 @@ describe('runTui', () => {
     expect(rec.questions).toEqual([['run-1', 'q1', 'my answer']])
   })
 
+  it('does not send an empty typed answer: it asks again, and end of input dismisses', async () => {
+    const q: AgentEvent = { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Name it?', options: [] }
+    const a = deps([q, { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', '', '   ', 'my answer', null])
+    a.d.io = t.io
+    await runTui(opts, a.d)
+    expect(a.rec.questions).toEqual([['run-1', 'q1', 'my answer']])
+    expect(t.text()).toContain('type an answer')
+    const b = deps([q, { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    b.d.io = fakeIo(['go', null]).io
+    await runTui(opts, b.d)
+    expect(b.rec.questions).toEqual([['run-1', 'q1', QUESTION_DISMISSED_ANSWER]])
+  })
+
+  it('caps a typed answer at the same length the desktop does', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Name it?', options: [] },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    d.io = fakeIo(['go', 'y'.repeat(MAX_QUESTION_ANSWER_LEN + 9), null]).io
+    await runTui(opts, d)
+    expect(rec.questions[0][2]).toHaveLength(MAX_QUESTION_ANSWER_LEN)
+  })
+
   it('resending a message whose turn failed replaces it instead of stacking a copy', async () => {
     const { d, rec } = deps([{ runId: 'x', type: 'error', message: 'boom' }])
     const t = fakeIo(['start the dev server', 'start the dev server', null])
@@ -2034,7 +2059,7 @@ describe('runTui', () => {
     }
     d.io = t.io
     await runTui(opts, d)
-    expect(specs[0].options.map((o) => o.key)).toEqual(['a', 'k', 'e', 's', 'r'])
+    expect(specs[0].options.map((o) => o.key)).toEqual(['a', 'k', 'e', 'd', 's', 'r'])
     expect(specs[0].typeLabel).toBeNull()
     expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
   })
@@ -4176,6 +4201,47 @@ describe('runTui — plan review (present_plan)', () => {
       expect(t.text()).toMatch(result === null ? /edit cancelled/ : /edited plan is empty/)
       expect(t.text()).toContain('choose again')
     }
+  })
+
+  it('an emptied plan in the editor accepts nothing and asks again', async () => {
+    const { d, rec } = deps(withPlan())
+    const t = fakeIo(['do it', 'e', 'k', null])
+    d.io = t.io
+    d.editText = async () => '   \n'
+    await runTui(opts, d)
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'accept', mode: 'ask' }]])
+    expect(t.text()).toContain('the edited plan is empty')
+  })
+
+  it('edits the plan and runs it asking per edit', async () => {
+    const { d, rec } = deps(withPlan())
+    d.io = fakeIo(['do it', 'd', null]).io
+    d.editText = async (initial) => `${initial}\n\nEdited.`
+    await runTui(opts, d)
+    const [, , decision] = rec.plans[0]
+    expect(decision).toEqual({ kind: 'accept', mode: 'ask', editedBody: 'Move the guard to middleware.\n\nEdited.' })
+  })
+
+  it('an empty suggestion asks again instead of rejecting', async () => {
+    const { d, rec } = deps(withPlan())
+    d.io = fakeIo(['do it', 's', '  ', 's', 'add tests first', null]).io
+    await runTui(opts, d)
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'suggest', note: 'add tests first' }]])
+  })
+
+  it('caps a suggestion and an edited plan at the same length the desktop does', async () => {
+    const huge = 'x'.repeat(MAX_QUESTION_ANSWER_LEN + 50)
+    const a = deps(withPlan())
+    a.d.io = fakeIo(['do it', 's', huge, null]).io
+    await runTui(opts, a.d)
+    const [, , note] = a.rec.plans[0]
+    expect(note.kind === 'suggest' && note.note.length).toBe(MAX_QUESTION_ANSWER_LEN)
+    const b = deps(withPlan())
+    b.d.io = fakeIo(['do it', 'e', null]).io
+    b.d.editText = async () => huge
+    await runTui(opts, b.d)
+    const [, , edited] = b.rec.plans[0]
+    expect(edited.kind === 'accept' && edited.editedBody?.length).toBe(MAX_QUESTION_ANSWER_LEN)
   })
 
   // Parity guard (runtime complement to the assertNever compile guard): every

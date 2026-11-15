@@ -241,11 +241,23 @@ const wrap = (i: number, len: number): number => (len === 0 ? 0 : ((i % len) + l
 function commitValue(s: PickerState): string {
   const options = visibleOptions(s)
   if (s.spec.multiSelect) {
-    const picked = options.filter((_, i) => s.checked.has(i)).map((o) => o.value)
-    // With nothing checked, committing takes the cursor's option (a sensible default).
-    return picked.length ? picked.join(', ') : (options[s.cursor]?.value ?? '')
+    return options
+      .filter((_, i) => s.checked.has(i))
+      .map((o) => o.value)
+      .join(', ')
   }
   return options[s.cursor]?.value ?? ''
+}
+
+/** Said when Enter is pressed on a multi-select with nothing ticked (nothing is sent). */
+export const NOTHING_TICKED_NOTICE = 'Nothing ticked yet: press space to tick an option, then enter.'
+
+/**
+ * Enter on a multi-select with nothing ticked: stay open and say how to tick, rather
+ * than sending the highlighted option the person never chose.
+ */
+function nothingTicked(s: PickerState): PickerStep | null {
+  return s.spec.multiSelect && s.checked.size === 0 ? { state: { ...s, notice: NOTHING_TICKED_NOTICE } } : null
 }
 
 /** The reducer's result: the next state, an outcome when it's over, and whether the filter changed. */
@@ -354,7 +366,7 @@ function reduceRich(s: PickerState, key: PickerKey): PickerStep {
       return s.spec.filter && query ? setQuery([...query].slice(0, -1).join('')) : { state: s }
     case 'enter':
       if (!len) return { state: s }
-      return { state: s, outcome: { kind: 'commit', value: commitValue(s) } }
+      return nothingTicked(s) ?? { state: s, outcome: { kind: 'commit', value: commitValue(s) } }
     case 'cancel':
       if (s.spec.filter && query) return setQuery('')
       return { state: s, outcome: { kind: 'cancel' } }
@@ -404,10 +416,10 @@ export function reducePicker(s: PickerState, key: PickerKey): PickerStep {
       const checked = new Set(s.checked)
       if (checked.has(s.cursor)) checked.delete(s.cursor)
       else checked.add(s.cursor)
-      return { state: { ...s, checked } }
+      return { state: { ...s, checked, notice: undefined } }
     }
     case 'enter':
-      return { state: s, outcome: { kind: 'commit', value: commitValue(s) } }
+      return nothingTicked(s) ?? { state: s, outcome: { kind: 'commit', value: commitValue(s) } }
     case 'char': {
       // An option's key commits it; any other key starts the typed answer with that
       // key, unless there is no typed answer here.
@@ -484,6 +496,7 @@ export function renderPicker(
 ): string[] {
   if (isRichPicker(s.spec)) return renderRichPicker(s, paint, size)
   const lines = s.spec.title ? [paint(s.spec.title, 'bold')] : []
+  if (s.notice) lines.push(paint(s.notice, 'yellow'))
   // With keys, each option shows its own in a column ahead of the label.
   const keyed = s.spec.options.some((o) => o.key)
   const typing = s.spec.typeLabel === undefined ? 'type for a custom answer' : s.spec.typeLabel

@@ -34,6 +34,7 @@ import { throttleNotice } from '@shared/rateLimit'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
 import { fitAcpFrame } from './acpFrame'
+import { QUESTION_DISMISSED_ANSWER } from '@shared/answerCaps'
 import { agentTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
 import { builtinCommands, mergeCommands, parseSlashCommand, resolveCommand, type Command } from '@shared/commands'
 import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
@@ -167,7 +168,7 @@ export const ACP_NO_QUESTION_ANSWER =
   '[This editor cannot show a question to the user. Proceed using your best judgment.]'
 
 /** Answer given to `ask_user` when the user dismissed the question. */
-export const ACP_DECLINED_ANSWER = '[The user dismissed the question without answering. Proceed using your best judgment.]'
+export const ACP_DECLINED_ANSWER = QUESTION_DISMISSED_ANSWER
 
 /** How each approval warning reads in the editor's permission request. */
 const ACP_WARNING_TEXT: Record<ApprovalWarning, string> = {
