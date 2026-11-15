@@ -8,8 +8,19 @@ import {
   denialText,
   isUnansweredQuestion,
   planOutcome,
-  stoppedPromptText
+  stoppedPromptText,
+  withApprovalNote
 } from './promptOutcome'
+
+describe('withApprovalNote', () => {
+  it('follows the result with the note the user allowed the call with', () => {
+    expect(withApprovalNote('ran ls', 'keep it short')).toBe('ran ls\n\nAllowed by the user. Note from the user: keep it short')
+    expect(withApprovalNote('ran ls')).toBe('ran ls')
+    expect(withApprovalNote('ran ls', '')).toBe('ran ls')
+    // It never reads as a denial to the clients that recognize one.
+    expect(deniedPromptText(withApprovalNote('ran ls', 'x'))).toBeNull()
+  })
+})
 
 describe('stoppedPromptText', () => {
   it('describes a question the run was stopped in front of', () => {

@@ -4477,6 +4477,13 @@ button.finding__head:focus-visible,
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+.tool-row__approval-count {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.8em;
+  font-weight: 600;
+  color: var(--text-dim);
+}
 .tool-row__approval-note {
   flex-basis: 100%;
   margin: 0;
@@ -8996,6 +9003,42 @@ body:has(.coachmark) .get-started {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 8px;
+}
+.recent-denials {
+  margin-top: 14px;
+}
+.recent-denials__title {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+.recent-denials__list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.recent-denials__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.recent-denials__tool {
+  font-weight: 600;
+}
+.recent-denials__subject {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.recent-denials__meta {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.recent-denials .rule__meta {
+  margin-left: 0;
 }
 .rule-tester {
   margin: 10px 0;

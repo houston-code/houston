@@ -162,6 +162,12 @@ export const IPC = {
   permissionsTest: 'permissions:test',
   /** When each permission rule last decided a call. */
   permissionsUsage: 'permissions:usage',
+  /** The calls denied at an approval prompt this session (Settings > Permissions). */
+  permissionsRecentDenials: 'permissions:recentDenials',
+  /** The allow rules "Allow this" would add for one of them; read-only. */
+  permissionsDenialRules: 'permissions:denialRules',
+  /** Drop one from the list once its rule is in the working copy. */
+  permissionsForgetDenial: 'permissions:forgetDenial',
   /** Write a preferences export to a file the user picks. */
   settingsExportFile: 'settings:exportFile',
   /** Read a preferences export from a file the user picks. */

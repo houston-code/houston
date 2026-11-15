@@ -88,6 +88,7 @@ import { runGitCapture } from './agent/gitRead'
 import { readHeadBranch } from './headBranch'
 import { writeExportFile } from './tui-sessions'
 import {
+  addPermissionRule,
   canPersistHeaderSecrets,
   canRemoveKey,
   canSetKey,
@@ -97,6 +98,7 @@ import {
   setProviderKey,
   updateSettings
 } from './store'
+import { allowRulesForDenial, forgetDenial, listRecentDenials } from './agent/recentDenials'
 import { getUserDataDir } from './userData'
 import { ReadStateStore } from './readState'
 import { log, logFilePath } from './logger'
@@ -1020,6 +1022,16 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // Settings editing for /hooks and /mcp (writes the shared settings.json, 0600).
       updateSettings: (patch) => {
         updateSettings(patch)
+      },
+      // /permissions: this session's denials, and "allow this" through the same
+      // rule-building and save path as an approval prompt's "Always allow".
+      recentDenials: () => listRecentDenials(),
+      allowRecentDenial: (id) => {
+        const r = allowRulesForDenial(id, getSettings().permissionRules ?? [])
+        if (!r) return null
+        for (const rule of r.rules) addPermissionRule(rule)
+        forgetDenial(id)
+        return { added: r.rules, deniedByRule: r.deniedByRule }
       },
       // Live connection badges + OAuth sign-in/out for /mcp. Sign-in runs the full
       // interactive flow (discovery, registration, browser, exchange) and persists

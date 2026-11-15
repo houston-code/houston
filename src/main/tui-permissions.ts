@@ -4,29 +4,34 @@ import {
   type AppSettings,
   type FolderTrustState,
   type PermissionPolicyView,
-  type PermissionRule
+  type PermissionRule,
+  type RecentDenial
 } from '@shared/types'
 import { isRuleWarning, lintPermissionRules, ruleIssueText } from '@shared/permissionLint'
 import { parseRulesText } from '@shared/permissionRulesText'
 import type { Painter } from './tui'
-import { stripControlChars } from './tui-wrap'
+import { stripControlChars, terminalText } from './tui-wrap'
+import { renderRecentDenials } from './tui-sessions'
 
 /**
  * /permissions and /trust in the terminal: the desktop's Settings > Permissions and
  * Trusted folders pages. Every tier the agent's gate reads is shown (the
  * administrator's and the project's rules read-only, labeled), the user's own rules
  * carry the same lint notes and last-used time the desktop shows, and a rule added
- * here passes the same validation as the desktop's rules editor.
+ * here passes the same validation as the desktop's rules editor. The calls denied at a
+ * prompt this session are listed too, and `/permissions allow <n>` saves the rule
+ * "Always allow" would have saved for one.
  */
 
 export type PermissionsOp =
   | { op: 'list' }
   | { op: 'remove'; index: number }
+  | { op: 'allow'; index: number }
   | { op: 'add'; rule: PermissionRule }
   | { op: 'usage'; error?: string }
 
 export const PERMISSIONS_USAGE =
-  'usage: /permissions   ·   /permissions add allow|ask|deny <tool> <pattern> [--exact]   ·   /permissions remove <n>'
+  'usage: /permissions   ·   /permissions add allow|ask|deny <tool> <pattern> [--exact]   ·   /permissions remove <n>   ·   /permissions allow <n> (a recent denial)'
 
 /** Parse the argument of /permissions. Bare command → list. */
 export function parsePermissionsArgs(arg: string): PermissionsOp {
@@ -37,6 +42,10 @@ export function parsePermissionsArgs(arg: string): PermissionsOp {
   if (v === 'remove' || v === 'rm' || v === 'delete') {
     const n = Number(rest[0])
     return rest.length === 1 && /^\d+$/.test(rest[0]) && n >= 1 ? { op: 'remove', index: n } : { op: 'usage' }
+  }
+  if (v === 'allow' && rest.length === 1) {
+    const n = Number(rest[0])
+    return /^\d+$/.test(rest[0]) && n >= 1 ? { op: 'allow', index: n } : { op: 'usage' }
   }
   if (v === 'add') {
     const exact = rest.includes('--exact')
@@ -62,6 +71,16 @@ export interface PermissionsCommandDeps {
   /** When each rule last decided a call, keyed by permissionRuleKey. */
   ruleUsage?: () => Record<string, number>
   now?: () => number
+  /** The calls denied at an approval prompt this session, newest first. */
+  recentDenials?: () => RecentDenial[]
+  /**
+   * Save the allow rules "Always allow" would have saved for a recent denial (by its id),
+   * and drop it from the list. Null when it is no longer listed. `deniedByRule` says a
+   * saved deny rule still matches it, which wins over any allow.
+   */
+  allowRecentDenial?: (id: string) => { added: PermissionRule[]; deniedByRule: boolean } | null
+  /** Terminal width, for fitting the recent denials. */
+  width?: number
   out: (text: string) => void
 }
 
@@ -184,7 +203,30 @@ export async function runPermissionsCommand(
     } catch {
       usage = {}
     }
-    return void deps.out(`${renderPermissionsView(rules, policy, usage, paint, now)}\n`)
+    deps.out(`${renderPermissionsView(rules, policy, usage, paint, now)}\n`)
+    const recent = renderRecentDenials(deps.recentDenials?.() ?? [], paint, now, deps.width)
+    if (recent) deps.out(`${recent}\n`)
+    return
+  }
+  if (op.op === 'allow') {
+    const denial = (deps.recentDenials?.() ?? [])[op.index - 1]
+    if (!denial) return void deps.out(paint(`· no recently denied call ${op.index}; /permissions lists them\n`, 'yellow'))
+    const saved = deps.allowRecentDenial?.(denial.id)
+    if (!saved) return void deps.out(paint('· saving rules is unavailable here\n', 'dim'))
+    const ruleText = (r: PermissionRule): string =>
+      `${r.action} ${clean(r.tool || '*')} ${terminalText(r.match, { lines: false })}${r.exact ? ' (exact)' : ''}`
+    deps.out(
+      paint(
+        saved.added.length
+          ? `· saved: ${saved.added.map(ruleText).join('; ')}\n`
+          : '· nothing to save: your rules already allow it, or it names nothing a rule can match\n',
+        'dim'
+      )
+    )
+    if (saved.deniedByRule) {
+      deps.out(paint('· a deny rule still matches it, and a deny always wins: /permissions remove <n> drops that rule\n', 'yellow'))
+    }
+    return
   }
   if (!deps.updateSettings) return void deps.out(paint('· editing settings is unavailable here\n', 'dim'))
   if (op.op === 'remove') {

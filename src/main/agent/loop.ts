@@ -56,7 +56,13 @@ import {
   type SelectedModel
 } from '@shared/types'
 import { modelDisplayName } from '@shared/models'
-import { APPROVAL_DENIED, APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER, denialText } from '@shared/promptOutcome'
+import {
+  APPROVAL_DENIED,
+  APPROVAL_INTERRUPTED_NOTE,
+  QUESTION_STOPPED_ANSWER,
+  denialText,
+  withApprovalNote
+} from '@shared/promptOutcome'
 import { describeToolCall } from '@shared/toolLabel'
 import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
@@ -394,6 +400,7 @@ import {
   resolveVerifyMaxPasses
 } from './verify-gate'
 import { MAX_UNATTENDED_STOP_CONTINUATIONS, UNATTENDED_STOP_NOTE, endsOnUndoneWork } from './unattended-stop'
+import { recordDenial } from './recentDenials'
 
 /**
  * Read-kind tools that report on background work (a shell or agent that kept writing
@@ -2678,6 +2685,8 @@ export async function startRun(
       } = input
       const networkScope = networkDest ? describeNetworkDestination(networkDest) : undefined
       const summary = `Subagent: ${getTool(name)!.summarize(args)}`
+      // A note the user allowed the call with, handed back with its result.
+      let allowNote: string | undefined
       if (mustApprove) {
         // Track + emit like any approval so re-adopt replay and cancelRun
         // (which resolves pending approvals as deny) cover this prompt too.
@@ -2717,7 +2726,18 @@ export async function startRun(
         })
         const { decision, note } = await approval
         run.pendingApprovals.delete(subCallId)
-        const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell, networkDest)
+        if (!abort.signal.aborted && (decision === 'deny' || decision === 'rule-deny')) {
+          recordDenial({ tool: name, kind, args, roots, reason: note })
+        }
+        // As in the main gate: a discard asks every time, so a chat grant runs it once.
+        const approved = applyApprovalDecision(
+          discardsWork && decision === 'always' ? 'allow' : decision,
+          name,
+          args,
+          kind,
+          unsandboxedShell,
+          networkDest
+        )
         if (!approved) {
           emit({
             type: 'tool_result',
@@ -2728,10 +2748,11 @@ export async function startRun(
           })
           return denialText(denyNote, note)
         }
+        allowNote = note
       }
       emit({ type: 'tool_start', callId: subCallId, name, args, kind, ...(preview ? { preview } : {}) })
       try {
-        const output = redact(await runCall())
+        const output = redact(withApprovalNote(await runCall(), allowNote))
         emit({ type: 'tool_result', callId: subCallId, name, ok: true, output })
         return output
       } catch (e) {
@@ -5835,9 +5856,9 @@ export async function startRun(
               !egressUnavailable
 
             let approved = true
-            // Guidance the user attached to their verdict ("no, use staging instead"),
-            // carried into the refusal so the correction reaches the model in the same
-            // interaction rather than needing a separate corrective turn.
+            // Guidance the user attached to their verdict ("no, use staging instead", or
+            // "yes, but keep the old file"), carried into the refusal or the result so it
+            // reaches the model in the same interaction rather than a corrective turn.
             let approvalNote: string | undefined
             // A user PreToolUse hook's approve was folded into mustApprove above: it
             // clears an ordinary prompt, never a guardrail-tier `ask` or a hard check.
@@ -5887,15 +5908,20 @@ export async function startRun(
                 ...(shellEscapesWorkspace ? { escapesWorkspace: true } : {}),
                 ...(networkScope ? { networkScope } : {})
               })
-              const { decision, note: denyGuidance } = await approval
+              const { decision, note: guidance } = await approval
               // Resolved (or cancelled) — it's no longer awaiting the user.
               run.pendingApprovals.delete(call.id)
-              approvalNote = denyGuidance
+              approvalNote = guidance
+              if (!abort.signal.aborted && (decision === 'deny' || decision === 'rule-deny')) {
+                recordDenial({ tool: call.name, kind: tool.kind, args: execArgs, roots, reason: guidance })
+              }
               // Overrides + rule persistence live in applyApprovalDecision (shared with
               // the writable subagent's unconfined-shell gate) — including the
-              // per-destination network grant and shell → network coupling.
+              // per-destination network grant and shell → network coupling. A command
+              // that can throw away work asks every time, so "Allow for this chat" on
+              // one runs it once rather than granting the chat its kind.
               approved = applyApprovalDecision(
-                decision,
+                discardsWork && decision === 'always' ? 'allow' : decision,
                 call.name,
                 execArgs,
                 tool.kind,
@@ -6132,6 +6158,9 @@ export async function startRun(
               } else if (OBSERVES_BACKGROUND_WORK.has(call.name)) {
                 onBackgroundNews()
               }
+              // A note the user allowed this call with ("go ahead, but use the staging
+              // bucket next time") reaches the model with the result it qualifies.
+              output = withApprovalNote(output, approvalNote)
             }
           }
           // Surface any context a PreToolUse hook injected (unless it blocked, where

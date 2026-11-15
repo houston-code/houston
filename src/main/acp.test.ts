@@ -738,6 +738,37 @@ describe('ACP server: protocol flow', () => {
     await h.end()
   })
 
+  it('warns that a command can throw away work, and sends no note with the answer', async () => {
+    const h = harness({
+      answer: () => ({ outcome: { outcome: 'selected', optionId: 'allow' } }),
+      run: async (req, send, loop) => {
+        const done = loop.waitFor('c1')
+        send({
+          runId: req.runId,
+          type: 'tool_approval',
+          callId: 'c1',
+          name: 'run_shell',
+          summary: 'git reset --hard',
+          args: { command: 'git reset --hard' },
+          kind: 'shell',
+          discardsWork: true
+        })
+        await done
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('reset') })
+    const perm = h.frames.find((f) => f.method === 'session/request_permission')
+    const texts = perm.params.toolCall.content.map((c: any) => c.content?.text)
+    expect(texts[0]).toContain('can throw away work in the project')
+    expect(texts[0]).not.toContain('\u2014')
+    // No chat-wide grant is offered to an editor, so the four choices stand.
+    expect(perm.params.options.map((o: any) => o.optionId)).toEqual(['allow', 'rule-allow', 'deny', 'rule-deny'])
+    expect(h.loop.approvals).toEqual([['run-1', 'c1', 'allow']])
+    await h.end()
+  })
+
   it('asks ask_user through elicitation when the editor supports forms', async () => {
     const h = harness({
       answer: (method, params) => {

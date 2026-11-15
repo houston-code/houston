@@ -717,6 +717,55 @@ describe('SettingsModal', () => {
       expect(await screen.findByText('Added 3 days ago from an approval prompt · last used yesterday')).toBeInTheDocument()
     })
 
+    it("lists this session's denials and turns one into the allow rule an approval would save", async () => {
+      const denial = {
+        id: 'd1',
+        at: Date.now() - 5 * 60 * 1000,
+        tool: 'run_shell',
+        kind: 'shell' as const,
+        subject: 'npm publish',
+        reason: 'not yet'
+      }
+      const saved = { action: 'allow' as const, tool: 'run_shell', match: 'npm publish' }
+      const denialAllowRules = vi.fn(() => Promise.resolve({ rules: [saved], deniedByRule: false }))
+      const forgetRecentDenial = vi.fn(() => Promise.resolve())
+      const existing = { action: 'deny' as const, tool: 'web_fetch', match: 'https://evil.example/*' }
+      const api = installApi({
+        listRecentDenials: vi.fn(() => Promise.resolve([denial])),
+        denialAllowRules,
+        forgetRecentDenial
+      })
+      renderModal({ permissionRules: [existing] })
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      expect(await screen.findByRole('heading', { name: 'Recently denied' })).toBeInTheDocument()
+      expect(screen.getByText('npm publish')).toBeInTheDocument()
+      expect(screen.getByText('5 minutes ago, you said: not yet')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Allow this: run_shell npm publish' }))
+      expect(await screen.findByText('Added an allow rule for run_shell.')).toBeInTheDocument()
+      expect(denialAllowRules).toHaveBeenCalledWith('d1', [existing])
+      expect(forgetRecentDenial).toHaveBeenCalledWith('d1')
+      expect(screen.queryByRole('button', { name: /Allow this/ })).toBeNull()
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      const rules = (api.saveSettings.mock.calls.at(-1)![0] as AppSettings).permissionRules
+      // First, as "Always allow" saves it, and stamped as coming from a prompt.
+      expect(rules?.[0]).toMatchObject({ ...saved, source: 'prompt', addedAt: expect.any(Number) })
+      expect(rules?.[1]).toEqual(existing)
+    })
+
+    it('says when a deny rule still matches a denial it allowed, and hides an empty list', async () => {
+      installApi({
+        listRecentDenials: vi.fn(() =>
+          Promise.resolve([{ id: 'd2', at: Date.now(), tool: 'read_file', kind: 'read' as const, subject: '.env' }])
+        ),
+        denialAllowRules: vi.fn(() => Promise.resolve({ rules: [], deniedByRule: true })),
+        forgetRecentDenial: vi.fn(() => Promise.resolve())
+      })
+      renderModal()
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Allow this: read_file .env' }))
+      expect(await screen.findByText(/A deny rule still matches it/)).toBeInTheDocument()
+    })
+
     it('stamps a rule added in Settings', async () => {
       const api = installApi()
       renderModal()

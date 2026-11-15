@@ -17,6 +17,7 @@ import type {
   PermissionPolicyView,
   PermissionRule,
   PermissionTestResult,
+  RecentDenial,
   SandboxStatus
 } from '@shared/types'
 import type { ForkPoint } from '@shared/conversation-io'
@@ -273,6 +274,16 @@ const api = {
   }): Promise<PermissionTestResult> => ipcRenderer.invoke(IPC.permissionsTest, input),
   /** When each permission rule last decided a call, keyed by permissionRuleKey. */
   getRuleUsage: (): Promise<Record<string, number>> => ipcRenderer.invoke(IPC.permissionsUsage),
+  /** The calls denied at an approval prompt this session, newest first. */
+  listRecentDenials: (): Promise<RecentDenial[]> => ipcRenderer.invoke(IPC.permissionsRecentDenials),
+  /** The allow rules "Allow this" would add for a recent denial, against the given rules. */
+  denialAllowRules: (
+    id: string,
+    userRules: PermissionRule[]
+  ): Promise<{ rules: PermissionRule[]; deniedByRule: boolean } | null> =>
+    ipcRenderer.invoke(IPC.permissionsDenialRules, id, userRules),
+  /** Drop a recent denial from the list. */
+  forgetRecentDenial: (id: string): Promise<void> => ipcRenderer.invoke(IPC.permissionsForgetDenial, id),
   /** Save a preferences export where the user chooses; resolves to the path, or null if cancelled. */
   exportSettingsFile: (content: string): Promise<string | null> => ipcRenderer.invoke(IPC.settingsExportFile, content),
   /** Read a preferences export the user picks; resolves to its text, or null if cancelled. */
