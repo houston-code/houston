@@ -4,6 +4,8 @@ import type { WorkingTreeChanges } from '@shared/workingTree'
 import { fileDiffSignature, type ChatChanges } from '@shared/changes'
 import { DiffPanel, revertQuestion } from './DiffPanel'
 import { clearAllDrafts } from '../lib/diffComments'
+import { TREE_CHANGED } from '../hooks/useWorkingTreeStats'
+import { forgetCommitDrafts } from './CommitForm'
 
 /** Install a fake `window.api` whose getWorkingTreeChanges resolves to `data`. */
 function installApi(data: WorkingTreeChanges, chat: ChatChanges = { files: [], added: 0, removed: 0, unavailable: 0 }) {
@@ -69,6 +71,7 @@ describe('DiffPanel', () => {
   beforeEach(() => {
     localStorage.clear()
     clearAllDrafts()
+    forgetCommitDrafts()
   })
 
   it('lists changed files with the working-tree scope label and totals', async () => {
@@ -244,6 +247,55 @@ describe('DiffPanel', () => {
     expect(screen.getByRole('button', { name: 'Suggest message' })).toBeInTheDocument()
     // The form reads the branch in an effect, which can run after the form is on screen.
     await waitFor(() => expect(gitBranchSync).toHaveBeenCalledWith('/repo'))
+  })
+
+  it('keeps a typed commit message across a scope switch', async () => {
+    installApi(sampleChanges)
+    const gitBranchSync = vi.fn().mockResolvedValue({ branch: 'feature/x', upstream: null, ahead: 0, remote: null })
+    window.api = { ...window.api, gitBranchSync } as unknown as typeof window.api
+    render(<DiffPanel workspace="/repo" commitForm conversationId="c1" />)
+    fireEvent.change(await screen.findByLabelText('Commit message'), { target: { value: 'Half written' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'This chat' }))
+    await waitFor(() => expect(screen.queryByLabelText('Commit message')).toBeNull())
+    fireEvent.click(screen.getByRole('radio', { name: 'Working tree' }))
+    expect(await screen.findByLabelText('Commit message')).toHaveValue('Half written')
+  })
+
+  it('tells the rest of the app when a commit or a revert changed the working tree', async () => {
+    const { revertChange } = installApi(sampleChanges)
+    const gitBranchSync = vi.fn().mockResolvedValue({ branch: 'feature/x', upstream: null, ahead: 0, remote: null })
+    const gitCommit = vi.fn().mockResolvedValue({ ok: true, detail: 'abc1234' })
+    window.api = { ...window.api, gitBranchSync, gitCommit } as unknown as typeof window.api
+    const heard = vi.fn()
+    window.addEventListener(TREE_CHANGED, heard)
+    try {
+      render(<DiffPanel workspace="/repo" commitForm conversationId="c1" />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Revert src/foo.ts' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Revert' }))
+      await waitFor(() => expect(heard).toHaveBeenCalledTimes(1))
+      expect(revertChange).toHaveBeenCalled()
+
+      fireEvent.change(screen.getByLabelText('Commit message'), { target: { value: 'Ship it' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Commit' }))
+      await waitFor(() => expect(heard).toHaveBeenCalledTimes(2))
+
+      // A refused revert changed nothing.
+      revertChange.mockResolvedValue({ ok: false, error: 'busy' })
+      fireEvent.click(screen.getByRole('button', { name: 'Revert src/foo.ts' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Revert' }))
+      expect(await screen.findByText('busy')).toBeInTheDocument()
+      expect(heard).toHaveBeenCalledTimes(2)
+    } finally {
+      window.removeEventListener(TREE_CHANGED, heard)
+    }
+  })
+
+  it('offers no "more lines below" under an untracked file, which is shown whole', async () => {
+    installApi(sampleChanges)
+    render(<DiffPanel workspace="/repo" />)
+    await screen.findByTitle('new.txt')
+    expect(screen.queryByRole('button', { name: /more lines? below change 1 in new.txt/ })).toBeNull()
+    expect(screen.getByRole('button', { name: /more lines? below change 1 in src\/foo.ts/ })).toBeInTheDocument()
   })
 
   it('offers the turn and chat scopes only once the chat exists', async () => {
@@ -628,6 +680,69 @@ describe('DiffPanel', () => {
       expect(await screen.findByText(/changed since this view loaded/)).toBeInTheDocument()
       expect(screen.queryByText('line20')).toBeNull()
       expect(screen.queryByRole('button', { name: /above change 1/ })).toBeNull()
+    })
+
+    it('keeps revealed lines and a comment on them through a refresh that finds the same diff', async () => {
+      const api = installApi(tree)
+      api.readWorkspaceFile.mockResolvedValue({ kind: 'text', text, truncated: false, bytes: text.length })
+      render(<DiffPanel workspace="/repo" conversationId="c1" onSendComments={vi.fn()} />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Show 20 more lines above change 1 in src/long.ts' }))
+      expect(await screen.findByText('line9')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Comment on line 10 of src/long.ts' }))
+      fireEvent.change(screen.getByLabelText('Comment on src/long.ts line 10'), { target: { value: 'why this?' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+
+      // Back from another window: the view re-reads the same diff (a new copy of it).
+      api.getWorkingTreeChanges.mockImplementation(async () => structuredClone(tree))
+      window.dispatchEvent(new Event('focus'))
+      await waitFor(() => expect(api.getWorkingTreeChanges).toHaveBeenCalledTimes(2), { timeout: 2000 })
+      await act(async () => {})
+      expect(screen.getByText('line9')).toBeInTheDocument()
+      expect(screen.getByText('why this?')).toBeInTheDocument()
+      expect(screen.queryByText(/Not on a line shown here/)).toBeNull()
+    })
+
+    it('stops revealing where the neighbouring change’s revealed lines begin', async () => {
+      // Changes at lines 10 and 50 of a 60-line file, 37 unchanged lines between them.
+      const two = Array.from({ length: 60 }, (_, i) => (i === 9 ? 'TEN' : i === 49 ? 'FIFTY' : `line${i + 1}`)).join('\n') + '\n'
+      const api = installApi({
+        ...tree,
+        files: [
+          {
+            ...tree.files[0],
+            hunks: [
+              {
+                header: '@@ -9,3 +9,3 @@',
+                lines: [
+                  { type: 'ctx', text: 'line9' },
+                  { type: 'del', text: 'line10' },
+                  { type: 'add', text: 'TEN' },
+                  { type: 'ctx', text: 'line11' }
+                ]
+              },
+              {
+                header: '@@ -49,3 +49,3 @@',
+                lines: [
+                  { type: 'ctx', text: 'line49' },
+                  { type: 'del', text: 'line50' },
+                  { type: 'add', text: 'FIFTY' },
+                  { type: 'ctx', text: 'line51' }
+                ]
+              }
+            ]
+          }
+        ]
+      })
+      api.readWorkspaceFile.mockResolvedValue({ kind: 'text', text: two, truncated: false, bytes: two.length })
+      render(<DiffPanel workspace="/repo" />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Show 20 more lines below change 1 in src/long.ts' }))
+      expect(await screen.findByText('line31')).toBeInTheDocument()
+      // 37 lines between the changes, 20 already shown under the first one.
+      fireEvent.click(screen.getByRole('button', { name: 'Show 17 more lines above change 2 in src/long.ts' }))
+      expect(await screen.findByText('line32')).toBeInTheDocument()
+      for (let n = 12; n <= 48; n++) expect(screen.getAllByText(`line${n}`)).toHaveLength(1)
+      expect(screen.queryByRole('button', { name: /below change 1 in/ })).toBeNull()
+      expect(screen.queryByRole('button', { name: /above change 2 in/ })).toBeNull()
     })
 
     it('offers no context for a deleted file', async () => {

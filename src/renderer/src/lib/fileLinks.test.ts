@@ -3,6 +3,7 @@ import {
   fileTargetFromHref,
   fileTargetFromPath,
   filesPanelKey,
+  revealFor,
   splitLine,
   toolFileTarget,
   workspaceRelative
@@ -101,5 +102,28 @@ describe('filesPanelKey', () => {
   it('changes with the target and workspace', () => {
     expect(filesPanelKey(WS, 'src/a.ts', undefined, 1)).not.toBe(filesPanelKey(WS, 'src/b.ts', undefined, 1))
     expect(filesPanelKey(WS, 'src/a.ts', undefined, 1)).not.toBe(filesPanelKey('/other', 'src/a.ts', undefined, 1))
+  })
+})
+
+describe('revealFor', () => {
+  it('reveals a target only in the project it was asked in', () => {
+    const target = { workspace: WS, path: 'src/index.ts', line: 42 }
+    expect(revealFor(target, WS)).toEqual({ path: 'src/index.ts', line: 42 })
+    expect(revealFor(target, '/home/me/other')).toBeUndefined()
+    expect(revealFor({ workspace: WS, path: 'a.ts' }, WS)).toEqual({ path: 'a.ts' })
+    expect(revealFor(undefined, WS)).toBeUndefined()
+  })
+})
+
+describe('fileTargetFromHref web addresses without a scheme', () => {
+  it('leaves hosts as plain text', () => {
+    expect(fileTargetFromHref('localhost:3000', WS)).toBeNull()
+    expect(fileTargetFromHref('localhost:3000/app', WS)).toBeNull()
+    expect(fileTargetFromHref('127.0.0.1:8080', WS)).toBeNull()
+    expect(fileTargetFromHref('www.example.com/x', WS)).toBeNull()
+  })
+  it('still opens ordinary paths with a line', () => {
+    expect(fileTargetFromHref('src/a.ts:12', WS)).toEqual({ path: 'src/a.ts', line: 12 })
+    expect(fileTargetFromHref('Makefile:3', WS)).toEqual({ path: 'Makefile', line: 3 })
   })
 })

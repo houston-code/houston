@@ -57,6 +57,13 @@ describe('collectMatchRanges', () => {
       'needle open'
     ])
   })
+
+  it('finds nothing in a root inside a hidden element, and skips hidden children', () => {
+    const wrap = root('<div hidden><div class="plan">needle</div></div>')
+    expect(collectMatchRanges(wrap.querySelector('.plan') as HTMLElement, 'needle')).toHaveLength(0)
+    const el = root('<p>needle shown</p><div hidden><p>needle hidden</p></div>')
+    expect(collectMatchRanges(el, 'needle').map((r) => r.startContainer.textContent)).toEqual(['needle shown'])
+  })
 })
 
 describe('scrollRangeIntoView', () => {

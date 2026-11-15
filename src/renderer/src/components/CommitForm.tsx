@@ -1,6 +1,17 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BranchSync } from '@shared/gitActions'
 import { ipcErrorMessage } from '../lib/ipcError'
+
+/**
+ * Commit messages being written, per folder, for this window's life: the form unmounts
+ * on a scope switch and when the side panel hides, and the draft must survive both.
+ */
+const drafts = new Map<string, string>()
+
+/** Drop every kept commit message draft (tests). */
+export function forgetCommitDrafts(): void {
+  drafts.clear()
+}
 
 /**
  * Commit and push from the Changes view without spending an agent turn. The message
@@ -30,7 +41,18 @@ export function CommitForm({
   /** A commit or push changed the repository; reload whatever shows it. */
   onChanged: () => void
 }): JSX.Element | null {
-  const [message, setMessage] = useState('')
+  const [message, setMessageState] = useState(() => drafts.get(workspace) ?? '')
+  // The box's latest text, so a suggestion can tell whether it was typed over meanwhile.
+  const messageRef = useRef(message)
+  const setMessage = useCallback(
+    (text: string) => {
+      messageRef.current = text
+      if (text) drafts.set(workspace, text)
+      else drafts.delete(workspace)
+      setMessageState(text)
+    },
+    [workspace]
+  )
   const [sync, setSync] = useState<BranchSync | null>(null)
   const [working, setWorking] = useState<'suggest' | 'commit' | 'push' | null>(null)
   const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null)
@@ -56,9 +78,11 @@ export function CommitForm({
   const suggest = async (): Promise<void> => {
     setWorking('suggest')
     setStatus(null)
+    const asked = messageRef.current
     try {
       const r = await window.api.gitSuggestMessage(workspace, conversationId)
-      if (r.ok && r.detail) setMessage(r.detail)
+      // Text typed while the model answered wins over the suggestion.
+      if (r.ok && r.detail && messageRef.current === asked) setMessage(r.detail)
       else if (!r.ok) setStatus({ text: r.error, error: true })
     } catch (e) {
       failed('Suggesting a message', e)

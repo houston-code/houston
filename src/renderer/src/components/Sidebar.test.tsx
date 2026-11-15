@@ -1876,8 +1876,11 @@ describe('Sidebar: chat labels', () => {
     expect(screen.getByRole('menuitemcheckbox', { name: 'bug' })).toHaveAttribute('aria-checked', 'true')
     fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'wip' }))
     expect(props.onSetChatLabels).toHaveBeenCalledWith('a', ['l-bug', 'l-wip'])
+    // The second click builds on the first, though the props have not caught up yet.
     fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'bug' }))
-    expect(props.onSetChatLabels).toHaveBeenCalledWith('a', [])
+    expect(props.onSetChatLabels).toHaveBeenLastCalledWith('a', ['l-wip'])
+    expect(screen.getByRole('menuitemcheckbox', { name: 'wip' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('menuitemcheckbox', { name: 'bug' })).toHaveAttribute('aria-checked', 'false')
   })
 
   it('makes a new label from the Labels submenu and puts it on the chat', async () => {
@@ -1912,6 +1915,22 @@ describe('Sidebar: chat labels', () => {
     expect(within(menu).getAllByRole('menuitemcheckbox').map((b) => b.textContent?.trim())).toEqual(['bug', 'review'])
     fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: 'review' }))
     expect(props.onSetSectionLabelFilter).toHaveBeenCalledWith('g1', ['l-rev'])
+  })
+
+  it('keeps both labels when two section filter labels are ticked before the props catch up', () => {
+    const props = labelProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha', groupId: 'g1', labels: ['l-bug'] }),
+        makeConv({ id: 'b', title: 'Beta', groupId: 'g1', labels: ['l-rev'] })
+      ]
+    })
+    render(<Sidebar {...props} />)
+    fireEvent.click(within(headOf('Work')).getByRole('button', { name: 'Filter Work by label' }))
+    const menu = screen.getByRole('menu', { name: 'Filter Work by label' })
+    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: 'bug' }))
+    fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: 'review' }))
+    expect(props.onSetSectionLabelFilter).toHaveBeenLastCalledWith('g1', ['l-bug', 'l-rev'])
   })
 
   it('shows only matching chats in a filtered section, with an “N of M” count, and clears', () => {

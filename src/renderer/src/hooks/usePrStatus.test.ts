@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PR_REFRESH_MS, usePrStatus } from './usePrStatus'
+import { notifyWorkingTreeChanged } from './useWorkingTreeStats'
 
 const pr = {
   number: 3,
@@ -41,6 +42,15 @@ describe('usePrStatus', () => {
     expect(gitPrStatus).toHaveBeenCalledTimes(3)
     await act(async () => void vi.advanceTimersByTime(1))
     expect(gitPrStatus).toHaveBeenCalledTimes(4)
+  })
+
+  it('reads the PR again when the app itself changed the working tree (a push from the Changes view)', async () => {
+    renderHook(() => usePrStatus('/ws', true, false))
+    await flush()
+    expect(gitPrStatus).toHaveBeenCalledTimes(1)
+    notifyWorkingTreeChanged()
+    await flush()
+    expect(gitPrStatus).toHaveBeenCalledTimes(2)
   })
 
   it('never asks for a folder without a GitHub remote, and hides the chip when there is no PR', async () => {

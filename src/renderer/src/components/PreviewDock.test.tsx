@@ -492,6 +492,18 @@ describe('PreviewDock native view sync', () => {
     expect(api.syncPreviewPanes.mock.calls.at(-1)![0][0].bounds.width).toBe(420)
   })
 
+  it('follows the dock when it moves without changing size (side chat opening beside it)', () => {
+    const { rerender } = render(dock())
+    setPaneRect({ x: 1000, y: 40, width: 400, height: 600 })
+    live()[0].fire()
+    expect(api.syncPreviewPanes.mock.calls.at(-1)![0][0].bounds.x).toBe(1000)
+
+    // Same size, new place: no observer or window resize fires, only a re-render.
+    setPaneRect({ x: 580, y: 40, width: 400, height: 600 })
+    rerender(dock())
+    expect(api.syncPreviewPanes.mock.calls.at(-1)![0][0].bounds.x).toBe(580)
+  })
+
   it('observes each pane placeholder as well as the dock', () => {
     render(dock())
     const observed = live()[0].observed

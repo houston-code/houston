@@ -198,9 +198,13 @@ export function PreviewDock({
     window.api.syncPreviewPanes(specs, visible)
   }, [occluded, previewVisible])
 
+  // Re-measure after every commit of the dock: the dock can move without changing
+  // size (the side chat opening, closing or being resized beside it), which neither
+  // the observer nor a window resize reports. The signature check above makes an
+  // unchanged layout cost no IPC.
   useLayoutEffect(() => {
     sync()
-  }, [sync, panesKey])
+  })
 
   // Re-measure when the dock, a pane, or the window changes size (width drag, a row
   // opening under the panes, window resize).

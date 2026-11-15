@@ -101,12 +101,21 @@ export function fileTargetFromHref(href: string, workspace: string | null): File
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f]/.test(h)) return null
   const { path, line } = splitLine(h)
+  // A web address written without its scheme (`localhost:3000`, `www.example.com/x`)
+  // is not a workspace file, even though it reads like a relative path.
+  if (looksLikeHost(path)) return null
   // Any colon left (after a drive letter) is a scheme, not a path.
   const rest = DRIVE.test(path.replace(/\\/g, '/')) ? path.slice(2) : path
   if (rest.includes(':')) return null
   const rel = workspaceRelative(path, workspace)
   if (!rel) return null
   return line ? { path: rel, line } : { path: rel }
+}
+
+/** The first segment of a relative path names a host: `localhost`, a dotted IPv4, or `www.`. */
+function looksLikeHost(path: string): boolean {
+  const first = path.replace(/\\/g, '/').split('/')[0].toLowerCase()
+  return first === 'localhost' || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(first) || first.startsWith('www.')
 }
 
 /** A path from a tool argument or the receipt as a file to open, or null when it's outside the workspace. */
@@ -129,6 +138,20 @@ export function toolFileTarget(
   if (!FILE_TOOLS.has(name) || !args || typeof args.path !== 'string') return null
   const offset = name === 'read_file' && typeof args.offset === 'number' ? args.offset : undefined
   return fileTargetFromPath(args.path, workspace, offset)
+}
+
+/** A Files reveal, tied to the project it was asked for in. */
+export interface FilesReveal extends FileTarget {
+  workspace: string
+}
+
+/**
+ * What the Files panel should reveal in `workspace`: the target when it was asked for
+ * in this project, nothing otherwise (another project opens at its root). Pure.
+ */
+export function revealFor(target: FilesReveal | undefined, workspace: string): FileTarget | undefined {
+  if (!target || target.workspace !== workspace) return undefined
+  return target.line ? { path: target.path, line: target.line } : { path: target.path }
 }
 
 /**

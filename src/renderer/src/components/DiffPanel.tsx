@@ -11,6 +11,7 @@ import {
 import { chooseShipAction, type ShipAction } from '@shared/shipAction'
 import type { ReviewComment } from '@shared/promptInvocation'
 import { useInitGitRepo } from '../hooks/useInitGitRepo'
+import { notifyWorkingTreeChanged } from '../hooks/useWorkingTreeStats'
 import {
   anchorComments,
   commentPlace,
@@ -501,18 +502,29 @@ export function DiffPanel({
   )
   // Unchanged lines revealed around hunks: each file's text as read from disk (null
   // when it can't be read, or no longer matches its diff), and how far each hunk has
-  // been opened up. Both start over whenever a new diff loads.
+  // been opened up. Both start over for a file whose diff changed when a new diff
+  // loads; a file whose diff is the same keeps what was revealed (a refresh on focus
+  // or after a run must not collapse it, or move comments on revealed lines away).
   const [texts, setTexts] = useState<Record<string, string[] | null>>({})
   const [opened, setOpened] = useState<Record<string, { above: number; below: number }>>({})
   const filesRef = useRef(files)
+  const signatures = useRef(new Map<string, string>())
   // A layout effect, not a passive one: it runs in the same commit that puts the new
   // diff's buttons on screen. A passive effect can run after that commit, so a click
   // that lands in between captured the previous list as `asked`, and the read it
   // started was then dropped as stale: the lines never appeared and nothing said why.
   useLayoutEffect(() => {
     filesRef.current = files
-    setTexts({})
-    setOpened({})
+    const before = signatures.current
+    const now = new Map(files.map((f) => [f.path, fileDiffSignature(f)]))
+    signatures.current = now
+    const same = (path: string): boolean => before.has(path) && before.get(path) === now.get(path)
+    const keep = <T,>(prev: Record<string, T>, pathOf: (key: string) => string): Record<string, T> => {
+      const kept = Object.entries(prev).filter(([k]) => same(pathOf(k)))
+      return kept.length === Object.keys(prev).length ? prev : Object.fromEntries(kept)
+    }
+    setTexts((prev) => keep(prev, (k) => k))
+    setOpened((prev) => keep(prev, (k) => k.slice(0, k.indexOf('\u0000'))))
   }, [files])
   const viewFiles = useMemo(
     () =>
@@ -536,8 +548,16 @@ export function DiffPanel({
           if (file.status === 'deleted' || file.binary || texts[file.path] === null) return { above: 0, below: 0 }
           const lines = texts[file.path]
           const r = contextRoom(file.hunks, i, lines ? lines.length : null)
+          // An added or untracked file's diff is the whole file: nothing lies below it.
+          if (r.below === null && (file.status === 'added' || file.status === 'untracked')) r.below = 0
           const o = opened[`${file.path}\u0000${i}`] ?? { above: 0, below: 0 }
-          return { above: Math.max(0, r.above - o.above), below: r.below === null ? null : Math.max(0, r.below - o.below) }
+          // The gap between two changes is shared: what one revealed is gone from the other.
+          const prevBelow = opened[`${file.path}\u0000${i - 1}`]?.below ?? 0
+          const nextAbove = opened[`${file.path}\u0000${i + 1}`]?.above ?? 0
+          return {
+            above: Math.max(0, r.above - o.above - prevBelow),
+            below: r.below === null ? null : Math.max(0, r.below - o.below - nextAbove)
+          }
         },
         expand: (file, i, dir) => {
           const key = `${file.path}\u0000${i}`
@@ -545,10 +565,13 @@ export function DiffPanel({
             const r = contextRoom(file.hunks, i, lines.length)
             setOpened((prev) => {
               const o = prev[key] ?? { above: 0, below: 0 }
+              // Stop where the neighbouring change's revealed lines begin.
+              const above = r.above - (prev[`${file.path}\u0000${i - 1}`]?.below ?? 0)
+              const below = (r.below ?? 0) - (prev[`${file.path}\u0000${i + 1}`]?.above ?? 0)
               const next =
                 dir === 'above'
-                  ? { ...o, above: Math.min(r.above, o.above + CONTEXT_STEP) }
-                  : { ...o, below: Math.min(r.below ?? 0, o.below + CONTEXT_STEP) }
+                  ? { ...o, above: Math.max(o.above, Math.min(above, o.above + CONTEXT_STEP)) }
+                  : { ...o, below: Math.max(o.below, Math.min(below, o.below + CONTEXT_STEP)) }
               return { ...prev, [key]: next }
             })
           }
@@ -711,6 +734,7 @@ export function DiffPanel({
         ...(hunk !== undefined ? { hunk } : {})
       })
       if (!res.ok) setNotice(res.error)
+      else notifyWorkingTreeChanged()
       await load()
     },
     [scope, workspace, conversationId, load]
@@ -826,7 +850,12 @@ export function DiffPanel({
             <button
               type="button"
               className="btn btn--sm btn--accent"
-              onClick={() => void initRepo(load)}
+              onClick={() =>
+                void initRepo(() => {
+                  notifyWorkingTreeChanged()
+                  return load()
+                })
+              }
               disabled={initializing}
               title="Run git init in this workspace so its files show up as reviewable changes"
             >
@@ -940,7 +969,10 @@ export function DiffPanel({
           hasChanges={files.length > 0}
           busy={creating}
           refreshSignal={treeReads}
-          onChanged={() => void load()}
+          onChanged={() => {
+            notifyWorkingTreeChanged()
+            void load()
+          }}
         />
       )}
 

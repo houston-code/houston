@@ -141,6 +141,25 @@ export interface SidebarProps {
 }
 
 const NO_LABELS: ChatLabel[] = []
+const NO_IDS: string[] = []
+
+/**
+ * A list of ids ticked on and off click by click: each click builds on the last one
+ * rather than on props that may not have caught up with the previous write yet.
+ * Follows `source` again whenever it changes. Returns a getter for the latest list.
+ */
+function useTickedIds(source: string[]): [string[], () => string[], (next: string[]) => void] {
+  const key = source.join('\0')
+  const [state, setState] = useState({ key, list: source })
+  const current = state.key === key ? state.list : source
+  const latest = useRef(current)
+  latest.current = current
+  const set = (next: string[]): void => {
+    latest.current = next
+    setState({ key, list: next })
+  }
+  return [current, () => latest.current, set]
+}
 
 /** The known labels among `ids`, in the order the user arranged their labels. */
 function labelsIn(ids: readonly string[], labels: readonly ChatLabel[]): ChatLabel[] {
@@ -189,9 +208,13 @@ function LabelsMenu({
 }): JSX.Element {
   const labels = props.labels ?? NO_LABELS
   const [naming, setNaming] = useState(false)
-  const carried = conv.labels ?? []
-  const toggle = (id: string): void =>
-    props.onSetChatLabels?.(conv.id, carried.includes(id) ? carried.filter((x) => x !== id) : [...carried, id])
+  const [carried, latestCarried, setCarried] = useTickedIds(conv.labels ?? NO_IDS)
+  const toggle = (id: string): void => {
+    const now = latestCarried()
+    const next = now.includes(id) ? now.filter((x) => x !== id) : [...now, id]
+    setCarried(next)
+    props.onSetChatLabels?.(conv.id, next)
+  }
   return (
     <>
       {labels.map((l) => {
@@ -221,7 +244,7 @@ function LabelsMenu({
               const clean = cleanLabelName(name)
               setNaming(false)
               if (!clean || !props.onCreateLabel) return
-              void props.onCreateLabel(clean).then((id) => props.onSetChatLabels?.(conv.id, [...carried, id]))
+              void props.onCreateLabel(clean).then((id) => props.onSetChatLabels?.(conv.id, [...latestCarried(), id]))
               onDone()
             }}
             onCancel={() => setNaming(false)}
@@ -355,10 +378,17 @@ function SectionLabelFilter({ section, props }: { section: SidebarSection; props
   const btnRef = useRef<HTMLButtonElement>(null)
   const labels = props.labels ?? NO_LABELS
   // Offer the labels the section's chats carry, plus any the filter still names.
+  const [active, latestActive, setActive] = useTickedIds(section.labelFilter)
   const offered = labelsIn([...section.labelIds, ...section.labelFilter], labels)
   if (!props.onSetSectionLabelFilter || props.search || offered.length === 0) return null
-  const active = section.labelFilter
-  const set = (ids: string[]): void => props.onSetSectionLabelFilter?.(section.id, ids)
+  const set = (ids: string[]): void => {
+    setActive(ids)
+    props.onSetSectionLabelFilter?.(section.id, ids)
+  }
+  const toggle = (id: string): void => {
+    const now = latestActive()
+    set(now.includes(id) ? now.filter((x) => x !== id) : [...now, id])
+  }
   return (
     <div className="conv__menu-wrap">
       <button
@@ -389,7 +419,7 @@ function SectionLabelFilter({ section, props }: { section: SidebarSection; props
                 role="menuitemcheckbox"
                 aria-checked={on}
                 className="menu__item"
-                onClick={() => set(on ? active.filter((x) => x !== l.id) : [...active, l.id])}
+                onClick={() => toggle(l.id)}
               >
                 {on ? <Icon name="check" /> : <span className="menu__icon-slot" />} <LabelDot color={l.color} /> {l.name}
               </button>
