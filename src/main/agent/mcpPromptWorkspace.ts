@@ -7,16 +7,16 @@ import { mcpPromptCommands, type McpPromptFetch } from './mcpPromptCommands'
 import { loadProjectConfig, mergeProjectMcpServers, mergeRunMcpServers } from './projectConfig'
 
 /**
- * The MCP servers a chat in `workspace` runs with, by id: the user's enabled servers, a
+ * The MCP servers a chat in `workspace` runs with: the user's enabled servers, a
  * trusted folder's project servers (`proj-<id>`), and a session's own (`run-<id>`, an
- * editor's over ACP). The same set the run loop connects, so a prompt command is
- * offered exactly when the chat's turns could call that server.
+ * editor's over ACP). The same configs the run loop connects, so a prompt command is
+ * offered exactly when the chat's turns could call that server, on the same connection.
  */
-export async function workspaceMcpServerIds(
+export async function workspaceMcpServers(
   workspace: string,
   settings: AppSettings,
   extra?: McpServerConfig[]
-): Promise<Set<string>> {
+): Promise<McpServerConfig[]> {
   let configs = settings.mcpServers ?? []
   try {
     const cfg = await loadProjectConfig(workspace)
@@ -33,21 +33,30 @@ export async function workspaceMcpServerIds(
     // An unreadable project config contributes no servers.
   }
   const merged = mergeRunMcpServers(configs, extra) ?? []
-  return new Set(merged.filter((c) => c.enabled && c.id && (c.command || c.url)).map((c) => c.id))
+  return merged.filter((c) => c.enabled && c.id && (c.command || c.url))
 }
 
-/** The prompt commands for a chat in `workspace` (see {@link workspaceMcpServerIds}). */
+/** The ids of {@link workspaceMcpServers}. */
+export async function workspaceMcpServerIds(
+  workspace: string,
+  settings: AppSettings,
+  extra?: McpServerConfig[]
+): Promise<Set<string>> {
+  return new Set((await workspaceMcpServers(workspace, settings, extra)).map((c) => c.id))
+}
+
+/** The prompt commands for a chat in `workspace` (see {@link workspaceMcpServers}). */
 export async function workspaceMcpPromptCommands(
   workspace: string,
   settings: AppSettings,
   extra?: McpServerConfig[]
 ): Promise<Command[]> {
-  return mcpPromptCommands(listMcpPrompts(await workspaceMcpServerIds(workspace, settings, extra)))
+  return mcpPromptCommands(listMcpPrompts(await workspaceMcpServers(workspace, settings, extra)))
 }
 
 /** Fetch a prompt for a chat in `workspace`, refusing any server outside its own. */
 export function workspaceMcpPromptFetch(workspace: string, settings: AppSettings, extra?: McpServerConfig[]): McpPromptFetch {
-  return async (server, prompt, args) => getMcpPromptText(await workspaceMcpServerIds(workspace, settings, extra), server, prompt, args)
+  return async (server, prompt, args) => getMcpPromptText(await workspaceMcpServers(workspace, settings, extra), server, prompt, args)
 }
 
 /**

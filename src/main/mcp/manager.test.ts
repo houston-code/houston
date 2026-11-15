@@ -770,16 +770,34 @@ describe("mcp manager: resources and prompts stay with their run's servers", () 
     useFactory(catalogSpawn(seen))
     await getMcpToolDefs([server('proj-db')], 'trusted-run')
     await getMcpToolDefs([server('web')], 'untrusted-run')
-    expect(listMcpPrompts(new Set(['web', 'not-connected']))).toEqual([
+    expect(listMcpPrompts([server('web'), server('not-connected')])).toEqual([
       { server: 'web', prompts: [{ name: 'web-review', description: 'plain' }] }
     ])
-    expect(listMcpPrompts(new Set(['web', 'proj-db'])).map((s) => s.server)).toEqual(['proj-db', 'web'])
+    expect(listMcpPrompts([server('web'), server('proj-db')]).map((s) => s.server)).toEqual(['proj-db', 'web'])
     seen.length = 0
-    await expect(getMcpPromptText(new Set(['web']), 'proj-db', 'proj-db-review', {})).rejects.toThrow(/not one of this chat's servers/)
-    await expect(getMcpPromptText(new Set(['gone']), 'gone', 'x', {})).rejects.toThrow(/not connected/)
+    await expect(getMcpPromptText([server('web')], 'proj-db', 'proj-db-review', {})).rejects.toThrow(/not one of this chat's servers/)
+    await expect(getMcpPromptText([server('gone')], 'gone', 'x', {})).rejects.toThrow(/not connected/)
     expect(seen).toEqual([])
-    expect(await getMcpPromptText(new Set(['web']), 'web', 'web-review', { topic: 'a' })).toBe('user: prompt of web')
+    expect(await getMcpPromptText([server('web')], 'web', 'web-review', { topic: 'a' })).toBe('user: prompt of web')
     expect(seen).toEqual(['web prompts/get'])
+  })
+
+  it("never offers or fetches another folder's server that shares the chat's server id", async () => {
+    const seen: string[] = []
+    useFactory(catalogSpawn(seen))
+    // Two folders, each with its own `proj-db`: same id, different server.
+    const mine = cfg({ id: 'proj-db', name: 'proj-db', command: 'mine-db' })
+    const theirs = cfg({ id: 'proj-db', name: 'proj-db', command: 'their-db' })
+    await getMcpToolDefs([theirs], 'their-run')
+    expect(listMcpPrompts([mine])).toEqual([])
+    seen.length = 0
+    await expect(getMcpPromptText([mine], 'proj-db', 'x', {})).rejects.toThrow(/not connected/)
+    expect(seen).toEqual([])
+    await getMcpToolDefs([mine], 'my-run')
+    expect(listMcpPrompts([mine]).map((s) => s.server)).toEqual(['proj-db'])
+    seen.length = 0
+    await getMcpPromptText([mine], 'proj-db', 'mine-db-review', {})
+    expect(seen).toEqual(['mine-db prompts/get'])
   })
 
   it('names the server in the approval summary', async () => {
