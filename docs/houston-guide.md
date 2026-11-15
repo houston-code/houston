@@ -3050,7 +3050,10 @@ have chosen "Allow for this chat" on such a prompt.
 - **Several matches** run in order. Any block wins, and the last rewrite wins.
 - **Each hook gets 60 seconds** unless it sets its own `timeout` in seconds (1 to 600),
   for example `{ "event": "Stop", "matcher": "*", "command": "npm test", "timeout": 300 }`.
-  The Hooks page and `/hooks add` ask for it too. One still running then is stopped and
+  The Hooks page, `/hooks add`, and `/hooks edit <n>` ask for it too. In the terminal,
+  `/hooks` lists your hooks, numbered, then this project's own hooks read-only, saying
+  whether the folder's trust lets them run; `/hooks edit <n>` keeps each field you
+  answer with Enter, and `/hooks remove <n>` deletes one. One still running then is stopped and
   its output ignored. A PreToolUse or UserPromptSubmit hook that times out still blocks, with a
   message saying it timed out; a Stop hook that times out lets the turn end.
 - **Sandboxed:** hooks run in the same project sandbox as `run_shell`, with no
@@ -3189,6 +3192,13 @@ In the terminal, `/mcp` lists the servers, numbered, and edits them:
 - `/mcp reconnect <n>` (or `/mcp reconnect all`) restarts a server's connection now and
   says whether it came back, without waiting for the 30 seconds Houston otherwise
   leaves a failed server alone.
+- `/mcp edit <n>` changes what a local server runs (command, arguments, working
+  folder) or a remote server's URL, with today's values as the Enter answers, and saves
+  on a yes. Environment and header values stay as they are and are never shown.
+- `/mcp catalog` lists the recommended servers Settings offers, and
+  `/mcp add-from-catalog <n>` (or its id) reviews a local one, with this folder filled
+  in where the entry asks for the project, and adds it switched off on a yes. A
+  recommended remote server that needs a token header is added in the desktop app.
 - `/mcp remove <n>` deletes one.
 
 ### Signing in

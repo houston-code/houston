@@ -436,7 +436,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   {
     name: 'mcp', group: 'Extend',
-    description: 'List MCP servers (add, remove, enable, disable, reconnect, login, logout, registry search)',
+    description: 'List MCP servers (add, edit, remove, enable, disable, reconnect, login, logout, registry, catalog)',
     clients: ['gui', 'tui'],
     gui: { description: 'Manage MCP servers in Settings' }
   },
@@ -446,7 +446,10 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['gui', 'tui'],
     gui: { description: "Review this folder's project-config trust in Settings" }
   },
-  { name: 'hooks', group: 'Extend', description: 'List configured hooks', clients: ['gui', 'tui'] },
+  {
+    name: 'hooks', group: 'Extend', description: 'List configured hooks (add, edit, remove)', clients: ['gui', 'tui'],
+    gui: { description: 'List configured hooks' }
+  },
   {
     name: 'memory', group: 'Extend',
     description: 'Review saved memories (show, edit, pin, forget, on, off)',

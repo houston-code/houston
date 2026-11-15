@@ -126,6 +126,8 @@ import {
   buildStdioMcpServer,
   buildRemoteMcpServer,
   renderHookList,
+  renderMcpCatalog,
+  renderProjectHooks,
   renderMcpList,
   type TuiDeps,
   type TuiIo,
@@ -3679,6 +3681,102 @@ describe('runTui', () => {
     await runTui(opts, d)
     expect(saved).toEqual([])
     expect(t.text()).toContain('no hook #5')
+  })
+
+  it('/hooks edit keeps what Enter keeps, changes the rest, and saves in place on a yes', async () => {
+    const h1: Hook = { event: 'PreToolUse', matcher: 'run_shell', command: 'a', timeout: 5 }
+    const h2: Hook = { event: 'Stop', matcher: '*', command: 'b' }
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { hooks: [h1, h2] })
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.settingsPath = () => '/p/s.json'
+    // event (keep), matcher (keep), command (new), timeout (- = default), confirm
+    const t = fakeIo(['/hooks edit 1', '', '', 'npm run lint', '-', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([{ hooks: [{ event: 'PreToolUse', matcher: 'run_shell', command: 'npm run lint' }, h2] }])
+    expect(t.text()).toContain('hook 1 saved')
+  })
+
+  it('/hooks edit saves nothing on no, an unchanged hook, a bad field, or a missing number', async () => {
+    const h1: Hook = { event: 'Stop', matcher: '*', command: 'b' }
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { hooks: [h1] })
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.settingsPath = () => '/p/s.json'
+    const t = fakeIo([
+      '/hooks edit 1', '', '', 'c', '', 'n',
+      '/hooks edit 1', '', '', '', '',
+      '/hooks edit 1', 'Bogus', '', '', '',
+      '/hooks edit 4',
+      null
+    ])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([])
+    expect(t.text()).toContain('not changed')
+    expect(t.text()).toContain('nothing changed')
+    expect(t.text()).toContain('unknown event')
+    expect(t.text()).toContain('no hook #4')
+  })
+
+  it("lists a project's hooks read-only with whether its trust lets them run", () => {
+    const hooks: Hook[] = [{ event: 'PostToolUse', matcher: 'edit_file', command: 'make fmt\u001b[2J' }]
+    expect(renderProjectHooks([], 'trusted', makePainter(false))).toBe('')
+    const off = renderProjectHooks(hooks, 'undecided', makePainter(false))
+    expect(off).toContain("This project's hooks (.houston/settings.json, read-only; they are off until you trust this folder (/trust))")
+    expect(off).toContain('PostToolUse  edit_file  → make fmt')
+    expect(off).not.toContain('\u001b')
+    expect(renderProjectHooks(hooks, 'trusted', makePainter(false))).toContain('they run: this folder is trusted')
+    expect(renderProjectHooks(hooks, 'untrusted', makePainter(false))).toContain('they never run')
+  })
+
+  it('/mcp edit changes a stdio server in place and keeps its switch and secret keys', async () => {
+    const server: McpServerConfig = {
+      id: 'files', name: 'files', transport: 'stdio', command: 'npx', args: ['-y', 'fs@1'], cwd: '/old',
+      env: { TOKEN: '••••••••' }, enabled: true
+    }
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { mcpServers: [server] })
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    // command (keep), args (new), cwd (- = none), confirm
+    const t = fakeIo(['/mcp edit 1', '', '-y fs@2 /data', '-', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([
+      { mcpServers: [{ id: 'files', name: 'files', transport: 'stdio', command: 'npx', args: ['-y', 'fs@2', '/data'], env: { TOKEN: '••••••••' }, enabled: true }] }
+    ])
+    expect(t.text()).toContain('TOKEN kept as is')
+    expect(t.text()).toContain('/mcp reconnect 1')
+  })
+
+  it('/mcp edit checks a remote URL like /mcp add --url does', async () => {
+    const server: McpServerConfig = { id: 'r', name: 'r', transport: 'http', command: '', url: 'https://a.example/mcp', enabled: true }
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { mcpServers: [server] })
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    const t = fakeIo(['/mcp edit 1', 'https://u:p@b.example/mcp', '/mcp edit 1', 'https://b.example/mcp', 'y', '/mcp edit 2', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('leave credentials out of the URL')
+    expect(saved).toEqual([{ mcpServers: [{ ...server, url: 'https://b.example/mcp' }] }])
+    expect(t.text()).toContain('no MCP server #2')
+  })
+
+  it('/mcp catalog lists the recommended servers and add-from-catalog reviews one, filling in this folder', async () => {
+    expect(renderMcpCatalog([], makePainter(false))).toContain(' 1) Filesystem')
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    // args (keep), confirm
+    const t = fakeIo(['/mcp add-from-catalog filesystem', '', 'y', '/mcp add-from-catalog 999', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const added = saved[0]?.mcpServers?.[0]
+    expect(added).toMatchObject({ id: 'filesystem', transport: 'stdio', command: 'npx', enabled: false })
+    expect(added?.args?.at(-1)).toBe('/proj')
+    expect(t.text()).toContain('/mcp enable 1')
+    expect(t.text()).toContain('no recommended server "999"')
   })
 
   it('/hooks add is unavailable when no settings writer is wired', async () => {

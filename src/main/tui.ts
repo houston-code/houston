@@ -12,6 +12,7 @@ import {
   upsertFolderTrust,
   type AppSettings,
   type ApprovalPolicy,
+  type FolderTrustState,
   type Hook,
   type McpServerConfig,
   type ModelOption,
@@ -194,7 +195,15 @@ import {
   type RegistrySearchResult,
   type RegistryServer
 } from '@shared/mcpRegistry'
-import { draftInputKey, applyDraftInputs, freeServerId, serverProblem } from '@shared/mcpCatalog'
+import {
+  applyDraftInputs,
+  catalogDraft,
+  draftInputKey,
+  freeServerId,
+  MCP_CATALOG,
+  serverProblem,
+  type McpDraft
+} from '@shared/mcpCatalog'
 import { stripInvisible, invisibleNote } from '@shared/invisibleChars'
 
 /**
@@ -2238,12 +2247,14 @@ export const HELP_TEXT = [
   '  /transcript           the whole session full screen, with reasoning and full tool output (Ctrl-O)',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /copy [n]             copy a reply (n back; default the last) or one of its code blocks',
-  '  /hooks [add|remove n] list or edit lifecycle hooks',
+  '  /hooks [verb n]       lifecycle hooks (yours, then the project\'s): add, edit <n>, remove <n>',
   '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
   '  /mcp [verb n]         list MCP servers (status, last error); tools · enable · disable · remove · login · logout <n>',
   '  /mcp add [--url u]    add a stdio server (guided), or a remote one: --url <url> [name] [--sse]',
   "  /mcp reconnect <n>    restart a server's connection now (/mcp reconnect all: every one)",
   '  /mcp search <query>   search the MCP Registry; /mcp add-from-registry <name> reviews one to add',
+  '  /mcp catalog          recommended servers; /mcp add-from-catalog <n> reviews one to add',
+  "  /mcp edit <n>         change a server's command, arguments, folder, or URL",
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
   '  /image [path]         attach an image from your clipboard, or a file',
@@ -2435,6 +2446,12 @@ export type SettingsAction =
   | { op: 'search'; query: string }
   /** Review and add a registry entry by its full name (/mcp add-from-registry <name>). /mcp only. */
   | { op: 'registry-add'; name: string }
+  /** Change an entry's fields, current values as the defaults (/hooks edit <n>, /mcp edit <n>). */
+  | { op: 'edit'; index: number }
+  /** The recommended servers shipped with the app (/mcp catalog). /mcp only. */
+  | { op: 'catalog' }
+  /** Review and add a recommended server by number or id (/mcp add-from-catalog <n|id>). /mcp only. */
+  | { op: 'catalog-add'; entry: string }
   | { op: 'usage' }
 
 /** Parse the argument of /hooks or /mcp into an action. Bare command → list. */
@@ -2455,6 +2472,12 @@ export function parseSettingsAction(arg: string): SettingsAction {
   }
   if (verb === 'search') return { op: 'search', query: rest.join(' ') }
   if (verb === 'add-from-registry') return rest.length === 1 ? { op: 'registry-add', name: rest[0] } : { op: 'usage' }
+  if (verb === 'catalog' || verb === 'recommended') return rest.length ? { op: 'usage' } : { op: 'catalog' }
+  if (verb === 'add-from-catalog') return rest.length === 1 ? { op: 'catalog-add', entry: rest[0] } : { op: 'usage' }
+  if (verb === 'edit') {
+    const n = Number(rest[0] ?? '')
+    return rest.length === 1 && /^\d+$/.test(rest[0]) && n >= 1 ? { op: 'edit', index: n } : { op: 'usage' }
+  }
   const indexed = (op: 'remove' | 'login' | 'logout' | 'tools' | 'enable' | 'disable'): SettingsAction => {
     const n = Number.parseInt(rest[0] ?? '', 10)
     if (Number.isInteger(n) && n >= 1) return { op, index: n }
@@ -5496,11 +5519,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'hooks') {
-        await runHooksCommand(result.action, deps, paint)
+        await runHooksCommand(result.action, deps, paint, opts.cwd)
         continue
       }
       if (result.kind === 'mcp') {
-        await runMcpCommand(result.action, deps, paint)
+        await runMcpCommand(result.action, deps, paint, opts.cwd)
         continue
       }
       if (result.kind === 'trust') {
@@ -6878,8 +6901,28 @@ async function runCopyCommand(
   )
 }
 
-/** /hooks: list, add (guided), or remove a lifecycle hook. Persists via deps.updateSettings. */
-async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Painter): Promise<void> {
+/**
+ * A project's own hooks (its `.houston/settings.json`), read-only, with whether the
+ * folder's trust lets them run. Empty when the project defines none.
+ */
+export function renderProjectHooks(hooks: Hook[], trust: FolderTrustState, paint: Painter): string {
+  if (!hooks.length) return ''
+  const state =
+    trust === 'trusted'
+      ? paint('they run: this folder is trusted', 'green')
+      : trust === 'untrusted'
+        ? paint('they never run: you chose not to trust this folder', 'yellow')
+        : paint('they are off until you trust this folder (/trust)', 'yellow')
+  const lines = hooks.map(
+    (h) =>
+      `   ${paint('·', 'dim')} ${paint(stripControlChars(h.event), 'cyan')}  ${stripControlChars(h.matcher)}  ${paint('→', 'dim')} ${stripControlChars(h.command)}` +
+      (h.timeout !== undefined ? paint(`  (timeout ${h.timeout}s)`, 'dim') : '')
+  )
+  return [`${paint("This project's hooks", 'bold')} (.houston/settings.json, read-only; ${state}):`, ...lines].join('\n')
+}
+
+/** /hooks: list (yours, then the project's), add or edit (guided), or remove a lifecycle hook. */
+async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Painter, cwd?: string): Promise<void> {
   const hooks = deps.getSettings().hooks ?? []
   const path = deps.settingsPath?.() ?? '(unknown)'
 
@@ -6890,17 +6933,33 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
     action.op === 'tools' ||
     action.op === 'search' ||
     action.op === 'registry-add' ||
+    action.op === 'catalog' ||
+    action.op === 'catalog-add' ||
     action.op === 'enable' ||
     action.op === 'disable' ||
     action.op === 'reconnect' ||
     (action.op === 'add' && action.url !== undefined)
   ) {
     // These are /mcp verbs; on /hooks they just fall to usage.
-    deps.io.out(paint('usage: /hooks   ·   /hooks add   ·   /hooks remove <n>\n', 'yellow'))
+    deps.io.out(paint('usage: /hooks   ·   /hooks add   ·   /hooks edit <n>   ·   /hooks remove <n>\n', 'yellow'))
     return
   }
   if (action.op === 'list') {
     deps.io.out(`${renderHookList(hooks, paint)}\n${renderSettingsFooter(path, paint)}\n`)
+    if (cwd) {
+      const cfg = await loadProjectConfig(cwd).catch(() => null)
+      const projectHooks = cfg?.elevated.hooks ?? []
+      if (cfg && projectHooks.length) {
+        let real = cwd
+        try {
+          real = realpathSync(cwd)
+        } catch {
+          // keep the path as given; trust records normalize the same way
+        }
+        const trust = folderTrustState(deps.getSettings().trustedFolders, real, cfg.elevatedHash)
+        deps.io.out(`${renderProjectHooks(projectHooks, trust, paint)}\n`)
+      }
+    }
     return
   }
   if (!deps.updateSettings) {
@@ -6916,6 +6975,49 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
     // Rebuild without the removed entry (never mutate the settings array in place).
     deps.updateSettings({ hooks: hooks.filter((_, i) => i !== action.index - 1) })
     deps.io.out(paint(`· removed hook ${action.index} (${removed.event} ${removed.matcher}). Applies on your next message.\n`, 'dim'))
+    return
+  }
+
+  if (action.op === 'edit') {
+    const cur = hooks[action.index - 1]
+    if (!cur) {
+      deps.io.out(paint(`· no hook #${action.index} (there ${hooks.length === 1 ? 'is 1' : `are ${hooks.length}`})\n`, 'yellow'))
+      return
+    }
+    // The add prompts, with each field's current value as the Enter answer.
+    deps.io.out(
+      `Edit hook ${action.index}. Enter keeps a value.\n  ${paint('events:', 'dim')} ${HOOK_EVENTS.map((e, i) => `${i + 1}) ${e}`).join('   ')}\n`
+    )
+    const evAns = await deps.io.readLine(`event (Enter for ${cur.event}): `)
+    if (evAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    const matcherAns = await deps.io.readLine(`matcher (Enter for ${cur.matcher}): `)
+    if (matcherAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    const cmdAns = await deps.io.readLine(`command (Enter for ${cur.command}): `)
+    if (cmdAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    const curTimeout = cur.timeout !== undefined ? String(cur.timeout) : ''
+    const timeoutAns = await deps.io.readLine(
+      `timeout in seconds (Enter for ${curTimeout ? `${curTimeout}; - for the default, ${HOOK_TIMEOUT_MS / 1000}` : `the default, ${HOOK_TIMEOUT_MS / 1000}`}): `
+    )
+    if (timeoutAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    const keep = (ans: string, was: string): string => (ans.trim() ? ans : was)
+    const timeout = timeoutAns.trim() === '-' ? '' : keep(timeoutAns, curTimeout)
+    const built = buildHook(resolveHookEventInput(keep(evAns, cur.event)), keep(matcherAns, cur.matcher), keep(cmdAns, cur.command), timeout)
+    if ('error' in built) return void deps.io.out(paint(`· ${built.error}\n`, 'yellow'))
+    const same =
+      built.event === cur.event && built.matcher === cur.matcher && built.command === cur.command && built.timeout === cur.timeout
+    if (same) return void deps.io.out(paint('· nothing changed\n', 'dim'))
+    const shownTimeout = built.timeout !== undefined ? `  (timeout ${built.timeout}s)` : ''
+    deps.io.out(`\n${paint('hook:', 'dim')} ${built.event}  ${built.matcher}  → ${built.command}${shownTimeout}\n`)
+    const ok = await deps.io.readLine('Save this hook? [y/N] ', { discardPending: true })
+    if (parseApprovalAnswer(ok ?? '').decision !== 'allow') return void deps.io.out(paint('· not changed\n', 'dim'))
+    // Re-read so an edit in the app since the prompts began isn't thrown away; the
+    // hook keeps its place (hooks run in list order).
+    const latest = deps.getSettings().hooks ?? []
+    if (JSON.stringify(latest[action.index - 1]) !== JSON.stringify(cur)) {
+      return void deps.io.out(paint('· that hook changed elsewhere meanwhile; nothing saved. /hooks lists them again.\n', 'yellow'))
+    }
+    deps.updateSettings({ hooks: latest.map((h, i) => (i === action.index - 1 ? built : h)) })
+    deps.io.out(paint(`· hook ${action.index} saved. Applies on your next message.\n`, 'dim'))
     return
   }
 
@@ -6986,7 +7088,15 @@ async function addFromRegistry(name: string, servers: McpServerConfig[], deps: T
     )
     return
   }
-  const draft = local.draft
+  return reviewStdioDraft(local.draft, servers, deps, paint)
+}
+
+/**
+ * Review a local (stdio) server draft, from the registry or the shipped catalog, and
+ * add it switched off: its arguments can be changed, each input it declares is asked
+ * for (a secret one hidden), and nothing is saved without a final yes.
+ */
+async function reviewStdioDraft(draft: McpDraft, servers: McpServerConfig[], deps: TuiDeps, paint: Painter): Promise<void> {
   const id = freeServerId(draft.server.id, servers.map((s) => s.id))
   deps.io.out(`${paint(draft.name, 'bold')}  ${paint(`from ${draft.publisher}`, 'dim')}\n`)
   if (draft.note) deps.io.out(paint(`${draft.note}\n`, 'dim'))
@@ -7013,12 +7123,7 @@ async function addFromRegistry(name: string, servers: McpServerConfig[], deps: T
   const ok = await deps.io.readLine('Add this server? [y/N] ', { discardPending: true })
   if (parseApprovalAnswer(ok ?? '').decision !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
   deps.updateSettings?.({ mcpServers: [...servers, built] })
-  deps.io.out(
-    paint(
-      `· added ${id}, switched off. Switch it on in the desktop app, or set "enabled": true for it in settings.json.\n`,
-      'dim'
-    )
-  )
+  deps.io.out(paint(`· added ${id} as #${servers.length + 1}, switched off. Switch it on with /mcp enable ${servers.length + 1}.\n`, 'dim'))
   if (built.env && deps.canStoreHeaderSecrets === false) {
     deps.io.out(
       paint(`· this terminal cannot store env values; put them in cli-headers.json under the scope "mcp-env:${id}"\n`, 'yellow')
@@ -7033,7 +7138,81 @@ async function addFromRegistry(name: string, servers: McpServerConfig[], deps: T
  * deps.updateSettings. It never collects auth headers: a server that needs a token
  * header is set up in the desktop app, one that uses OAuth signs in with `/mcp login`.
  */
-async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Painter): Promise<void> {
+/** The recommended servers shipped with the app, numbered for `/mcp add-from-catalog <n>`. */
+export function renderMcpCatalog(configured: McpServerConfig[], paint: Painter): string {
+  const have = new Set(configured.map((s) => s.id))
+  const lines = [paint('Recommended MCP servers (shipped with Houston, pinned versions):', 'bold')]
+  MCP_CATALOG.forEach((e, i) => {
+    const tag = have.has(e.id) ? paint('  (added)', 'dim') : e.transport !== 'stdio' ? paint('  (remote)', 'dim') : ''
+    lines.push(`  ${paint(`${String(i + 1).padStart(2)})`, 'cyan')} ${e.name}${tag}  ${paint(`from ${e.publisher}`, 'dim')}`)
+    lines.push(`      ${e.description}`)
+  })
+  lines.push(paint('Review and add one with /mcp add-from-catalog <n>. It is saved switched off.', 'dim'))
+  return lines.join('\n')
+}
+
+/**
+ * /mcp edit <n>: change what a server runs (stdio: command, arguments, working folder)
+ * or where it is (remote: the URL), with today's values as the Enter answers. Env and
+ * header values are secrets and are never shown or asked for here; they are kept as
+ * they are.
+ */
+async function editMcpServer(target: McpServerConfig, index: number, deps: TuiDeps, paint: Painter): Promise<void> {
+  if (!deps.updateSettings) return void deps.io.out(paint('· editing settings is unavailable here\n', 'dim'))
+  const label = stripControlChars(target.name ?? target.id)
+  const transport = target.transport ?? (target.url && !target.command ? 'http' : 'stdio')
+  deps.io.out(`Edit MCP server ${index} (${label}). Enter keeps a value, Ctrl-D cancels.\n`)
+  let next: McpServerConfig
+  if (transport === 'stdio') {
+    const cmd = await deps.io.readLine(`command (Enter for ${stripControlChars(target.command)}): `)
+    if (cmd === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    const curArgs = (target.args ?? []).join(' ')
+    const args = await deps.io.readLine(`arguments, space-separated (Enter for ${curArgs ? stripControlChars(curArgs) : 'none'}; - for none): `)
+    if (args === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    const cwdAns = await deps.io.readLine(`working folder (Enter for ${target.cwd ? stripControlChars(target.cwd) : 'none'}; - for none): `)
+    if (cwdAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    const command = cmd.trim() || target.command
+    if (!command.trim()) return void deps.io.out(paint('· a command to run is required; nothing changed\n', 'yellow'))
+    const newArgs = args.trim() === '-' ? [] : args.trim() ? args.trim().split(/\s+/) : (target.args ?? [])
+    const newCwd = cwdAns.trim() === '-' ? '' : cwdAns.trim() || (target.cwd ?? '')
+    const { args: _a, cwd: _c, ...rest } = target
+    next = { ...rest, command, ...(newArgs.length ? { args: newArgs } : {}), ...(newCwd ? { cwd: newCwd } : {}) }
+    if (target.env && Object.keys(target.env).length) {
+      deps.io.out(paint(`· env ${Object.keys(target.env).join(', ')} kept as is (values are changed in the desktop app)\n`, 'dim'))
+    }
+  } else {
+    const urlAns = await deps.io.readLine(`URL (Enter for ${stripControlChars(target.url ?? '')}): `)
+    if (urlAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    const url = urlAns.trim() || target.url || ''
+    // The same checks /mcp add --url applies (http(s), no credentials, no control characters).
+    const checked = buildRemoteMcpServer([], url, target.id, transport === 'sse')
+    if ('error' in checked) return void deps.io.out(paint(`· ${checked.error}; nothing changed\n`, 'yellow'))
+    next = { ...target, url: checked.url }
+  }
+  if (JSON.stringify(next) === JSON.stringify(target)) return void deps.io.out(paint('· nothing changed\n', 'dim'))
+  const shown =
+    transport === 'stdio' ? `${next.command} ${(next.args ?? []).join(' ')}${next.cwd ? `  (in ${next.cwd})` : ''}` : (next.url ?? '')
+  deps.io.out(`\n${paint('server:', 'dim')} ${label}  [${transport}]  ${stripControlChars(shown)}\n`)
+  const ok = await deps.io.readLine('Save these changes? [y/N] ', { discardPending: true })
+  if (parseApprovalAnswer(ok ?? '').decision !== 'allow') return void deps.io.out(paint('· not changed\n', 'dim'))
+  const latest = deps.getSettings().mcpServers ?? []
+  if (latest[index - 1]?.id !== target.id) {
+    return void deps.io.out(paint('· the server list changed elsewhere meanwhile; nothing saved. /mcp lists them again.\n', 'yellow'))
+  }
+  // Header and env values come back masked from settings and the save keeps the stored ones.
+  // `next` replaces the entry whole, so a cleared argument list or folder stays cleared;
+  // the switch and the secrets' keys come from the latest copy.
+  deps.updateSettings({
+    mcpServers: latest.map((s, i) =>
+      i === index - 1
+        ? { ...next, enabled: s.enabled, ...(s.env ? { env: s.env } : {}), ...(s.headers ? { headers: s.headers } : {}) }
+        : s
+    )
+  })
+  deps.io.out(paint(`· saved. It reconnects on your next message (or now with /mcp reconnect ${index}).\n`, 'dim'))
+}
+
+async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Painter, cwd?: string): Promise<void> {
   const servers = deps.getSettings().mcpServers ?? []
   const path = deps.settingsPath?.() ?? '(unknown)'
 
@@ -7047,12 +7226,14 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
       paint(
         'usage: /mcp   ·   /mcp add   ·   /mcp add --url <url> [name] [--sse]   ·   /mcp tools <n>   ·   /mcp enable|disable <n>\n' +
           '       /mcp reconnect <n|all>   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>\n' +
-          '       /mcp search <query>   ·   /mcp add-from-registry <name>\n',
+          '       /mcp search <query>   ·   /mcp add-from-registry <name>   ·   /mcp catalog   ·   /mcp add-from-catalog <n>\n' +
+          '       /mcp edit <n>\n',
         'yellow'
       )
     )
     return
   }
+  if (action.op === 'catalog') return void deps.io.out(`${renderMcpCatalog(servers, paint)}\n`)
   if (action.op === 'list') {
     deps.io.out(`${renderMcpList(servers, paint, deps.mcpStatuses?.() ?? [])}\n${renderSettingsFooter(path, paint)}\n`)
     deps.io.out(
@@ -7200,6 +7381,26 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
   }
 
   if (action.op === 'registry-add') return addFromRegistry(action.name, servers, deps, paint)
+
+  if (action.op === 'catalog-add') {
+    const n = Number(action.entry)
+    const entry = /^\d+$/.test(action.entry) ? MCP_CATALOG[n - 1] : MCP_CATALOG.find((e) => e.id === action.entry)
+    if (!entry) return void deps.io.out(paint(`· no recommended server "${stripControlChars(action.entry)}"; /mcp catalog lists them\n`, 'yellow'))
+    if (entry.transport !== 'stdio') {
+      // A remote entry needs header values the terminal doesn't collect for MCP servers.
+      const how = entry.headers
+        ? 'it needs a token header, so add it in the desktop app (Settings > MCP Servers > Recommended)'
+        : `add it with /mcp add --url ${entry.url ?? '<url>'} ${entry.id}`
+      return void deps.io.out(paint(`· ${entry.name} is a remote server: ${how}\n`, 'yellow'))
+    }
+    return reviewStdioDraft(catalogDraft(entry, cwd ?? null), servers, deps, paint)
+  }
+
+  if (action.op === 'edit') {
+    const target = servers[action.index - 1]
+    if (!target) return noServer(action.index)
+    return editMcpServer(target, action.index, deps, paint)
+  }
 
   if (action.url !== undefined) {
     const built = buildRemoteMcpServer(servers.map((s) => s.id), action.url, action.name, action.sse)
