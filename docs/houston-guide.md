@@ -1595,7 +1595,7 @@ Preview and Background tasks. The button closes it again. Pick a scope at the to
 | --- | --- |
 | **This turn** | what the chat's latest turn changed, against the files before that turn |
 | **This chat** | what every turn of the chat changed, against the files before the first of them |
-| **Working tree** | every uncommitted change in the project, tracked and untracked, from git |
+| **Working tree** | every uncommitted change in the project, tracked and untracked, from git. When the project folder is a subfolder of a repository, only changes inside that folder are listed |
 
 The two chat scopes come from the snapshots Houston takes before each write, so they
 work in a folder without git too; a turn cut by a rewind is left out, and very old

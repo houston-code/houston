@@ -74,7 +74,10 @@ export async function collectWorkingTreeChanges(workspace: string): Promise<Work
   // unborn HEAD (no commits yet) so staged files still show.
   const base = await uncommittedDiffBase(captureTry(root))
   const diff = await runGitCapture(
-    ['diff', base, '--no-color', '--no-ext-diff', '--no-textconv'],
+    // --relative: in a workspace below the repository's top folder, git would print
+    // tracked paths from the top (and list changes outside the workspace), while the
+    // untracked listing and every reader here resolve paths against the workspace.
+    ['diff', base, '--relative', '--no-color', '--no-ext-diff', '--no-textconv'],
     root
   )
   const tracked = diff.ok ? parseUnifiedDiff(diff.stdout) : []
@@ -117,11 +120,15 @@ export async function workingTreeFingerprint(workspace: string): Promise<string 
   const root = await workTreeRoot(workspace)
   // Outside a repository, or one git can't open: unknown, never "unchanged".
   if (typeof root !== 'string') return null
-  const [head, status] = await Promise.all([
+  const [head, status, top] = await Promise.all([
     runGitCapture(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], root),
-    runGitCapture(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root)
+    runGitCapture(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root),
+    runGitCapture(['rev-parse', '--show-toplevel'], root)
   ])
   if (!status.ok) return null
+  // Porcelain paths are relative to the repository's top folder, which is not the
+  // workspace when the workspace is a subfolder of the repository.
+  const statRoot = top.ok && top.stdout.trim() ? top.stdout.trim() : root
   const hash = createHash('sha256')
   hash.update(head.ok ? head.stdout.trim() : 'unborn')
   hash.update('\0')
@@ -136,7 +143,7 @@ export async function workingTreeFingerprint(workspace: string): Promise<string 
     const rel = entry.slice(3)
     statted++
     try {
-      const st = statSync(join(root, rel))
+      const st = statSync(join(statRoot, rel))
       hash.update(`\0${rel}\0${st.size}\0${st.mtimeMs}`)
     } catch {
       hash.update(`\0${rel}\0missing`)
@@ -222,7 +229,7 @@ export async function collectWorkingTreeStats(workspace: string): Promise<Workin
   const [branch, diff, untrackedPaths, ship] = await Promise.all([
     currentBranch(root),
     runGitCapture(
-      ['diff', base, '--numstat', '-z', '--no-color', '--no-ext-diff', '--no-textconv'],
+      ['diff', base, '--relative', '--numstat', '-z', '--no-color', '--no-ext-diff', '--no-textconv'],
       root
     ),
     listUntracked(root),
