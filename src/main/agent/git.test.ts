@@ -658,15 +658,19 @@ describe('gitContext text matches the one-at-a-time lookups (real repos)', () =>
   }
 
   /** Plain git, for both implementations alike (the hardening is covered above). */
+  // Every git here checks out and reads files as committed. The hardened runner skips the
+  // system config, where Git for Windows turns on CRLF conversion, so a converted checkout
+  // would read as changed to it and clean to plain git.
+  const asCommitted = ['-c', 'core.autocrlf=false']
   const plainExec: GitExec = (args, cwd) =>
     new Promise((resolve, reject) => {
-      execFile('git', ['--no-pager', ...args], { cwd, timeout: 10_000 }, (err, stdout) =>
+      execFile('git', ['--no-pager', ...asCommitted, ...args], { cwd, timeout: 10_000 }, (err, stdout) =>
         err ? reject(err) : resolve(stdout)
       )
     })
 
   const run = (args: string[], cwd: string): void => {
-    execFileSync('git', args, { cwd, stdio: 'pipe' })
+    execFileSync('git', [...asCommitted, ...args], { cwd, stdio: 'pipe' })
   }
   const commit = (cwd: string, file: string): void => {
     writeFileSync(join(cwd, file), `${file}\n`)
@@ -725,10 +729,6 @@ describe('gitContext text matches the one-at-a-time lookups (real repos)', () =>
 
       // A linked worktree of the clone.
       const linked = join(root, 'linked')
-      // Checked out as committed: the hardened runner skips the system config, where Git
-      // for Windows turns on CRLF conversion, so a converted checkout would read as changed
-      // to it and clean to plain git.
-      run(['config', 'core.autocrlf', 'false'], clone)
       run(['worktree', 'add', '-q', '-b', 'side', linked], clone)
       expect(await same(linked)).toContain('(current)')
 
