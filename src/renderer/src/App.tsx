@@ -2507,6 +2507,9 @@ export default function App(): JSX.Element {
   // The agent's open `ask_user` question, if it is waiting on one. While it is, the
   // run can't read a steer (it is blocked on the answer), so Enter answers it instead.
   const latestQuestion = useFromItems(chatItems, openQuestionIn)
+  // What `/rewind <n>` and `/changes last <n>` pick from.
+  const chatRewindTargets = useFromItems(chatItems, rewindTargets)
+  const chatPastEdits = useFromItems(chatItems, pastEdits)
   const openQuestion = chat.running ? latestQuestion : null
 
   // Enter mid-run: answer the open question, or else steer the running turn (the
@@ -2793,7 +2796,7 @@ export default function App(): JSX.Element {
             setRewindPickerOpen(true)
             return
           }
-          const targets = rewindTargets(chat.items)
+          const targets = chatRewindTargets
           const target = targets[action.turn]
           if (!target) {
             chat.notify(`No message ${action.turn + 1} to rewind to (there are ${targets.length}).`, 'error')
@@ -2851,7 +2854,7 @@ export default function App(): JSX.Element {
             showChanges()
             return
           }
-          const edits = pastEdits(chat.items)
+          const edits = chatPastEdits
           const edit = edits[edits.length - action.last]
           if (edit) setPastEdit({ edit, back: action.last })
           else {
@@ -2984,7 +2987,9 @@ export default function App(): JSX.Element {
       saveDefaults,
       onForgetTrust,
       canUndoRewind,
-      onUndoRewind
+      onUndoRewind,
+      chatRewindTargets,
+      chatPastEdits
     ]
   )
 
