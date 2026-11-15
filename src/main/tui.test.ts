@@ -12289,3 +12289,121 @@ describe('live subagent panel', () => {
     expect(redraws).toBeGreaterThan(1)
   })
 })
+
+describe('/keybindings and keybinding problems', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  function kb(over: Partial<NonNullable<TuiDeps['keybindings']>> = {}) {
+    const calls: string[] = []
+    let pending: string[] = []
+    let onProblems: (() => void) | null = null
+    const api: NonNullable<TuiDeps['keybindings']> = {
+      path: '/home/u/.houston/keybindings.json',
+      ensureFile: () => {
+        calls.push('ensure')
+        return { created: true }
+      },
+      reload: () => {
+        calls.push('reload')
+      },
+      takeProblems: () => {
+        const out = pending
+        pending = []
+        return out
+      },
+      problems: () => [],
+      onProblems: (cb) => {
+        onProblems = cb
+      },
+      count: () => 0,
+      ...over
+    }
+    return {
+      api,
+      calls,
+      later: (p: string[]) => {
+        pending = p
+        onProblems?.()
+      },
+      setPending: (p: string[]) => {
+        pending = p
+      }
+    }
+  }
+
+  it('parses', () => {
+    expect(parseSlashCommand('/keybindings', {} as AppSettings)).toEqual({ kind: 'keybindings' })
+  })
+
+  it('reports mistakes in the file once at startup, after the banner', async () => {
+    const { d } = deps(done)
+    const t = fakeIo([null])
+    d.io = t.io
+    const k = kb()
+    k.setPending(['composer: "ctrl-y": unknown action "fly" (see /keybindings for the list)'])
+    d.keybindings = k.api
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text).toContain('keybindings.json: one entry was skipped (/keybindings to fix)')
+    expect(text).toContain('unknown action "fly"')
+    expect(text.indexOf('unknown action')).toBeGreaterThan(text.indexOf('/help for commands'))
+    expect(text.split('unknown action').length).toBe(2)
+  })
+
+  it('reports problems found when the file changes later', async () => {
+    const { d } = deps(done)
+    const k = kb()
+    const t = fakeIo(['/cwd', null])
+    d.io = t.io
+    d.keybindings = k.api
+    const run = runTui(opts, d)
+    k.later(['picker: "j" would stop you typing that character; use a key with ctrl or alt'])
+    await run
+    expect(t.text()).toContain('"j" would stop you typing')
+  })
+
+  it('creates the file, opens it in the editor, reads it again and says what is in force', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/keybindings', null])
+    d.io = t.io
+    const k = kb({ count: () => 2, problems: () => ['composer: "a" would stop you typing that character; use a key with ctrl or alt'] })
+    d.keybindings = k.api
+    const opened: string[] = []
+    d.editFile = async (p) => {
+      opened.push(p)
+      return true
+    }
+    await runTui(opts, d)
+    expect(k.calls).toEqual(['ensure', 'reload'])
+    expect(opened).toEqual(['/home/u/.houston/keybindings.json'])
+    const text = t.text()
+    expect(text).toContain('with every key commented out')
+    expect(text).toContain('"a" would stop you typing')
+    expect(text).toContain('keybindings: 2 in force')
+  })
+
+  it('without an editor, says where the file is and that it is read on change', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/keybindings', null])
+    d.io = t.io
+    d.keybindings = kb({ ensureFile: () => ({ created: false }) }).api
+    d.editFile = async () => false
+    await runTui(opts, d)
+    expect(t.text()).toContain('Houston reads it again when it changes')
+    expect(t.text()).toContain('none set, the default keys apply')
+    expect(t.text()).not.toContain('commented out')
+  })
+
+  it('says so when keybindings are unavailable', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/keybindings', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('keybindings are unavailable here')
+  })
+
+  it('the help lists /keybindings and the ? key', () => {
+    expect(HELP_TEXT).toContain('/keybindings')
+    expect(HELP_TEXT).toMatch(/\n {2}\? {21}on an empty prompt/)
+  })
+})

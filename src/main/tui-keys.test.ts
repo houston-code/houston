@@ -4,6 +4,7 @@ import {
   initialDecoderState,
   normalizePaste,
   sanitizePastedKeys,
+  sanitizePastedNamed,
   PASTE_START,
   PASTE_END,
   type EditorKey,
@@ -400,5 +401,105 @@ describe('decodeInput: composer keys for undo, stash, images, suspend', () => {
       { type: 'undo' }
     ]
     expect(sanitizePastedKeys(keys, -Infinity, 100).keys).toEqual([{ type: 'paste', value: 'x' }])
+  })
+})
+
+describe('decodeInput with names (user keybindings on)', () => {
+  const names = (chunk: string): Array<string | null> =>
+    decodeInput(chunk, initialDecoderState(), { named: true }).named.map((e) => e.name)
+
+  it('names control keys, including ones the composer does not bind', () => {
+    expect(names('\x0b')).toEqual(['ctrl-k'])
+    expect(names('\x14')).toEqual(['ctrl-t'])
+    expect(names('\r')).toEqual(['enter'])
+    expect(names('\t')).toEqual(['tab'])
+    expect(names('\x7f')).toEqual(['backspace'])
+    expect(names('\x1f')).toEqual(['ctrl-_'])
+    expect(names('\x00')).toEqual(['ctrl-space'])
+  })
+
+  it('reports Ctrl-X as itself, leaving the chord to the keybinding layer', () => {
+    const r = decodeInput('\x18\x05', initialDecoderState(), { named: true })
+    expect(r.named).toEqual([
+      { key: null, name: 'ctrl-x' },
+      { key: { type: 'end' }, name: 'ctrl-e' }
+    ])
+  })
+
+  it('names Alt keys, unbound ones too', () => {
+    expect(names('\x1bb')).toEqual(['alt-b'])
+    expect(names('\x1bx')).toEqual(['alt-x'])
+    expect(names('\x1bX')).toEqual(['alt-X'])
+    expect(names('\x1b\r')).toEqual(['alt-enter'])
+    expect(names('\x1b\x7f')).toEqual(['alt-backspace'])
+    expect(names('\x1b ')).toEqual(['alt-space'])
+  })
+
+  it('names cursor, function and modified keys', () => {
+    expect(names('\x1b[A')).toEqual(['up'])
+    expect(names('\x1b[1;5D')).toEqual(['ctrl-left'])
+    expect(names('\x1b[1;3C')).toEqual(['alt-right'])
+    expect(names('\x1b[5~')).toEqual(['pageup'])
+    expect(names('\x1b[3;5~')).toEqual(['ctrl-delete'])
+    expect(names('\x1bOP')).toEqual(['f1'])
+    expect(names('\x1b[15~')).toEqual(['f5'])
+    expect(names('\x1b[24~')).toEqual(['f12'])
+    expect(names('\x1b[Z')).toEqual(['shift-tab'])
+    expect(names('\x1b[27;2;13~')).toEqual(['shift-enter'])
+    expect(names('\x1b[13;5u')).toEqual(['ctrl-enter'])
+    expect(names('\x1b[47;5u')).toEqual(['ctrl-_'])
+  })
+
+  it('gives text a name only when it is one character, and pastes and focus none', () => {
+    expect(names('q')).toEqual(['q'])
+    expect(names(' ')).toEqual(['space'])
+    expect(names('hello')).toEqual([null])
+    expect(names(`${PASTE_START}x${PASTE_END}`)).toEqual([null])
+    expect(names('\x1b[I')).toEqual([null])
+  })
+
+  it('names nothing in an unbracketed paste burst', () => {
+    const r = decodeInput('some pasted text\r\x0bmore', initialDecoderState(), { named: true })
+    expect(r.named.every((e) => e.name === null)).toBe(true)
+  })
+
+  it('decodes the same keys as without names', () => {
+    for (const chunk of ['hi\x0b\x1b[A\x1bb', '\x07\x1b[Z', '\x1b[5~\r']) {
+      const plain = decodeInput(chunk, initialDecoderState()).keys
+      const named = decodeInput(chunk, initialDecoderState(), { named: true })
+      expect(named.keys).toEqual(plain)
+      expect(named.named.flatMap((e) => (e.key ? [e.key] : []))).toEqual(plain)
+    }
+  })
+
+  it('returns no names when they were not asked for', () => {
+    expect(decodeInput('\x0b', initialDecoderState()).named).toEqual([])
+  })
+})
+
+describe('sanitizePastedNamed', () => {
+  it('strips names inside the paste window and drops action keys there', () => {
+    const r = sanitizePastedNamed(
+      [
+        { key: { type: 'paste', value: 'x' }, name: null },
+        { key: { type: 'enter' }, name: 'enter' },
+        { key: { type: 'char', value: 'a' }, name: 'a' },
+        { key: null, name: 'ctrl-t' },
+        { key: { type: 'kill-line' }, name: 'ctrl-k' }
+      ],
+      -Infinity,
+      1000
+    )
+    expect(r.entries).toEqual([
+      { key: { type: 'paste', value: 'x' }, name: null },
+      { key: { type: 'newline' }, name: null },
+      { key: { type: 'char', value: 'a' }, name: null }
+    ])
+    expect(r.lastPasteAt).toBe(1000)
+  })
+
+  it('lets named keys through once the window has passed', () => {
+    const r = sanitizePastedNamed([{ key: null, name: 'ctrl-t' }], 1000, 1100)
+    expect(r.entries).toEqual([{ key: null, name: 'ctrl-t' }])
   })
 })

@@ -510,6 +510,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'keybindings', group: 'Terminal',
+    description: 'Change the terminal keys: opens ~/.houston/keybindings.json (creates it the first time)',
+    clients: ['tui']
+  },
+  {
     name: 'add-dir', group: 'Terminal', args: '[path]',
     description: 'Let the agent work in another folder this session (/add-dir alone lists them)',
     clients: ['tui']
@@ -716,6 +721,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   config: 'in the app, every setting is in Settings',
   status: 'in the app, Settings > About shows the version, and /doctor checks the setup',
   feedback: 'in the app, use Help > Report an Issue',
+  keybindings: 'in the app, shortcuts are under Settings > Keyboard',
   'add-dir': 'in the app, add folders the agent may use under Settings, Workspace, Additional folders',
   cd: 'in the app, the project folder button by the message box opens another folder, in a new chat',
   'reduce-motion': 'the app follows your system\'s reduce motion setting',
