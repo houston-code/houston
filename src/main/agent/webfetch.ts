@@ -171,7 +171,9 @@ export async function resolveAndPin(
  * UTF-8 when there is none or the label is one the runtime doesn't know.
  */
 export function decodeBody(body: Buffer, contentType: string): string {
-  const label = /charset\s*=\s*"?([\w.:-]+)"?/i.exec(contentType)?.[1]
+  // A byte-order mark wins over the declared charset, as in a browser.
+  const bom = bomEncoding(body)
+  const label = bom ?? charsetLabel(contentType)
   if (label && !/^utf-?8$/i.test(label)) {
     try {
       return new TextDecoder(label).decode(body)
@@ -179,11 +181,35 @@ export function decodeBody(body: Buffer, contentType: string): string {
       // Unknown label: UTF-8 below.
     }
   }
-  return body.toString('utf8')
+  // TextDecoder drops a leading UTF-8 BOM, which would otherwise push an HTML
+  // parser out of <head> and into the body.
+  return new TextDecoder('utf-8').decode(body)
 }
 
-/** Media types that are binary whatever their first bytes look like (SVG and other `+xml` types are text). */
-const BINARY_TYPE = /^(image|audio|video|font)\/(?![\w.-]*\+xml$)|^application\/(zip|gzip|x-gzip|x-tar|x-7z-compressed|x-rar-compressed|wasm|vnd\.)/
+function charsetLabel(contentType: string): string | undefined {
+  return /charset\s*=\s*"?([\w.:-]+)"?/i.exec(contentType)?.[1]
+}
+
+function bomEncoding(body: Buffer): string | undefined {
+  if (body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf) return 'utf-8'
+  if (body[0] === 0xff && body[1] === 0xfe) return 'utf-16le'
+  if (body[0] === 0xfe && body[1] === 0xff) return 'utf-16be'
+  return undefined
+}
+
+/** True when the body is in a wide encoding, where NUL bytes are normal text. */
+function isWideText(body: Buffer, contentType: string): boolean {
+  const bom = bomEncoding(body)
+  if (bom) return bom !== 'utf-8'
+  return /^(utf-?16|utf-?32|ucs-?2)/i.test(charsetLabel(contentType) ?? '')
+}
+
+/**
+ * Media types that are binary whatever their first bytes look like (SVG and other
+ * `+xml` types are text, as are vendor types with a `+json`/`+xml`/`+yaml` suffix).
+ */
+const BINARY_TYPE =
+  /^(image|audio|video|font)\/(?![\w.-]*\+xml$)|^application\/(zip|gzip|x-gzip|x-tar|x-7z-compressed|x-rar-compressed|wasm|vnd\.(?![\w.+-]*\+(json|xml|yaml)$))/
 
 /**
  * What to say instead of the body when it isn't text: a PDF (named, so the model
@@ -199,7 +225,11 @@ export function nonTextNotice(body: Buffer, contentType: string): string | null 
       'run_shell (e.g. curl -L -o doc.pdf <url>) and extract its text with pdftotext.]'
     )
   }
-  if (looksBinary(body) || BINARY_TYPE.test(type)) {
+  // A declared charset says the body is text, so the type alone doesn't make it
+  // binary; in UTF-16/32 text NUL bytes are normal, so the byte sniff is skipped.
+  const textual = isWideText(body, contentType)
+  const declaredText = charsetLabel(contentType) !== undefined
+  if ((!textual && looksBinary(body)) || (!declaredText && BINARY_TYPE.test(type))) {
     return `[binary content (${type || 'unknown type'}, ${size}): not text, so there is nothing to show.]`
   }
   return null

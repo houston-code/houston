@@ -112,6 +112,17 @@ describe('nonTextNotice', () => {
     expect(nonTextNotice(Buffer.from('{"a":1}'), 'application/json')).toBeNull()
     expect(nonTextNotice(Buffer.from('plain'), '')).toBeNull()
   })
+
+  it('treats vendor JSON/XML types and UTF-16 bodies as text', () => {
+    expect(nonTextNotice(Buffer.from('{"data":[]}'), 'application/vnd.api+json')).toBeNull()
+    expect(nonTextNotice(Buffer.from('{}'), 'application/vnd.github+json; charset=utf-8')).toBeNull()
+    expect(nonTextNotice(Buffer.from('<kml/>'), 'application/vnd.google-earth.kml+xml')).toBeNull()
+    expect(nonTextNotice(Buffer.from('PK\u0003\u0004'), 'application/vnd.ms-excel')).toMatch(/^\[binary content/)
+    const utf16 = Buffer.from('<p>hi</p>', 'utf16le')
+    expect(nonTextNotice(utf16, 'text/html; charset=utf-16')).toBeNull()
+    expect(nonTextNotice(Buffer.concat([Buffer.from([0xff, 0xfe]), utf16]), 'text/html')).toBeNull()
+    expect(nonTextNotice(utf16, 'text/html')).toMatch(/^\[binary content/)
+  })
 })
 
 describe('decodeBody', () => {
@@ -123,6 +134,13 @@ describe('decodeBody', () => {
   it('falls back to UTF-8 for a missing or unknown charset', () => {
     expect(decodeBody(Buffer.from('café', 'utf8'), 'text/html')).toBe('café')
     expect(decodeBody(Buffer.from('café', 'utf8'), 'text/html; charset=no-such-charset')).toBe('café')
+  })
+
+  it('drops a byte-order mark, and lets it name the encoding', () => {
+    expect(decodeBody(Buffer.from('﻿hi', 'utf8'), 'text/html')).toBe('hi')
+    expect(decodeBody(Buffer.from('﻿hi', 'utf8'), 'text/html; charset=utf-8')).toBe('hi')
+    const le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi', 'utf16le')])
+    expect(decodeBody(le, 'text/html; charset=iso-8859-1')).toBe('hi')
   })
 })
 
@@ -175,6 +193,23 @@ describe('fetchUrlAsText', () => {
     const out = await fetchUrlAsText('https://example.com/', { transport, resolveHost: publicHost })
     expect(out).toContain('HTTP 200')
     expect(out).toContain('Hello world')
+  })
+
+  it('returns the text of a UTF-16 page and a vendor JSON type', async () => {
+    const transport = fakeTransport({
+      'https://example.com/u16': {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-16' },
+        body: Buffer.from('<p>Wide hello</p>', 'utf16le')
+      },
+      'https://example.com/api': {
+        status: 200,
+        headers: { 'content-type': 'application/vnd.api+json' },
+        body: '{"data":[]}'
+      }
+    })
+    expect(await fetchUrlAsText('https://example.com/u16', { transport, resolveHost: publicHost })).toContain('Wide hello')
+    expect(await fetchUrlAsText('https://example.com/api', { transport, resolveHost: publicHost })).toContain('{"data":[]}')
   })
 
   it('follows redirects but re-validates each hop', async () => {
