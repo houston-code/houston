@@ -46,6 +46,11 @@ export interface DoctorFacts {
    */
   update: { latest: string; url: string; hint?: string } | null
   /**
+   * How this copy was installed (npm, homebrew, install-script, ...) and the command
+   * that upgrades it. Terminal clients only; the desktop app updates itself.
+   */
+  install?: { method: string; upgrade: string }
+  /**
    * Language servers Houston can drive: whether each is installed and whether the
    * workspace looks like it uses that language. Absent on hosts that don't probe them.
    */
@@ -108,26 +113,39 @@ function languageServerChecks(f: DoctorFacts): DoctorCheck[] {
   return checks
 }
 
-/** Which app shows the report: its fix hints name that app's own way of doing it. */
-export type DoctorClient = 'terminal' | 'desktop'
+/**
+ * Which app shows the report: its fix hints name that app's own way of doing it.
+ * `shell` is `houston doctor`, run from a shell with no session to type a slash
+ * command into, so its fixes are `houston` commands.
+ */
+export type DoctorClient = 'terminal' | 'desktop' | 'shell'
 
 /**
  * The fix hints that differ by client. The terminal has slash commands (`/login`,
  * `/model`); the desktop has Settings pages and the model picker, and typing a
  * terminal command there would do nothing.
  */
-const FIXES: Record<DoctorClient, { noKey: (id: string) => string; noProviders: string; noModel: string; mcpAuth: string }> = {
+const FIXES: Record<
+  DoctorClient,
+  { noKey: (id: string) => string; noProviders: string; noModel: string; mcpAuth: (id: string) => string }
+> = {
   terminal: {
     noKey: (id) => `run /login and pick ${id}`,
     noProviders: 'run /login to add one',
     noModel: 'run /login, or /model <id>',
-    mcpAuth: '/mcp login <n>'
+    mcpAuth: (id) => `/mcp login ${id}`
   },
   desktop: {
     noKey: (id) => `add a key for ${id} in Settings > Providers & Models`,
     noProviders: 'connect one in Settings > Providers & Models',
     noModel: 'pick one in the model menu above the message box',
-    mcpAuth: 'sign in from Settings > MCP Servers'
+    mcpAuth: () => 'sign in from Settings > MCP Servers'
+  },
+  shell: {
+    noKey: (id) => `houston providers set-key ${id}`,
+    noProviders: 'houston providers add <id>, or run houston and /login',
+    noModel: 'run houston and pick one with /login, or pass --model <id>',
+    mcpAuth: (id) => `houston mcp login ${id}`
   }
 }
 
@@ -143,7 +161,7 @@ export function buildDoctorReport(f: DoctorFacts, client: DoctorClient = 'termin
     if (!p.hasKey) {
       return { label: p.id, status: 'warn', detail: 'no API key', fix: fixes.noKey(p.id) }
     }
-    if (p.shadowedByEnv && client === 'terminal') {
+    if (p.shadowedByEnv && client !== 'desktop') {
       // Not broken, but the cause of "I changed my key and nothing happened".
       return {
         label: p.id,
@@ -180,6 +198,9 @@ export function buildDoctorReport(f: DoctorFacts, client: DoctorClient = 'termin
           detail: f.update ? `${f.version} (${f.update.latest} available)` : f.version,
           ...(f.update ? { fix: f.update.hint ?? `download it at ${f.update.url}` } : {})
         },
+        ...(f.install
+          ? [{ label: 'install', status: 'ok' as const, detail: `${f.install.method} (upgrade: ${f.install.upgrade})` }]
+          : []),
         { label: 'node', status: 'ok', detail: f.nodeVersion },
         { label: 'platform', status: 'ok', detail: f.platform },
         { label: 'settings', status: 'ok', detail: f.settingsPath },
@@ -235,7 +256,7 @@ export function buildDoctorReport(f: DoctorFacts, client: DoctorClient = 'termin
               : m.state === 'idle'
                 ? 'not connected yet'
                 : (m.detail ?? 'failed to connect'),
-        ...(m.state === 'needs-auth' ? { fix: client === 'terminal' ? `/mcp login ${m.id}` : fixes.mcpAuth } : {})
+        ...(m.state === 'needs-auth' ? { fix: fixes.mcpAuth(m.id) } : {})
       }))
     }
   ]

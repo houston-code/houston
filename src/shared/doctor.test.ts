@@ -109,10 +109,20 @@ describe('buildDoctorReport — update row', () => {
     expect(row.detail).toBe('0.2.200 (0.3.0 available)')
     expect(row.fix).toBe('brew upgrade houston')
   })
+
+  it('names the install method and its upgrade command when the host knows them, and only then', () => {
+    const houston = (f: DoctorFacts) => buildDoctorReport(f).groups.find((g) => g.title === 'Houston')!.checks
+    expect(houston(facts({ install: { method: 'npm', upgrade: 'npm i -g @houston-code/cli@latest' } }))).toContainEqual({
+      label: 'install',
+      status: 'ok',
+      detail: 'npm (upgrade: npm i -g @houston-code/cli@latest)'
+    })
+    expect(houston(facts()).map((c) => c.label)).not.toContain('install')
+  })
 })
 
 describe('buildDoctorReport — fix hints follow the client', () => {
-  const fixOf = (f: DoctorFacts, label: string, client: 'terminal' | 'desktop'): string | undefined =>
+  const fixOf = (f: DoctorFacts, label: string, client: 'terminal' | 'desktop' | 'shell'): string | undefined =>
     buildDoctorReport(f, client)
       .groups.flatMap((g) => g.checks)
       .find((c) => c.label === label)?.fix
@@ -132,6 +142,16 @@ describe('buildDoctorReport — fix hints follow the client', () => {
     const mcp = facts({ mcp: [{ id: 'linear', state: 'needs-auth' }] })
     expect(fixOf(mcp, 'linear', 'terminal')).toBe('/mcp login linear')
     expect(fixOf(mcp, 'linear', 'desktop')).toBe('sign in from Settings > MCP Servers')
+  })
+
+  it('points `houston doctor` (no session to type into) at houston commands', () => {
+    const noKey = facts({ providers: [{ id: 'openai', requiresKey: true, hasKey: false }] })
+    expect(fixOf(noKey, 'openai', 'shell')).toBe('houston providers set-key openai')
+    expect(fixOf(facts({ mcp: [{ id: 'linear', state: 'needs-auth' }] }), 'linear', 'shell')).toBe('houston mcp login linear')
+    expect(fixOf(facts({ active: null }), 'active model', 'shell')).toBe('run houston and pick one with /login, or pass --model <id>')
+    // The shell reads keys from the environment like the terminal, so it warns the same.
+    const shadowed = facts({ providers: [{ id: 'anthropic', requiresKey: true, hasKey: true, shadowedByEnv: 'ANTHROPIC_API_KEY' }] })
+    expect(fixOf(shadowed, 'anthropic', 'shell')).toBe('unset ANTHROPIC_API_KEY to use the stored key')
   })
 
   it('never mentions /login or another slash command to the desktop', () => {

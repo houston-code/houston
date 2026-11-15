@@ -18,6 +18,7 @@ vi.mock('./run', () => {
 
 import { USAGE, cliArgvError, main, nodeVersionError, shortUsage } from './index'
 import { HEADLESS_FLAGS } from '../main/headless'
+import { CLI_SUBCOMMANDS, renderOptions } from './flags'
 
 describe('nodeVersionError', () => {
   it('returns null when the runtime is new enough', () => {
@@ -105,6 +106,20 @@ describe('main', () => {
     expect(problem.endsWith('Run houston --help for every option.\n')).toBe(true)
   })
 
+  it('prints a completion script without loading the program', async () => {
+    const load = vi.fn()
+    expect(await main(['node', 'houston', 'completion', 'bash'], load)).toBe(0)
+    expect(load).not.toHaveBeenCalled()
+    expect(out.join('')).toMatch(/^# bash completion for houston/)
+  })
+
+  it("leaves -h and -v after -- to the command they belong to", async () => {
+    const argv = ['node', 'houston', 'mcp', 'add', 'x', '--', 'server', '--help', '-v']
+    expect(await main(argv)).toBe(7)
+    expect(probe.runCli).toEqual([argv])
+    expect(out.join('')).not.toContain('Usage:')
+  })
+
   it('opens a folder in the desktop app without loading the program', async () => {
     const load = vi.fn()
     // A missing folder fails inside the open command, before anything is launched.
@@ -155,6 +170,14 @@ describe('cliArgvError', () => {
       expect(USAGE).toMatch(new RegExp(`(^|[\\s,(])${flag.replace(/[-]/g, '\\-')}([\\s,=)]|$)`, 'm'))
     }
     expect(USAGE).toContain('houston providers remove <id>')
+  })
+
+  it('renders its options and subcommands from the one flag table', () => {
+    expect(USAGE).toContain(`Options:\n${renderOptions()}`)
+    for (const sub of CLI_SUBCOMMANDS) expect(USAGE).toContain(`houston ${sub.usage}`)
+    for (const line of ['houston mcp add <name> -- <command> [args...]', 'houston mcp login <name>', 'houston completion zsh']) {
+      expect(USAGE).toContain(line)
+    }
   })
 
   it('does not mark the flags an interactive session takes as one-shot only', () => {

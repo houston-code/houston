@@ -175,7 +175,6 @@ export async function checkForUpdate(
   if (!updateCheckEnabled(currentVersion, env)) return null
   const now = deps.now ?? Date.now
   const path = deps.path ?? cachePath()
-  const doFetch = deps.fetch ?? globalThis.fetch
 
   const cached = readCache(path)
   const fromCache = (c: CheckCache): UpdateAvailable | null =>
@@ -192,6 +191,30 @@ export async function checkForUpdate(
     return fromCache(cached)
   }
 
+  const release = await fetchRelease(currentVersion, path, cached, deps)
+  if (!release) return cached ? fromCache(cached) : null
+
+  if (!isNewerVersion(release.latest, currentVersion)) return null
+  return {
+    latest: release.latest,
+    url: DOWNLOAD_URL,
+    ...(release.headline ? { headline: release.headline } : {})
+  }
+}
+
+/**
+ * Ask the feed now and record the answer (or the failure) in the cache. A failure
+ * keeps the last answer: an update found yesterday must not vanish because today's
+ * check failed, and the failure stops a broken network being retried every launch.
+ */
+async function fetchRelease(
+  currentVersion: string,
+  path: string,
+  cached: CheckCache | null,
+  deps: UpdateCheckDeps
+): Promise<{ latest: string; headline?: string } | null> {
+  const now = deps.now ?? Date.now
+  const doFetch = deps.fetch ?? globalThis.fetch
   let release: { latest: string; headline?: string } | null = null
   try {
     const res = await doFetch(LATEST_RELEASE_API, {
@@ -202,25 +225,39 @@ export async function checkForUpdate(
   } catch {
     // Offline, DNS down, timed out, rate limited: a failed check is a non-event.
   }
-
   if (!release) {
-    // Record the failure so a broken network doesn't retry on every launch, but keep the
-    // last answer: an update found yesterday must not vanish because today's check failed.
     writeCache(path, { ...(cached ?? { checkedAt: 0 }), failedAt: now() })
-    return cached ? fromCache(cached) : null
+    return null
   }
-
   writeCache(path, {
     checkedAt: now(),
     latest: release.latest,
     ...(release.headline ? { headline: release.headline } : {})
   })
+  return release
+}
 
-  if (!isNewerVersion(release.latest, currentVersion)) return null
+/** What `houston update` learned: a newer release, this one is current, or no answer. */
+export type UpdateCheckResult =
+  | { status: 'newer'; update: UpdateAvailable }
+  | { status: 'current'; latest: string }
+  | { status: 'unknown' }
+
+/**
+ * Ask the feed now, for a person who asked (`houston update`): no daily cache and no
+ * opt-out check, since running the command is the request. The answer still refreshes
+ * the cache the automatic check reads. A development build has no version to compare,
+ * so it is always `unknown`.
+ */
+export async function checkForUpdateNow(currentVersion: string, deps: UpdateCheckDeps = {}): Promise<UpdateCheckResult> {
+  if (currentVersion === 'dev' || currentVersion === '0.0.0') return { status: 'unknown' }
+  const path = deps.path ?? cachePath()
+  const release = await fetchRelease(currentVersion, path, readCache(path), deps)
+  if (!release) return { status: 'unknown' }
+  if (!isNewerVersion(release.latest, currentVersion)) return { status: 'current', latest: release.latest }
   return {
-    latest: release.latest,
-    url: DOWNLOAD_URL,
-    ...(release.headline ? { headline: release.headline } : {})
+    status: 'newer',
+    update: { latest: release.latest, url: DOWNLOAD_URL, ...(release.headline ? { headline: release.headline } : {}) }
   }
 }
 
