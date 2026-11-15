@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { folderArgQuery, folderCompletions, type FolderEntry } from './tui-complete'
-import { mentionQuery, commandQuery, inlineCommandQuery, completeInput, makeCompleter, COMMANDS, commandMenu, renderCommandMenu, renderMentionMenu, makeMentionMenu, makeMentionMenuView, commandMenuView, markMenuRow, MENU_LIMIT, type CommandSpec } from './tui-complete'
+import { mentionQuery, commandQuery, inlineCommandQuery, completeInput, makeCompleter, COMMANDS, commandMenu, renderCommandMenu, renderMentionMenu, makeMentionMenu, makeMentionMenuView, makeMentionFinder, commandMenuView, markMenuRow, MENU_LIMIT, type CommandSpec } from './tui-complete'
 
 describe('mentionQuery', () => {
   it('extracts an @token at the end of the line', () => {
@@ -364,5 +364,80 @@ describe('folder completion for /cd and /add-dir', () => {
     // Without a lister, /cd completes nothing rather than a command name.
     const plain = makeCompleter(async () => [], COMMANDS)
     expect(await new Promise<[string[], string]>((res) => plain('/cd sr', (_e, r) => res(r)))).toEqual([[], '/cd sr'])
+  })
+})
+
+describe('the richer @ lookup (makeMentionFinder)', () => {
+  const plain = (x: string): string => x
+  const files = async (q: string): Promise<string[]> => ['src/a.ts', 'src/', 'docs/b.md'].filter((f) => f.includes(q))
+  const finder = makeMentionFinder({
+    files,
+    agents: async () => [
+      { name: 'reviewer', description: 'reviews \x1b[31mdiffs' },
+      { name: 'writer' },
+      { name: 'bad name' }
+    ],
+    resources: async () => [
+      { server: 'github', uri: 'repo://o/r/issues/1', name: 'Issue 1' },
+      { server: 'github', uri: 'repo://o/r/README' },
+      { server: 'github', uri: 'evil\x1b]52;c;x\x07' },
+      { server: 'db', uri: 'table://users' }
+    ]
+  })
+
+  it('offers agents after @agent-, and nothing else', async () => {
+    expect(await finder('agent-re')).toEqual([{ value: 'agent-reviewer', detail: 'agent: reviews [31mdiffs' }])
+    const all = await finder('agent-')
+    expect(all.map((c) => (typeof c === 'string' ? c : c.value))).toEqual(['agent-reviewer', 'agent-writer'])
+  })
+
+  it('lists agents first on a bare @, then the files', async () => {
+    const rows = (await finder('')).map((c) => (typeof c === 'string' ? c : c.value))
+    expect(rows).toEqual(['agent-reviewer', 'agent-writer', 'src/a.ts', 'src/', 'docs/b.md'])
+  })
+
+  it("offers a server's resources after @server:, dropping one with control characters", async () => {
+    const rows = await finder('github:repo://o/r/')
+    expect(rows).toEqual([
+      { value: 'github:repo://o/r/issues/1', detail: 'resource: Issue 1' },
+      { value: 'github:repo://o/r/README', detail: 'resource' }
+    ])
+    expect((await finder('github:')).map((c) => (typeof c === 'string' ? c : c.value))).toEqual([
+      'github:repo://o/r/issues/1',
+      'github:repo://o/r/README'
+    ])
+    // A server name alone lists its resources, along with any matching files.
+    const db = (await finder('db')).map((c) => (typeof c === 'string' ? c : c.value))
+    expect(db).toEqual(['db:table://users'])
+  })
+
+  it('adds a line range to matching files, open until the range is typed', async () => {
+    expect(await finder('src/a#')).toEqual([{ value: 'src/a.ts#', detail: 'type a line range, like #20-45', open: true }])
+    expect(await finder('src/a#20-45')).toEqual([{ value: 'src/a.ts#20-45', detail: 'lines 20-45' }])
+  })
+
+  it('completes an open range without a space, and anything else with one', () => {
+    const [hits] = completeInput('see @src/a#', [{ value: 'src/a.ts#', open: true }])
+    expect(hits).toEqual(['@src/a.ts#'])
+    const [done] = completeInput('see @agent-r', [{ value: 'agent-reviewer', detail: 'agent' }])
+    expect(done).toEqual(['@agent-reviewer '])
+  })
+
+  it('offers its rows to pick in the menu, an open row without a trailing space', async () => {
+    const view = makeMentionMenuView(async () => [{ value: 'agent-', detail: 'agents', open: true }, 'src/a.ts'], (x) => x)
+    view('ask @a', () => {})
+    await new Promise((r) => setTimeout(r, 0))
+    expect(view('ask @a', () => {})!.options).toEqual([
+      { replace: '@a', insert: '@agent-' },
+      { replace: '@a', insert: '@src/a.ts ' }
+    ])
+  })
+
+  it('shows each row with its detail, dim, stripped of control characters', () => {
+    expect(renderMentionMenu([{ value: 'agent-reviewer', detail: 'agent: x\x1b[2J' }, 'src/a.ts'], plain)).toEqual([
+      '  @agent-reviewer   agent: x[2J',
+      '  @src/a.ts',
+      '  Up/Down to choose, Tab completes'
+    ])
   })
 })

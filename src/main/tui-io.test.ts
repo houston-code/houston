@@ -3582,3 +3582,82 @@ describe('user keybindings and the ? overlay', () => {
     await expect(open).resolves.toBe(true)
   })
 })
+
+
+/**
+ * Managing the follow-ups queued mid-run: only a count showed, and a queued line
+ * could not be seen in full, edited, removed, or sent to the turn early.
+ */
+describe('/queue on the mid-run waiting list', () => {
+  function harness(opts: { screenReader?: boolean; steer?: (text: string) => boolean | 'handled' } = {}) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 120,
+      now: () => 1000,
+      schedule: () => () => {}
+    })
+    if (opts.screenReader) io.setAccessibility!({ screenReader: true })
+    const saved: string[][] = []
+    io.onPendingInput!((p) => saved.push(p.queued))
+    const steered: Array<[string, string]> = []
+    io.onSteer!((text, id) => {
+      const r = opts.steer ? opts.steer(text) : false
+      if (r === true) steered.push([text, id])
+      return r
+    })
+    return { io, stdin, steered, saved, text: () => written.join('') }
+  }
+
+  it('lists only the follow-ups, oldest first, not the steers', () => {
+    const t = harness({ steer: (text) => text === 'use YAML' })
+    t.io.startSpinner!('Working')
+    t.stdin.push('first later\t')
+    t.stdin.push('use YAML\r')
+    t.stdin.push('second later\t')
+    expect(t.io.peekQueued!()).toEqual(['first later', 'second later'])
+  })
+
+  it('sends one to the turn now under its own id, where it shows as steering next', () => {
+    const t = harness({ steer: () => true })
+    t.io.startSpinner!('Working')
+    t.stdin.push('run the tests\t')
+    expect(t.steered).toEqual([])
+    expect(t.io.sendQueuedNow!(0)).toBe(true)
+    expect(t.steered.map(([text]) => text)).toEqual(['run the tests'])
+    expect(t.io.peekQueued!()).toEqual([])
+    expect(t.text().split('\x1b[2K').at(-1)).toContain('steering next: run the tests')
+    // Saved as still waiting until it lands.
+    expect(t.saved.at(-1)).toEqual(['run the tests'])
+    t.io.steerLanded!(t.steered[0][1])
+    expect(t.saved.at(-1)).toEqual([])
+  })
+
+  it('keeps a follow-up the turn will not take', () => {
+    const t = harness({ steer: () => false })
+    t.io.startSpinner!('Working')
+    t.stdin.push('/compact\t')
+    expect(t.io.sendQueuedNow!(0)).toBe(false)
+    expect(t.io.sendQueuedNow!(3)).toBe(false)
+    expect(t.io.peekQueued!()).toEqual(['/compact'])
+  })
+
+  it('drops one by index and clears the rest, leaving steers alone', () => {
+    const t = harness({ steer: (text) => text === 'use YAML' })
+    t.io.startSpinner!('Working')
+    t.stdin.push('a\t')
+    t.stdin.push('use YAML\r')
+    t.stdin.push('b\t')
+    t.stdin.push('c\t')
+    expect(t.io.dropQueued!(1)).toBe('b')
+    expect(t.io.dropQueued!(5)).toBeNull()
+    expect(t.saved.at(-1)).toEqual(['a', 'use YAML', 'c'])
+    expect(t.io.clearQueued!()).toEqual(['a', 'c'])
+    expect(t.io.peekQueued!()).toEqual([])
+    expect(t.saved.at(-1)).toEqual(['use YAML'])
+    expect(t.text().split('\x1b[2K').at(-1)).toContain('steering next: use YAML')
+  })
+})

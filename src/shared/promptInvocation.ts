@@ -162,6 +162,32 @@ export function agentTurn(arg: string, typed: string): InvokedTurn | null {
   }
 }
 
+/**
+ * A message whose `@` mentions Houston filled in: an `@agent-<name>` that hands it to
+ * that subagent (the same dispatch `/agent <name>` sends), and the context its other
+ * mentions add after it (a file's lines, the MCP resources to read). `typed` is the
+ * message as the user wrote it, which the chip and history recall show; `context`
+ * is what was added, `describe` a few words naming it for the chip.
+ */
+export function mentionTurn(
+  typed: string,
+  opts: { agent?: string; task: string; context: string[]; describe: string[] }
+): InvokedTurn {
+  const body = [opts.task.trim(), ...opts.context].filter(Boolean).join('\n\n')
+  const firstLine = typed.trim().split('\n')[0]?.trim() ?? ''
+  const detail = clip(opts.describe.join(', '), MAX_DETAIL)
+  const typedClip = clip(typed, MAX_TYPED)
+  return {
+    text: opts.agent ? agentInvocationPrompt(opts.agent, body) : body,
+    invokedAs: {
+      kind: 'command',
+      label: opts.agent ? `@agent-${opts.agent}` : (clip(firstLine, MAX_LABEL) ?? 'Message'),
+      ...(detail ? { detail } : {}),
+      ...(typedClip ? { typed: typedClip } : {})
+    }
+  }
+}
+
 /** A Changes-panel ship button (Create PR, Publish to GitHub, Commit and push, ...). */
 export function shipTurn(action: ShipAction): InvokedTurn {
   return {

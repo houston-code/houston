@@ -12678,3 +12678,182 @@ describe('rate limits in the status line and /usage', () => {
     _resetRateLimits()
   })
 })
+
+describe('/queue', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+  const ESC = String.fromCharCode(27)
+  /** A fake io whose mid-run queue the test controls, like the real adapter's. */
+  function queueIo(inputs: Array<string | null>) {
+    const t = fakeIo(inputs)
+    let q: string[] = []
+    t.io.peekQueued = () => [...q]
+    t.io.dropQueued = (i) => {
+      const gone = q[i]
+      if (gone === undefined) return null
+      q = q.filter((_, j) => j !== i)
+      return gone
+    }
+    t.io.clearQueued = () => {
+      const out = q
+      q = []
+      return out
+    }
+    const hold: { steer: ((text: string, id: string) => boolean | 'handled') | null } = { steer: null }
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    // As the real adapter does: the run takes it under the item's id, or it stays.
+    t.io.sendQueuedNow = (i) => {
+      const item = q[i]
+      if (item === undefined || hold.steer?.(item, `q${i}`) !== true) return false
+      q = q.filter((_, j) => j !== i)
+      return true
+    }
+    const queue = (...items: string[]): void => {
+      q = [...q, ...items]
+    }
+    return { ...t, hold, queue, items: () => [...q] }
+  }
+
+  it('is in the catalog and /help', () => {
+    expect(parseSlashCommand('/queue', settings())).toEqual({ kind: 'queue', op: { op: 'list' } })
+    expect(parseSlashCommand('/queue drop 2', settings())).toEqual({ kind: 'queue', op: { op: 'drop', index: 2 } })
+    expect(HELP_TEXT).toContain('/queue [op n]')
+  })
+
+  it('lists, sends and drops while the turn runs, and keeps what the turn will not take', async () => {
+    const { d } = deps(done)
+    const t = queueIo(['go', null])
+    d.io = t.io
+    const steers: string[] = []
+    d.steerRun = (_r, text) => {
+      steers.push(text)
+      return true
+    }
+    let mid = ''
+    d.startRun = async (req, send) => {
+      t.queue('run the tests', '/compact')
+      expect(t.hold.steer?.('/queue', 'id')).toBe('handled')
+      expect(t.hold.steer?.('/queue send 1', 'id')).toBe('handled')
+      expect(t.hold.steer?.('/queue send 1', 'id')).toBe('handled') // now /compact: a command
+      expect(t.hold.steer?.('/queue send 7', 'id')).toBe('handled')
+      expect(t.hold.steer?.('/queue drop 1', 'id')).toBe('handled')
+      mid = t.text()
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+    expect(mid).toContain('Queued for after this turn (2):\n  1. run the tests\n  2. /compact\n')
+    expect(steers).toEqual(['run the tests'])
+    expect(mid).toContain('sent to the running turn, which reads it at its next step: run the tests')
+    expect(mid).toContain("can't go to the running turn (a command, or too long to steer); it stays queued")
+    expect(mid).toContain('no queued message 7; /queue lists them')
+    expect(mid).toContain('removed: /compact')
+    expect(t.items()).toEqual([])
+  })
+
+  it('says nothing is queued at the prompt, and how to use it', async () => {
+    const { d } = deps(done)
+    const t = queueIo(['/queue', '/queue send 1', '/queue nonsense', '/queue clear', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text).toContain('Nothing is queued.')
+    expect(text).toContain('nothing is queued')
+    expect(text).toContain('usage: /queue, /queue drop <n>, /queue send <n>, /queue clear')
+  })
+
+  it('clears everything waiting', async () => {
+    const { d } = deps(done)
+    const t = queueIo(['go', null])
+    d.io = t.io
+    d.startRun = async (req, send) => {
+      t.queue('a', 'b')
+      t.hold.steer?.('/queue clear', 'id')
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+    expect(t.text()).toContain('cleared 2 queued messages')
+    expect(t.items()).toEqual([])
+  })
+
+  it('prints the list as plain lines in screen-reader mode', async () => {
+    const { d } = deps(done)
+    const t = queueIo(['go', null])
+    d.io = t.io
+    let runs = 0
+    d.startRun = async (req, send) => {
+      // Only the first turn: the queued line goes out as the next one.
+      if (runs++ === 0) {
+        t.queue('later')
+        t.hold.steer?.('/queue', 'id')
+      }
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui({ ...opts, color: true, screenReader: true }, d)
+    expect(t.text()).toContain('Queued for after this turn (1):\n  1. later\n')
+    expect(t.text()).not.toContain(ESC)
+  })
+})
+
+describe('richer @ mentions at send', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+  it('sends the filled-in turn, labelled with what was typed, with the notes', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['@agent-reviewer check @src/a.ts#2-3', null])
+    d.io = t.io
+    const seen: string[] = []
+    d.expandMentions = async (text, o) => {
+      seen.push(text)
+      expect(o.addDirs).toEqual([])
+      return {
+        ok: true,
+        turn: { text: 'EXPANDED', invokedAs: { kind: 'command', label: '@agent-reviewer', typed: text } },
+        notes: ['hands this message to the reviewer subagent', 'adds src/a.ts lines 2-3']
+      }
+    }
+    await runTui(opts, d)
+    expect(seen).toEqual(['@agent-reviewer check @src/a.ts#2-3'])
+    const sent = rec.runs[0].messages.at(-1)!
+    expect(sent.content).toBe('EXPANDED')
+    expect(sent.invokedAs).toMatchObject({ label: '@agent-reviewer', typed: '@agent-reviewer check @src/a.ts#2-3' })
+    expect(t.text()).toContain('· hands this message to the reviewer subagent\n· adds src/a.ts lines 2-3\n')
+  })
+
+  it('does not ask for a message with no @ in it, or one that is already a command turn', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['plain words', '/review', null])
+    d.io = t.io
+    let calls = 0
+    d.expandMentions = async () => {
+      calls++
+      return { ok: true, turn: null }
+    }
+    await runTui(opts, d)
+    expect(calls).toBe(0)
+    expect(rec.runs[0].messages.at(-1)!.content).toBe('plain words')
+  })
+
+  it('sends nothing on a failed mention and says why', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['see @src/a.ts#90-99', null])
+    d.io = t.io
+    d.expandMentions = async () => ({ ok: false, error: '@src/a.ts#90-99: src/a.ts has only 3 lines\u001b[2J' })
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(0)
+    expect(t.text()).toContain('· not sent: @src/a.ts#90-99: src/a.ts has only 3 lines[2J')
+  })
+
+  it('asks before a credential file is read, as a plain y/N question', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['look at @.env#1', 'n', null])
+    d.io = t.io
+    d.expandMentions = async (_text, o) => {
+      const ok = await o.confirm({ commands: [], sensitiveFiles: ['.env'] })
+      return ok ? { ok: true, turn: null } : { ok: false, error: 'not sent: you declined to share the credential file' }
+    }
+    await runTui({ ...opts, screenReader: true }, d)
+    expect(t.text()).toContain('This message reads a credential file:\n  read .env (a credential file)\n')
+    expect(t.reads.some((r) => r.prompt.includes('[y/N]') && r.discardPending)).toBe(true)
+    expect(rec.runs).toHaveLength(0)
+  })
+})

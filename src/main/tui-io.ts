@@ -2517,6 +2517,36 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       waiting = []
       return out
     },
+    // /queue: the follow-ups waiting for after the turn (not the steers, which the
+    // run reads at its next step), numbered oldest first.
+    peekQueued: () => waiting.filter((w) => w.kind === 'queued').map((w) => w.text),
+    dropQueued: (index) => {
+      const item = waiting.filter((w) => w.kind === 'queued')[index]
+      if (!item) return null
+      waiting = waiting.filter((w) => w !== item)
+      pendingChanged(true)
+      drawSpinner()
+      return item.text
+    },
+    sendQueuedNow: (index) => {
+      const item = waiting.filter((w) => w.kind === 'queued')[index]
+      if (!item) return false
+      // The same path as Enter: the run takes it under the item's own id, so it shows
+      // as "steering next" until it lands and Up can still take it back.
+      if ((steerHandler?.(item.text, item.id) ?? false) !== true) return false
+      waiting = waiting.map((w) => (w === item ? { ...w, kind: 'steer' } : w))
+      pendingChanged(true)
+      drawSpinner()
+      return true
+    },
+    clearQueued: () => {
+      const out = waiting.filter((w) => w.kind === 'queued').map((w) => w.text)
+      if (!out.length) return out
+      waiting = waiting.filter((w) => w.kind !== 'queued')
+      pendingChanged(true)
+      drawSpinner()
+      return out
+    },
     steerLanded: (id) => {
       const before = waiting.length
       waiting = waiting.filter((w) => w.id !== id)
