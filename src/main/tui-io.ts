@@ -2,7 +2,15 @@ import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node
 import { StringDecoder } from 'node:string_decoder'
 import { randomUUID } from 'node:crypto'
 import { spinnerFrame, type TuiIo, type Painter, type ImagePasteRequest, type ImagePasteResult } from './tui'
-import { filterTerminalOutput, stripAnsi, stripControlChars, truncateVisible, truncateVisibleStart, visibleWidth } from './tui-wrap'
+import {
+  filterTerminalOutput,
+  stripAnsi,
+  stripControlChars,
+  trustedClipboardWrites,
+  truncateVisible,
+  truncateVisibleStart,
+  visibleWidth
+} from './tui-wrap'
 import type { NotifySpec } from '@shared/notify'
 import { findUltrathink, ultrathinkHint, type KeywordRange, type UltrathinkEffect } from '@shared/ultrathink'
 import {
@@ -10,6 +18,7 @@ import {
   pickerKeyFor,
   renderNumberedPicker,
   parseNumberedPick,
+  type PickerKey,
   type PickerSpec,
   type PickerOutcome
 } from './tui-picker'
@@ -17,6 +26,7 @@ import {
   decodeInput,
   initialDecoderState,
   sanitizePastedKeys,
+  normalizePaste,
   ENABLE_BRACKETED_PASTE,
   DISABLE_BRACKETED_PASTE,
   ENABLE_FOCUS_REPORTING,
@@ -41,6 +51,7 @@ import {
   initialEditorState,
   reduceEditor,
   renderEditor,
+  windowEditorView,
   setEditorText,
   editorEmpty,
   editorText,
@@ -82,6 +93,13 @@ const SHOW_CURSOR = '\x1b[?25h'
 /** Two Esc presses this close together are a double press (clear the draft, or rewind). */
 export const DOUBLE_ESC_MS = 600
 
+/**
+ * A picker that opens while the user is typing mid-run ignores answering keys until
+ * they have paused this long: the next letter of a sentence must not answer a
+ * prompt drawn under it.
+ */
+export const PICKER_TYPING_GRACE_MS = 500
+
 /** What Ctrl-Z says on Windows, which has no job control to hand the terminal back to. */
 const NO_SUSPEND_NOTE = '· Ctrl-Z (suspend to the shell) is not available on Windows'
 
@@ -91,13 +109,48 @@ const NO_SUSPEND_NOTE = '· Ctrl-Z (suspend to the shell) is not available on Wi
  * does from the tty: a command Houston is running for the turn stops and resumes
  * with it.
  */
-function defaultSuspend(onContinue: () => void): void {
-  process.once('SIGCONT', onContinue)
-  process.kill(0, 'SIGTSTP')
+export function defaultSuspend(
+  onContinue: () => void,
+  kill: (pid: number, signal: NodeJS.Signals) => unknown = (pid, signal) => process.kill(pid, signal)
+): void {
+  let resumed = false
+  const resume = (): void => {
+    if (resumed) return
+    resumed = true
+    process.removeListener('SIGCONT', resume)
+    onContinue()
+  }
+  process.once('SIGCONT', resume)
+  try {
+    kill(0, 'SIGTSTP')
+  } finally {
+    // With no job-control shell above us (Houston run straight from tmux, ssh -t or
+    // docker), the process group is orphaned and the stop is discarded: nothing
+    // would ever send SIGCONT. Carry on once control is back here, which after a
+    // real stop is only after `fg`.
+    setImmediate(resume)
+  }
 }
 
 /** Whether writing `s` leaves the cursor at the start of a line (colour codes after the newline aside). */
 const endsLine = (s: string): boolean => stripAnsi(s).endsWith('\n')
+
+/**
+ * Ask a Tab completer about `line`. A candidate holding a control character (a file
+ * name with an escape sequence in it) is dropped: it is neither printed nor typed in.
+ */
+function completeSafely(
+  completer: NonNullable<TerminalIoDeps['completer']>,
+  line: string
+): Promise<[string[], string]> {
+  return new Promise<[string[], string]>((res) => {
+    try {
+      completer(line, (_e, [hits, sub]) => res([hits.filter((h) => stripControlChars(h) === h), sub]))
+    } catch {
+      res([[], line])
+    }
+  })
+}
 
 /** Longest prefix shared by every candidate — how Tab completes an ambiguous token. */
 function commonPrefix(items: string[]): string {
@@ -546,6 +599,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     // Screen-reader mode redraws nothing in place: every write is a plain append, even
     // with a prompt open (whose reads there are append-only lines too).
     if (screenReader) {
+      // A clipboard write Houston built (/copy, /share) is not display: it goes out
+      // untouched, where plainText would strip it and the copy would silently not happen.
+      for (const copy of trustedClipboardWrites(safe)) rawWrite(copy)
       const plain = plainText(safe)
       if (plain) rawWrite(plain)
       return
@@ -561,6 +617,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     if (cancelTimer && !midLine) repaint(eraseRegionSeq() + safe)
     else rawWrite(safe)
     midLine = !endsLine(safe)
+    // Reduced motion ticks every few seconds, too slow to bring the line back: it (and
+    // the draft typed on it) stayed erased that long. A still line can be redrawn now.
+    if (reduceMotion && cancelTimer && !midLine) drawSpinner()
   }
 
   // --- Interrupt watch. While a turn streams, the interface is paused AND the
@@ -646,6 +705,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // What the user is typing right now, rendered on the spinner line.
   let draft = ''
   let watchDec: DecoderState = initialDecoderState()
+  // When the watcher last took a key, so a picker opening mid-sentence knows the
+  // user is still typing (see PICKER_TYPING_GRACE_MS).
+  let lastWatchKeyAt = -Infinity
 
   /**
    * Every byte that arrives while a turn streams.
@@ -660,7 +722,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     const chunk = decodeChunk(data)
     const r = decodeInput(chunk, watchDec)
     watchDec = r.state
-    if (r.keys.some((k) => k.type !== 'focus')) disarmReminder()
+    if (r.keys.some((k) => k.type !== 'focus')) {
+      disarmReminder()
+      lastWatchKeyAt = now()
+    }
     // A paste here is as untrusted as one in the composer: its tail must not be
     // able to submit or fire actions.
     const g = sanitizePastedKeys(r.keys, lastPasteAt, now())
@@ -799,6 +864,17 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   const stopInterruptWatch = (): void => {
     if (!watching) return
     watching = false
+    // A paste cut off here (the turn ended, or a picker opened, between its chunks)
+    // must not leave the decoder inside it: every later byte, Ctrl-C and Esc
+    // included, would be taken as paste text. What arrived of it stays in the draft.
+    if (watchDec.inPaste || watchDec.pending) {
+      const partial = watchDec.inPaste ? normalizePaste(watchDec.pasteBuf) : ''
+      if (partial) {
+        draft += partial
+        pendingChanged(false)
+      }
+    }
+    watchDec = initialDecoderState()
     try {
       // An armed idle reminder still wants focus reports (see armReminder).
       if (!cancelReminder) rawWrite(DISABLE_FOCUS_REPORTING)
@@ -1027,6 +1103,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const composer = opts.composer === true
       const history = composer ? (deps.history?.() ?? []) : []
       let histIdx = history.length
+      // The line being typed, kept while Up and Down browse history.
+      let live: string | null = null
       let buf = opts.initial ?? ''
       let dec: DecoderState = initialDecoderState()
       let done = false
@@ -1089,13 +1167,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         const completer = deps.completer
         if (!completer) return
         const line = buf.slice(buf.lastIndexOf('\n') + 1)
-        const [hits, sub] = await new Promise<[string[], string]>((res) => {
-          try {
-            completer(line, (_e, result) => res(result))
-          } catch {
-            res([[], line])
-          }
-        })
+        const [hits, sub] = await completeSafely(completer, line)
         if (done || !hits.length) return
         const insert = hits.length === 1 ? hits[0] : commonPrefix(hits)
         if (insert.length > sub.length && insert.startsWith(sub)) {
@@ -1263,8 +1335,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
             case 'up':
             case 'down':
               if (!composer || !history.length) break
+              // Leaving the line being typed for history keeps it, so Down past the
+              // newest entry brings it back (as the full composer does).
+              if (histIdx === history.length) live = buf
               histIdx = key.type === 'up' ? Math.max(0, histIdx - 1) : Math.min(history.length, histIdx + 1)
-              buf = history[histIdx] ?? ''
+              buf = histIdx === history.length ? (live ?? '') : (history[histIdx] ?? '')
               restate()
               break
             case 'cycle-mode':
@@ -1490,9 +1565,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         // Every row under the composer is cut to the width: the
         // redraw moves up by rows as drawn, and a menu row that wrapped (a long command
         // description) left a stale copy of the prompt behind on each keystroke.
-        const below = belowRows.map((r) => truncateVisible(r, width()))
+        // The menus show the workspace's text (file names, command descriptions): the
+        // same filter as every other write, so none of it drives the terminal.
+        const below = belowRows.map((r) => truncateVisible(filterTerminalOutput(r), width()))
         const marks = effect === 'raises' ? marksByLine(state.lines, uses) : undefined
-        return renderEditor(state, {
+        const rendered = renderEditor(state, {
           // The mode marker rides in front of the prompt, so which mode you are in
           // is answered where you are already looking.
           prompt: vimOn ? vimStatus(vim.mode, paint) + promptNow() : promptNow(),
@@ -1502,6 +1579,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           ...(below.length ? { below } : {}),
           ...(marks ? { marks } : {})
         })
+        // A draft taller than the screen (a long one handed back) shows the rows
+        // around the cursor, so the redraw never climbs past the top of the screen.
+        return windowEditorView(rendered, below.length, deps.rows?.() ?? process.stdout.rows ?? 0)
       }
 
       // readline software-echoes every keystroke off its own 'keypress' listener,
@@ -1669,13 +1749,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         const completer = deps.completer
         if (!completer) return void draw()
         const line = [...(state.lines[state.row] ?? '')].slice(0, state.col).join('')
-        const [hits, sub] = await new Promise<[string[], string]>((res) => {
-          try {
-            completer(line, (_e, result) => res(result))
-          } catch {
-            res([[], line])
-          }
-        })
+        const [hits, sub] = await completeSafely(completer, line)
         if (done) return
         if (!hits.length) return void draw()
         const insert = hits.length === 1 ? hits[0] : commonPrefix(hits)
@@ -2196,6 +2270,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         announced = safeLabel
         announce(lowerFirst(safeLabel))
       }
+      // At the slow pace the next tick may be seconds away: show the new label now.
+      if (reduceMotion && cancelTimer) drawSpinner()
     },
     setSpinnerTokens: (tokens) => {
       // Shown on the next redraw; screen-reader mode never draws the spinner.
@@ -2213,6 +2289,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // region and fight its cursor-up redraw, tearing it. The picker also owns
       // stdin (its own raw keypress + Ctrl-C cancel), so release the watcher first.
       if (screenReader) return selectNumbered(spec)
+      // Mid-run the watcher takes every key as it arrives, so nothing is buffered for
+      // drainInput to drop: a user typing a message when the picker opens would answer
+      // it with the next letter. Hold answering keys until they pause.
+      const typing =
+        spinnerLabel !== null && watching && (draft.length > 0 || now() - lastWatchKeyAt < PICKER_TYPING_GRACE_MS)
       stopTimer(true)
       toFreshLine()
       stopInterruptWatch()
@@ -2224,7 +2305,23 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           size: () => ({ rows: deps.rows?.() ?? process.stdout.rows ?? 0, columns: columnsNow() }),
           printAbove: (fn) => {
             printAbove = fn
-          }
+          },
+          ...(typing
+            ? {
+                typingGuard: {
+                  now,
+                  graceMs: PICKER_TYPING_GRACE_MS,
+                  // What was held back is the rest of the message being typed: keep it.
+                  onHeld: (key) => {
+                    const ch = key.sequence ?? ''
+                    if (key.name === 'backspace') draft = [...draft].slice(0, -1).join('')
+                    else if (ch.length === 1 && ch >= ' ' && ch !== '\x7f') draft += ch
+                    else return
+                    pendingChanged(false)
+                  }
+                }
+              }
+            : {})
         })
       } finally {
         startTimer() // resume the spinner if a turn is still running
@@ -2258,6 +2355,9 @@ export function pickerPhysicalRows(lines: string[], cols: number): number {
     : lines.length
 }
 
+/** Picker keys held while the user is still typing (everything but moving, Esc and Ctrl-C). */
+const HELD_WHILE_TYPING = new Set<PickerKey['type']>(['enter', 'space', 'digit', 'char', 'text', 'backspace', 'ctrl'])
+
 function runPicker(
   spec: PickerSpec,
   rl: ReadlineLike,
@@ -2269,6 +2369,16 @@ function runPicker(
     size: () => { rows: number; columns: number }
     /** Register how outside output is printed above the open picker (null once it closes). */
     printAbove: (fn: ((s: string) => void) | null) => void
+    /**
+     * The picker opened while the user was typing: keys that answer or edit it are
+     * held (handed to `onHeld`) until no key has arrived for `graceMs`. Arrows, Esc
+     * and Ctrl-C work throughout.
+     */
+    typingGuard?: {
+      now: () => number
+      graceMs: number
+      onHeld: (key: { name?: string; sequence?: string }) => void
+    }
   }
 ): Promise<PickerOutcome> {
   // No real terminal, or no raw mode available → let the driver use the typed path.
@@ -2280,6 +2390,8 @@ function runPicker(
     const session = createPickerSession(spec, paint)
     let prevRows = 0
     let done = false
+    // Until when answering keys are held as the tail of a message being typed (0: not).
+    let guardUntil = screen.typingGuard ? screen.typingGuard.now() + screen.typingGuard.graceMs : 0
     // Keys are handled one at a time: an action may await, and a key arriving
     // meanwhile must see the state it left.
     let queue: Promise<void> = Promise.resolve()
@@ -2330,6 +2442,17 @@ function runPicker(
     const onKey = (_str: string, key: { name?: string; sequence?: string; ctrl?: boolean }): void => {
       const pk = pickerKeyFor(spec, key ?? {})
       if (!pk) return
+      const guard = screen.typingGuard
+      if (guard && guardUntil > 0 && HELD_WHILE_TYPING.has(pk.type)) {
+        const t = guard.now()
+        if (t < guardUntil) {
+          // Still mid-sentence: every key pushes the window on.
+          guardUntil = t + guard.graceMs
+          guard.onHeld(key ?? {})
+          return
+        }
+        guardUntil = 0
+      }
       queue = queue.then(async () => {
         if (done) return
         try {

@@ -32,7 +32,11 @@ export interface PickerOption {
  */
 export interface PickerAction {
   id: string
-  /** `ctrl-<letter>`, or one printable character (which acts only while the filter is empty). */
+  /**
+   * `ctrl-<letter>`, or one printable character. A printable key never acts in a
+   * picker that filters: there it is always filter text, so typing a word cannot start
+   * (and its next letter confirm) an action.
+   */
   keys: string[]
   /** Ask for a line of text first, shown inline under the list. */
   input?: { label: string; initial?: (o: PickerOption) => string }
@@ -333,6 +337,9 @@ function reduceRich(s: PickerState, key: PickerKey): PickerStep {
     case 'down':
       return { state: { ...s, cursor: wrap(s.cursor + 1, len) } }
     case 'digit': {
+      // A filter without digit commits takes digits as text: almost every model id
+      // holds one ("gpt-5").
+      if (s.spec.filter && !s.spec.digitCommits) return setQuery(query + String(key.n))
       const i = key.n - 1
       if (i < 0 || i >= len) return { state: s }
       if (s.spec.digitCommits) {
@@ -351,11 +358,9 @@ function reduceRich(s: PickerState, key: PickerKey): PickerStep {
     case 'ctrl':
       return startAction(s, `ctrl-${key.name}`) ?? { state: s }
     case 'text': {
-      if (!query) {
-        const started = startAction(s, key.ch)
-        if (started) return started
-      }
       if (s.spec.filter) return setQuery(query + key.ch)
+      const started = startAction(s, key.ch)
+      if (started) return started
       // A picker with key actions has no typed answer to fall back to: other keys do nothing.
       if (s.spec.actions?.length) return { state: s }
       return { state: s, outcome: { kind: 'type' } }
@@ -644,7 +649,11 @@ function renderRichPicker(s: PickerState, paint: Painter, size: { width?: number
     }
     if (end < options.length) rows.push(paint(`  ↓ ${options.length - end} more`, 'dim'))
   }
-  const lines = [...head, ...rows, ...preview, ...tail]
+  // A tab is measured as one column but the terminal moves to the next tab stop: a
+  // tab-indented preview row (a Go or Makefile code block) wrapped, and the redraw,
+  // counting one row too few, walked the picker down the screen. Spaces, as the
+  // transcript viewer shows them.
+  const lines = [...head, ...rows, ...preview, ...tail].map((l) => l.replace(/\t/g, '    '))
   return width ? lines.map((l) => truncateVisible(l, Math.max(1, width - 1))) : lines
 }
 

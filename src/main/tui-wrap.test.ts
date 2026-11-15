@@ -12,6 +12,7 @@ import {
   terminalText,
   filterTerminalOutput,
   osc8Link,
+  trustedClipboardWrites,
   osc52Copy
 } from './tui-wrap'
 
@@ -352,5 +353,17 @@ describe('filterTerminalOutput', () => {
   })
   it('folds CRLF and keeps newlines and tabs', () => {
     expect(filterTerminalOutput('a\r\n\tb')).toBe('a\n\tb')
+  })
+  // A block is rendered whole before it is filtered: past 512 links the first ones had
+  // been forgotten and came out as escape text.
+  it('passes every link of a block with hundreds of them, and a copy made before it', () => {
+    const copy = osc52Copy('before the links')
+    const block = Array.from({ length: 2000 }, (_, i) => osc8Link(`file:///repo/f${i}.ts`, `f${i}.ts`)).join('\n')
+    expect(filterTerminalOutput(block)).toBe(block)
+    expect(filterTerminalOutput(copy)).toBe(copy)
+  })
+  it('lists the clipboard writes Houston built, and only those', () => {
+    const copy = osc52Copy('mine')
+    expect(trustedClipboardWrites(`a${copy}b${ESC}]52;c;eA==\x07`)).toEqual([copy])
   })
 })

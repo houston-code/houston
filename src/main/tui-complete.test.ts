@@ -164,6 +164,10 @@ describe('the @ mention dropdown', () => {
     expect(renderMentionMenu([], plain)).toEqual(['  (no matching file)'])
   })
 
+  it('strips control characters from a file name', () => {
+    expect(renderMentionMenu(['a\x1b]52;c;eA==\x07.md'], plain)[0]).toBe('  @a]52;c;eA==.md')
+  })
+
   it('looks the files up once per query and repaints when they arrive', async () => {
     const asked: string[] = []
     const menu = makeMentionMenu(async (q) => {

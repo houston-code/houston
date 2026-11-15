@@ -172,6 +172,28 @@ describe('reducePager', () => {
     expect(run([ch('N')], { ...found.s, top: 77 }).s.top).toBe(42)
   })
 
+  // Opened at the bottom, a match in the last screenful sits below `top`: n found it
+  // again forever, never reaching the next one or wrapping.
+  it('n and N step past matches in the last screenful', () => {
+    const tail: TranscriptDoc = {
+      lines: Array.from({ length: 100 }, (_, i) => ([10, 85, 95].includes(i) ? `hit ${i}` : `line ${i}`)),
+      prompts: []
+    }
+    const go = (keys: EditorKey[], from: PagerState): PagerState => {
+      let s = from
+      for (const k of keys) s = reducePager(s, k, { doc: tail, height: 20 }).state
+      return s
+    }
+    const found = go([ch('/'), ch('hit'), { type: 'enter' }], { ...initialPagerState(), top: 80 })
+    expect(found.message).toBe('match 2 of 3')
+    const third = go([ch('n')], found)
+    expect(third.message).toBe('match 3 of 3')
+    const wrapped = go([ch('n')], third)
+    expect(wrapped.message).toBe('match 1 of 3, from the top')
+    expect(wrapped.top).toBe(10)
+    expect(go([ch('N')], third).message).toBe('match 2 of 3')
+  })
+
   it('edits and cancels a search being typed', () => {
     const typing = run([ch('/'), ch('nee'), { type: 'backspace' }])
     expect(typing.s.input).toBe('ne')

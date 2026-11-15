@@ -9,12 +9,14 @@ import {
   marksByLine,
   physicalCursorRow,
   pickerPhysicalRows,
+  PICKER_TYPING_GRACE_MS,
+  defaultSuspend,
   SYNC_BEGIN,
   SYNC_END,
   type ReadlineLike
 } from './tui-io'
 import type { PagerSource } from './tui-pager'
-import { visibleWidth } from './tui-wrap'
+import { osc52Copy, visibleWidth } from './tui-wrap'
 import { makePainter } from './tui'
 import { commandMenuView, renderCommandMenu, type CommandSpec } from './tui-complete'
 
@@ -386,6 +388,23 @@ describe('createTerminalIo spinner, reduced motion', () => {
     expect(h.text()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
   })
 
+  // The erase-before-write relied on the next tick to redraw the line, five seconds off.
+  it('draws the activity line again right after output and on a new label', () => {
+    const h = harness()
+    h.io.setAccessibility!({ reduceMotion: true })
+    h.io.startSpinner!('Working')
+    const before = h.text().length
+    h.io.out('a tool line\n')
+    const after = h.text().slice(before)
+    expect(after.indexOf('• Working')).toBeGreaterThan(after.indexOf('a tool line'))
+    h.io.setSpinnerLabel!('Responding')
+    expect(h.text()).toContain('• Responding')
+    // Half a line written: nothing is drawn over it.
+    const mid = h.text().length
+    h.io.out('partial')
+    expect(h.text().slice(mid)).not.toContain('•')
+  })
+
   it('switching it mid-run restarts the timer at the new pace', () => {
     const h = harness()
     h.io.startSpinner!('Working')
@@ -554,6 +573,23 @@ describe('readComposer (raw-mode composer)', () => {
       }
     }
   }
+
+  // A draft handed back whole (a long mid-run paste, a restored draft) reprinted all
+  // of its rows into the scrollback on every key, climbing past the top of the screen.
+  it('a draft taller than the screen redraws only a screenful per key', async () => {
+    const t = harness({ rows: () => 24 })
+    const big = Array.from({ length: 300 }, (_, i) => `line ${i}`).join('\n')
+    const read = t.io.readComposer!('> ', big)
+    const before = t.written.length
+    t.stdin.push('x')
+    const redraw = t.written.slice(before).join('')
+    expect(redraw).toContain('line 299x')
+    expect(redraw.split('\n').length).toBeLessThanOrEqual(24)
+    expect(redraw).not.toContain('line 0\n')
+    for (const [, n] of redraw.matchAll(CURSOR_UP)) expect(Number(n)).toBeLessThan(24)
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe(`${big}x`)
+  })
 
   it('repaints when menu rows arrive after the keystroke (an @ file lookup)', async () => {
     let late: string[] = []
@@ -836,6 +872,29 @@ describe('readComposer (raw-mode composer)', () => {
     const noMenu = harness({ completer })
     await tab(noMenu)
     expect(noMenu.text()).toContain('/redo  /review')
+  })
+
+  // A repository's file names are untrusted: a clipboard write or screen clear in one
+  // must not reach the terminal through the @ dropdown or Tab.
+  it('a file name holding an escape sequence is shown inert in the menu and never completed', async () => {
+    const evil = 'a\x1b]52;c;eA==\x07\x1b[2J.md'
+    const menu = harness({ menuFor: (l) => (l.includes('@') ? [`  @${evil}`] : []) })
+    const read = menu.io.readComposer!('> ')
+    menu.stdin.push('@a')
+    menu.stdin.push('\r')
+    await read
+    expect(menu.text()).not.toContain('\x1b]52')
+    expect(menu.text()).not.toContain('\x1b[2J')
+    const completer = (line: string, cb: (err: null, result: [string[], string]) => void): void =>
+      cb(null, [[`@${evil}`, '@ab.md'], line.slice(line.lastIndexOf('@'))])
+    const tabbed = harness({ completer })
+    const read2 = tabbed.io.readComposer!('> ')
+    tabbed.stdin.push('see @a')
+    tabbed.stdin.push('\t')
+    await new Promise((r) => setImmediate(r))
+    tabbed.stdin.push('\r')
+    await expect(read2).resolves.toBe('see @ab.md')
+    expect(tabbed.text()).not.toContain('\x1b]52')
   })
 
   it('hands the draft to $EDITOR on Ctrl-X Ctrl-E and takes back the result', async () => {
@@ -1862,6 +1921,104 @@ describe('sub-prompts and the picker after the composer', () => {
     await expect(escaped).resolves.toEqual({ kind: 'cancel' })
   })
 
+  // Mid-run the watcher takes keys as they come, so nothing is buffered to drain: the
+  // next letter of a message being typed answered an approval opened under it.
+  it('a picker opened while the user types mid-run holds answering keys until they pause', async () => {
+    const stdin = fakeTty()
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: () => {},
+      columns: () => 80,
+      now: () => clock,
+      schedule: () => () => {},
+      drainInput: () => {}
+    })
+    const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
+    io.startSpinner!('Working')
+    stdin.push('pl')
+    await settle()
+    clock += 100
+    let result: unknown = 'pending'
+    const picked = io.select!({
+      title: '',
+      options: [
+        { label: 'Allow once', value: 'once', key: 'y' },
+        { label: 'Allow for this chat', value: 'always', key: 'a' },
+        { label: 'Deny', value: 'deny', key: 'n' }
+      ]
+    })
+    void picked.then((r) => (result = r))
+    // "ease" of "please": each letter well inside the grace window of the last.
+    for (const ch of 'ease') {
+      clock += 120
+      stdin.push(ch)
+      await settle()
+    }
+    stdin.push('\r')
+    await settle()
+    expect(result).toBe('pending')
+    // A pause, then a deliberate answer.
+    clock += PICKER_TYPING_GRACE_MS + 100
+    stdin.push('n')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: 'deny' })
+    // What was held back stays in the message being typed.
+    expect(io.takeDraft!()).toBe('please')
+    io.stopSpinner!()
+  })
+
+  // A paste cut off when the watcher stopped left its decoder inside the paste: the
+  // next run took Ctrl-C and Esc as paste text and could not be stopped.
+  it('a paste cut off when a run ends does not leave the next run deaf to Ctrl-C', async () => {
+    const stdin = fakeTty()
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: () => {},
+      columns: () => 80,
+      now: () => 1000,
+      schedule: () => () => {},
+      drainInput: () => {}
+    })
+    const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
+    let interrupts = 0
+    io.onInterrupt!(() => {
+      interrupts++
+    })
+    io.startSpinner!('Working')
+    stdin.push('\x1b[200~first half')
+    await settle()
+    io.stopSpinner!()
+    // What arrived of the paste is kept, not lost.
+    expect(io.takeDraft!()).toBe('first half')
+    io.startSpinner!('Working')
+    stdin.push('\x03')
+    await settle()
+    expect(interrupts).toBe(1)
+    io.stopSpinner!()
+  })
+
+  it('a picker opened mid-run with nothing being typed answers at once', async () => {
+    const stdin = fakeTty()
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: () => {},
+      columns: () => 80,
+      now: () => clock,
+      schedule: () => () => {},
+      drainInput: () => {}
+    })
+    io.startSpinner!('Working')
+    clock += 5000
+    const picked = io.select!({ title: '', options: [{ label: 'Allow once', value: 'once', key: 'y' }] })
+    stdin.push('y')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: 'once' })
+    io.stopSpinner!()
+  })
+
   it('the composer joins a character split across two reads', async () => {
     const stdin = fakeTty()
     const io = createTerminalIo({ stdin, createInterface: () => fakeRl().rl, write: () => {}, columns: () => 80, now: () => 1000 })
@@ -2485,6 +2642,28 @@ describe('screen-reader mode', () => {
     }
   }
 
+  // /copy over SSH: the clipboard write was stripped with every other escape, so
+  // nothing was copied while Houston said it was.
+  it('keeps the line being typed while Up and Down browse history', async () => {
+    const t = harness({ history: () => ['older'] })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('a long thought')
+    t.stdin.push(`${ESC}[A`)
+    t.stdin.push(`${ESC}[B`)
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('a long thought')
+  })
+
+  it('sends a clipboard write Houston built, and still strips a foreign one', () => {
+    const t = harness()
+    t.io.out(`${osc52Copy('x')}copied\n`)
+    expect(t.text()).toContain(`${ESC}]52;c;eA==\x07`)
+    expect(t.text()).toContain('copied\n')
+    const t2 = harness()
+    t2.io.out(`${ESC}]52;c;ZXZpbA==\x07hi\n`)
+    expect(t2.text()).not.toContain(`${ESC}]52`)
+  })
+
   it('reads the composer append-only, a multi-line paste included, with no redraw escapes', async () => {
     const t = harness()
     const read = t.io.readComposer!('you: ')
@@ -2923,5 +3102,26 @@ describe('notification modes and the idle reminder', () => {
     t.io.remindIfIdle!(reminder, 'auto')
     t.io.remindIfIdle!(reminder, 'auto', 1000)
     expect(t.pending()).toEqual([1000])
+  })
+})
+
+describe('defaultSuspend', () => {
+  // With no job-control shell above Houston the stop is discarded and no SIGCONT ever
+  // comes: the composer stayed torn down for good.
+  it('carries on when the stop signal is discarded, once', async () => {
+    const before = process.listenerCount('SIGCONT')
+    let continued = 0
+    const sent: string[] = []
+    defaultSuspend(
+      () => continued++,
+      (_pid, signal) => sent.push(signal)
+    )
+    expect(sent).toEqual(['SIGTSTP'])
+    await new Promise((r) => setImmediate(r))
+    expect(continued).toBe(1)
+    // A late SIGCONT (a real stop, then `fg`) does not resume twice.
+    process.emit('SIGCONT', 'SIGCONT')
+    expect(continued).toBe(1)
+    expect(process.listenerCount('SIGCONT')).toBe(before)
   })
 })
