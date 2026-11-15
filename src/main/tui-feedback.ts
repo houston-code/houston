@@ -1,5 +1,6 @@
 import type { Painter, TuiDeps } from './tui'
 import type { PickerOption } from './tui-picker'
+import { renderLogFileLine } from './tui-info'
 import { stripControlCharsKeepLines } from './tui-wrap'
 
 /**
@@ -17,6 +18,8 @@ export interface IssueReportHost {
   url: (body: string | null) => string
   /** Hand a URL to the system browser; false when it couldn't. */
   open: (url: string) => boolean
+  /** Where the log file is, shown (never sent) so the user can attach it; null when unknown. */
+  logPath?: () => string | null
 }
 
 export const FEEDBACK_INTRO = [
@@ -63,6 +66,7 @@ export async function runFeedbackCommand(deps: TuiDeps, paint: Painter): Promise
     deps.io.out(`${shown.split('\n').map((l) => (l ? `  ${l}` : '')).join('\n')}\n\n`)
   }
   deps.io.out(paint(`${FEEDBACK_CHAT_NOTE}\n`, 'dim'))
+  if (host.logPath) deps.io.out(`${renderLogFileLine(host.logPath(), paint)}\n`)
 
   const options: PickerOption[] = [
     { label: 'Open in browser', value: 'open', description: 'the new-issue page with this text filled in' },

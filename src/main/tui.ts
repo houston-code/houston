@@ -217,7 +217,8 @@ import {
   type SessionFlags,
   type SessionInputs
 } from './sessionFlags'
-import { isSubagentTool, splitSubagentReport, SubagentTermLines } from '@shared/subagents'
+import { isSubagentTool, splitSubagentReport, subagentSpend, SubagentTermLines, type SubagentSpend } from '@shared/subagents'
+import { renderSubagentSpend, renderWhatsNew } from './tui-info'
 import { formatElapsed } from '@shared/elapsed'
 import {
   registryDelivery,
@@ -2321,7 +2322,7 @@ export const HELP_TEXT = [
   '  /delete               delete this chat (asks first)',
   '  /permissions [remove n]  all rules that apply, with warnings; or remove one',
   '  /permissions add …    add a rule of your own: allow|ask|deny <tool> <pattern> [--exact]',
-  '  /cost                 show session token + cost totals',
+  '  /cost                 show session token + cost totals, by model and by subagent',
   '  /usage                spend and tokens per day (last 7) and per project, from the chats on this computer',
   '  /context              what fills the context now, part by part',
   '  /skills /agents       list workspace skills / custom agents',
@@ -3778,6 +3779,12 @@ export interface TuiDeps {
    */
   takeLegacyRulesNotice?: () => boolean
   /**
+   * Optional one-time "What's new" after an upgrade: the bundled highlights when the
+   * terminal last ran an older version, else null. The host records the version, so
+   * it prints once per upgrade (the desktop app keeps its own record).
+   */
+  takeWhatsNew?: () => { version: string; highlights: string } | null
+  /**
    * Optional waking of this session when background work it started finishes while
    * the composer sits idle (see agent/backgroundEvents.ts). `register` installs the
    * driver's handler (`tryWake` says whether it took the wake); `take` takes the
@@ -5116,6 +5123,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // the middle of the composer's redraw region (or a streaming turn) and corrupt it.
     if (!rulesNoticeChecked) {
       rulesNoticeChecked = true
+      try {
+        const news = deps.takeWhatsNew?.()
+        if (news) deps.io.out(`${renderWhatsNew(news, paint)}\n`)
+      } catch {
+        /* a failed check is a non-event */
+      }
       let due = false
       try {
         due = deps.takeLegacyRulesNotice?.() === true
@@ -6316,7 +6329,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // 'handled' — informational commands print here where the state lives.
         handleInfoCommand(
           text,
-          { providerId, model, policy, cwd: opts.cwd, sessionCost, modelCosts, contextParts, contextTokens },
+          {
+            providerId,
+            model,
+            policy,
+            cwd: opts.cwd,
+            sessionCost,
+            modelCosts,
+            contextParts,
+            contextTokens,
+            agents: subagentSpend(messages.flatMap((m) => m.subagents ?? []))
+          },
           deps,
           paint,
           customCommands
@@ -7221,6 +7244,8 @@ function handleInfoCommand(
     contextParts?: ContextParts | null
     /** The provider's measured context size for that round (0 when unknown). */
     contextTokens?: number
+    /** What each subagent in the chat spent, for /cost. */
+    agents?: SubagentSpend[]
   },
   deps: TuiDeps,
   paint: Painter,
@@ -7251,7 +7276,8 @@ function handleInfoCommand(
     return
   }
   if (name === 'cost') {
-    deps.io.out(`${renderCostReport(state.modelCosts, paint)}\n`)
+    const agents = state.modelCosts.length ? renderSubagentSpend(state.agents ?? [], paint) : ''
+    deps.io.out(`${renderCostReport(state.modelCosts, paint)}\n${agents ? `${agents}\n` : ''}`)
     return
   }
   if (name === 'context') {

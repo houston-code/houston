@@ -883,7 +883,8 @@ file paths, or keys (server and provider names you chose are counted, not named,
 the secret redacter runs over it). Then you choose: open the new-issue page in your
 browser with that text filled in, print its link, or cancel. Nothing is sent until you
 submit the issue on GitHub. To share the chat too, `/export` it, read the file over, and
-attach it yourself.
+attach it yourself. It also says where the log file is, to attach if it helps (read it
+first: it can name your folders); the path is never put in the report.
 
 ### Terminal themes
 
@@ -1966,6 +1967,11 @@ reaches a model with no higher level to move to.
 Subagents and reviews often run on a different (cheaper) model, so they're listed
 separately rather than folded into the main one.
 
+Under the model rows, `/cost` lists what each subagent in the chat spent (tokens and
+cost, most expensive first, the first eight by name and the rest summed in one row).
+Those tokens are already counted in their model's row; the list says which agent spent
+them.
+
 In the desktop app, the usage chip in the control bar shows how full the context is
 (a small bar and "used/maximum") and the chat's cost so far (output tokens for a
 model with no known price). Clicking it opens the same breakdown, which also lists
@@ -2077,6 +2083,8 @@ The desktop app updates itself separately.
 - which language servers are installed, and whether servers are off on this host
 - each MCP server's connection state
 - in the terminal, the terminal's size and color support
+- in the terminal, that looking at the running app (`view_localhost`) and rendering
+  mockups are desktop app only: a terminal session leaves those tools out
 
 Each row is marked healthy, worth knowing, or broken, and anything not healthy comes
 with what to do about it. The fixes fit where you are: the terminal names its slash
@@ -4087,6 +4095,8 @@ The desktop app's **Help** menu is last in the menu bar on every platform.
   **Open GitHub** opens the issue
   in your browser with that text filled in; describe what happened there before you
   submit. Both are also in the command palette.
+- **In the terminal,** `/feedback` (or `/bug`) shows the same report, then opens or
+  prints the prefilled new-issue link, and says where the log file is.
 - **Take the Tour…** plays the getting-started tips again.
 - **On macOS** it also has the system search field: type part of a command's name (for
   example "settings") to find it in the menus.
@@ -4140,6 +4150,11 @@ sidebar) or `Esc` returns to the chat.
 
 **Check for Updates…** is also in the app menu on macOS, and the Help menu on Windows
 and Linux.
+
+**What's new.** After an update, the first launch shows a one-line summary of the
+release: a small popup in the desktop app, and a line above the first prompt in the
+terminal. Each keeps its own record, so each shows it once per update, whichever you
+open first. A fresh install shows nothing.
 
 **API keys** are encrypted with the OS keychain and stay in the app's main process.
 
