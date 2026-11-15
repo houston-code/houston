@@ -111,7 +111,7 @@ import {
   shellTail
 } from './agent/shells'
 import { removeWorktreeOnArchive } from './archiveWorktree'
-import { stopAndDeleteConversation } from './deleteChat'
+import { deleteChat, planChatDelete, resolveDeleteAction } from './deleteChat'
 import { addToQueue, removeFromQueue, clearQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
 import { runAndDrain, drainQueue, startWakeTurn, type DrainIO } from './agent/drain'
 import { setWakeHost } from './agent/backgroundEvents'
@@ -285,28 +285,7 @@ export async function testProviderKey(providerId: unknown, key: unknown): Promis
   }
 }
 
-/**
- * Which delete-confirmation dialog was shown: a plain chat, a chat whose worktree
- * holds work (keep/remove choice), or a chat whose worktree is clean and merged
- * (plain confirmation that also tears the worktree down, since nothing is lost).
- */
-export type DeleteDialogKind = 'plain' | 'worktree' | 'disposableWorktree'
-
-/**
- * Translate a delete-confirmation dialog button index into what should happen.
- * Button 0 is always Cancel (in every dialog), so a cancel can never delete — the
- * bug this guards against. The worktree dialog's button 2 ("Delete & remove
- * worktree") tears the worktree down; a disposable worktree goes with the chat.
- */
-export function resolveDeleteAction(
-  kind: DeleteDialogKind,
-  response: number
-): { delete: boolean; removeWorktree: boolean } {
-  if (response === 0) return { delete: false, removeWorktree: false }
-  const removeWorktree =
-    kind === 'disposableWorktree' || (kind === 'worktree' && response === 2)
-  return { delete: true, removeWorktree }
-}
+export { resolveDeleteAction } from './deleteChat'
 
 /**
  * Persist a usage event's tokens/cost and rewrite it to carry the conversation's
@@ -1502,18 +1481,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(
     IPC.conversationDelete,
     async (event, id: string): Promise<DeleteConversationResult> => {
-      // Only the title and worktree are needed: no attachment bytes.
-      const conv = peekConversation(id)
+      const plan = await planChatDelete(id)
+      const { kind, shared } = plan
       const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
-      const title = conv?.title ?? 'this chat'
-      // A worktree another chat still runs in (a fork shares its source's) is never
-      // offered for removal, even when it looks disposable.
-      const shared = conv?.worktree ? otherConversationsInWorktree(id, conv.worktree.path) > 0 : false
-      const kind: DeleteDialogKind = !conv?.worktree || shared
-        ? 'plain'
-        : (await isWorktreeDisposable(conv.worktree))
-          ? 'disposableWorktree'
-          : 'worktree'
+      const title = plan.title ?? 'this chat'
 
       const { response } = await dialog.showMessageBox(
         win!,
@@ -1526,7 +1497,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
               title: 'Delete chat',
               message: `Delete “${title}”?`,
               detail:
-                `This chat has a git worktree on branch “${conv!.worktree!.branch}”.\n\n` +
+                `This chat has a git worktree on branch “${plan.worktree!.branch}”.\n\n` +
                 `Delete, keep worktree: remove the chat, leave the worktree on disk.\n` +
                 `Delete & remove worktree: also tear down the worktree (any uncommitted ` +
                 `or unmerged work is kept).`
@@ -1540,10 +1511,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
               message: `Delete “${title}”?`,
               detail:
                 kind === 'disposableWorktree'
-                  ? `Its worktree on branch “${conv!.worktree!.branch}” has no changes or ` +
+                  ? `Its worktree on branch “${plan.worktree!.branch}” has no changes or ` +
                     `unmerged commits, so it will be removed too. This cannot be undone.`
                   : shared
-                    ? `This cannot be undone. Its worktree on branch “${conv!.worktree!.branch}” ` +
+                    ? `This cannot be undone. Its worktree on branch “${plan.worktree!.branch}” ` +
                       `stays, because another chat still uses it.`
                     : 'This cannot be undone.'
             }
@@ -1551,14 +1522,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
 
       const action = resolveDeleteAction(kind, response)
       if (!action.delete) return { deleted: false }
-      // Stop what the chat still has running before it goes: its live run (which would
-      // otherwise keep writing to a deleted chat) and its background shells (whose dev
-      // servers would keep their ports, inside a worktree about to be removed).
-      stopAndDeleteConversation(id)
+      const result = await deleteChat(id, plan, action.removeWorktree)
       attention?.forget(id)
-      const worktree =
-        action.removeWorktree && conv?.worktree ? await removeWorktree(conv.worktree) : null
-      return { deleted: true, worktree }
+      return result
     }
   )
   // Rename / pin / archive / move-to-group / set labels. Does not affect the recency ordering.

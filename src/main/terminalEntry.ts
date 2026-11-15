@@ -57,7 +57,7 @@ import { loadSkills } from './agent/skills'
 import { runUserShell } from './userShell'
 import { loadAgents } from './agent/agents'
 import { loadSlashCommands } from './agent/commands'
-import { stopAndDeleteConversation } from './deleteChat'
+import { deleteChat, planChatDelete, stopAndDeleteConversation } from './deleteChat'
 import { compactConversationNow } from './agent/compact'
 import {
   getConversationCheckpoint,
@@ -985,7 +985,11 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         // The desktop sidebar's rename: marks the title as chosen, so it is never
         // replaced by a generated one.
         rename: (id, title) => organizeConversation(id, { title }),
-        remove: (id) => stopAndDeleteConversation(id),
+        // The desktop app's delete: a live run, shells and queue stop too, and the
+        // worktree goes only when the user chose that (or it holds nothing).
+        remove: (id, choice) =>
+          choice ? deleteChat(id, choice.plan, choice.removeWorktree) : stopAndDeleteConversation(id),
+        planDelete: (id) => planChatDelete(id),
         get: (id) => {
           const conv = getConversation(id)
           return conv
