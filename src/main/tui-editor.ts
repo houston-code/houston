@@ -697,7 +697,7 @@ function markChunk(
   chunk: string,
   at: number,
   marks: ReadonlyArray<{ start: number; end: number }>,
-  paint: Painter
+  paint: (s: string) => string
 ): string {
   let out = ''
   let pos = 0
@@ -705,7 +705,7 @@ function markChunk(
     const from = Math.max(m.start - at, pos)
     const to = Math.min(m.end - at, chunk.length)
     if (to <= from) continue
-    out += chunk.slice(pos, from) + paint(chunk.slice(from, to), 'bold', 'magenta')
+    out += chunk.slice(pos, from) + paint(chunk.slice(from, to))
     pos = to
   }
   return out + chunk.slice(pos)
@@ -738,6 +738,8 @@ export function renderEditor(
      * text, so a marked draft lays out exactly as an unmarked one.
      */
     marks?: ReadonlyArray<ReadonlyArray<{ start: number; end: number }>>
+    /** How a mark is drawn. Defaults to the keyword emphasis (bold magenta). */
+    markPaint?: (s: string) => string
   }
 ): EditorView {
   const width = Math.max(8, opts.width)
@@ -787,10 +789,11 @@ export function renderEditor(
       }
     }
     const lineMarks = opts.marks?.[i] ?? []
+    const markPaint = opts.markPaint ?? ((t: string) => opts.paint(t, 'bold', 'magenta'))
     let at = 0
     chunks.forEach((chunk, j) => {
       const prefix = i === 0 && j === 0 ? opts.prompt : j === 0 ? cont : ' '.repeat(lead)
-      rows.push(prefix + (lineMarks.length ? markChunk(chunk, at, lineMarks, opts.paint) : chunk))
+      rows.push(prefix + (lineMarks.length ? markChunk(chunk, at, lineMarks, markPaint) : chunk))
       at += chunk.length
     })
   })

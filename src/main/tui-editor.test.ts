@@ -325,6 +325,13 @@ describe('renderEditor', () => {
     expect(v.rows).toEqual([`> ab ${marked('ultra')}`, `  ${marked('think')}`])
   })
 
+  it('draws marks with the given painter, as a vim selection is', () => {
+    const { state } = run([type('select me')])
+    const inverse = (t: string): string => `\x1b[7m${t}\x1b[27m`
+    const v = renderEditor(state, { prompt: '> ', width: 40, paint, marks: [[{ start: 0, end: 6 }]], markPaint: inverse })
+    expect(v.rows).toEqual([`> ${inverse('select')} me`])
+  })
+
   it('leaves unmarked lines and a colourless terminal as they were', () => {
     const { state } = run([type('ultrathink')])
     expect(renderEditor(state, { prompt: '> ', width: 40, paint, marks: [[{ start: 0, end: 10 }]] }).rows).toEqual([

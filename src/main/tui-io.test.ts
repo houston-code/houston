@@ -2596,6 +2596,26 @@ describe('composer: drafts, images, rewind and suspend', () => {
     expect(rewinds).toBe(1)
   })
 
+  it('in vim mode, a visual selection is drawn in reverse video with a block cursor', async () => {
+    const t = harness({ editorMode: () => 'vim' })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('hello world')
+    t.tick()
+    t.stdin.push('\x1b')
+    t.tick()
+    t.stdin.push('0')
+    const before = t.written.length
+    t.stdin.push('v')
+    t.stdin.push('e')
+    const drawn = t.written.slice(before).join('')
+    expect(drawn).toContain('\x1b[7mhello\x1b[27m')
+    expect(drawn).toContain('\x1b[2 q')
+    t.stdin.push('d')
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe(' world')
+  })
+
   it('in vim mode, Esc Esc never clears text', async () => {
     const t = harness({ editorMode: () => 'vim' })
     t.io.onRewindKey!(() => {})

@@ -1159,14 +1159,31 @@ letters in scripts that need them) stay. The desktop app does the same.
 
 **Supported in normal mode:**
 
-- **Motions:** `h j k l w W b B e E 0 ^ $ gg G`, with counts (`3w`, `d2j`)
+- **Motions:** `h j k l w W b B e E 0 ^ $ gg G`, with counts (`3w`, `d2j`); `f F t T`
+  to a character on the line, `;` and `,` to repeat the last one forward and back;
+  `%` to the matching bracket
 - **Insert:** `i a I A o O s`
 - **Edits:** `x X D C r`
-- **Operators:** `d c y` over any motion, plus `dd cc yy`
+- **Operators:** `d c y > <` over any motion or text object, plus `dd cc yy >> <<`.
+  `>` indents by two spaces, `<` takes up to two away
+- **Text objects:** `iw aw iW aW`, `i" a" i' a'`, `i( a( i[ a[ i{ a{` (the closing
+  bracket works too, as in `di)`). `ciw` changes the word under the cursor, `da"` a
+  quoted string with its quotes
+- **Repeat:** `.` repeats the last change, with what you typed if it went into
+  insert mode (`ce` then a word, then `.` elsewhere). A count replaces the old one
+  (`3.`)
 - **Paste and undo:** `p`/`P`, `u`
 
-**Not supported:** visual mode, text objects (`ciw`), registers beyond the unnamed
-one, marks, macros, and `.` repeat.
+**Visual modes:** `v` selects characters, `V` whole lines. Motions, arrows and text
+objects (`viw`, `vi(`) stretch the selection, shown in reverse video, and `o` jumps
+to its other end. Then `d` or `x` deletes it, `y` copies it, `c` or `s` replaces it
+with what you type, and `>` or `<` shifts its lines (with a count, that many times).
+`Esc`, or the same `v`/`V` again, leaves without changing anything. `.` repeats a
+visual change over the same amount of text from the cursor. The marker shows `v` or
+`V`.
+
+**Not supported:** registers beyond the unnamed one, marks, macros, `:` commands,
+`/` search, and blockwise visual mode.
 
 Everything else in the composer (Enter to send, `Ctrl-R` history search,
 `Ctrl-X Ctrl-E`, pasting) works the same in both modes.

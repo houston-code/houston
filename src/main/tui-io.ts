@@ -67,8 +67,8 @@ import {
   initialVimState,
   reduceVim,
   vimStatus,
-  CURSOR_BAR,
-  CURSOR_BLOCK,
+  vimCursor,
+  vimSelection,
   CURSOR_RESET,
   type VimState
 } from './tui-vim'
@@ -1602,7 +1602,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         // The menus show the workspace's text (file names, command descriptions): the
         // same filter as every other write, so none of it drives the terminal.
         const below = belowRows.map((r) => truncateVisible(filterTerminalOutput(r), width()))
-        const marks = effect === 'raises' ? marksByLine(state.lines, uses) : undefined
+        // A visual selection is drawn in reverse video; it takes the place of the
+        // keyword colouring while it is up (the two never matter at once).
+        const selection = vimOn ? vimSelection(vim, state) : null
+        const marks = selection ?? (effect === 'raises' ? marksByLine(state.lines, uses) : undefined)
         const rendered = renderEditor(state, {
           // The mode marker rides in front of the prompt, so which mode you are in
           // is answered where you are already looking.
@@ -1611,7 +1614,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           paint,
           continuation: paint('… ', 'dim'),
           ...(below.length ? { below } : {}),
-          ...(marks ? { marks } : {})
+          ...(marks ? { marks } : {}),
+          ...(selection ? { markPaint: (t: string) => `\x1b[7m${t}\x1b[27m` } : {})
         })
         // A draft taller than the screen (a long one handed back) shows the rows
         // around the cursor, so the redraw never climbs past the top of the screen.
@@ -1770,7 +1774,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           if (done) return
           try {
             setup()
-            if (vimOn) rawWrite(vim.mode === 'normal' ? CURSOR_BLOCK : CURSOR_BAR)
+            if (vimOn) rawWrite(vimCursor(vim.mode))
           } catch {
             /* best-effort: the read still settles through close/cancel */
           }
@@ -1903,7 +1907,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
             outcome = r2.outcome
             // The cursor shape is the signal a vim user reads without looking; only
             // written when the mode actually changed, so a keystroke stays one write.
-            if (vim.mode !== before) rawWrite(vim.mode === 'normal' ? CURSOR_BLOCK : CURSOR_BAR)
+            if (vim.mode !== before) rawWrite(vimCursor(vim.mode))
           } else {
             const r2 = reduceEditor(state, k)
             next = r2.state

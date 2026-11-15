@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialVimState, reduceVim, vimStatus, type VimState } from './tui-vim'
+import { initialVimState, reduceVim, vimSelection, vimStatus, type VimState } from './tui-vim'
 import { initialEditorState, editorText, setEditorText, type EditorState } from './tui-editor'
 import { makePainter } from './tui'
 import type { EditorKey } from './tui-keys'
@@ -427,5 +427,331 @@ describe('a batched keystroke run', () => {
     expect(keys(at('abc', 0, 0), { type: 'char', value: 'ox y' }).state.lines).toEqual(['abc', 'x y'])
     // A burst that ends on the command itself just enters insert mode.
     expect(keys(at('abc', 0, 0), { type: 'char', value: 'A' }).state.lines).toEqual(['abc'])
+  })
+})
+
+describe('f F t T, ; and ,', () => {
+  it('f and t find a character forward, F and T backward', () => {
+    expect(cursor(keys(at('a,b,c,d', 0, 0), 'f', ','))).toBe('0:1')
+    expect(cursor(keys(at('a,b,c,d', 0, 0), 't', 'c'))).toBe('0:3')
+    expect(cursor(keys(at('a,b,c,d', 0, 6), 'F', ','))).toBe('0:5')
+    expect(cursor(keys(at('a,b,c,d', 0, 6), 'T', 'b'))).toBe('0:3')
+  })
+
+  it('takes a count and stays put when the character is not there', () => {
+    expect(cursor(keys(at('a,b,c,d', 0, 0), '2', 'f', ','))).toBe('0:3')
+    expect(cursor(keys(at('abc', 0, 0), 'f', 'z'))).toBe('0:0')
+  })
+
+  it('; repeats the last find and , repeats it the other way', () => {
+    const r = keys(at('a,b,c,d', 0, 0), 'f', ',', ';', ';')
+    expect(cursor(r)).toBe('0:5')
+    expect(cursor(keys(r, ','))).toBe('0:3')
+  })
+
+  it('a repeated t moves past the character it already sits before', () => {
+    expect(cursor(keys(at('a,b,c', 0, 0), 't', ',', ';'))).toBe('0:2')
+  })
+
+  it('works under an operator: df is inclusive, dt stops short, dF takes back to it', () => {
+    expect(keys(at('foo(bar)', 0, 0), 'd', 'f', '(').text).toBe('bar)')
+    expect(keys(at('foo(bar)', 0, 0), 'd', 't', '(').text).toBe('(bar)')
+    expect(keys(at('foo(bar)', 0, 7), 'd', 'F', '(').text).toBe('foo)')
+  })
+
+  it('takes any key as its character, even a digit or a command', () => {
+    expect(cursor(keys(at('ab1x', 0, 0), 'f', '1'))).toBe('0:2')
+    expect(cursor(keys(at('abdx', 0, 0), 'f', 'd'))).toBe('0:2')
+  })
+})
+
+describe('%', () => {
+  it('jumps between a bracket and its match, across lines', () => {
+    expect(cursor(keys(at('f(a, (b))', 0, 1), '%'))).toBe('0:8')
+    expect(cursor(keys(at('f(a, (b))', 0, 8), '%'))).toBe('0:1')
+    expect(cursor(keys(at('{\n  x\n}', 0, 0), '%'))).toBe('2:0')
+  })
+
+  it('finds the first bracket after the cursor on the line', () => {
+    expect(cursor(keys(at('call [x]', 0, 0), '%'))).toBe('0:7')
+  })
+
+  it('d% takes the whole bracketed span', () => {
+    expect(keys(at('a (b c) d', 0, 2), 'd', '%').text).toBe('a  d')
+  })
+
+  it('does nothing without a bracket', () => {
+    expect(cursor(keys(at('plain', 0, 1), '%'))).toBe('0:1')
+  })
+})
+
+describe('text objects', () => {
+  it('iw is the word under the cursor, aw takes the space after it too', () => {
+    expect(keys(at('one two three', 0, 5), 'd', 'i', 'w').text).toBe('one  three')
+    expect(keys(at('one two three', 0, 5), 'd', 'a', 'w').text).toBe('one three')
+  })
+
+  it('aw takes the space before the last word on a line', () => {
+    expect(keys(at('one two', 0, 5), 'd', 'a', 'w').text).toBe('one')
+  })
+
+  it('iW and aW run to whitespace, across punctuation', () => {
+    expect(keys(at('see a.b-c now', 0, 6), 'd', 'i', 'W').text).toBe('see  now')
+    expect(keys(at('see a.b-c now', 0, 6), 'd', 'a', 'W').text).toBe('see now')
+    expect(keys(at('see a.b-c now', 0, 6), 'd', 'i', 'w').text).toBe('see a.-c now')
+  })
+
+  it('ciw changes the word and leaves you typing', () => {
+    const r = keys(at('say hello there', 0, 6), 'c', 'i', 'w', 'bye')
+    expect(r.text).toBe('say bye there')
+    expect(r.vim.mode).toBe('insert')
+  })
+
+  it('i" and a" are the quoted text, without and with the quotes', () => {
+    expect(keys(at('x = "a b" + y', 0, 6), 'd', 'i', '"').text).toBe('x = "" + y')
+    expect(keys(at('x = "a b" + y', 0, 6), 'd', 'a', '"').text).toBe('x = + y')
+    expect(keys(at("say 'here' now", 0, 6), 'd', 'i', "'").text).toBe("say '' now")
+  })
+
+  it('a quote object finds the next pair when the cursor is before it', () => {
+    expect(keys(at('call "arg"', 0, 0), 'c', 'i', '"', 'x').text).toBe('call "x"')
+  })
+
+  it('i( a( i[ a[ i{ a{ work from anywhere inside, through nesting and lines', () => {
+    expect(keys(at('f(a, g(b), c)', 0, 3), 'd', 'i', '(').text).toBe('f()')
+    expect(keys(at('f(a, g(b), c)', 0, 7), 'd', 'i', ')').text).toBe('f(a, g(), c)')
+    expect(keys(at('f(a, g(b), c)', 0, 3), 'd', 'a', '(').text).toBe('f')
+    expect(keys(at('x[1, 2]', 0, 3), 'd', 'i', '[').text).toBe('x[]')
+    expect(keys(at('x[1, 2]', 0, 3), 'd', 'a', ']').text).toBe('x')
+    expect(keys(at('{\n  a\n}', 1, 2), 'd', 'i', '{').text).toBe('{}')
+    expect(keys(at('{ a }', 0, 2), 'd', 'a', '{').text).toBe('')
+  })
+
+  it('i( on an empty pair puts you between the brackets', () => {
+    const r = keys(at('f()', 0, 1), 'c', 'i', '(', 'x')
+    expect(r.text).toBe('f(x)')
+  })
+
+  it('an object that is not there does nothing', () => {
+    const r = keys(at('no brackets', 0, 3), 'd', 'i', '(')
+    expect(r.text).toBe('no brackets')
+    expect(r.vim.pending).toBe('')
+    expect(keys(at('abc', 0, 1), 'd', 'i', 'z').text).toBe('abc')
+  })
+
+  it('yi( yanks the inside for p', () => {
+    const r = keys(at('(ab)', 0, 1), 'y', 'i', '(', '$', 'p')
+    expect(r.text).toBe('(ab)ab')
+  })
+})
+
+describe('> and <', () => {
+  it('>> indents the line, << takes it back', () => {
+    const r = keys(at('a\nb', 0, 0), '>', '>')
+    expect(r.text).toBe('  a\nb')
+    expect(keys(r, '<', '<').text).toBe('a\nb')
+  })
+
+  it('takes a count of lines and a motion', () => {
+    expect(keys(at('a\nb\nc', 0, 0), '2', '>', '>').text).toBe('  a\n  b\nc')
+    expect(keys(at('a\nb\nc', 0, 0), '>', 'j').text).toBe('  a\n  b\nc')
+  })
+
+  it('leaves empty lines empty and < stops at the margin', () => {
+    expect(keys(at('a\n\nb', 0, 0), '>', 'G').text).toBe('  a\n\n  b')
+    expect(keys(at(' a', 0, 0), '<', '<').text).toBe('a')
+    expect(keys(at('a', 0, 0), '<', '<').vim.undo).toHaveLength(0)
+  })
+})
+
+describe('visual mode', () => {
+  it('v starts a selection that motions stretch, and shows its mode', () => {
+    const r = keys(at('hello world', 0, 0), 'v', 'e')
+    expect(r.vim.mode).toBe('visual')
+    expect(cursor(r)).toBe('0:4')
+    expect(vimStatus('visual', paint)).toContain('v')
+    expect(vimStatus('visual-line', paint)).toContain('V')
+  })
+
+  it('d and x delete the selection, including the character under the cursor', () => {
+    expect(keys(at('hello world', 0, 0), 'v', 'e', 'd').text).toBe(' world')
+    expect(keys(at('hello world', 0, 6), 'v', '$', 'x').text).toBe('hello ')
+  })
+
+  it('selects backwards from the anchor', () => {
+    const r = keys(at('hello world', 0, 4), 'v', '0', 'd')
+    expect(r.text).toBe(' world')
+    expect(r.vim.mode).toBe('normal')
+  })
+
+  it('y yanks the selection and puts the cursor at its start', () => {
+    const r = keys(at('abc def', 0, 6), 'v', 'b', 'y')
+    expect(r.vim.register).toBe('def')
+    expect(cursor(r)).toBe('0:4')
+    expect(r.text).toBe('abc def')
+  })
+
+  it('c replaces the selection with what you type', () => {
+    const r = keys(at('one two three', 0, 4), 'v', 'e', 'c', '2')
+    expect(r.text).toBe('one 2 three')
+    expect(r.vim.mode).toBe('insert')
+  })
+
+  it('a selection runs across lines', () => {
+    expect(keys(at('ab\ncd', 0, 1), 'v', 'j', 'd').text).toBe('a')
+  })
+
+  it('o swaps the ends of the selection', () => {
+    const r = keys(at('abcdef', 0, 1), 'v', 'l', 'l', 'o')
+    expect(cursor(r)).toBe('0:1')
+    expect(keys(r, 'h', 'd').text).toBe('ef')
+  })
+
+  it('Esc and v leave visual mode without touching the text', () => {
+    const a = keys(at('abc', 0, 0), 'v', 'l', { type: 'escape' })
+    expect(a.vim.mode).toBe('normal')
+    expect(a.vim.anchor).toBeNull()
+    expect(keys(at('abc', 0, 0), 'v', 'l', 'v').vim.mode).toBe('normal')
+  })
+
+  it('viw selects a word, and an object switches V to charwise', () => {
+    const r = keys(at('say hello there', 0, 6), 'v', 'i', 'w')
+    expect(cursor(r)).toBe('0:8')
+    expect(r.vim.anchor).toEqual({ row: 0, col: 4 })
+    expect(keys(r, 'd').text).toBe('say  there')
+    expect(keys(at('a (b) c', 0, 3), 'V', 'a', '(', 'd').text).toBe('a  c')
+  })
+
+  it('arrows stretch the selection too', () => {
+    expect(keys(at('abc', 0, 0), 'v', { type: 'right' }, 'd').text).toBe('c')
+  })
+
+  it('f inside visual mode moves the end', () => {
+    expect(keys(at('a,b,c', 0, 0), 'v', 'f', ',', ';', 'd').text).toBe('c')
+  })
+
+  it('> and < shift every line the selection touches', () => {
+    expect(keys(at('a\nb\nc', 0, 0), 'v', 'j', '>').text).toBe('  a\n  b\nc')
+    expect(keys(at('    a\n    b', 0, 0), 'V', 'j', '2', '<').text).toBe('a\nb')
+  })
+
+  it('u takes back a visual change', () => {
+    expect(keys(at('abc', 0, 0), 'v', 'l', 'd', 'u').text).toBe('abc')
+  })
+})
+
+describe('visual-line mode', () => {
+  it('V selects whole lines, and d takes them', () => {
+    const r = keys(at('a\nb\nc', 0, 0), 'V', 'j', 'd')
+    expect(r.text).toBe('c')
+    expect(r.vim.registerLinewise).toBe(true)
+  })
+
+  it('y then p puts the lines back as lines', () => {
+    expect(keys(at('a\nb', 0, 0), 'V', 'y', 'j', 'p').text).toBe('a\nb\na')
+  })
+
+  it('c keeps one empty line to type on', () => {
+    const r = keys(at('a\nb\nc', 1, 0), 'V', 'c', 'x')
+    expect(r.text).toBe('a\nx\nc')
+  })
+
+  it('v and V switch between the two visual modes', () => {
+    const r = keys(at('ab\ncd', 0, 0), 'v', 'V')
+    expect(r.vim.mode).toBe('visual-line')
+    expect(keys(r, 'v').vim.mode).toBe('visual')
+    expect(keys(r, 'V').vim.mode).toBe('normal')
+  })
+})
+
+describe('vimSelection', () => {
+  it('is null outside visual modes', () => {
+    const r = at('abc')
+    expect(vimSelection(r.vim, r.state)).toBeNull()
+  })
+
+  it('covers the characters from the anchor to the cursor, inclusive', () => {
+    const r = keys(at('hello world', 0, 2), 'v', 'l', 'l')
+    expect(vimSelection(r.vim, r.state)).toEqual([[{ start: 2, end: 5 }]])
+  })
+
+  it('runs to the end of each line between the ends', () => {
+    const r = keys(at('ab\ncd\nef', 0, 1), 'v', 'j', 'j')
+    expect(vimSelection(r.vim, r.state)).toEqual([[{ start: 1, end: 2 }], [{ start: 0, end: 2 }], [{ start: 0, end: 2 }]])
+  })
+
+  it('covers whole lines in visual-line mode', () => {
+    const r = keys(at('ab\ncd\nef', 1, 1), 'V', 'k')
+    expect(vimSelection(r.vim, r.state)).toEqual([[{ start: 0, end: 2 }], [{ start: 0, end: 2 }], []])
+  })
+
+  it('counts in string offsets, so an emoji is two units wide', () => {
+    const r = keys(at('😀ab', 0, 0), 'v', 'l')
+    expect(vimSelection(r.vim, r.state)).toEqual([[{ start: 0, end: 3 }]])
+  })
+})
+
+describe('. repeat', () => {
+  it('repeats a delete', () => {
+    expect(keys(at('a b c d', 0, 0), 'd', 'w', '.').text).toBe('c d')
+    expect(keys(at('abcd', 0, 0), 'x', '.', '.').text).toBe('d')
+  })
+
+  it('repeats a change with the text typed after it', () => {
+    const r = keys(at('one two three', 0, 0), 'c', 'e', 'X', { type: 'escape' }, 'w', '.')
+    expect(r.text).toBe('X X three')
+    expect(r.vim.mode).toBe('normal')
+  })
+
+  it('repeats an insert', () => {
+    const r = keys(at('a\nb', 0, 0), 'A', '!', { type: 'escape' }, 'j', '.')
+    expect(r.text).toBe('a!\nb!')
+  })
+
+  it('repeats a text-object change', () => {
+    const r = keys(at('(a) (b)', 0, 1), 'c', 'i', '(', 'z', { type: 'escape' }, 'f', '(', '.')
+    expect(r.text).toBe('(z) (z)')
+  })
+
+  it('takes a new count in place of the old one', () => {
+    expect(keys(at('abcdefg', 0, 0), 'x', '3', '.').text).toBe('efg')
+    expect(keys(at('a b c d e', 0, 0), '2', 'd', 'w', '.').text).toBe('e')
+  })
+
+  it('repeats dd, p and r', () => {
+    expect(keys(at('a\nb\nc', 0, 0), 'd', 'd', '.').text).toBe('c')
+    expect(keys(at('abc', 0, 0), 'r', 'x', 'l', '.').text).toBe('xxc')
+  })
+
+  it('repeats a visual delete over the same amount of text', () => {
+    expect(keys(at('abcdef', 0, 0), 'v', 'l', 'd', '.').text).toBe('ef')
+    expect(keys(at('a\nb\nc\nd\ne', 0, 0), 'V', 'j', 'd', '.').text).toBe('e')
+  })
+
+  it('repeats a visual change and a visual shift', () => {
+    // Esc leaves the cursor after the X, on the `c`: the repeat changes two from there.
+    expect(keys(at('abcd', 0, 0), 'v', 'l', 'c', 'X', { type: 'escape' }, '.').text).toBe('XX')
+    expect(keys(at('a\nb', 0, 0), 'V', '>', 'j', '.').text).toBe('  a\n  b')
+  })
+
+  it('is not itself a change, and motions or yanks do not replace the last one', () => {
+    const r = keys(at('a b c d e', 0, 0), 'd', 'w', 'w', 'y', 'w', '.')
+    expect(r.text).toBe('b d e')
+    expect(r.vim.lastChange).toEqual({ kind: 'keys', keys: 'dw', text: null })
+  })
+
+  it('does nothing before any change', () => {
+    expect(keys(at('abc', 0, 1), '.').text).toBe('abc')
+  })
+
+  it('an insert where the cursor moved is not repeatable', () => {
+    const r = keys(at('ab', 0, 0), 'x', 'i', 'q', { type: 'left' }, 'z', { type: 'escape' }, '.')
+    // `.` repeats the `x` from before (taking the q), not the insert it can't put
+    // back faithfully.
+    expect(r.text).toBe('zb')
+  })
+
+  it('is undone by one u', () => {
+    expect(keys(at('a b c', 0, 0), 'd', 'w', '.', 'u').text).toBe('b c')
   })
 })
