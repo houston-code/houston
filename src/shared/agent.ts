@@ -1470,6 +1470,19 @@ export type AgentEvent =
        */
       protectedWrite?: boolean
       /**
+       * Present and `true` only on a shell command that can throw away work in the
+       * project (`git reset --hard`, `rm -r` of tracked files, a forced push). Such a
+       * command asks in every mode, since shell side effects aren't checkpointed; lets
+       * the UI say that is why it is asking.
+       */
+      discardsWork?: boolean
+      /**
+       * Present and `true` only on a shell command that reaches outside the workspace
+       * (names a path outside it, or runs from a folder outside it). Asks in every mode;
+       * lets the UI say that is why.
+       */
+      escapesWorkspace?: boolean
+      /**
        * On a network call only: a readable name for what "Allow for run" grants (one
        * site, GitHub posts on one repository, one merge tool), so the card can say how
        * far the grant reaches before the user picks it.

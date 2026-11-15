@@ -723,6 +723,26 @@ describe('ToolGroup', () => {
     expect(screen.getByText('2 files')).toBeInTheDocument()
   })
 
+  it('says why a shell command asks in every mode', () => {
+    render(
+      <ToolGroup
+        items={[
+          tool({
+            id: 's1',
+            name: 'run_shell',
+            status: 'awaiting-approval',
+            args: { command: 'git reset --hard' },
+            toolKind: 'shell',
+            discardsWork: true
+          })
+        ]}
+        onApprove={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/It can throw away work in the project/)).toBeInTheDocument()
+    expect(screen.queryByText(/outside the project folder/)).not.toBeInTheDocument()
+  })
+
   it('gives a read waiting on approval its own row with the prompt, even after other reads', () => {
     const onApprove = vi.fn()
     const items: ToolItem[] = [

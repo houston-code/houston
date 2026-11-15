@@ -29,6 +29,7 @@ import { formatReceiptLines, type TurnReceipt } from '@shared/evidence'
 import { formatReadinessLines } from '@shared/planReadiness'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
+import { approvalAskReasonShort } from '@shared/approvalReasons'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { formatCost } from '@shared/usage'
 import {
@@ -1250,7 +1251,12 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
             deps.resolveApproval(e.runId, e.callId, 'allow')
           } else {
             if (!opts.json) {
-              deps.err(`· denying ${terminalText(e.name, { lines: false })} (no interactive user; pass --on-approval allow to permit gated calls)\n`)
+              // Say why when it is a check that holds in every mode, so a script's author
+              // sees that full auto alone won't clear it.
+              const why = approvalAskReasonShort(e)
+              deps.err(
+                `· denying ${terminalText(e.name, { lines: false })}${why ? ` (it ${why})` : ''} (no interactive user; pass --on-approval allow to permit gated calls)\n`
+              )
             }
             if (opts.onApproval === 'fail') t.approvalDenied = true
             deps.resolveApproval(e.runId, e.callId, 'deny')

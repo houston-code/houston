@@ -143,6 +143,10 @@ export interface ToolItem {
   sensitiveWrite?: boolean
   /** With sensitiveWrite: the file is an in-project control file (.houston/, .vscode/, …). */
   protectedWrite?: boolean
+  /** A shell command that can throw away work, so it asks in every mode (see the event). */
+  discardsWork?: boolean
+  /** A shell command that reaches outside the workspace, so it asks in every mode. */
+  escapesWorkspace?: boolean
   /** On a network prompt: what "Allow for run" grants (see the tool_approval event). */
   networkScope?: string
   output?: string
@@ -520,6 +524,8 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           sensitiveRead: e.sensitiveRead === true,
           sensitiveWrite: e.sensitiveWrite === true,
           protectedWrite: e.protectedWrite === true,
+          discardsWork: e.discardsWork === true,
+          escapesWorkspace: e.escapesWorkspace === true,
           ...(e.networkScope ? { networkScope: e.networkScope } : {}),
           status: 'awaiting-approval'
         })
@@ -540,6 +546,8 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           ...(e.sensitiveRead ? { sensitiveRead: true } : {}),
           ...(e.sensitiveWrite ? { sensitiveWrite: true } : {}),
           ...(e.protectedWrite ? { protectedWrite: true } : {}),
+          ...(e.discardsWork ? { discardsWork: true } : {}),
+          ...(e.escapesWorkspace ? { escapesWorkspace: true } : {}),
           ...(e.networkScope ? { networkScope: e.networkScope } : {}),
           status: 'awaiting-approval'
         }

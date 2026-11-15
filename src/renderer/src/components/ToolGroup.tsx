@@ -10,6 +10,7 @@ import { droppedSummary, findingTally, isDropped, sortFindings } from '@shared/r
 import { deniedPromptText, stoppedPromptText } from '@shared/promptOutcome'
 import { endedShort, isSubagentTool, statusLabel } from '@shared/subagents'
 import { formatElapsed } from '@shared/elapsed'
+import { approvalAskReasons } from '@shared/approvalReasons'
 import { hasHiddenCharacters, visibleText } from '@shared/visibleText'
 import { useTick } from '../hooks/useTick'
 import type { ToolItem } from '../lib/items'
@@ -784,6 +785,11 @@ function ApprovalPrompt({
           in full auto.
         </p>
       )}
+      {approvalAskReasons(item).map((reason) => (
+        <p key={reason} className="tool-row__approval-note">
+          {reason}
+        </p>
+      ))}
       {item.shellOffline && (
         <p className="tool-row__approval-note">
           Runs without network. If it needs the network, Houston asks before allowing it.

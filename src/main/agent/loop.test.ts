@@ -9307,6 +9307,25 @@ describe('egress hardening', () => {
       })
       expect(approvalCallIds(r)).toEqual(['x3'])
       expect(shellNetPerCall.map((c) => c.command)).toEqual(['npm test', 'npm run build', 'rm -rf node_modules dist'])
+      // The prompt says why it is asking in full auto.
+      const ask = r.events.find((e) => e.type === 'tool_approval' && e.callId === 'x3') as { discardsWork?: boolean; escapesWorkspace?: boolean }
+      expect(ask.discardsWork).toBe(true)
+      expect(ask.escapesWorkspace).toBeUndefined()
+    })
+
+    it('says a command that reaches outside the workspace is why it asks', async () => {
+      h.probeTools = [probeRunShell()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('deny'),
+        turns: [
+          [runShellCall('x1', 'cat /etc/hosts'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const ask = r.events.find((e) => e.type === 'tool_approval' && e.callId === 'x1') as { discardsWork?: boolean; escapesWorkspace?: boolean }
+      expect(ask.escapesWorkspace).toBe(true)
+      expect(ask.discardsWork).toBeUndefined()
     })
 
     it('an explicit allow rule lets a known destructive command through', async () => {

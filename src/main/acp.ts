@@ -47,6 +47,7 @@ import { formatReceiptLines } from '@shared/evidence'
 import { formatReadinessLines } from '@shared/planReadiness'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { assertNever } from '@shared/assert'
+import { approvalAskReasons } from '@shared/approvalReasons'
 import { SubagentTermLines } from '@shared/subagents'
 import { approvalSubject, visibleText, type ApprovalSubjectPart } from '@shared/visibleText'
 import { resolveHeadlessModel } from './headless'
@@ -1775,6 +1776,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         warnings.push('Changes a credential or secret file (asked even in full auto).')
       }
       if (e.shellOffline) warnings.push('The command runs without network access.')
+      // Why a command asks even in full auto: it can throw away work or leaves the workspace.
+      warnings.push(...approvalAskReasons(e))
       // What is being approved, whole: the command exactly as it will run, or the memory
       // about to be saved (its summary only names it). Invisible and display-altering
       // characters are shown as <U+XXXX>, so the editor can't render it as something else.

@@ -563,6 +563,33 @@ describe('ACP server: protocol flow', () => {
     expect(h.loop.cancelled).toEqual(['run-1'])
   })
 
+  it('tells the editor why a command asks when it can throw away work', async () => {
+    const h = harness({
+      answer: (method) => (method === 'session/request_permission' ? { outcome: { outcome: 'cancelled' } } : undefined),
+      run: async (req, send, loop) => {
+        const done = loop.waitFor('c1')
+        send({
+          runId: req.runId,
+          type: 'tool_approval',
+          callId: 'c1',
+          name: 'run_shell',
+          summary: 'git reset --hard',
+          args: { command: 'git reset --hard' },
+          kind: 'shell',
+          discardsWork: true
+        })
+        await done
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('reset') })
+    const perm = h.frames.find((f) => f.method === 'session/request_permission')
+    const texts = perm.params.toolCall.content.map((c: any) => c.content?.text)
+    expect(texts).toContainEqual(expect.stringContaining('It can throw away work in the project'))
+    await h.end()
+  })
+
   it('denies a pending permission when the editor cancels it', async () => {
     const h = harness({
       answer: (method) => (method === 'session/request_permission' ? { outcome: { outcome: 'cancelled' } } : undefined),
