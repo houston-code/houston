@@ -9,6 +9,7 @@ import {
   marksByLine,
   physicalCursorRow,
   pickerPhysicalRows,
+  PICKER_TYPING_GRACE_MS,
   SYNC_BEGIN,
   SYNC_END,
   type ReadlineLike
@@ -1860,6 +1861,73 @@ describe('sub-prompts and the picker after the composer', () => {
     const escaped = io.select!(spec)
     stdin.push('\x1b')
     await expect(escaped).resolves.toEqual({ kind: 'cancel' })
+  })
+
+  // Mid-run the watcher takes keys as they come, so nothing is buffered to drain: the
+  // next letter of a message being typed answered an approval opened under it.
+  it('a picker opened while the user types mid-run holds answering keys until they pause', async () => {
+    const stdin = fakeTty()
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: () => {},
+      columns: () => 80,
+      now: () => clock,
+      schedule: () => () => {},
+      drainInput: () => {}
+    })
+    const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
+    io.startSpinner!('Working')
+    stdin.push('pl')
+    await settle()
+    clock += 100
+    let result: unknown = 'pending'
+    const picked = io.select!({
+      title: '',
+      options: [
+        { label: 'Allow once', value: 'once', key: 'y' },
+        { label: 'Allow for this chat', value: 'always', key: 'a' },
+        { label: 'Deny', value: 'deny', key: 'n' }
+      ]
+    })
+    void picked.then((r) => (result = r))
+    // "ease" of "please": each letter well inside the grace window of the last.
+    for (const ch of 'ease') {
+      clock += 120
+      stdin.push(ch)
+      await settle()
+    }
+    stdin.push('\r')
+    await settle()
+    expect(result).toBe('pending')
+    // A pause, then a deliberate answer.
+    clock += PICKER_TYPING_GRACE_MS + 100
+    stdin.push('n')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: 'deny' })
+    // What was held back stays in the message being typed.
+    expect(io.takeDraft!()).toBe('please')
+    io.stopSpinner!()
+  })
+
+  it('a picker opened mid-run with nothing being typed answers at once', async () => {
+    const stdin = fakeTty()
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: () => {},
+      columns: () => 80,
+      now: () => clock,
+      schedule: () => () => {},
+      drainInput: () => {}
+    })
+    io.startSpinner!('Working')
+    clock += 5000
+    const picked = io.select!({ title: '', options: [{ label: 'Allow once', value: 'once', key: 'y' }] })
+    stdin.push('y')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: 'once' })
+    io.stopSpinner!()
   })
 
   it('the composer joins a character split across two reads', async () => {

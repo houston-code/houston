@@ -335,15 +335,26 @@ describe('filtering and action pickers', () => {
     expect(cancelled.notice).toBe('cancelled')
   })
 
-  it('a confirm action needs y; a bound char acts only while the filter is empty', () => {
-    const asked = reducePicker(initialPickerState(rich), { type: 'text', ch: 'x' }).state
+  it('a confirm action needs y', () => {
+    const asked = reducePicker(initialPickerState(rich), { type: 'ctrl', name: 'd' }).state
     expect(renderPicker(asked, paint).join('\n')).toContain('Delete Auth refactor? [y/N]')
     expect(reducePicker(asked, { type: 'text', ch: 'Y' }).outcome).toEqual({ kind: 'action', id: 'delete', value: 'a' })
     expect(reducePicker(asked, { type: 'enter' }).state.mode).toEqual({ kind: 'list' })
-    let s = reducePicker(initialPickerState(rich), { type: 'text', ch: 'c' }).state
-    s = reducePicker(s, { type: 'text', ch: 'x' }).state
-    expect(s.query).toBe('cx')
+  })
+
+  // Typing "xyz" to find a chat must not delete the highlighted one (x asks, y confirms).
+  it('a printable action key is filter text in a filtering picker, even on an empty filter', () => {
+    let s = initialPickerState(rich)
+    for (const k of text('xyz')) {
+      const step = reducePicker(s, k)
+      expect(step.outcome).toBeUndefined()
+      s = step.state
+    }
+    expect(s.query).toBe('xyz')
     expect(s.mode).toBeUndefined()
+    // Without a filter the key still acts.
+    const plain = reducePicker(initialPickerState({ ...rich, filter: false }), { type: 'text', ch: 'x' }).state
+    expect(plain.mode).toMatchObject({ kind: 'confirm', action: 'delete' })
   })
 
   it('a row action with nothing highlighted says so; a global one still runs', () => {

@@ -10,6 +10,7 @@ import {
   pickerKeyFor,
   renderNumberedPicker,
   parseNumberedPick,
+  type PickerKey,
   type PickerSpec,
   type PickerOutcome
 } from './tui-picker'
@@ -81,6 +82,13 @@ const SHOW_CURSOR = '\x1b[?25h'
 
 /** Two Esc presses this close together are a double press (clear the draft, or rewind). */
 export const DOUBLE_ESC_MS = 600
+
+/**
+ * A picker that opens while the user is typing mid-run ignores answering keys until
+ * they have paused this long: the next letter of a sentence must not answer a
+ * prompt drawn under it.
+ */
+export const PICKER_TYPING_GRACE_MS = 500
 
 /** What Ctrl-Z says on Windows, which has no job control to hand the terminal back to. */
 const NO_SUSPEND_NOTE = '· Ctrl-Z (suspend to the shell) is not available on Windows'
@@ -646,6 +654,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // What the user is typing right now, rendered on the spinner line.
   let draft = ''
   let watchDec: DecoderState = initialDecoderState()
+  // When the watcher last took a key, so a picker opening mid-sentence knows the
+  // user is still typing (see PICKER_TYPING_GRACE_MS).
+  let lastWatchKeyAt = -Infinity
 
   /**
    * Every byte that arrives while a turn streams.
@@ -660,7 +671,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     const chunk = decodeChunk(data)
     const r = decodeInput(chunk, watchDec)
     watchDec = r.state
-    if (r.keys.some((k) => k.type !== 'focus')) disarmReminder()
+    if (r.keys.some((k) => k.type !== 'focus')) {
+      disarmReminder()
+      lastWatchKeyAt = now()
+    }
     // A paste here is as untrusted as one in the composer: its tail must not be
     // able to submit or fire actions.
     const g = sanitizePastedKeys(r.keys, lastPasteAt, now())
@@ -2213,6 +2227,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // region and fight its cursor-up redraw, tearing it. The picker also owns
       // stdin (its own raw keypress + Ctrl-C cancel), so release the watcher first.
       if (screenReader) return selectNumbered(spec)
+      // Mid-run the watcher takes every key as it arrives, so nothing is buffered for
+      // drainInput to drop: a user typing a message when the picker opens would answer
+      // it with the next letter. Hold answering keys until they pause.
+      const typing =
+        spinnerLabel !== null && watching && (draft.length > 0 || now() - lastWatchKeyAt < PICKER_TYPING_GRACE_MS)
       stopTimer(true)
       toFreshLine()
       stopInterruptWatch()
@@ -2224,7 +2243,23 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           size: () => ({ rows: deps.rows?.() ?? process.stdout.rows ?? 0, columns: columnsNow() }),
           printAbove: (fn) => {
             printAbove = fn
-          }
+          },
+          ...(typing
+            ? {
+                typingGuard: {
+                  now,
+                  graceMs: PICKER_TYPING_GRACE_MS,
+                  // What was held back is the rest of the message being typed: keep it.
+                  onHeld: (key) => {
+                    const ch = key.sequence ?? ''
+                    if (key.name === 'backspace') draft = [...draft].slice(0, -1).join('')
+                    else if (ch.length === 1 && ch >= ' ' && ch !== '\x7f') draft += ch
+                    else return
+                    pendingChanged(false)
+                  }
+                }
+              }
+            : {})
         })
       } finally {
         startTimer() // resume the spinner if a turn is still running
@@ -2258,6 +2293,9 @@ export function pickerPhysicalRows(lines: string[], cols: number): number {
     : lines.length
 }
 
+/** Picker keys held while the user is still typing (everything but moving, Esc and Ctrl-C). */
+const HELD_WHILE_TYPING = new Set<PickerKey['type']>(['enter', 'space', 'digit', 'char', 'text', 'backspace', 'ctrl'])
+
 function runPicker(
   spec: PickerSpec,
   rl: ReadlineLike,
@@ -2269,6 +2307,16 @@ function runPicker(
     size: () => { rows: number; columns: number }
     /** Register how outside output is printed above the open picker (null once it closes). */
     printAbove: (fn: ((s: string) => void) | null) => void
+    /**
+     * The picker opened while the user was typing: keys that answer or edit it are
+     * held (handed to `onHeld`) until no key has arrived for `graceMs`. Arrows, Esc
+     * and Ctrl-C work throughout.
+     */
+    typingGuard?: {
+      now: () => number
+      graceMs: number
+      onHeld: (key: { name?: string; sequence?: string }) => void
+    }
   }
 ): Promise<PickerOutcome> {
   // No real terminal, or no raw mode available → let the driver use the typed path.
@@ -2280,6 +2328,8 @@ function runPicker(
     const session = createPickerSession(spec, paint)
     let prevRows = 0
     let done = false
+    // Until when answering keys are held as the tail of a message being typed (0: not).
+    let guardUntil = screen.typingGuard ? screen.typingGuard.now() + screen.typingGuard.graceMs : 0
     // Keys are handled one at a time: an action may await, and a key arriving
     // meanwhile must see the state it left.
     let queue: Promise<void> = Promise.resolve()
@@ -2330,6 +2380,17 @@ function runPicker(
     const onKey = (_str: string, key: { name?: string; sequence?: string; ctrl?: boolean }): void => {
       const pk = pickerKeyFor(spec, key ?? {})
       if (!pk) return
+      const guard = screen.typingGuard
+      if (guard && guardUntil > 0 && HELD_WHILE_TYPING.has(pk.type)) {
+        const t = guard.now()
+        if (t < guardUntil) {
+          // Still mid-sentence: every key pushes the window on.
+          guardUntil = t + guard.graceMs
+          guard.onHeld(key ?? {})
+          return
+        }
+        guardUntil = 0
+      }
       queue = queue.then(async () => {
         if (done) return
         try {

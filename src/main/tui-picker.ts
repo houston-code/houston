@@ -32,7 +32,11 @@ export interface PickerOption {
  */
 export interface PickerAction {
   id: string
-  /** `ctrl-<letter>`, or one printable character (which acts only while the filter is empty). */
+  /**
+   * `ctrl-<letter>`, or one printable character. A printable key never acts in a
+   * picker that filters: there it is always filter text, so typing a word cannot start
+   * (and its next letter confirm) an action.
+   */
   keys: string[]
   /** Ask for a line of text first, shown inline under the list. */
   input?: { label: string; initial?: (o: PickerOption) => string }
@@ -351,11 +355,9 @@ function reduceRich(s: PickerState, key: PickerKey): PickerStep {
     case 'ctrl':
       return startAction(s, `ctrl-${key.name}`) ?? { state: s }
     case 'text': {
-      if (!query) {
-        const started = startAction(s, key.ch)
-        if (started) return started
-      }
       if (s.spec.filter) return setQuery(query + key.ch)
+      const started = startAction(s, key.ch)
+      if (started) return started
       // A picker with key actions has no typed answer to fall back to: other keys do nothing.
       if (s.spec.actions?.length) return { state: s }
       return { state: s, outcome: { kind: 'type' } }

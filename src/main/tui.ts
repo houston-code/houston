@@ -1672,7 +1672,7 @@ export function sessionPickerHint(o: {
   if (o.rename) keys.push('ctrl-r rename')
   if (o.pin) keys.push('ctrl-p pin')
   if (o.archive) keys.push('ctrl-e archive')
-  if (o.remove) keys.push('ctrl-d or x delete')
+  if (o.remove) keys.push('ctrl-d delete')
   if (o.scope) keys.push(o.all ? 'ctrl-a this folder' : 'ctrl-a all folders')
   return [...keys, 'esc cancel'].join(' · ')
 }
@@ -2379,7 +2379,7 @@ export const HELP_TEXT = [
   '  /retry                run your last message again after a turn that failed',
   '  /review               adversarial review of your uncommitted changes',
   '  /init                 write or improve AGENTS.md, the instructions file for this project',
-  '  /resume [query]       pick a saved session to reopen (also /sessions): type to filter, 1-9 open a row, ctrl-r rename, ctrl-d or x delete, ctrl-a this folder or all folders',
+  '  /resume [query]       pick a saved session to reopen (also /sessions): type to filter, 1-9 open a row, ctrl-r rename, ctrl-d delete, ctrl-a this folder or all folders',
   '  /spawned              list the background sessions the agent started; open one',
   '  /tasks [n|kill n]     background shells and subagents of this chat: list, show n, or stop n (works mid-turn)',
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
@@ -5177,7 +5177,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (persist.remove) {
       actions.push({
         id: 'delete',
-        keys: ['ctrl-d', 'x'],
+        keys: ['ctrl-d'],
         confirm: (o) => {
           const title = titleOf(o.value)
           if (o.value === conversationId) {

@@ -9397,7 +9397,7 @@ describe('resume picker rows', () => {
 
   it('the footer names only the keys that work here', () => {
     expect(sessionPickerHint({ rename: true, remove: true, scope: true, all: false })).toBe(
-      '↑/↓ move · enter open · 1-9 open row · type to filter · ctrl-r rename · ctrl-d or x delete · ctrl-a all folders · esc cancel'
+      '↑/↓ move · enter open · 1-9 open row · type to filter · ctrl-r rename · ctrl-d delete · ctrl-a all folders · esc cancel'
     )
     expect(sessionPickerHint({ rename: false, remove: false, scope: true, all: true })).toBe(
       '↑/↓ move · enter open · 1-9 open row · type to filter · ctrl-a this folder · esc cancel'
@@ -9497,7 +9497,7 @@ describe('/resume arrow-key picker', () => {
     expect(first).toContain('Done: split ]52;c;eA==the handler') // the escape is stripped
     expect(first).not.toContain('\x1b')
     // The footer wraps between keys rather than cutting any off.
-    expect(first).toContain('ctrl-r rename · ctrl-d or x delete\nctrl-a all folders · esc cancel')
+    expect(first).toContain('ctrl-r rename · ctrl-d delete\nctrl-a all folders · esc cancel')
     expect(t.text()).toContain('resumed: 1 message')
     expect(rec.runs[0].messages[0]).toEqual({ role: 'user', content: 'make the button blue' })
   })
@@ -9606,19 +9606,20 @@ describe('/resume arrow-key picker', () => {
     expect(after).not.toContain('2. CSS tweaks')
   })
 
-  it('x deletes only while the filter is empty; typed after a letter it filters', async () => {
+  // Typing "xy" to find a chat once deleted the highlighted one: x asked, y confirmed.
+  it('typed letters only ever filter, even on an empty filter: "xy" deletes nothing', async () => {
     const { d } = deps(finished)
     const st = pickerStore([
       ...seed(),
-      { id: 'x', title: 'xterm colors', updatedAt: 500, messages: [] }
+      { id: 'x', title: 'xyz experiments', updatedAt: 500, messages: [] }
     ])
     d.persist = st.persist
     const t = fakeIo(['/resume', null])
     d.io = t.io
-    const frames = scriptPicker(t, [[...text('t'), ...text('x'), esc, ...text('x')]])
+    const frames = scriptPicker(t, [[...text('x'), ...text('y'), esc, esc]])
     await runTui(opts, d)
-    expect(frames[0][2].join('\n')).toContain('filter: tx')
-    expect(frames[0][4].join('\n')).toContain('Delete "Auth refactor"')
+    expect(frames[0][2].join('\n')).toContain('filter: xy')
+    expect(frames[0][2].join('\n')).not.toContain('[y/N]')
     expect(st.removed).toEqual([])
   })
 
@@ -9629,7 +9630,7 @@ describe('/resume arrow-key picker', () => {
     const t = fakeIo(['hi', '/resume', 'again', null])
     d.io = t.io
     // The chat just created (conv-1) sorts last: move up onto it.
-    const frames = scriptPicker(t, [[{ type: 'up' }, ...text('x'), ...text('y'), esc]])
+    const frames = scriptPicker(t, [[{ type: 'up' }, ctrl('d'), ...text('y'), esc]])
     await runTui(opts, d)
     expect(frames[0][0].join('\n')).toContain('(this chat)')
     expect(frames[0][2].join('\n')).toContain("It's the chat you're in: you'll be in a new chat. This cannot be undone. [y/N]")
