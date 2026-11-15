@@ -110,7 +110,7 @@ export function exposeMcpTools(
         name = clash ? rewrittenName(serverId, t.name, true) : plain
         report(serverId, `tool "${t.name}" is offered to the model as "${name}"`)
       }
-      const { parameters, note } = normalizeMcpInputSchema(t.inputSchema)
+      const { parameters, note } = safeNormalize(t.inputSchema)
       if (note) report(serverId, `tool "${t.name}": ${note}`)
       const base = (t.description ?? `MCP tool "${t.name}" from server "${serverId}".`).slice(0, MAX_DESCRIPTION_CHARS)
       return {
@@ -122,6 +122,21 @@ export function exposeMcpTools(
     })
     return { serverId, tools: exposed }
   })
+}
+
+/**
+ * {@link normalizeMcpInputSchema}, but total: any throw while lowering one tool's
+ * schema gives that tool an open schema instead of failing every run.
+ */
+function safeNormalize(schema: Record<string, unknown> | undefined): { parameters: Record<string, unknown>; note?: string } {
+  try {
+    return normalizeMcpInputSchema(schema)
+  } catch {
+    return {
+      parameters: { type: 'object', properties: {}, additionalProperties: true },
+      note: 'its input schema could not be read, so any arguments are accepted'
+    }
+  }
 }
 
 /**
@@ -222,7 +237,8 @@ const MAX_SCHEMA_DEPTH = 32
  *   dropped; a cyclic, missing, root (`#`) or remote reference becomes an open
  *   schema. Remote references are never fetched.
  * - `const` becomes a one-value `enum`;
- * - `prefixItems` (tuples) becomes `items` that accept any of the listed item schemas;
+ * - `prefixItems` (tuples), and draft-07 tuples (`items` as a list, with `additionalItems`),
+ *   become `items` that accept any of the listed item schemas;
  * - identifiers, annotations and conditionals (`$schema`, `$id`, `$anchor`,
  *   `$dynamicRef`, `if`/`then`/`else`, `dependentSchemas`, `unevaluated*`, ...) are dropped.
  *
@@ -240,17 +256,23 @@ export function lowerJsonSchema(schema: Record<string, unknown>): { schema: Reco
   let tooBig = false
   const lower = (node: unknown, depth: number, refs: readonly string[]): unknown => {
     if (tooBig) return {}
-    if (Array.isArray(node)) return node.map((n) => lower(n, depth + 1, refs))
     if (!node || typeof node !== 'object') return node
+    // Before the array case, so nested arrays are bounded too.
     if (++nodes > MAX_SCHEMA_NODES || depth > MAX_SCHEMA_DEPTH) {
       tooBig = true
       return {}
     }
+    if (Array.isArray(node)) return node.map((n) => lower(n, depth + 1, refs))
     const obj = node as Record<string, unknown>
     let base: Record<string, unknown> = {}
     if (typeof obj.$ref === 'string') {
       const m = /^#\/(?:\$defs|definitions)\/(.+)$/.exec(obj.$ref)
-      const name = m ? decodeURIComponent(m[1]).replace(/~1/g, '/').replace(/~0/g, '~') : undefined
+      let name: string | undefined
+      try {
+        name = m ? decodeURIComponent(m[1]).replace(/~1/g, '/').replace(/~0/g, '~') : undefined
+      } catch {
+        name = undefined // a malformed percent escape: an unresolvable reference
+      }
       if (name !== undefined && name in defs && !refs.includes(name)) {
         const target = lower(defs[name], depth + 1, [...refs, name])
         if (target && typeof target === 'object' && !Array.isArray(target)) base = target as Record<string, unknown>
@@ -269,6 +291,8 @@ export function lowerJsonSchema(schema: Record<string, unknown>): { schema: Reco
         continue
       }
       if (key === 'prefixItems') continue // folded into items below
+      // A draft-07 tuple (`items` as a list) is folded like `prefixItems`, below.
+      if (key === 'items' && Array.isArray(value)) continue
       if (SCHEMA_KEYWORDS.has(key)) {
         // A boolean `items: false` closes a tuple; providers take only schemas.
         if (typeof value === 'boolean') {
@@ -289,6 +313,13 @@ export function lowerJsonSchema(schema: Record<string, unknown>): { schema: Reco
       const rest = out.items && typeof out.items === 'object' ? [out.items] : []
       const options = [...tuple, ...rest]
       out.items = options.length === 1 ? options[0] : { anyOf: options }
+    } else if (Array.isArray(obj.items)) {
+      // Draft-07 tuple: `items` lists the positions, `additionalItems` is the rest.
+      const tuple = obj.items.map((v) => lower(v, depth + 1, refs))
+      const rest = out.additionalItems && typeof out.additionalItems === 'object' ? [out.additionalItems] : []
+      delete out.additionalItems
+      const options = [...tuple, ...rest]
+      if (options.length) out.items = options.length === 1 ? options[0] : { anyOf: options }
     }
     return out
   }
