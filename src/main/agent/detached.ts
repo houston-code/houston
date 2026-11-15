@@ -52,6 +52,37 @@ function hasFlag(args: string[], short: string, long: string[]): boolean {
   return args.some((a) => long.includes(a) || (short !== '' && /^-[A-Za-z]+$/.test(a) && a.slice(1).includes(short)))
 }
 
+/**
+ * `docker run`'s options take a value as the next word unless given as `--opt=value`;
+ * these are the ones commonly given that way. A flag cluster ending in one of the short
+ * ones (`-it`, `-dp 80:80`) takes the value too.
+ */
+const RUN_VALUED_LONG = new Set([
+  '--name', '--network', '--net', '--volume', '--env', '--env-file', '--publish', '--workdir',
+  '--user', '--entrypoint', '--label', '--mount', '--memory', '--cpus', '--platform', '--hostname',
+  '--add-host', '--restart', '--pull', '--cidfile', '--device', '--dns', '--expose', '--link',
+  '--log-driver', '--log-opt', '--shm-size', '--ulimit', '--cap-add', '--cap-drop', '--security-opt',
+  '--tmpfs', '--volumes-from', '--gpus', '--pid', '--ipc', '--runtime', '--stop-signal', '--attach'
+])
+const RUN_VALUED_SHORT = new Set(['v', 'e', 'p', 'w', 'u', 'l', 'm', 'h', 'a'])
+
+/**
+ * The words of a `docker run` before its image: the run's own options. Everything from
+ * the image on is the container's command, whose flags (`base64 -d`) are not docker's.
+ */
+function runOptions(args: string[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a === '--' || !a.startsWith('-')) break
+    out.push(a)
+    if (a.includes('=')) continue
+    const valued = a.startsWith('--') ? RUN_VALUED_LONG.has(a) : RUN_VALUED_SHORT.has(a.slice(-1))
+    if (valued && i + 1 < args.length) i++
+  }
+  return out
+}
+
 /** The value of an option given as `--opt value`, `--opt=value`, or `-o value`. */
 function optionValue(args: string[], names: string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
@@ -94,7 +125,7 @@ function classify(segment: string): DetachedLaunch | null {
     }
     const runArgs = sub === 'container' ? args.slice(1) : args
     const verb = (runArgs[0] ?? '').toLowerCase()
-    if (verb === 'run' && hasFlag(runArgs.slice(1), 'd', ['--detach'])) {
+    if (verb === 'run' && hasFlag(runOptions(runArgs.slice(1)), 'd', ['--detach'])) {
       const name = optionValue(runArgs, ['--name'])
       return { what: 'a detached container', stop: `\`${prog} stop ${name ?? '<container>'}\` (\`${prog} ps\` lists them)` }
     }
@@ -180,8 +211,12 @@ export function detachedLaunches(command: string, backgrounded: boolean): Detach
   return found
 }
 
-/** The note appended to a foreground run_shell result, or '' when nothing was left running. */
-export function detachedLaunchNote(command: string, backgrounded: boolean): string {
+/**
+ * The note appended to a foreground run_shell result, or '' when nothing was left
+ * running. A command that exited non-zero (`exitCode`) is taken not to have launched it.
+ */
+export function detachedLaunchNote(command: string, backgrounded: boolean, exitCode?: number | null): string {
+  if (typeof exitCode === 'number' && exitCode !== 0) return ''
   const found = detachedLaunches(command, backgrounded)
   if (!found.length) return ''
   const items = found.map((d) => `${d.what} (stop it with ${d.stop})`).join('; ')

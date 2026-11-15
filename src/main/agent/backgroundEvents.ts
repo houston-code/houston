@@ -1,3 +1,4 @@
+import { runOutcomePhrase } from '@shared/runEnd'
 import { CHILD_REPORT_TAINT, systemNoteMessage, type ChatMessage, type ChildReport } from '@shared/agent'
 
 /**
@@ -184,7 +185,7 @@ function describeEvent(e: BackgroundEvent): string {
 
 /** The lines of a note about finished spawned sessions (their summaries quoted as data). */
 function describeReports(reports: ChildReport[]): string[] {
-  return reports.map((r) => `- session "${r.title}" ${r.outcome === 'error' ? 'failed' : 'finished'}: ${JSON.stringify(r.summary)}`)
+  return reports.map((r) => `- session "${r.title}" ${runOutcomePhrase(r)}: ${JSON.stringify(r.summary)}`)
 }
 
 const DATA_CAVEAT =

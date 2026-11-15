@@ -33,8 +33,6 @@ export interface SubAgentSession {
 export const MAX_SUBAGENT_SESSIONS = 8
 
 interface ConversationSessions {
-  /** Monotonic counter so ids stay unique even after evictions. */
-  counter: number
   sessions: Map<string, SubAgentSession>
 }
 
@@ -49,6 +47,14 @@ export const MAX_SUBAGENT_CONVERSATIONS = 12
 
 const byConversation = new Map<string, ConversationSessions>()
 
+/**
+ * Each conversation's last-issued id number, kept apart from its transcripts so that
+ * evicting them doesn't start the count over: a later dispatch never gets an id the
+ * model already holds for another agent. One number per key; cleared only when the
+ * conversation is forgotten.
+ */
+const counters = new Map<string, number>()
+
 /** Mark a conversation as just used, and drop the least recently used past the cap. */
 function touchConversation(key: string, conv: ConversationSessions): void {
   byConversation.delete(key)
@@ -62,6 +68,7 @@ function touchConversation(key: string, conv: ConversationSessions): void {
 /** Forget a conversation's transcripts (it was deleted). */
 export function forgetSubAgentSessions(conversationKey: string): void {
   byConversation.delete(conversationKey)
+  counters.delete(conversationKey)
 }
 
 /**
@@ -73,10 +80,11 @@ export function rememberSubAgent(
   conversationKey: string,
   entry: Omit<SubAgentSession, 'id'>
 ): string {
-  const conv = byConversation.get(conversationKey) ?? { counter: 0, sessions: new Map() }
+  const conv = byConversation.get(conversationKey) ?? { sessions: new Map() }
   touchConversation(conversationKey, conv)
-  conv.counter += 1
-  const id = `ag${conv.counter}`
+  const n = (counters.get(conversationKey) ?? 0) + 1
+  counters.set(conversationKey, n)
+  const id = `ag${n}`
   conv.sessions.set(id, { ...entry, id })
   if (conv.sessions.size > MAX_SUBAGENT_SESSIONS) {
     // Map preserves insertion order, so the first key is the oldest transcript.
@@ -113,4 +121,5 @@ export function updateSubAgentMessages(
 /** Test-only: drop every stored transcript so suites can't leak state into each other. */
 export function resetSubAgentSessions(): void {
   byConversation.clear()
+  counters.clear()
 }

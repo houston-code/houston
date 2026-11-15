@@ -13,7 +13,7 @@ import {
 } from '@shared/agent'
 import type { ModelCaps, PermissionRule } from '@shared/types'
 import { turnCostUsd } from '@shared/usage'
-import { EMPTY_REPORT_NOTE, runSubAgent, type SubAgentOptions } from './agent/subagent'
+import { EMPTY_REPORT_NOTE, FAILED_REPORT_TAIL, runSubAgent, type SubAgentOptions } from './agent/subagent'
 import { createSecretRedactor } from './agent/redact'
 import { matchRule, permissionSubject } from './agent/permissions'
 import { isSensitiveRead } from './agent/sensitive-paths'
@@ -327,6 +327,13 @@ export function sideOutcome(report: string, aborted: boolean): { answer: string 
   if (aborted) return { error: 'Stopped before it answered.' }
   const err = /^\[subagent error: ([\s\S]*)\]$/.exec(report.trim())
   if (err) return { error: err[1] }
+  // A failure after the agent had said something keeps that text and ends with why it
+  // stopped: still a failure, so it is neither shown as an answer nor saved as the state.
+  const modelError = /\n\n\[subagent stopped by a model error \(([\s\S]*)\); this is what it had\]\s*$/.exec(report)
+  if (modelError) return { error: modelError[1] }
+  if (FAILED_REPORT_TAIL.test(report) || /^\[subagent reached the model's context limit/.test(report.trim())) {
+    return { error: "It reached the model's context limit before it answered. Try a shorter question." }
+  }
   if (report.trim() === EMPTY_REPORT_NOTE) return { error: 'No answer came back. Try asking again.' }
   return { answer: report }
 }

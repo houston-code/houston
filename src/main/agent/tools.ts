@@ -2384,7 +2384,7 @@ const runShell: ToolDef = {
     if (!result.sandboxed) parts.push(UNSANDBOXED_SHELL_NOTE)
     // `docker compose up -d`, `pm2 start`, `nohup x &`: something outlives this
     // command, and Houston's Stop and quit won't reach it. Say how to stop it.
-    const detachedNote = detachedLaunchNote(command, backgroundsItself(command))
+    const detachedNote = detachedLaunchNote(command, backgroundsItself(command), result.exitCode)
     if (detachedNote) parts.push(detachedNote)
     const gitNote = await gitGuardAfter(ctx)
     if (gitNote) parts.push(gitNote)

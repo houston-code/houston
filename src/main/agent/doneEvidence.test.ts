@@ -31,6 +31,21 @@ describe('doneEvidenceGaps', () => {
     expect(doneEvidenceGaps(prose)).toEqual([])
   })
 
+  it('finds no gap when only prose changed after the passing check of the code', () => {
+    const l = new EvidenceLedger()
+    l.recordFiles('/ws', ['src/a.ts'])
+    l.recordShell({ kind: 'shell', command: 'npm test', background: false, exitCode: 0, timedOut: false, output: '# pass 12' })
+    l.recordFiles('/ws', ['README.md'])
+    const gaps = doneEvidenceGaps({
+      ...clean,
+      filesChanged: l.changedFiles(),
+      passedAfterLastWrite: l.passed('any', { afterLastWrite: true }),
+      passedBeforeLastWrite: l.passed('any'),
+      lastTest: l.lastTest()
+    })
+    expect(gaps).toEqual([])
+  })
+
   it('reports a failed last test run instead of a missing check', () => {
     const gaps = doneEvidenceGaps({
       ...clean,

@@ -39,7 +39,10 @@ function basename(path: string): string {
 }
 
 export function isTestPath(path: string): boolean {
-  const p = norm(path)
+  const n = norm(path)
+  // A file outside the workspace is shown by its absolute path, whose directories (a
+  // `/test/` anywhere above the project) say nothing; only its own name counts then.
+  const p = n.startsWith('/') || /^[a-z]:\//i.test(n) ? basename(n) : n
   return TEST_FILE.test(p) || CLASS_TEST_FILE.test(p)
 }
 
@@ -66,12 +69,14 @@ export function isTestRelevantPath(path: string): boolean {
   return isTestPath(path) || isTestConfigPath(path)
 }
 
+// Markers and test cases are calls on a test function (`it.skip(`, `test.only(`, `fit(`),
+// never a method of something else: `clf.fit(X, y)`, `lines().skip(1)`, `/re/.test(s)`.
 const SKIP_MARKER =
-  /\.(skip|skipIf|todo|fixme)\s*\(|\b(xit|xdescribe|xtest|xcontext)\s*\(|@pytest\.mark\.(skip|skipif|xfail)\b|\bpytest\.skip\s*\(|@unittest\.(skip|skipIf|skipUnless|expectedFailure)\b|\bt\.Skip(Now|f)?\s*\(|#\[ignore\b/
-const FOCUS_MARKER = /\.only\s*\(|\b(fit|fdescribe)\s*\(/
+  /(?<![.\w$])(it|test|describe|suite|context|specify|bench|this|t)(\.\w+)*\.(skip|skipIf|todo|fixme)\s*\(|\b(xit|xdescribe|xtest|xcontext)\s*\(|@pytest\.mark\.(skip|skipif|xfail)\b|\bpytest\.skip\s*\(|@unittest\.(skip|skipIf|skipUnless|expectedFailure)\b|\bt\.Skip(Now|f)?\s*\(|#\[ignore\b/
+const FOCUS_MARKER = /\.only\s*\(|(?<![.\w$])(fit|fdescribe)\s*\(/
 const ASSERTION =
   /\bassert\w*!?\s*[(.\s]|\bexpect\s*\(|\.should\b|\bt\.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)\s*\(|\brequire\.\w+\s*\(/g
-const TEST_CASE = /\b[xf]?(it|test)(\.\w+)*\s*\(|\bdef test_|\bfunc Test\w*\s*\(|#\[test\]/g
+const TEST_CASE = /(?<![.\w$])[xf]?(it|test)(\.\w+)*\s*\(|\bdef test_|\bfunc Test\w*\s*\(|#\[test\]/g
 
 /**
  * The file's lines that are code, not comments: a commented-out assertion is a removed
@@ -197,7 +202,7 @@ export function detectTestEdits(files: FileChange[]): TestEdit[] {
 
 /** What makes a test script pass whatever its tests do, or run fewer of them. */
 const SCRIPT_LOOSENERS: { re: RegExp; text: string }[] = [
-  { re: /\|\|\s*(true|:|exit\s+0)\b/, text: 'an exit status that is always 0' },
+  { re: /\|\|\s*(true|:|exit\s+0)(?=[\s;)&|]|$)/, text: 'an exit status that is always 0' },
   { re: /;\s*(exit\s+0|true)\s*$/, text: 'an exit status that is always 0' },
   { re: /--passWithNoTests|--pass-with-no-tests/, text: '--passWithNoTests' },
   { re: /--testPathIgnorePatterns|--exclude\b|--ignore\b|--deselect\b|(^|\s)-k\s/, text: 'a filter that leaves tests out' }

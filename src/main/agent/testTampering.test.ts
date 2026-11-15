@@ -175,6 +175,28 @@ describe('detectTestEdits: test files', () => {
     ).toEqual([['src/math/add.test.ts', 'skip']])
   })
 
+  it('does not read method calls that share a marker name as test edits', () => {
+    const py = 'def test_model():\n    clf = make()\n    assert clf\n'
+    const rs = '#[test]\nfn parses() {\n    let v: Vec<_> = lines().collect();\n    assert_eq!(v.len(), 2);\n}\n'
+    const ts = "it('matches', () => {\n  expect(/foo/.test(s)).toBe(true)\n})\n"
+    expect(
+      detectTestEdits([
+        { path: 'tests/test_model.py', before: py, after: py.replace('assert clf', 'clf.fit(X, y)\n    assert clf') },
+        { path: 'tests/parse.rs', before: rs, after: rs.replace('lines().collect()', 'lines().skip(1).collect()') },
+        { path: 'src/a.test.ts', before: ts, after: ts.replace('expect(/foo/.test(s)).toBe(true)', 'expect(s).toMatch(/foo/)') }
+      ])
+    ).toEqual([])
+  })
+
+  it('does not take a test directory above the project for a test file', () => {
+    expect(isTestPath('/home/dev/test/lib/src/util.ts')).toBe(false)
+    expect(isTestPath('/home/dev/other/src/util.test.ts')).toBe(true)
+    const src = 'export function f(a) {\n  assert(a)\n  return a\n}\n'
+    expect(
+      detectTestEdits([{ path: '/home/dev/test/lib/src/util.ts', before: src, after: 'export const f = (a) => a\n' }])
+    ).toEqual([])
+  })
+
   it('ignores files that are not tests', () => {
     const src = 'export function add(a, b) {\n  assert(typeof a === "number")\n  return a + b\n}\n'
     expect(
@@ -192,6 +214,7 @@ describe('detectTestEdits: scripts and configs', () => {
 
   it.each([
     ['vitest run || true', 'an exit status that is always 0'],
+    ['vitest run || :', 'an exit status that is always 0'],
     ['vitest run; exit 0', 'an exit status that is always 0'],
     ['jest --passWithNoTests', '--passWithNoTests']
   ])('flags a test script that gained %s', (next, text) => {

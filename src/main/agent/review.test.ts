@@ -229,6 +229,20 @@ describe('runReview', () => {
     expect(rows.at(-1)?.status).toBe('candidate')
   })
 
+  it('treats agents that failed after their first step as failed, not as findings or rejections', async () => {
+    const failedLate = 'Looking.\n\n[subagent stopped by a model error (boom); this is what it had]'
+    const { fn } = fakeAgent((o) => {
+      if (isSkeptic(o)) return failedLate
+      if (dimensionOf(o) === 'CORRECTNESS') return failedLate
+      if (dimensionOf(o) === 'SECURITY') return '- [SEVERITY: high] a.ts:1 — injection'
+      return 'No issues found.'
+    })
+    const out = await runReview(base({ runAgent: fn, effort: 'high' }))
+    expect(out).toContain('correctness review could not complete')
+    expect(out).toContain('could not be verified')
+    expect(out).not.toContain('no findings survived')
+  })
+
   it('still rejects a finding the skeptics that ran voted down', async () => {
     let n = 0
     const { fn } = fakeAgent((o) => {
@@ -877,6 +891,21 @@ describe('review rounds per run', () => {
     expect(calls.length).toBe(before)
     expect(out).toMatch(/already reviewed twice/i)
     expect(out).toMatch(/stop reviewing/i)
+  })
+
+  it('does not count a round whose reviewers all failed', async () => {
+    const history = createReviewHistory()
+    let failing = true
+    const { fn, calls } = fakeAgent(() => (failing ? '[subagent error: overloaded]' : 'No issues found.'))
+    const diff = (): string => '@@ a.ts @@\n+x'
+    await reviewWith(history, diff, fn)
+    await reviewWith(history, diff, fn)
+    failing = false
+    const before = calls.length
+    const out = await reviewWith(history, diff, fn)
+    expect(calls.length).toBeGreaterThan(before)
+    expect(out).not.toMatch(/already reviewed/i)
+    expect(history.rounds).toBe(1)
   })
 
   it('still reviews a changed diff after two rounds, up to the per-run cap', async () => {

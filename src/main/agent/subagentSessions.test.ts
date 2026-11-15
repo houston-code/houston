@@ -82,6 +82,15 @@ describe('subagent transcripts across conversations', () => {
     expect(getSubAgent('k1', 'ag1')).toBeUndefined()
   })
 
+  it('never reuses an id after a conversation was evicted', () => {
+    const first = rememberSubAgent('chat-X', entry)
+    for (let i = 0; i < MAX_SUBAGENT_CONVERSATIONS; i++) rememberSubAgent(`other${i}`, entry)
+    const second = rememberSubAgent('chat-X', entry)
+    expect(second).not.toBe(first)
+    expect(getSubAgent('chat-X', first)).toBeUndefined()
+    expect(getSubAgent('chat-X', second)).toBeDefined()
+  })
+
   it('forgets a deleted conversation', () => {
     rememberSubAgent('gone', entry)
     forgetSubAgentSessions('gone')

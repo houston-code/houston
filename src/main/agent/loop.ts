@@ -1465,7 +1465,7 @@ export async function startRun(
     ultrathinkNoted: ultrathinkTail.noted,
     ultrathinkAnnounced: false,
     transcript: [],
-    evidence: new EvidenceLedger(),
+    evidence: new EvidenceLedger(peekShell),
     ...(owner !== undefined ? { owner } : {})
   }
   runs.set(runId, run)
@@ -1941,7 +1941,7 @@ export async function startRun(
         emit({
           type: 'notice',
           message: `Finished since your last message: ${reports
-            .map((r) => `"${r.title}" (${r.outcome === 'error' ? 'failed' : 'done'})`)
+            .map((r) => `"${r.title}" (${r.outcome === 'done' ? 'done' : runOutcomePhrase(r)})`)
             .join(', ')}`
         })
       }
@@ -4280,7 +4280,7 @@ export async function startRun(
             emit({
               type: 'notice',
               message: `Finished while this turn ran: ${reports
-                .map((r) => `"${r.title}" (${r.outcome === 'error' ? 'failed' : 'done'})`)
+                .map((r) => `"${r.title}" (${r.outcome === 'done' ? 'done' : runOutcomePhrase(r)})`)
                 .join(', ')}`
             })
           }
