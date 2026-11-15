@@ -337,4 +337,16 @@ describe('sideOutcome', () => {
     expect(sideOutcome('[subagent error: 429 rate limited]', false)).toEqual({ error: '429 rate limited' })
     expect(sideOutcome('[subagent returned no answer]', false)).toEqual({ error: expect.stringMatching(/No answer/) })
   })
+
+  it('treats a failure after the first step as an error, not an answer', () => {
+    expect(
+      sideOutcome('Looking.\n\n[subagent stopped by a model error (boom (500)); this is what it had]', false)
+    ).toEqual({ error: 'boom (500)' })
+    expect(
+      sideOutcome("Looking.\n\n[subagent stopped at the model's context limit; this is what it had]", false)
+    ).toEqual({ error: expect.stringMatching(/context limit/) })
+    expect(sideOutcome("[subagent reached the model's context limit without a final answer]", false)).toEqual({
+      error: expect.stringMatching(/context limit/)
+    })
+  })
 })

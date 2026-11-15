@@ -16,6 +16,7 @@
  */
 import type { TestEdit } from '@shared/evidence'
 import type { Todo } from '@shared/todos'
+import { PROSE_FILE } from './evidence'
 import { testEditsNote } from './testTampering'
 import { todoGapFacts, type TodoGap } from './todoEvidence'
 
@@ -37,8 +38,6 @@ export interface DoneEvidence {
   testEdits: TestEdit[]
 }
 
-/** Files whose change no check of the code is expected to cover. */
-const PROSE_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|[\\/])(LICENSE|NOTICE|AUTHORS|CHANGELOG)[^\\/]*$/i
 
 function clip(text: string, max = 80): string {
   const t = text.trim().replace(/\s+/g, ' ')

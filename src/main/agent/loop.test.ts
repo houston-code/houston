@@ -11493,6 +11493,26 @@ describe('session proposals, forked spawns, and finished-child reports', () => {
     const again = await run({ provider, conversationId: parent.id, messages: [...r.messages, { role: 'user', content: 'and?' }] })
     expect(again.events.some((e) => e.type === 'notice')).toBe(false)
   })
+
+  it('names a session that hit a limit by how it ended, not as done', async () => {
+    const parent = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const child = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    setMessages(child.id, [
+      { role: 'user', content: 'migrate tests' },
+      { role: 'assistant', content: 'Halfway.', runEnds: [{ reason: 'limit', limit: 'max-steps', at: '2026-01-01T00:00:00.000Z' }] }
+    ])
+    reportChildToParent(parent.id, child.id)
+    const provider: Provider = {
+      async *streamChat() {
+        yield { type: 'text', text: 'ok' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const r = await run({ provider, conversationId: parent.id, userText: 'what next?' })
+    expect(r.events.find((e) => e.type === 'notice')).toMatchObject({
+      message: 'Finished since your last message: "migrate tests" (hit the step limit)'
+    })
+  })
 })
 
 describe('proposal helpers', () => {

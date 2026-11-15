@@ -78,6 +78,21 @@ describe('todoEvidenceGaps', () => {
     expect(todoEvidenceGaps([], [todo('Run the test suite')], l)).toEqual([])
   })
 
+  it('is not stale when only a README or changelog changed after the passing run', () => {
+    const l = new EvidenceLedger()
+    l.recordFiles('/ws', ['src/a.ts'])
+    l.recordShell({ kind: 'shell', command: 'npm test', background: false, exitCode: 0, timedOut: false, output: '# pass 12\n# fail 0' })
+    l.recordFiles('/ws', ['README.md', 'CHANGELOG.md'])
+    expect(todoEvidenceGaps([], [todo('Run the tests')], l)).toEqual([])
+  })
+
+  it('counts a background test run that finished as backing', () => {
+    const l = new EvidenceLedger(() => ({ running: false, exitCode: 0, output: '# pass 12\n# fail 0' }))
+    l.recordFiles('/ws', ['src/a.ts'])
+    l.recordShell({ kind: 'shell', command: 'npm test', background: true, shellId: 'sh1', exitCode: null, timedOut: false, output: '' })
+    expect(todoEvidenceGaps([], [todo('Run the tests')], l)).toEqual([])
+  })
+
   it('counts a failed run as no backing', () => {
     const l = new EvidenceLedger()
     l.recordShell({ kind: 'shell', command: 'pytest', background: false, exitCode: 1, timedOut: false, output: '1 failed, 2 passed in 0.1s' })

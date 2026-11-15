@@ -9,7 +9,14 @@ import {
   RECEIPT_MAX_DELEGATED,
   RECEIPT_MAX_FILES
 } from '@shared/evidence'
-import { classifyCommand, EvidenceLedger, parseTestCounts, type BrowserEvidence, type ShellEvidence } from './evidence'
+import {
+  classifyCommand,
+  EvidenceLedger,
+  parseTestCounts,
+  type BrowserEvidence,
+  type ShellEvidence,
+  type ShellPeek
+} from './evidence'
 
 const shell = (command: string, over: Partial<ShellEvidence> = {}): ShellEvidence => ({
   kind: 'shell',
@@ -124,6 +131,13 @@ describe('classifyCommand', () => {
     // Backgrounded, a build script is still a build, not a server.
     expect(classifyCommand(command, true).kind).toBe(kind)
   })
+
+  it.each(['node dist/bundle.js', 'python types.py', 'node e2e-fixtures.js', 'node build/compile.js', 'tsx src/lint.ts'])(
+    'running the program %s is not a check',
+    (command) => {
+      expect(classifyCommand(command).kind).toBeNull()
+    }
+  )
 
   it.each(['sh deploy.sh', './scripts/check-all.sh', "bash -c 'echo build.sh'", 'bash build', 'build.sh', 'node server.js'])(
     '%s says nothing from its name',
@@ -759,6 +773,35 @@ describe('EvidenceLedger.passed and todo gaps', () => {
     l.recordShell(shell('npm test', { output: '      Tests  12 passed (12)' }))
     expect(l.passed('test', { afterLastWrite: true })).toBe(true)
     expect(receiptSummary(l.receipt()!)).toBe('Tests passed (12) · install passed · 1 file changed')
+  })
+
+  it('does not count a later prose-only change against the passing run', () => {
+    const l = new EvidenceLedger()
+    l.recordFiles('/ws', ['src/a.ts'])
+    l.recordShell(shell('npm test', { output: '      Tests  12 passed (12)' }))
+    l.recordFiles('/ws', ['README.md', 'CHANGELOG.md'])
+    expect(l.passed('any', { afterLastWrite: true })).toBe(true)
+    expect(l.passed('test', { afterLastWrite: true })).toBe(true)
+    // A later code change still does.
+    l.recordFiles('/ws', ['docs/guide.md', 'src/b.ts'])
+    expect(l.passed('test', { afterLastWrite: true })).toBe(false)
+  })
+
+  it('counts a background check that has finished', () => {
+    let peek: ShellPeek = { running: true, exitCode: null, output: '' }
+    const l = new EvidenceLedger(() => peek)
+    l.recordFiles('/ws', ['src/a.ts'])
+    l.recordShell(shell('npm test', { background: true, shellId: 'sh1', exitCode: null }))
+    expect(l.passed('test', { afterLastWrite: true })).toBe(false)
+    expect(l.lastTest()?.ok).toBeUndefined()
+    peek = { running: false, exitCode: 0, output: '      Tests  12 passed (12)' }
+    expect(l.passed('test', { afterLastWrite: true })).toBe(true)
+    expect(l.lastTest()?.ok).toBe(true)
+    // Without a way to read the shell, it stays unknown.
+    const blind = new EvidenceLedger()
+    blind.recordShell(shell('npm test', { background: true, shellId: 'sh1', exitCode: null }))
+    expect(blind.passed('test')).toBe(false)
+    expect(blind.lastTest()?.ok).toBeUndefined()
   })
 
   it('lists todos backed only by a run before the last change apart from those with nothing recorded', () => {

@@ -30,9 +30,16 @@ function packageRunner(dir: string): { run: (script: string) => string; name: st
   return { name: 'npm', run: (s) => (s === 'test' ? 'npm test' : `npm run ${s}`) }
 }
 
-/** A script that would run once and exit (not a watcher, not npm's placeholder). */
+/**
+ * A script that would run once and exit (not a watcher, not npm's placeholder).
+ * `--watch` and `--watchAll` watch unless set `=false`; `react-scripts test` watches
+ * by default, so it runs once only with `--watchAll=false` (or `--watch=false`).
+ */
 function runsOnce(script: string): boolean {
-  return !/--watch\b|\bwatch\b/.test(script) && !/no test specified/i.test(script)
+  if (/no test specified/i.test(script)) return false
+  if (/--watch(All)?\b(?!=false)|\bwatch\b/.test(script)) return false
+  if (/\breact-scripts\s+test\b/.test(script) && !/--watch(All)?=false\b/.test(script)) return false
+  return true
 }
 
 function fromPackageJson(dir: string): VerifySuggestion | null {

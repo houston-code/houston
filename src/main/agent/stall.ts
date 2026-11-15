@@ -170,6 +170,16 @@ export const FILE_READ_TOOLS: ReadonlySet<string> = new Set([
   'lsp_workspace_symbols'
 ])
 
+/**
+ * Tools whose purpose is to be called again with the same arguments: a wait that timed
+ * out says to wait again, so repeating it is not a loop. An iteration that waits on or
+ * polls background work also means something outside the loop is moving (a build
+ * writing `dist/`, a background agent editing files), so a read after it may see
+ * something new.
+ */
+const WAITING_TOOLS: ReadonlySet<string> = new Set(['wait_for'])
+const BACKGROUND_POLL_TOOLS: ReadonlySet<string> = new Set(['wait_for', 'read_shell_output'])
+
 /** One iteration's worth of observations fed to the detector. */
 export interface IterationObservation {
   /** The tool calls the model made this iteration (empty for a text-only turn). */
@@ -282,6 +292,8 @@ interface WindowEntry {
   errors: Set<string>
   failures: Map<string, CommandFailure>
   reverts: Set<string>
+  /** Signatures of this iteration's file reads, emptied once a later iteration changed something. */
+  reads: string[]
 }
 
 /** What the loop should do after an iteration. */
@@ -306,8 +318,6 @@ export class StallDetector {
   private readonly thresholds: StallThresholds
   /** Count of consecutive iterations ending with a given repeated call signature. */
   private repeatCall: { sig: string; count: number } | null = null
-  /** File-read calls made since the last iteration that could have changed something. */
-  private readsSinceChange = new Map<string, number>()
   /** The last {@link STALL_WINDOW} iterations, newest last, for the windowed checks. */
   private window: WindowEntry[] = []
   /**
@@ -325,8 +335,8 @@ export class StallDetector {
   }
 
   observe(obs: IterationObservation): StallAction {
-    const repeatedCallSig = this.trackRepeatedCall(obs.calls) ?? this.trackRepeatedReads(obs)
     this.remember(obs)
+    const repeatedCallSig = this.trackRepeatedCall(obs.calls) ?? this.trackRepeatedReads(obs)
     const repeatedErrorSig = this.repeatedInWindow((e) => e.errors, this.thresholds.repeatErrorLimit)
     const failureSig = this.repeatedInWindow((e) => new Set(e.failures.keys()), this.thresholds.repeatErrorLimit)
     const failure = failureSig ? this.window[this.window.length - 1]!.failures.get(failureSig)! : null
@@ -354,7 +364,8 @@ export class StallDetector {
    * key on the *set* of call signatures this iteration so a lone repeated read is
    * caught while a genuinely varied multi-call turn resets progress.
    */
-  private trackRepeatedCall(calls: ToolCall[]): string | null {
+  private trackRepeatedCall(allCalls: ToolCall[]): string | null {
+    const calls = allCalls.filter((c) => !WAITING_TOOLS.has(c.name))
     if (calls.length === 0) {
       this.repeatCall = null
       return null
@@ -373,19 +384,25 @@ export class StallDetector {
 
   /**
    * The same file read made again and again with nothing changed in between, even when
-   * other calls sit between the repeats (read a, read b, read a, read b, ...). Any
-   * iteration that could have changed something (a write, a command) starts the count
-   * over, since a read after it may see something new.
+   * other calls sit between the repeats (read a, read b, read a, read b, ...). Counted
+   * over the last {@link STALL_WINDOW} iterations, like the other windowed checks, so a
+   * long read-only investigation that comes back to a file much later is not a loop.
+   * Any iteration that could have changed something (a write, a command, a wait on or
+   * poll of background work) starts the count over, since a read after it may see
+   * something new. Runs after {@link remember}, so the newest entry is this iteration.
    */
   private trackRepeatedReads(obs: IterationObservation): string | null {
+    const counts = new Map<string, number>()
+    for (const entry of this.window) for (const sig of entry.reads) counts.set(sig, (counts.get(sig) ?? 0) + 1)
     let hit: string | null = null
-    for (const call of obs.reads ?? []) {
-      const sig = callSignature(call)
-      const count = (this.readsSinceChange.get(sig) ?? 0) + 1
-      this.readsSinceChange.set(sig, count)
-      if (count >= this.thresholds.repeatCallLimit && hit === null) hit = sig
+    for (const sig of this.window[this.window.length - 1]?.reads ?? []) {
+      if ((counts.get(sig) ?? 0) >= this.thresholds.repeatCallLimit) {
+        hit = sig
+        break
+      }
     }
-    if (obs.changed) this.readsSinceChange.clear()
+    const changed = obs.changed === true || obs.calls.some((c) => BACKGROUND_POLL_TOOLS.has(c.name))
+    if (changed) for (const entry of this.window) entry.reads = []
     return hit
   }
 
@@ -396,7 +413,8 @@ export class StallDetector {
     this.window.push({
       errors: new Set(obs.errors.map(errorSignature)),
       failures,
-      reverts: new Set(obs.reverts ?? [])
+      reverts: new Set(obs.reverts ?? []),
+      reads: (obs.reads ?? []).map(callSignature)
     })
     if (this.window.length > STALL_WINDOW) this.window.shift()
   }
@@ -495,7 +513,6 @@ export class StallDetector {
   private reset(): void {
     this.silentIterations = 0
     this.repeatCall = null
-    this.readsSinceChange.clear()
     this.window = []
   }
 }

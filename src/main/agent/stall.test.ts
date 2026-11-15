@@ -269,6 +269,37 @@ describe('StallDetector: windowed loops', () => {
     }
   })
 
+  it('does not count re-reads far apart in a long read-only run', () => {
+    const d = new StallDetector()
+    const pkg = call('read_file', { path: 'package.json' })
+    for (let round = 0; round < 3; round++) {
+      expect(d.observe({ calls: [pkg], errors: [], reads: [pkg], changed: false }).kind).toBe('ok')
+      for (let i = 0; i < 25; i++) {
+        const other = call('read_file', { path: `src/f${round}-${i}.ts` })
+        expect(d.observe({ calls: [other], errors: [], reads: [other], changed: false }).kind).toBe('ok')
+      }
+    }
+  })
+
+  it('does not count re-reads between polls of background work', () => {
+    const d = new StallDetector()
+    const list = call('list_dir', { path: 'dist' })
+    const poll = call('read_shell_output', { shell_id: 'sh1' })
+    const kinds: string[] = []
+    for (let i = 0; i < 6; i++) {
+      kinds.push(d.observe({ calls: [list], errors: [], reads: [list], changed: false }).kind)
+      kinds.push(d.observe({ calls: [poll], errors: [], reads: [], changed: false }).kind)
+    }
+    expect(kinds.every((k) => k === 'ok')).toBe(true)
+  })
+
+  it('does not treat waiting again with wait_for as a repeated call', () => {
+    const d = new StallDetector()
+    const wait = call('wait_for', { id: 'bg1' })
+    const kinds = [0, 1, 2, 3, 4, 5].map(() => d.observe({ calls: [wait], errors: [], reads: [], changed: false }).kind)
+    expect(kinds).toEqual(['ok', 'ok', 'ok', 'ok', 'ok', 'ok'])
+  })
+
   it('catches the same error coming back with other calls in between', () => {
     const d = new StallDetector()
     const err = failedCallKey(call('edit_file', { path: 'a.ts' }), 'Error: old_string was not found in the file.')

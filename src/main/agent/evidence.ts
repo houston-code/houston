@@ -79,6 +79,9 @@ export interface ShellPeek {
   output: string
 }
 
+/** Files whose change no check of the code is expected to cover (docs, changelogs, notices). */
+export const PROSE_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|[\\/])(LICENSE|NOTICE|AUTHORS|CHANGELOG)[^\\/]*$/i
+
 // ---------------------------------------------------------------------------
 // Command classification
 // ---------------------------------------------------------------------------
@@ -245,6 +248,26 @@ function scriptFileKind(path: string): CheckKind | null {
   return scriptKind(stem)
 }
 
+/**
+ * A file an interpreter runs (`node`, `python`, `tsx`, `deno`), named for a check. Running
+ * a program is not a check of it, so beyond a test file the name only counts for a
+ * script kept where projects keep them: a `scripts/` (or `script/`, `tools/`) folder, or
+ * the project root under the bare name (`node build.mjs`). `node dist/bundle.js`,
+ * `node e2e-fixtures.js` and `python types.py` (a module, not a typecheck) say nothing.
+ */
+function interpretedScriptKind(path: string): CheckKind | null {
+  const p = path.replace(/\\/g, '/').replace(/^\.\//, '')
+  if (!p || p.length > 256) return null
+  if (TEST_SCRIPT.test(p)) return 'test'
+  const parts = p.split('/')
+  const file = parts.pop() ?? ''
+  const dir = parts.join('/')
+  const stem = file.replace(/\.[a-z0-9]+$/i, '').replace(/_/g, '-').toLowerCase()
+  if (!stem || stem === 'types') return null
+  if (dir === '') return /^[a-z]+$/.test(stem) ? scriptFileKind(file) : null
+  return /(^|\/)(scripts?|tools)$/i.test(dir) ? scriptFileKind(p) : null
+}
+
 /** What one simple command is for, or null when it's none of the receipt's kinds. */
 function classifySegment(segment: string): CheckKind | null {
   const w = stripWrappers(words(segment))
@@ -297,7 +320,7 @@ function classifySegment(segment: string): CheckKind | null {
         const sub = args[at + 1] ?? ''
         return sub === 'test' ? 'test' : sub === 'runserver' ? 'server' : null
       }
-      return scriptFileKind(script)
+      return interpretedScriptKind(script)
     }
     case 'sh':
     case 'bash':
@@ -807,6 +830,13 @@ function testTrend(c: TestCounts | undefined, h: RunHistory | undefined): Pick<R
  * as long as the run does; only the receipt it produces is persisted.
  */
 export class EvidenceLedger {
+  /**
+   * `peek` reads a background shell's state (see {@link receipt}), so a backgrounded
+   * check that has finished counts in {@link passed} and {@link lastTest} as it does on
+   * the receipt.
+   */
+  constructor(private readonly peek?: (shellId: string) => ShellPeek | undefined) {}
+
   private seq = 0
   /** Checks keyed by kind + label; re-inserted on each run so the order is most recent last. */
   private readonly checks = new Map<string, { record: CheckRecord; runs: number; history?: RunHistory }>()
@@ -817,6 +847,11 @@ export class EvidenceLedger {
   /** Who changed a file, when it was a subagent. */
   private readonly filesBy = new Map<string, string>()
   private lastWriteSeq = -1
+  /**
+   * When a file other than prose last changed: a README or changelog edited after the
+   * passing test run makes that run no less a check of the final code.
+   */
+  private lastCodeWriteSeq = -1
   /** What the turn's edits did to its tests, as of the last look (see testTampering.ts). */
   private testEdits: TestEdit[] = []
 
@@ -902,6 +937,7 @@ export class EvidenceLedger {
    */
   recordFiles(workspace: string, paths: string[], by?: string): void {
     let any = false
+    let code = false
     for (const p of paths) {
       if (!p) continue
       const rel = relative(workspace, resolve(workspace, p))
@@ -912,8 +948,11 @@ export class EvidenceLedger {
       if (by) this.filesBy.set(key, displayLabel(by, 60))
       else this.filesBy.delete(key)
       any = true
+      if (!PROSE_FILE.test(key)) code = true
     }
-    if (any) this.lastWriteSeq = this.seq++
+    if (!any) return
+    this.lastWriteSeq = this.seq++
+    if (code) this.lastCodeWriteSeq = this.lastWriteSeq
   }
 
   /** Replace the turn's test edits with the latest reading of its files. Details must already be redacted. */
@@ -930,13 +969,15 @@ export class EvidenceLedger {
    * An HTTP request whose status wasn't checked counts: it was made, which is what a
    * "curl the API" todo claims. A browser check counts only if it checked the page.
    * With `afterLastWrite`, a check of the code counts only if it ran after the turn's
-   * last file change, so a pass from before a later edit doesn't back the final code.
+   * last change to a file other than prose, so a pass from before a later code edit
+   * doesn't back the final code. A background run that has since finished counts.
    */
   passed(kind: RequiredCheck, opts: { afterLastWrite?: boolean } = {}): boolean {
-    for (const { record } of this.checks.values()) {
+    for (const { record: stored } of this.checks.values()) {
+      const record = this.settle(stored, this.peek)
       const ok = record.ok === true || (record.kind === 'http' && record.unknown === 'http-status-unchecked')
       if (!ok) continue
-      if (opts.afterLastWrite && CHECKS_CODE.has(record.kind) && record.seq < this.lastWriteSeq) continue
+      if (opts.afterLastWrite && CHECKS_CODE.has(record.kind) && record.seq < this.lastCodeWriteSeq) continue
       if (kind === 'any' ? CHECKS_CODE.has(record.kind) : record.kind === kind) return true
     }
     return false
@@ -957,12 +998,14 @@ export class EvidenceLedger {
    * outcome is unknown, or it is still running in the background), and how many failed.
    */
   lastTest(): { label: string; ok: boolean | undefined; failed?: number } | undefined {
-    let last: CheckRecord | undefined
+    let found: CheckRecord | undefined
     for (const { record } of this.checks.values()) {
-      if (record.kind === 'test' && (!last || record.seq > last.seq)) last = record
+      if (record.kind === 'test' && (!found || record.seq > found.seq)) found = record
     }
-    if (!last) return undefined
-    const ok = last.pending || last.unknown || last.ok === null ? undefined : last.ok
+    if (!found) return undefined
+    const last = this.settle(found, this.peek)
+    // A background run not yet settled still has `ok: null` (and an `unknown` reason).
+    const ok = last.unknown || last.ok === null ? undefined : last.ok
     return { label: last.label, ok, ...(last.counts?.failed ? { failed: last.counts.failed } : {}) }
   }
 

@@ -139,6 +139,19 @@ describe('notes', () => {
     expect(note.content).toContain('background shell a')
   })
 
+  it('says how a session that did not finish its work ended', () => {
+    const limited = wakeNote([], [
+      { conversationId: 'k', title: 'Migrate tests', outcome: 'limit', limit: 'max-steps', summary: 'half', finishedAt: 1 }
+    ])!.content
+    expect(limited).toContain('- session "Migrate tests" hit the step limit: "half"')
+    expect(limited).not.toContain('"Migrate tests" finished')
+    const stopped = wakeNote([], [
+      { conversationId: 'k', title: 'Migrate tests', outcome: 'stopped', summary: 'half', finishedAt: 1 }
+    ])!.content
+    expect(stopped).toContain('- session "Migrate tests" was stopped: "half"')
+    expect(stopped).not.toContain('"Migrate tests" finished')
+  })
+
   it('summarizes for the user in one line', () => {
     expect(backgroundEventsNotice([exit('a', { exitCode: 2 }), match('b', ['x'], 'ready'), exit('c', { stoppedBy: 'user' })])).toBe(
       'Background update: shell a exited (code 2), shell b printed "ready", shell c stopped'

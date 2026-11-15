@@ -48,6 +48,17 @@ describe('inferVerifyCommand', () => {
     expect(inferVerifyCommand(ws)).toEqual({ command: 'npm run type-check', source: 'package.json script type-check' })
   })
 
+  it('skips jest --watchAll and react-scripts test, which watch, but not --watchAll=false', () => {
+    pkg({ test: 'jest --watchAll' })
+    expect(inferVerifyCommand(ws)).toBeNull()
+    pkg({ test: 'react-scripts test' })
+    expect(inferVerifyCommand(ws)).toBeNull()
+    pkg({ test: 'jest --watchAll=false' })
+    expect(inferVerifyCommand(ws)?.command).toBe('npm test')
+    pkg({ test: 'react-scripts test --watchAll=false' })
+    expect(inferVerifyCommand(ws)?.command).toBe('npm test')
+  })
+
   it('ignores a broken package.json and falls through to other manifests', () => {
     put('package.json', '{nope')
     put('Cargo.toml', '[package]\nname = "x"')

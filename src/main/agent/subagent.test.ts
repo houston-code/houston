@@ -964,6 +964,33 @@ describe('progress, resume, and nesting', () => {
     expect(toolMsg?.content).toBe('inner report')
   })
 
+  it('marks a nested agent that failed after its first step as a failed call', async () => {
+    const provider = recordingProvider(
+      [
+        [
+          { type: 'tool_call', call: { id: 'n1', name: 'dispatch_agent', arguments: { prompt: 'inner' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'text', text: 'outer report' },
+          { type: 'done', stopReason: 'end_turn' }
+        ]
+      ],
+      { system: '', messages: [] }
+    )
+    const steps: SubagentStep[] = []
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'outer task',
+      signal: new AbortController().signal,
+      onStep: (s) => steps.push(s),
+      dispatchNested: async () => 'Looking.\n\n[subagent stopped by a model error (boom); this is what it had]'
+    })
+    expect(steps.find((s) => s.tool === 'dispatch_agent' && s.ok !== undefined)?.ok).toBe(false)
+  })
+
   it('refuses resume from within a subagent', async () => {
     const sink = { system: '', messages: [] as ChatMessage[][] }
     const provider = recordingProvider(

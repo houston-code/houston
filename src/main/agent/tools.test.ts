@@ -62,7 +62,7 @@ import type { EvidenceDraft } from './evidence'
 import type { FetchedDocument } from './webfetch'
 import type { GhResult } from './github'
 import { killShell, MAX_RUNNING_SHELLS_PER_CHAT, readShellOutput, registerShell } from './shells'
-import { detachedLaunches } from './detached'
+import { detachedLaunchNote, detachedLaunches } from './detached'
 import { createShellSession } from './shell-session'
 import { GIT_GUARD_UNDO, GitGuard } from './gitGuard'
 import { backendSupportsSession } from '../sandbox'
@@ -3177,6 +3177,19 @@ describe('detachedLaunches', () => {
     ]) {
       expect(whats(command), command).toEqual([])
     }
+  })
+
+  it("reads only docker run's own options, not the container command's", () => {
+    expect(whats('echo aGk= | docker run --rm -i alpine base64 -d')).toEqual([])
+    expect(whats('docker run --rm -v "$PWD":/w alpine unzip -d /w/out /w/a.zip')).toEqual([])
+    expect(whats('docker run --rm -e TZ=UTC alpine date -d @0')).toEqual([])
+    expect(whats('docker run -d --name web nginx')).toEqual(['a detached container'])
+    expect(whats('docker run --name web -dp 80:80 nginx')).toEqual(['a detached container'])
+  })
+
+  it('adds no note for a command that failed', () => {
+    expect(detachedLaunchNote('docker run -d nginx', false, 125)).toBe('')
+    expect(detachedLaunchNote('docker run -d nginx', false, 0)).toContain('a detached container')
   })
 })
 

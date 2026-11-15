@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { Provider, ReviewFinding, ReviewSeverity, TokenUsage } from '@shared/agent'
-import { runSubAgent, type SubAgentOptions } from './subagent'
+import { FAILED_REPORT_TAIL, runSubAgent, type SubAgentOptions } from './subagent'
 import { gitDiff, isSafeGitRef, type GitExec, type WorkspaceDiff } from './git'
 
 /**
@@ -235,9 +235,15 @@ function mergeChunkReports(reports: string[]): string {
   return 'No issues found.'
 }
 
-/** runSubAgent wraps provider failures, aborts, and step-limit hits in bracketed notes. */
+/**
+ * runSubAgent wraps provider failures, aborts, and step-limit hits in bracketed notes.
+ * A run that failed after it had said something keeps that text and ends with the
+ * reason instead ({@link FAILED_REPORT_TAIL}): still a failure, not a finding.
+ */
 function isErrorReport(report: string): boolean {
-  return report.trim() === '' || /^\s*\[subagent (error|aborted|reached)/i.test(report)
+  return (
+    report.trim() === '' || /^\s*\[subagent (error|aborted|reached)/i.test(report) || FAILED_REPORT_TAIL.test(report)
+  )
 }
 
 /** A reviewer that found nothing replies with exactly this phrase. */
@@ -534,8 +540,10 @@ export interface RunReviewOptions {
   /**
    * Called once the review ends (however it ends) with the last state of every
    * finding it raised, so the next round can be told what was already settled.
+   * `reviewed` is false when no reviewer completed (all failed, or the review was
+   * stopped first), so nothing of the diff was actually reviewed.
    */
-  onSettled?: (findings: ReviewFinding[]) => void
+  onSettled?: (findings: ReviewFinding[], reviewed: boolean) => void
   /** Opt the nested reviewer subagents into explicit prompt caching (see SubAgentOptions). */
   explicitCacheControl?: boolean
   /**
@@ -586,14 +594,19 @@ export interface ReviewAgentObserver {
  */
 export async function runReview(opts: RunReviewOptions): Promise<string> {
   const latest = new Map<string, ReviewFinding>()
+  const state = { reviewed: false }
   try {
-    return await reviewOnce(opts, latest)
+    return await reviewOnce(opts, latest, state)
   } finally {
-    opts.onSettled?.([...latest.values()])
+    opts.onSettled?.([...latest.values()], state.reviewed)
   }
 }
 
-async function reviewOnce(opts: RunReviewOptions, latest: Map<string, ReviewFinding>): Promise<string> {
+async function reviewOnce(
+  opts: RunReviewOptions,
+  latest: Map<string, ReviewFinding>,
+  state: { reviewed: boolean }
+): Promise<string> {
   const { provider, model, workspace, signal } = opts
   const baseRunAgent = opts.runAgent ?? runSubAgent
   const dimensions = opts.dimensions ?? REVIEW_DIMENSIONS
@@ -698,6 +711,7 @@ async function reviewOnce(opts: RunReviewOptions, latest: Map<string, ReviewFind
           ).then((r) => r.trim())
         )
       )
+      if (chunkReports.some((r) => !isErrorReport(r))) state.reviewed = true
       const report = mergeChunkReports(chunkReports)
       const partNotes = failedPartNotes(dimension, chunkReports)
       sub(dimensionOutcome(dimension, report, partNotes.length, chunkReports.length))
@@ -982,6 +996,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
   const history = opts.history
   const context = opts.context?.trim() ? clip(opts.context.trim(), MAX_CONTEXT_CHARS) : undefined
   let previousFindings: string | undefined
+  let reviewHash: { hash: string; added: boolean } | undefined
   if (history) {
     if (history.rounds >= REVIEW_MAX_ROUNDS) {
       return `Not reviewed: review_changes already ran ${REVIEW_MAX_ROUNDS} times in this run, the most it allows. Stop reviewing, verify the remaining changes directly (run the tests, recheck the changed lines), and finish.`
@@ -990,8 +1005,12 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     if (history.rounds >= REVIEW_REPEAT_ROUNDS && history.reviewed.has(hash)) {
       return `Not reviewed: these changes were already reviewed twice in this run and the diff has not changed since that review. Stop reviewing, fix any confirmed findings you have not addressed yet, verify those fixes directly, and finish.`
     }
+    // Counted up front so concurrent calls can't all slip under the cap, and taken
+    // back below when no reviewer completed: a round that reviewed nothing doesn't count.
     history.rounds++
+    const newHash = !history.reviewed.has(hash)
     history.reviewed.add(hash)
+    reviewHash = { hash, added: newHash }
     previousFindings = formatPreviousFindings(history.previous) || undefined
   }
   const background: ReviewBackground | undefined =
@@ -1002,8 +1021,12 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     ...(background ? { background } : {}),
     ...(history
       ? {
-          onSettled: (found: ReviewFinding[]) => {
+          onSettled: (found: ReviewFinding[], reviewed: boolean) => {
             history.previous = [...history.previous, ...found].slice(-MAX_PREVIOUS_FINDINGS)
+            if (!reviewed) {
+              history.rounds = Math.max(0, history.rounds - 1)
+              if (reviewHash?.added) history.reviewed.delete(reviewHash.hash)
+            }
           }
         }
       : {}),

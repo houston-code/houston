@@ -511,6 +511,15 @@ const OVERFLOW_STUB_MIN_BYTES = 256
 /** The note on a report cut short because the agent's history outgrew the context window. */
 const CONTEXT_LIMIT_NOTE = "[subagent stopped at the model's context limit; this is what it had]"
 
+/**
+ * The tail a failed run's report ends with when the agent had already said something:
+ * its last text, then why a model error or the context limit stopped it. Such a report
+ * is a failure although it doesn't start with "[subagent error"; a caller that only has
+ * the text tells it apart with this.
+ */
+export const FAILED_REPORT_TAIL =
+  /\n\n\[subagent stopped (?:by a model error \([\s\S]*\)|at the model's context limit); this is what it had\]\s*$/
+
 /** What running one of a subagent's tool calls produced, before it is recorded. */
 interface CallOutcome {
   output: string
@@ -987,7 +996,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
               ? call.arguments.description.trim()
               : undefined
           output = await opts.dispatchNested(nestedPrompt, agentName, nestedModel, stepIndex, description)
-          ok = !/^\[subagent (error|aborted)/.test(output)
+          ok = !/^\[subagent (error|aborted)/.test(output) && !FAILED_REPORT_TAIL.test(output)
         }
       } else if (!tool) {
         output = writable
