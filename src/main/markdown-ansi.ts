@@ -1,6 +1,7 @@
 import { parseMarkdown, type Block, type Inline, type ListItem } from '@shared/markdown'
 import type { Painter } from './tui'
-import { wrapAnsi, visibleWidth, terminalText } from './tui-wrap'
+import { PROSE_PATH, type MarkdownLinks } from './tui-links'
+import { osc8Link, wrapAnsi, visibleWidth, terminalText } from './tui-wrap'
 
 /**
  * Render markdown to ANSI for the terminal, reusing the same parser the GUI uses
@@ -19,6 +20,11 @@ export interface MarkdownOpts {
   width?: number
   /** Optional code highlighter (lang, code) → ANSI; plain text when omitted. */
   highlight?: (lang: string, code: string) => string
+  /**
+   * Where links and file paths point, when the terminal shows OSC 8 hyperlinks.
+   * Omitted (no TTY, screen-reader mode, colour off): everything stays plain text.
+   */
+  links?: MarkdownLinks
 }
 
 /**
@@ -58,15 +64,21 @@ function renderBlock(b: Block, opts: MarkdownOpts, depth: number): string {
     width > 0 ? indentLines(wrapAnsi(s, Math.max(1, width - indent)), indent) : s
   switch (b.type) {
     case 'heading': {
-      const text = renderInline(b.children, paint)
+      const text = renderInline(b.children, paint, opts.links)
       return paint(`${'#'.repeat(b.level)} ${text}`, 'bold', 'cyan')
     }
     case 'paragraph':
-      return wrap(renderInline(b.children, paint))
+      return wrap(renderInline(b.children, paint, opts.links))
     case 'code': {
       const body = opts.highlight ? opts.highlight(b.lang, b.value) : b.value
       const gutter = paint('│ ', 'dim')
-      const lines = body.replace(/\n$/, '').split('\n')
+      // A line wider than the terminal wraps under its own gutter, so the block keeps
+      // its edge instead of the terminal folding the line back to column 0.
+      const room = width > 2 ? width - 2 : 0
+      const lines = body
+        .replace(/\n$/, '')
+        .split('\n')
+        .flatMap((l) => (room > 0 && visibleWidth(l) > room ? wrapCode(l, room) : [l]))
       const label = b.lang ? paint(`${b.lang}`, 'dim') : ''
       const head = label ? `${paint('┌', 'dim')} ${label}\n` : ''
       const hint = visualHint(b.lang, b.info)
@@ -86,7 +98,7 @@ function renderBlock(b: Block, opts: MarkdownOpts, depth: number): string {
     case 'hr':
       return paint('─'.repeat(width > 0 ? Math.min(width, 40) : 40), 'dim')
     case 'table':
-      return renderTable(b, paint)
+      return renderTable(b, paint, width, opts.links)
   }
 }
 
@@ -120,44 +132,118 @@ function renderListItem(
   return lines.map((l, i) => (i === 0 ? `${'  '.repeat(depth)}${bullet} ${l}` : `${'  '.repeat(depth)}${pad}${l}`)).join('\n')
 }
 
+/** Narrowest a table column is squeezed to before the table is left to overflow. */
+const MIN_COLUMN = 6
+
+/**
+ * Column widths that fit `width` (0: no limit): the widest columns give up room first,
+ * down to {@link MIN_COLUMN}. A table that can't fit even then keeps its natural widths
+ * and lets the terminal wrap it, which beats a column of one-letter rows.
+ */
+export function fitColumns(natural: number[], width: number): number[] {
+  const gaps = 3 * Math.max(0, natural.length - 1)
+  if (width <= 0 || natural.reduce((a, w) => a + w, 0) + gaps <= width) return natural
+  const budget = width - gaps
+  if (budget < natural.reduce((a, w) => a + Math.min(w, MIN_COLUMN), 0)) return natural
+  const out = [...natural]
+  let total = out.reduce((a, w) => a + w, 0)
+  while (total > budget) {
+    let widest = 0
+    for (let i = 1; i < out.length; i++) if (out[i] > out[widest]) widest = i
+    if (out[widest] <= MIN_COLUMN) break
+    out[widest]--
+    total--
+  }
+  return out
+}
+
 function renderTable(
   b: Extract<Block, { type: 'table' }>,
-  paint: Painter
+  paint: Painter,
+  width: number,
+  links: MarkdownLinks | undefined
 ): string {
-  const cells = [b.header, ...b.rows].map((row) => row.map((c) => renderInline(c, paint)))
+  const cells = [b.header, ...b.rows].map((row) => row.map((c) => renderInline(c, paint, links)))
   const cols = Math.max(0, ...cells.map((r) => r.length))
-  const widths: number[] = []
+  const natural: number[] = []
   for (let c = 0; c < cols; c++) {
-    widths[c] = Math.max(...cells.map((r) => visibleWidth(r[c] ?? '')))
+    natural[c] = Math.max(...cells.map((r) => visibleWidth(r[c] ?? '')))
   }
-  const fmtRow = (row: string[]): string =>
-    row.map((cell, c) => padVisible(cell ?? '', widths[c], b.align[c])).join(paint(' │ ', 'dim'))
+  const widths = fitColumns(natural, width)
+  // A cell wider than its column wraps inside it; the row is as tall as its tallest cell.
+  const fmtRow = (row: string[]): string => {
+    const wrapped = widths.map((w, c) => {
+      const cell = row[c] ?? ''
+      return visibleWidth(cell) > w ? wrapAnsi(cell, w).split('\n') : [cell]
+    })
+    const height = Math.max(1, ...wrapped.map((l) => l.length))
+    const lines: string[] = []
+    for (let i = 0; i < height; i++) {
+      lines.push(wrapped.map((l, c) => padVisible(l[i] ?? '', widths[c], b.align[c])).join(paint(' │ ', 'dim')))
+    }
+    return lines.join('\n')
+  }
   const sep = paint(widths.map((w) => '─'.repeat(w)).join('─┼─'), 'dim')
   const [header, ...rows] = cells
-  return [paint(fmtRow(header), 'bold'), sep, ...rows.map(fmtRow)].join('\n')
+  const head = fmtRow(header)
+    .split('\n')
+    .map((l) => paint(l, 'bold'))
+    .join('\n')
+  return [head, sep, ...rows.map(fmtRow)].join('\n')
+}
+
+/** A code line cut into rows of `width` columns (code has no word breaks to honour). */
+function wrapCode(line: string, width: number): string[] {
+  // wrapAnsi hard-splits a run longer than the row and breaks at spaces otherwise;
+  // its leading indentation would be lost on a break, which code can live with.
+  return wrapAnsi(line, width).split('\n')
 }
 
 // ---- inline -----------------------------------------------------------------
 
-export function renderInline(nodes: Inline[], paint: Painter): string {
-  return nodes.map((n) => renderInlineNode(n, paint)).join('')
+export function renderInline(nodes: Inline[], paint: Painter, links?: MarkdownLinks): string {
+  return nodes.map((n) => renderInlineNode(n, paint, links)).join('')
 }
 
-function renderInlineNode(n: Inline, paint: Painter): string {
+/** Prose with each path-shaped word that names a workspace file made a hyperlink. */
+function linkPaths(text: string, links: MarkdownLinks | undefined): string {
+  if (!links || !text.includes('/')) return text
+  return text.replace(PROSE_PATH, (word: string) => {
+    const url = links.path(word)
+    return url ? osc8Link(url, word) : word
+  })
+}
+
+/** The text of a link node, with no links of its own inside (a hyperlink can't nest). */
+function plainInline(nodes: Inline[], paint: Painter): string {
+  return renderInline(nodes, paint)
+}
+
+function renderInlineNode(n: Inline, paint: Painter, links: MarkdownLinks | undefined): string {
   switch (n.type) {
     case 'text':
-      return n.value
+      return linkPaths(n.value, links)
     case 'strong':
-      return paint(renderInline(n.children, paint), 'bold')
+      return paint(renderInline(n.children, paint, links), 'bold')
     case 'em':
-      return paint(renderInline(n.children, paint), 'yellow')
+      return paint(renderInline(n.children, paint, links), 'yellow')
     case 'del':
-      return paint(renderInline(n.children, paint), 'dim')
-    case 'code':
-      return paint(n.value, 'green')
+      return paint(renderInline(n.children, paint, links), 'dim')
+    case 'code': {
+      const shown = paint(n.value, 'green')
+      // A path in backticks is the usual way a reply names a file.
+      const url = links && !/\s/.test(n.value) ? links.path(n.value) : null
+      return url ? osc8Link(url, shown) : shown
+    }
     case 'link': {
-      const text = renderInline(n.children, paint)
-      return `${text} ${paint(`(${n.href})`, 'dim')}`
+      const text = plainInline(n.children, paint)
+      const url = links?.href(n.href) ?? null
+      // A bare URL already shows its target; a labelled link keeps it beside the label,
+      // so where a click goes is never hidden behind the words.
+      const same = n.children.length === 1 && n.children[0].type === 'text' && n.children[0].value === n.href
+      const suffix = same ? '' : ` ${paint(`(${n.href})`, 'dim')}`
+      if (!url) return `${text}${suffix}`
+      return `${osc8Link(url, paint(text, 'cyan'))}${suffix}`
     }
     case 'br':
       return '\n'

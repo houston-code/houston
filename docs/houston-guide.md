@@ -154,6 +154,13 @@ the terminal. Only three kinds do anything:
 `houston -i` keeps a chat open in your terminal.
 
 - The conversation streams live, and you answer approvals and questions inline.
+- **Links in replies.** Web links and files in the folder a reply names (in a link,
+  in backticks, or as a path like `src/app.ts:12`) are clickable in terminals that
+  support hyperlinks (Cmd- or Ctrl-click in most); a labelled link still shows its
+  target beside it. A script, app or other file a click could run is never linked.
+  Links are off when color is off (no TTY, `NO_COLOR`) and in
+  screen-reader mode. Tables narrow their widest columns to fit the terminal, wrapping
+  long cells, and a long code line wraps under the block's edge.
 - Slash commands switch settings mid-session.
 - `--continue` reopens this folder's most recent chat at launch; `--resume <id>`
   reopens a specific one.
