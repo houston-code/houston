@@ -34,6 +34,7 @@ import {
 } from '@shared/provider-catalog'
 import { providerKeyUrl } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
+import { compactionNoticeText, modelFallbackText, retryNoticeText, verificationNoticeText } from '@shared/runNotices'
 import { formatReceiptLines, receiptHasFailure } from '@shared/evidence'
 import { formatReadinessLines, planVerifySteps, readinessOk } from '@shared/planReadiness'
 import { diffStat, type FileDiffPreview } from '@shared/diff'
@@ -72,7 +73,7 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { quotaIsLow, quotaStatusText, throttleNotice, type ProviderQuota } from '@shared/rateLimit'
+import { quotaIsLow, quotaStatusText, type ProviderQuota } from '@shared/rateLimit'
 import { providerQuota } from './providers/quota'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
@@ -6223,14 +6224,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'retry':
           deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
           if (retryStreak === 0) {
-            const line = e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `retrying (${retryProgress(e)})… ${e.message}`
+            const line = retryNoticeText(e)
             deps.io.out(paint(`\n· ${terminalText(line)}\n`, 'yellow'))
           }
           retryStreak = e.attempt
           break
         case 'model_fallback':
           deps.io.setSpinnerLabel?.('Switching model')
-          deps.io.out(paint(`\n· ${terminalText(`${e.from} unavailable, falling back to ${e.to}… ${e.reason}`)}\n`, 'yellow'))
+          deps.io.out(paint(`\n· ${terminalText(modelFallbackText(e))}\n`, 'yellow'))
           break
         case 'tool_approval':
           if (e.kind === 'write') promptedWrites.add(e.callId)
@@ -6447,7 +6448,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`\n· ${limitNoticeText(e.reason)}\n`, 'yellow'))
           break
         case 'compaction':
-          deps.io.out(paint(`\n· compacted ${plural(e.summarized, 'message')}\n`, 'dim'))
+          deps.io.out(paint(`\n· ${compactionNoticeText(e.summarized)}\n`, 'dim'))
           break
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension) — display-only, never
@@ -6519,7 +6520,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         case 'verification':
           deps.io.out(
-            paint(`\n· verification ${e.passed ? 'passed' : 'failed'}\n`, e.passed ? 'dim' : 'yellow')
+            paint(`\n· ${verificationNoticeText(e.passed)}\n`, e.passed ? 'dim' : 'yellow')
           )
           break
         case 'run_info':

@@ -172,13 +172,19 @@ export function missingRuntimeHint(runtime: RuntimeInfo): string {
   )
 }
 
+/** What every client says when a runtime a command needed isn't available. User-facing. */
+export function runtimeMissingText(label: string): string {
+  return `${label} isn't installed, or isn't on the PATH Houston sees.`
+}
+
 /** One-line message for the terminal clients when a runtime is missing. User-facing. */
 export function runtimeMissingLine(e: {
   label: string
   installCommand?: string
   url: string
 }): string {
+  const missing = runtimeMissingText(e.label)
   return e.installCommand
-    ? `! ${e.label} isn't installed. Install it in another terminal with: ${e.installCommand}  (or see ${e.url})`
-    : `! ${e.label} isn't installed. Download it from ${e.url}`
+    ? `! ${missing} Install it in another terminal with: ${e.installCommand}  (or see ${e.url})`
+    : `! ${missing} Download it from ${e.url}`
 }

@@ -1085,7 +1085,7 @@ describe('runHeadless', () => {
       { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
     ])
     expect(await runHeadless(baseOpts, passed.d)).toBe(0)
-    expect(passed.err.join('')).toContain('verification passed')
+    expect(passed.err.join('')).toContain('Verification passed.')
 
     // A failing check is fed back inside the loop for self-correction; one the agent
     // then fixed (the next check passes) is a success.
@@ -1095,7 +1095,7 @@ describe('runHeadless', () => {
       { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
     ])
     expect(await runHeadless(baseOpts, fixed.d)).toBe(0)
-    expect(fixed.err.join('')).toContain('verification failed')
+    expect(fixed.err.join('')).toContain('Verification failed, attempting to self-correct.')
 
     // The fix-up passes ran out with the check still failing: not a finished task.
     const stillFailing = deps([

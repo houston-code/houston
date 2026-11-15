@@ -6,11 +6,16 @@ import {
   type ElicitationField,
   type PlanPayload,
   type QuestionOption,
-  type ReviewFinding,
-  retryProgress,
+  type ReviewFinding
 } from '@shared/agent'
 import { latestRunEnd, limitNoticeText, runEndNoticeText, runEndRecords } from '@shared/runEnd'
-import { throttleNotice } from '@shared/rateLimit'
+import {
+  compactionNoticeText,
+  modelFallbackText,
+  retryNoticeText,
+  verificationNoticeText
+} from '@shared/runNotices'
+import { runtimeMissingText } from '@shared/runtimes'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import type { FileDiffPreview } from '@shared/diff'
 import type { TurnReceipt } from '@shared/evidence'
@@ -754,16 +759,14 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         {
           kind: 'notice',
           id: nextId(),
-          text: `🗜 Compacted ${e.summarized} earlier message${e.summarized === 1 ? '' : 's'} to stay within the context window.`,
+          text: `🗜 ${compactionNoticeText(e.summarized)}`,
           tone: 'info'
         }
       ]
     }
     case 'retry': {
       const finalized = finalizeStreaming(items)
-      const text = e.throttle
-        ? `⏳ ${throttleNotice(e.throttle, retryProgress(e))}`
-        : `⟳ Connection issue, retrying (${retryProgress(e)}): ${e.message}`
+      const text = `${e.throttle ? '⏳' : '⟳'} ${retryNoticeText(e)}`
       // Back-to-back attempts update one line ("retrying (3/6)") rather than stacking
       // a row per attempt down the transcript.
       const last = finalized[finalized.length - 1]
@@ -783,7 +786,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         {
           kind: 'notice',
           id: nextId(),
-          text: `⇄ ${e.from} was unavailable, so this reply came from ${e.to}. ${e.reason}`,
+          text: `⇄ ${modelFallbackText(e)}`,
           tone: 'info'
         }
       ]
@@ -803,9 +806,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'verification': {
       const finalized = finalizeStreaming(items)
-      const text = e.passed
-        ? '✓ Verification passed.'
-        : '⚠ Verification failed, attempting to self-correct.'
+      const text = `${e.passed ? '✓' : '⚠'} ${verificationNoticeText(e.passed)}`
       return [
         ...finalized,
         { kind: 'notice', id: nextId(), text, tone: e.passed ? 'info' : 'error' }
@@ -824,7 +825,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         {
           kind: 'notice',
           id: nextId(),
-          text: `${e.label} isn't installed, or isn't on the PATH Houston sees.`,
+          text: runtimeMissingText(e.label),
           tone: 'error',
           runtime: {
             label: e.label,

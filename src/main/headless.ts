@@ -25,6 +25,7 @@ import { formatSchemaErrors, schemaProblems, validateJson, type JsonSchema } fro
 import { stripControlChars, terminalText } from './tui-wrap'
 import { missingKeyHint } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
+import { compactionNoticeText, modelFallbackText, retryNoticeText, verificationNoticeText } from '@shared/runNotices'
 import { formatReceiptLines, type TurnReceipt } from '@shared/evidence'
 import { formatReadinessLines } from '@shared/planReadiness'
 import { pickDefaultModel } from '@shared/models'
@@ -45,9 +46,7 @@ import {
   type RunSettingsOverrides,
   type StopReason,
   type ToolApprovalDecision,
-  retryProgress,
 } from '@shared/agent'
-import { throttleNotice } from '@shared/rateLimit'
 import { SubagentTermLines } from '@shared/subagents'
 
 /**
@@ -1192,14 +1191,10 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           break
         case 'retry':
           if (!opts.json)
-            deps.err(
-              e.throttle
-                ? `· ${throttleNotice(e.throttle, retryProgress(e))}\n`
-                : `· retrying (${retryProgress(e)})… ${terminalText(e.message)}\n`
-            )
+            deps.err(`· ${terminalText(retryNoticeText(e))}\n`)
           break
         case 'model_fallback':
-          if (!opts.json) deps.err(`· ${terminalText(`${e.from} unavailable, falling back to ${e.to}… ${e.reason}`)}\n`)
+          if (!opts.json) deps.err(`· ${terminalText(modelFallbackText(e))}\n`)
           break
         case 'usage':
           t.inTok += e.inputTokens
@@ -1304,7 +1299,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           if (!e.passed) t.finalText = ''
           // The last check decides the run's status: a later pass clears an earlier failure.
           t.verified = e.passed
-          if (!opts.json) deps.err(`· verification ${e.passed ? 'passed' : 'failed'}\n`)
+          if (!opts.json) deps.err(`· ${verificationNoticeText(e.passed)}\n`)
           break
         case 'error':
           t.errored = true
@@ -1335,7 +1330,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           deps.resolvePlan(e.runId, e.callId, { kind: 'reject' })
           break
         case 'compaction':
-          if (!opts.json) deps.err(`· compacted ${e.summarized} messages\n`)
+          if (!opts.json) deps.err(`· ${compactionNoticeText(e.summarized)}\n`)
           break
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension). Meta output, so stderr —

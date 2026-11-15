@@ -2801,7 +2801,7 @@ describe('runTui', () => {
     await runTui(opts, d)
     const out = t.text()
     expect(out.match(/retrying \(/g)).toHaveLength(1)
-    expect(out).toContain('retrying (1/6)… 500 boom')
+    expect(out).toContain('Connection issue, retrying (1/6): 500 boom')
     expect(out).toContain('tried 3 more times, then stopped')
     expect(out.indexOf('then stopped')).toBeLessThan(out.indexOf('Error: 500 boom'))
     expect(t.spinner).toContain('label:Retrying 3/6')
@@ -5279,7 +5279,7 @@ describe('the spinner between tools', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.spinner.slice(t.spinner.indexOf('label:Run'))).toContain('label:Working')
-    expect(t.text()).toContain('compacted 1 message\n')
+    expect(t.text()).toContain('Compacted 1 earlier message to stay within the context window.\n')
   })
 })
 
