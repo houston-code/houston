@@ -14,5 +14,7 @@ export default function globalSetup(): (() => void) | undefined {
   const copy = inspectableCopy(packaged)
   if (!copy) return undefined
   process.env[LAUNCH_EXECUTABLE_ENV] = copy.executable
-  return () => rmSync(copy.root, { recursive: true, force: true })
+  // Windows can keep the executable locked for a moment after the last app process
+  // exits (a scanner still reading it), so the removal retries rather than failing the run.
+  return () => rmSync(copy.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 }
