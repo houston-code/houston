@@ -1,3 +1,4 @@
+import { join, sep } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   linkedWorktreeRoot,
@@ -101,14 +102,16 @@ describe('sanitizeStatusOutput', () => {
 describe('linkedWorktreeRoot', () => {
   const fs = (entries: Record<string, 'file' | 'dir'>) => (p: string) =>
     entries[p] ? { isFile: () => entries[p] === 'file' } : null
+  // Paths as this platform writes them (backslashes on Windows), as the walk builds them.
+  const at = (...segs: string[]) => join(sep, ...segs)
 
   it('finds the linked worktree a folder is in', () => {
-    expect(linkedWorktreeRoot('/repo/wt/src/app', fs({ '/repo/wt/.git': 'file' }))).toBe('/repo/wt')
+    expect(linkedWorktreeRoot(at('repo', 'wt', 'src', 'app'), fs({ [at('repo', 'wt', '.git')]: 'file' }))).toBe(at('repo', 'wt'))
   })
 
   it('is null in a main checkout or outside a repository', () => {
-    expect(linkedWorktreeRoot('/repo/src', fs({ '/repo/.git': 'dir' }))).toBeNull()
-    expect(linkedWorktreeRoot('/tmp/x', fs({}))).toBeNull()
+    expect(linkedWorktreeRoot(at('repo', 'src'), fs({ [at('repo', '.git')]: 'dir' }))).toBeNull()
+    expect(linkedWorktreeRoot(at('tmp', 'x'), fs({}))).toBeNull()
   })
 })
 
