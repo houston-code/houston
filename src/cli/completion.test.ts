@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -9,8 +9,9 @@ import { CLI_FLAGS, CLI_SUBCOMMANDS } from './flags'
 const has = (bin: string): boolean => process.platform !== 'win32' && spawnSync(bin, ['-c', 'exit 0']).status === 0
 
 /** Source the bash script, complete the words typed so far, and return the candidates. */
-function bashComplete(words: string[]): string[] {
+function bashComplete(words: string[], setup?: (dir: string) => void): string[] {
   const dir = mkdtempSync(join(tmpdir(), 'houston-complete-'))
+  setup?.(dir)
   const script = join(dir, 'houston.bash')
   writeFileSync(script, completionScript('bash'))
   const arr = words.map((w) => `'${w.replace(/'/g, `'\\''`)}'`).join(' ')
@@ -50,6 +51,17 @@ describe('completion scripts', () => {
     expect(bashComplete(['houston', '--scr'])).toEqual(['--screen-reader'])
     // A free-form value (a model id) offers nothing rather than the flag list.
     expect(bashComplete(['houston', '--model', ''])).toEqual([])
+  })
+
+  it.skipIf(!has('bash'))('bash: keeps a folder or file name with spaces as one candidate', () => {
+    const tree = (dir: string): void => {
+      mkdirSync(join(dir, 'My Projects'))
+      mkdirSync(join(dir, 'My Other'))
+      writeFileSync(join(dir, 'My Schema.json'), '{}')
+    }
+    expect(bashComplete(['houston', '-C', 'My'], tree).sort()).toEqual(['My Other', 'My Projects'])
+    expect(bashComplete(['houston', 'open', 'My'], tree).sort()).toEqual(['My Other', 'My Projects'])
+    expect(bashComplete(['houston', '--output-schema', 'My S'], tree)).toEqual(['My Schema.json'])
   })
 
   it.skipIf(!has('zsh'))('zsh: parses', () => {

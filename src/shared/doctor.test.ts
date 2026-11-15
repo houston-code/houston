@@ -151,7 +151,8 @@ describe('buildDoctorReport — fix hints follow the client', () => {
     expect(fixOf(noModel, 'active model', 'desktop')).toBe('pick one in the model menu above the message box')
 
     const mcp = facts({ mcp: [{ id: 'linear', state: 'needs-auth' }] })
-    expect(fixOf(mcp, 'linear', 'terminal')).toBe('/mcp login linear')
+    // The terminal's `/mcp login` takes the server's number in `/mcp`, never its id.
+    expect(fixOf(mcp, 'linear', 'terminal')).toBe('run /mcp to find its number, then /mcp login <n>')
     expect(fixOf(mcp, 'linear', 'desktop')).toBe('sign in from Settings > MCP Servers')
   })
 

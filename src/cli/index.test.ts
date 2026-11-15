@@ -17,8 +17,8 @@ vi.mock('./run', () => {
 })
 
 import { USAGE, cliArgvError, dropOwnCompileCacheEnv, main, nodeVersionError, shortUsage } from './index'
-import { HEADLESS_FLAGS } from '../main/headless'
-import { CLI_SUBCOMMANDS, renderOptions } from './flags'
+import { HEADLESS_FLAGS, parseHeadlessArgs } from '../main/headless'
+import { CLI_FLAGS, CLI_SUBCOMMANDS, renderOptions } from './flags'
 
 describe('dropOwnCompileCacheEnv', () => {
   it("removes the packaging wrapper's compile cache so child processes don't inherit it", () => {
@@ -178,6 +178,13 @@ describe('cliArgvError', () => {
   it('knows every flag the run-mode parsers read', () => {
     for (const flag of [...HEADLESS_FLAGS, '-i', '--interactive', '--tui', '--acp', '--unattended']) {
       expect(cliArgvError([flag, 'v']) ?? '').not.toContain('unknown option')
+    }
+  })
+
+  it('reads a piped prompt for `-p` followed by any flag in the table', () => {
+    for (const name of CLI_FLAGS.flatMap((f) => f.names)) {
+      if (name === '-p' || name === '--prompt') continue
+      expect(parseHeadlessArgs(['-p', name], '/d', { stdinPiped: true })?.promptFromStdin, name).toBe(true)
     }
   })
 

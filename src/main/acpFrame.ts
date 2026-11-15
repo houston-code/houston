@@ -5,14 +5,17 @@
  * 64 KiB and drops the whole connection, so one big diff or pasted image ends the run.
  *
  * Only the display payload of a tool call is ever shrunk: its content blocks, its
- * rawInput and its rawOutput. Ids, statuses, titles and every other method's frames
+ * rawInput and its rawOutput, and as a last resort its title and locations. A message
+ * chunk only loses an image too large to send; its text is split into several chunks
+ * by the sender (`splitChunkText`). Ids, statuses and every other method's frames
  * are sent as they are. Shrinking runs in steps from least to most lossy, and stops
  * at the first one that fits:
  *   1. images become a short text note (a partial base64 image is useless);
  *   2. long string values in rawInput / rawOutput are shortened;
  *   3. each diff keeps only the region that changed, with a few lines of context;
  *   4. the remaining long strings are shortened, with a tighter cap each pass;
- *   5. the content is replaced by one note and the raw fields dropped.
+ *   5. the content is replaced by one note and the raw fields dropped;
+ *   6. the title is shortened and the locations list cut.
  */
 
 /** Largest frame sent, in UTF-8 bytes including the newline: headroom under 64 KiB. */
@@ -28,8 +31,35 @@ const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null 
 
 const bytes = (s: string): number => Buffer.byteLength(s, 'utf8') + 1
 
+/** The first `n` UTF-16 units of `s`, one fewer when the cut would split a surrogate pair. */
+export function sliceUnits(s: string, n: number): string {
+  if (s.length <= n) return s
+  const code = s.charCodeAt(n - 1)
+  return s.slice(0, code >= 0xd800 && code <= 0xdbff ? n - 1 : n)
+}
+
 function shorten(s: string, cap: number): string {
-  return s.length > cap ? `${s.slice(0, cap)}\n… (shortened to fit one message)` : s
+  return s.length > cap ? `${sliceUnits(s, cap)}\n… (shortened to fit one message)` : s
+}
+
+/**
+ * Text for a message chunk, split into pieces that each fit one frame. A piece is at
+ * most `CHUNK_TEXT_UNITS` UTF-16 units and every unit encodes to at most 6 bytes of
+ * JSON, so a piece stays well under the frame limit. Cuts fall on code-point
+ * boundaries; the protocol joins a message's chunks back together.
+ */
+export const CHUNK_TEXT_UNITS = 8_000
+
+export function splitChunkText(text: string, units = CHUNK_TEXT_UNITS): string[] {
+  const out: string[] = []
+  let rest = text
+  while (rest.length > units) {
+    const piece = sliceUnits(rest, units)
+    out.push(piece)
+    rest = rest.slice(piece.length)
+  }
+  if (rest || !out.length) out.push(rest)
+  return out
 }
 
 /** Every string leaf longer than `cap`, shortened (keys and structure kept). */
@@ -95,14 +125,30 @@ const steps: ((t: Json) => void)[] = [
     )
 ]
 
-/** Where a frame's tool-call display payload lives, if it has one. */
-function payloadOf(m: Json): { holder: Json; key: string } | null {
+const TOOL_CALL_UPDATES = new Set(['tool_call', 'tool_call_update'])
+
+/**
+ * Where a frame's shrinkable payload lives, if it has one: a tool call's display
+ * payload, or a message chunk (only an image in it is ever replaced; its text is
+ * split into several chunks by the sender instead).
+ */
+function payloadOf(m: Json): { holder: Json; key: string; chunk: boolean } | null {
   const params = m.params
   if (!isObject(params)) return null
-  if (m.method === 'session/update' && isObject(params.update)) return { holder: params, key: 'update' }
-  if (m.method === 'session/request_permission' && isObject(params.toolCall)) return { holder: params, key: 'toolCall' }
+  if (m.method === 'session/update' && isObject(params.update)) {
+    const kind = params.update.sessionUpdate
+    if (typeof kind === 'string' && TOOL_CALL_UPDATES.has(kind)) return { holder: params, key: 'update', chunk: false }
+    if (typeof kind === 'string' && kind.endsWith('_chunk')) return { holder: params, key: 'update', chunk: true }
+    return null
+  }
+  if (m.method === 'session/request_permission' && isObject(params.toolCall)) {
+    return { holder: params, key: 'toolCall', chunk: false }
+  }
   return null
 }
+
+const TITLE_CAP = 200
+const LOCATIONS_KEPT = 20
 
 /**
  * The frame as one line of JSON (no trailing newline), shrunk to fit `max` bytes
@@ -118,6 +164,10 @@ export function fitAcpFrame(m: Json, max = ACP_MAX_FRAME_BYTES): string {
   // A copy, so the caller's object (and anything it shares) is left alone.
   const target: Json = JSON.parse(JSON.stringify(params[at.key])) as Json
   const render = (): string => JSON.stringify({ ...m, params: { ...params, [at.key]: target } })
+  if (at.chunk) {
+    steps[0]!(target)
+    return render()
+  }
   for (const step of steps) {
     step(target)
     line = render()
@@ -136,5 +186,10 @@ export function fitAcpFrame(m: Json, max = ACP_MAX_FRAME_BYTES): string {
   }
   delete target.rawInput
   delete target.rawOutput
+  line = render()
+  if (bytes(line) <= max) return line
+  // Last, the title (a long shell command can be its whole text) and the locations.
+  if (typeof target.title === 'string') target.title = shorten(target.title, TITLE_CAP)
+  if (Array.isArray(target.locations)) target.locations = target.locations.slice(0, LOCATIONS_KEPT)
   return render()
 }

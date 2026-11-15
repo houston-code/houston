@@ -500,13 +500,23 @@ async function openFixPullRequest(o) {
 /**
  * The lines of the pull request's diff (merge base to head, as GitHub shows it) that take
  * an inline comment, or null when the head commit isn't in the checkout.
+ *
+ * Findings name lines of the checked-out files, and comments are posted against the head
+ * commit. A file whose checkout differs from the head (the merge commit `actions/checkout`
+ * makes for a pull request, when the base branch changed it too) numbers its lines
+ * differently, so it gets no inline comments: its findings stay in the review body.
  */
 async function reviewLines(exec, workspace, ctx) {
   const run = (args) => exec('git', [...SAFE_GIT, ...args], { cwd: workspace })
   if (!isSha(ctx.headSha) || (await run(['cat-file', '-e', `${ctx.headSha}^{commit}`])).code !== 0) return null
   const range = `${ctx.baseSha}...${ctx.headSha}`
   const diff = await run(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=3', range])
-  return diff.code === 0 ? commentableLines(diff.stdout) : null
+  if (diff.code !== 0) return null
+  const differs = await run(['diff', '--name-only', '--no-renames', '-z', ctx.headSha, '--'])
+  if (differs.code !== 0) return null
+  const lines = commentableLines(diff.stdout)
+  for (const path of differs.stdout.split('\0')) if (path) lines.delete(path)
+  return lines
 }
 
 /**

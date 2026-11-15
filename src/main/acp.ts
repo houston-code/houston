@@ -31,7 +31,7 @@ import {
 } from '@shared/agent'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
-import { fitAcpFrame } from './acpFrame'
+import { ACP_MAX_FRAME_BYTES, CHUNK_TEXT_UNITS, fitAcpFrame, sliceUnits, splitChunkText } from './acpFrame'
 import { QUESTION_DISMISSED_ANSWER } from '@shared/answerCaps'
 import { agentTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
 import { builtinCommands, mergeCommands, parseSlashCommand, resolveCommand, type Command } from '@shared/commands'
@@ -343,6 +343,8 @@ interface Session {
   title?: string
   /** A `/compact` in progress, which holds off prompts like a run does. */
   compacting?: boolean
+  /** Prompts still looking up their slash command, before their run starts. */
+  resolving?: number
   /** Extra directories the editor gave this session (`additionalDirectories`), as given. */
   additionalRoots: string[]
   /** The editor's system prompt for this session, appended to Houston's own. */
@@ -709,7 +711,14 @@ function planUpdate(args: Record<string, unknown>): AcpSessionUpdate {
 }
 
 function clip(s: string): string {
-  return s.length > MAX_TOOL_OUTPUT ? `${s.slice(0, MAX_TOOL_OUTPUT)}\n… (output shortened)` : s
+  return s.length > MAX_TOOL_OUTPUT ? `${sliceUnits(s, MAX_TOOL_OUTPUT)}\n… (output shortened)` : s
+}
+
+/** A permission request's title: the full command is already in its content. */
+const PERMISSION_TITLE_MAX = 300
+
+function clipTitle(s: string): string {
+  return s.length > PERMISSION_TITLE_MAX ? `${sliceUnits(s, PERMISSION_TITLE_MAX - 1)}…` : s
 }
 
 function modeState(current: ApprovalPolicy): Record<string, unknown> {
@@ -1036,6 +1045,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   const running = new Set<Promise<unknown>>()
   let clientCaps: AcpClientCapabilities = {}
   let inputClosed = false
+  // Set by `stop` (a signal or a broken pipe), unlike a plain end of input, after
+  // which prompts already sent still run.
+  let stopping = false
 
   // Requests this server sent to the client, awaiting a response.
   let nextRequestId = 1
@@ -1066,7 +1078,25 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       frame({ id, method, params })
     })
   }
-  const update = (sessionId: string, u: AcpSessionUpdate): void => notify('session/update', { sessionId, update: u })
+  const update = (sessionId: string, u: AcpSessionUpdate): void => {
+    // A message chunk too long for one frame goes as several chunks of the same kind,
+    // which the editor joins: its text is never cut.
+    const c = u.content as { type?: unknown; text?: unknown } | undefined
+    if (
+      u.sessionUpdate.endsWith('_chunk') &&
+      c?.type === 'text' &&
+      typeof c.text === 'string' &&
+      c.text.length > CHUNK_TEXT_UNITS &&
+      Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: u } })) + 1 >
+        ACP_MAX_FRAME_BYTES
+    ) {
+      for (const piece of splitChunkText(c.text)) {
+        notify('session/update', { sessionId, update: { ...u, content: { ...c, text: piece } } })
+      }
+      return
+    }
+    notify('session/update', { sessionId, update: u })
+  }
 
   const track = <T>(p: Promise<T>): Promise<T> => {
     running.add(p)
@@ -1228,7 +1258,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     const additionalRoots = acpAdditionalDirectories(params, cwd)
     const appendSystemPrompt = acpSystemPrompt(params)
     const live = sessions.get(p.sessionId)
-    if (live?.runId) throw new AcpError(ACP_ERROR.invalidRequest, 'That session is running a prompt')
+    if (live?.runId || live?.compacting || live?.resolving) {
+      throw new AcpError(ACP_ERROR.invalidRequest, 'That session is running a prompt')
+    }
     const stored = deps.store.get(p.sessionId)
     if (!stored) throw new AcpError(ACP_ERROR.notFound, `No saved session ${p.sessionId}`)
     const mcpServers = clientServers(params)
@@ -1603,7 +1635,18 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     if (busy(s)) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
     const { text: typed, images } = promptFromBlocks((params as { prompt?: unknown }).prompt)
     if (!typed.trim() && images.length === 0) throw new AcpError(ACP_ERROR.invalidParams, 'The prompt is empty')
-    const command = typed.trimStart().startsWith('/') ? await runCommand(s, typed.trim()) : null
+    let command: Awaited<ReturnType<typeof runCommand>> = null
+    if (typed.trimStart().startsWith('/')) {
+      s.resolving = (s.resolving ?? 0) + 1
+      try {
+        command = await runCommand(s, typed.trim())
+      } finally {
+        s.resolving = (s.resolving ?? 1) - 1
+      }
+    }
+    // Closed, deleted or shut down while the command lookup read the disk: a run
+    // started now would be one nothing serves or stops.
+    if (s.closed || stopping) return { stopReason: 'cancelled' }
     if (command?.kind === 'reply') return reply(s, command.text)
     // Withdrawn while the command lookup read the disk: nothing has run yet.
     if (inbound?.cancelled) return { stopReason: 'cancelled' }
@@ -1814,7 +1857,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       try {
         const res = (await request('session/request_permission', {
           sessionId: s.id,
-          toolCall: { toolCallId: e.callId, title: visibleText(e.summary), kind: acpToolKind(e.name, e.kind), status: 'pending', content },
+          toolCall: { toolCallId: e.callId, title: clipTitle(visibleText(e.summary)), kind: acpToolKind(e.name, e.kind), status: 'pending', content },
           options
         })) as { outcome?: { outcome?: string; optionId?: string } } | null
         const picked = res?.outcome?.outcome === 'selected' ? res.outcome.optionId : undefined
@@ -1884,9 +1927,10 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         log(`acp: plan review request failed, keeping the plan unexecuted: ${String(err)}`)
       }
       // Accepting switches the run off Plan mode (the loop does it); keep the
-      // session's mode and the editor's mode picker in step.
+      // session's mode, the saved chat and the editor's mode picker in step.
       if (decision.kind === 'accept') {
         s.mode = decision.mode
+        saveSettings(s, { approvalPolicy: decision.mode })
         up({ sessionUpdate: 'current_mode_update', currentModeId: decision.mode })
       }
       deps.resolvePlan(runId, e.callId, decision)
@@ -2215,6 +2259,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   const stop = (opts: { peerGone?: boolean } = {}): void => {
     if (opts.peerGone) peerGone = true
     inputClosed = true
+    stopping = true
     for (const p of outgoing.values()) p.reject(new Error('connection closed'))
     outgoing.clear()
     for (const s of sessions.values()) {

@@ -30,6 +30,7 @@ import { formatReceiptLines, type TurnReceipt } from '@shared/evidence'
 import { formatReadinessLines } from '@shared/planReadiness'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
+import { CLI_FLAGS } from '../cli/flags'
 import { approvalAskReasonShort } from '@shared/approvalReasons'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { formatCost } from '@shared/usage'
@@ -331,6 +332,14 @@ export const HEADLESS_FLAGS = new Set([
   '--worktree'
 ])
 
+/**
+ * Every word `-p` treats as the next flag rather than its prompt: the headless
+ * parser's own flags and every flag of the CLI's table (`--unattended`,
+ * `--screen-reader`, `--help`, ...), so `-p --unattended` with a piped prompt reads
+ * the prompt from stdin.
+ */
+const FLAG_WORDS: ReadonlySet<string> = new Set([...HEADLESS_FLAGS, ...CLI_FLAGS.flatMap((f) => f.names)])
+
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
 export function flagValue(argv: string[], i: number): { value?: string; next: number } {
   const arg = argv[i]
@@ -392,7 +401,7 @@ export function parseHeadlessArgs(
     }
     if (name === '-p' || name === '--prompt') {
       promptFlag = true
-      if (!argv[i].includes('=') && argv[i + 1] !== undefined && HEADLESS_FLAGS.has(nameOf(argv[i + 1]))) {
+      if (!argv[i].includes('=') && argv[i + 1] !== undefined && FLAG_WORDS.has(nameOf(argv[i + 1]))) {
         prompt = undefined
         continue
       }
@@ -912,9 +921,13 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
   }
 
   let opts = inputOpts
+  // A signal while the prompt is still being read ends the wait: stdin may never close.
+  let interruptedReading = false
   if (opts.promptFromStdin) {
-    const text = deps.readStdin ? (await deps.readStdin()).trim() : ''
-    if (!text) {
+    const read = deps.readStdin ? await Promise.race([deps.readStdin(), stop.stopped.then(() => null)]) : ''
+    interruptedReading = read === null
+    const text = (read ?? '').trim()
+    if (!text && !interruptedReading) {
       deps.err('No prompt: stdin was empty. Pass -p "<prompt>", or pipe the prompt in.\n')
       return HEADLESS_EXIT.usage
     }
@@ -980,6 +993,11 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       finalText: '',
       error
     })
+
+  if (interruptedReading) {
+    writeEarlyResult('aborted', `interrupted by ${stop.signal}`)
+    return HEADLESS_EXIT.failed
+  }
 
   // --continue / --resume: load the prior conversation first, so a run with no
   // --provider/--model/--effort continues on the chat's own model and effort. Its

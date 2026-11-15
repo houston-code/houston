@@ -133,7 +133,8 @@ const FIXES: Record<
     noKey: (id) => `run /login and pick ${id}`,
     noProviders: 'run /login to add one',
     noModel: 'run /login, or /model <id>',
-    mcpAuth: (id) => `/mcp login ${id}`
+    // `/mcp login` takes the server's number in the `/mcp` list, not its id.
+    mcpAuth: () => 'run /mcp to find its number, then /mcp login <n>'
   },
   desktop: {
     noKey: (id) => `add a key for ${id} in Settings > Providers & Models`,

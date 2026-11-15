@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { realpathSync, statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { chatDeepLink, folderDeepLink, isConversationId } from '@shared/deepLink'
 
 /**
@@ -92,14 +92,32 @@ export function resolveDirectory(path: string): string | null {
   }
 }
 
-/** Run the opener detached; resolves once it started (or rejects when it can't). */
-export function launchDetached(cmd: string, args: string[]): Promise<void> {
+/** How long to wait for an opener's exit status before taking a running one as success. */
+const OPENER_EXIT_WAIT_MS = 5_000
+
+/**
+ * Run the opener detached. Resolves once it handed the link on, and rejects when it
+ * can't start or exits non-zero (`open` and `xdg-open` fail that way when nothing
+ * handles the link). `rundll32` always exits 0, so it counts as done once started; an
+ * opener still running after a few seconds is taken as having opened the link.
+ */
+export function launchDetached(cmd: string, args: string[], waitMs = OPENER_EXIT_WAIT_MS): Promise<void> {
+  const spawnOnly = /^rundll32(\.exe)?$/i.test(basename(cmd))
   return new Promise((done, fail) => {
     const child = spawn(cmd, args, { stdio: 'ignore', detached: true, shell: false })
+    let timer: NodeJS.Timeout | undefined
     child.once('error', fail)
     child.once('spawn', () => {
       child.unref()
-      done()
+      if (spawnOnly) return done()
+      timer = setTimeout(done, waitMs)
+      timer.unref()
+    })
+    child.once('exit', (code, signal) => {
+      if (timer) clearTimeout(timer)
+      if (spawnOnly) return
+      if (code === 0) done()
+      else fail(new Error(`${basename(cmd)} ${signal ? `was stopped by ${signal}` : `exited with code ${code}`}`))
     })
   })
 }

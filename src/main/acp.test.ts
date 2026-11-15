@@ -248,6 +248,9 @@ function harness(opts: {
   }
 }
 
+/** No lone surrogate: a high one always followed by a low one, a low one always preceded by a high one. */
+const wellFormed = (s: string): boolean => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s)
+
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
 
 async function ready(h: Harness, clientCapabilities: object = {}): Promise<string> {
@@ -501,6 +504,88 @@ describe('ACP server: protocol flow', () => {
     await h.end()
   })
 
+  it('replays a long stored message in full, split into chunks that each fit the line limit', async () => {
+    // A pair across a likely cut point, so a split must keep it whole.
+    const userText = `${'u'.repeat(7_999)}😀${'v'.repeat(100_000)}`
+    const replyText = Array.from({ length: 5_000 }, (_, i) => `line ${i} "quoted"\t${'ü'.repeat(10)}`).join('\n')
+    const h = harness({
+      run: async () => {},
+      stored: [
+        {
+          id: 'long-1',
+          workspace: '/x',
+          messages: [
+            { role: 'user', content: userText },
+            { role: 'assistant', content: replyText }
+          ]
+        }
+      ]
+    })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    await h.call('session/load', { sessionId: 'long-1', cwd: h.cwd, mcpServers: [] })
+    expect(Math.max(...h.lineBytes)).toBeLessThanOrEqual(ACP_MAX_FRAME_BYTES)
+    const ups = h.updates('long-1')
+    const joined = (kind: string): string =>
+      ups.filter((u) => u.sessionUpdate === kind).map((u) => u.content.text as string).join('')
+    expect(joined('user_message_chunk')).toBe(userText)
+    expect(joined('agent_message_chunk')).toBe(replyText)
+    for (const u of ups) if (typeof u.content?.text === 'string') expect(wellFormed(u.content.text)).toBe(true)
+    await h.end()
+  })
+
+  it('keeps a permission request for a very long shell command under the line limit', async () => {
+    const command = `python3 - <<'PY'\n${'print("hello world")\n'.repeat(4_000)}PY`
+    const h = harness({
+      answer: (method) => (method === 'session/request_permission' ? { outcome: { outcome: 'selected', optionId: 'allow' } } : undefined),
+      run: async (req, send, loop) => {
+        const done = loop.waitFor('c1')
+        send({ runId: req.runId, type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: command, args: { command }, kind: 'shell' })
+        await done
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('run it') })
+    expect(Math.max(...h.lineBytes)).toBeLessThanOrEqual(ACP_MAX_FRAME_BYTES)
+    const perm = h.frames.find((f) => f.method === 'session/request_permission')
+    expect(perm.params.toolCall.title.length).toBeLessThanOrEqual(300)
+    expect(perm.params.toolCall.title.startsWith("python3 - <<'PY'")).toBe(true)
+    expect(JSON.stringify(perm.params.toolCall.content)).toContain("python3 - <<'PY'")
+    expect(h.loop.approvals).toEqual([['run-1', 'c1', 'allow']])
+    await h.end()
+  })
+
+  it('starts no run for a slash-command prompt whose session closed or shut down during the command lookup', async () => {
+    for (const how of ['close', 'shutdown'] as const) {
+      let release: () => void = () => {}
+      const held = new Promise<void>((r) => (release = r))
+      let lookups = 0
+      const shutdown = new AbortController()
+      const h = harness({
+        serve: { shutdown: shutdown.signal },
+        deps: {
+          commands: async () => {
+            lookups++
+            await held
+            return []
+          }
+        },
+        run: async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      })
+      const sessionId = await ready(h)
+      const reply = h.call('session/prompt', { sessionId, prompt: text('/x do it') })
+      // The session's command announcement and the prompt's lookup are both waiting.
+      await vi.waitFor(() => expect(lookups).toBe(2))
+      if (how === 'close') expect((await h.call('session/close', { sessionId })).result).toEqual({})
+      else shutdown.abort()
+      release()
+      expect((await reply).result).toEqual({ stopReason: 'cancelled' })
+      expect(h.loop.requests).toEqual([])
+      if (how === 'close') await h.end()
+      else await h.served
+    }
+  })
+
   it('maps session/cancel to cancelRun and reports the turn as cancelled', async () => {
     const h = harness({
       run: async (req, send, loop) => {
@@ -732,6 +817,8 @@ describe('ACP server: protocol flow', () => {
     const perm = h.frames.find((f) => f.method === 'session/request_permission')
     expect(perm.params.toolCall.content[0].content.text).toContain('Step one')
     expect(h.updates(sessionId)).toContainEqual({ sessionUpdate: 'current_mode_update', currentModeId: 'auto-edit' })
+    // The chat keeps the accepted mode, so a reload is not back in Plan.
+    expect(h.settingsWrites.at(-1)).toEqual([sessionId, { approvalPolicy: 'auto-edit' }])
     // The next prompt runs under the accepted mode.
     await h.call('session/prompt', { sessionId, prompt: text('go') })
     expect(h.loop.requests[1].approvalPolicy).toBe('auto-edit')
