@@ -22,8 +22,8 @@ import type { TurnReceipt } from '@shared/evidence'
 import type { ImageAttachment } from '@shared/images'
 import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocation'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
-import { planOutcome, stoppedPromptText } from '@shared/promptOutcome'
-import { rendersAsReply } from '@shared/chatStatus'
+import { QUESTION_STOPPED_ANSWER, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
+import { countsAsReply, rendersAsReply } from '@shared/chatStatus'
 import { upsertFinding } from '@shared/reviewFindings'
 import { capSteps, upsertStep, type SubagentRecord } from '@shared/subagents'
 import { turnLabel, turnText } from '@shared/rewind'
@@ -92,6 +92,11 @@ export interface AssistantItem {
   messageIndex?: number
   /** When the reply was written (ISO 8601); absent on older saved messages. */
   at?: string
+  /**
+   * A live bubble still streaming when its run failed or was stopped. The loop never
+   * saves that partial reply, so it has no saved message to be "the Nth reply" of.
+   */
+  unsaved?: boolean
 }
 /** A nested subagent spawned by a tool (e.g. a review_changes dimension reviewer), shown as its own row. */
 export interface SubAgentRow {
@@ -434,6 +439,32 @@ export function turnStatsByReply(items: DisplayItem[]): Map<string, TurnStats> {
   return out
 }
 
+/**
+ * Each reply's position among the chat's saved replies, by item id ("Fork from here",
+ * "Mark unread from here"). Counted by the same rule main numbers saved replies with
+ * (forkCut, the unread anchor), so "the Nth reply" names one message on both sides. A
+ * partial reply the run never saved takes no number.
+ */
+export function replyNumbersOf(items: DisplayItem[]): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const it of items)
+    if (it.kind === 'assistant' && !it.unsaved && countsAsReply(it.text, !!it.reasoning)) out.set(it.id, out.size)
+  return out
+}
+
+/**
+ * The latest question with no answer yet in the current turn, or null. An earlier
+ * turn's question is never the one a run is waiting on.
+ */
+export function openQuestionIn(items: DisplayItem[]): Extract<DisplayItem, { kind: 'question' }> | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.kind === 'question' && it.answer === undefined) return it
+    if (it.kind === 'user' && !it.steered && !it.isSummary) break
+  }
+  return null
+}
+
 /** Most characters of live output a row holds (main already sends no more). */
 export const MAX_LIVE_OUTPUT = 16 * 1024
 
@@ -472,6 +503,31 @@ function retractStreamed(items: DisplayItem[], textChars: number, reasoningChars
   if (reasoning) kept.reasoning = reasoning
   if (last.at) kept.at = last.at
   return [...items.slice(0, -1), kept]
+}
+
+/**
+ * A run ended (finished, stopped or failed). A bubble still streaming is closed; when
+ * the run did not finish (`unsaved`), its partial reply was never saved. A question
+ * still open was answered for the run as stopped (git-guard and verification
+ * questions get no result event of their own), and a background agent still running
+ * was stopped with the run.
+ */
+function settleRunEnd(items: DisplayItem[], unsaved: boolean): DisplayItem[] {
+  const last = items[items.length - 1]
+  const closed =
+    last && last.kind === 'assistant' && last.streaming
+      ? [...items.slice(0, -1), { ...last, streaming: false, ...(unsaved ? { unsaved: true } : {}) }]
+      : items
+  return closed.map((it) => {
+    if (it.kind === 'question' && it.answer === undefined) return { ...it, answer: QUESTION_STOPPED_ANSWER }
+    if (it.kind === 'tool' && it.records?.some((r) => r.status === 'running')) {
+      return {
+        ...it,
+        records: it.records.map((r) => (r.status === 'running' ? { ...r, status: 'aborted' as const } : r))
+      }
+    }
+    return it
+  })
 }
 
 function updateTool(items: DisplayItem[], callId: string, patch: Partial<ToolItem>): DisplayItem[] {
@@ -729,6 +785,22 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         return items.map((it) => (it.kind === 'plan' && it.id === e.callId ? { ...it, status } : it))
       }
       const status = resultStatus(e.output, e.ok)
+      // A call that never started (denied by a rule, blocked by plan mode or a hook,
+      // or invalid) has no row yet. Add one, as a reload of the saved log shows it,
+      // and close the bubble the model wrote before it.
+      if (!items.some((it) => it.kind === 'tool' && it.id === e.callId)) {
+        return [
+          ...finalizeStreaming(items),
+          {
+            kind: 'tool',
+            id: e.callId,
+            name: e.name,
+            status,
+            output: e.output,
+            ...(e.images?.length ? { images: e.images } : {})
+          }
+        ]
+      }
       const patched = updateTool(items, e.callId, {
         status,
         output: e.output,
@@ -749,10 +821,14 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           }
         }
         // A subagent that never reported its end (the run was stopped) isn't running.
-        if (it.records?.some((r) => r.status === 'running')) {
+        // A background agent outlives its dispatch call's result: it ends with its
+        // own subagent_end, or as stopped when the run ends.
+        if (it.records?.some((r) => r.status === 'running' && !r.backgroundId)) {
           next = {
             ...next,
-            records: it.records.map((r) => (r.status === 'running' ? { ...r, status: 'aborted' as const } : r))
+            records: it.records.map((r) =>
+              r.status === 'running' && !r.backgroundId ? { ...r, status: 'aborted' as const } : r
+            )
           }
         }
         if (it.findings?.some((f) => f.status === 'verifying')) {
@@ -859,7 +935,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       // Any elicitation card still open when the run ends was answered for the
       // server by cancelRun (a cancel) — reflect that so the form can't be
       // submitted into a run that no longer exists.
-      const finalized = finalizeStreaming(items).map((it) =>
+      const finalized = settleRunEnd(items, e.stopReason === 'aborted').map((it) =>
         it.kind === 'elicitation' && !it.outcome ? { ...it, outcome: 'cancelled' as const } : it
       )
       if (e.stopReason === 'aborted') {
@@ -872,18 +948,31 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     case 'error': {
       // The run gave up while a "retrying (6/6)" line was the last thing shown: say
       // the retries are over, so it doesn't read as still in progress above the error.
-      const settled = settleRetry(finalizeStreaming(items), ', then stopped.')
+      const settled = settleRetry(settleRunEnd(items, true), ', then stopped.')
       return [...settled, { kind: 'notice', id: nextId(), text: e.message, tone: 'error' }]
     }
     case 'usage': {
+      // A subagent's, a review's or a side request's spend. The saved log keeps usage
+      // only on the main model's replies, so folding this in would give the turn's
+      // details line one total live and another after a reload. It shows on the
+      // agent's own row and in the chat's cost breakdown instead.
+      if (e.delegatedInputTokens !== undefined) return items
+      // A main-model round ended. Its reply is saved as its own message, so the next
+      // round (continued after a system note, a Stop hook, or a call that never
+      // started) starts its own bubble, as a reload shows it. A round that streamed
+      // no text yet is left open: a reasoning-only round the loop does not keep, or
+      // one it gives fallback text, is saved as the one message the next text joins.
+      const last = items[items.length - 1]
+      const closed =
+        last && last.kind === 'assistant' && last.streaming && last.text.trim() !== '' ? finalizeStreaming(items) : items
       // Fold this round into the turn it belongs to. The GUI seam rewrites the
       // top-level numbers to the conversation's running totals and keeps the round's
       // own under `round`; a raw event's top-level numbers are the round's.
       const round = e.round ?? { inputTokens: e.inputTokens, outputTokens: e.outputTokens, cost: e.cost }
-      const at = turnStartIndex(items, items.length)
-      if (at < 0) return items
-      const user = items[at] as UserItem
-      const next = items.slice()
+      const at = turnStartIndex(closed, closed.length)
+      if (at < 0) return closed
+      const user = closed[at] as UserItem
+      const next = closed.slice()
       next[at] = { ...user, turn: addRound(user.turn, e.model, round) }
       return next
     }

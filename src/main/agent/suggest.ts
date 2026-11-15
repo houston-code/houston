@@ -1,7 +1,7 @@
 import type { ChatMessage, Provider } from '@shared/agent'
 import { collectSecrets, getProvider, getSettings } from '../agentHost'
 import { createProvider } from '../providers'
-import { peekConversation } from '../conversations'
+import { peekConversation, peekConversationHeader } from '../conversations'
 import { providerStreamError, withProviderRetry } from './retry'
 import { titleRequestOptions, type TitleRequestOptions } from './title'
 import { redactSecrets } from './redact'
@@ -123,6 +123,9 @@ export async function maybeSuggestNext(opts: {
   } catch {
     return // no usable key, unknown provider, unreadable chat: no suggestion
   }
+  // The log's length when asked: a chat that grows while the model answers has moved
+  // on to a newer turn, and a suggestion for this one would be stale by then.
+  const asked = conv.messages.length
   inFlight.add(opts.conversationId)
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), SUGGEST_TIMEOUT_MS)
@@ -140,7 +143,7 @@ export async function maybeSuggestNext(opts: {
       // "Nothing to suggest" is an answer, not a failure: only an error tries again.
       { retryEmpty: false }
     )
-    if (text) opts.onSuggestion(text)
+    if (text && peekConversationHeader(opts.conversationId)?.messageCount === asked) opts.onSuggestion(text)
   } catch {
     // no suggestion
   } finally {

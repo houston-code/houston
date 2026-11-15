@@ -124,6 +124,7 @@ import type { ForkPoint } from '@shared/conversation-io'
 import {
   endsWithRecordedError,
   itemsFromMessages,
+  openQuestionIn,
   lastUserText,
   rewindTargets,
   showsHandoff,
@@ -304,15 +305,6 @@ function lastUserTurnIn(items: DisplayItem[]): { target: RewindItemTarget; item:
   if (!target) return null
   const item = items.find((it) => it.id === target.id)
   return item?.kind === 'user' ? { target, item } : null
-}
-
-/** The latest `ask_user` question with no answer yet, or null. */
-function openQuestionIn(items: DisplayItem[]): Extract<DisplayItem, { kind: 'question' }> | null {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i]
-    if (it.kind === 'question' && it.answer === undefined) return it
-  }
-  return null
 }
 
 export default function App(): JSX.Element {
@@ -604,12 +596,13 @@ export default function App(): JSX.Element {
   const [suggestion, setSuggestion] = useState<{ id: string; text: string } | null>(null)
   useEffect(() => {
     return window.api.onConversationSuggestion?.(({ id, text }) => {
-      if (typeof id === 'string' && typeof text === 'string') setSuggestion({ id, text })
+      if (typeof id !== 'string' || typeof text !== 'string') return
+      // Late for a chat whose next turn has already started: it answers a turn that
+      // is no longer the latest.
+      if (chatStatusRef.current[id]?.running) return
+      setSuggestion({ id, text })
     })
   }, [])
-  useEffect(() => {
-    if (chat.running) setSuggestion(null)
-  }, [chat.running])
 
   // Pull any one-shot "What's new" staged after an upgrade-and-relaunch.
   useEffect(() => {
@@ -646,6 +639,13 @@ export default function App(): JSX.Element {
   // Read when a chat opens: its unread anchor must be taken before the open marks it read.
   const chatStatusRef = useRef(chatStatus)
   chatStatusRef.current = chatStatus
+  // Gone once a turn starts in its own chat (not when another chat that is running
+  // is opened).
+  const suggestionChatRunning =
+    suggestion !== null && (chatStatus[suggestion.id]?.running === true || (chat.running && suggestion.id === currentId))
+  useEffect(() => {
+    if (suggestionChatRunning) setSuggestion(null)
+  }, [suggestionChatRunning])
   // Where the open chat's unseen output starts (the "New" divider), set on open.
   const [newFrom, setNewFrom] = useState<{ conversationId: string; itemId: string } | null>(null)
   // A short confirmation with an Undo (marking a chat unread leaves it).
@@ -2506,9 +2506,11 @@ export default function App(): JSX.Element {
     const hold = heldShellOutput.current
     if (!hold.has()) return
     const added = await hold.flush((id) => runningIdsRef.current.has(id), recordHeldShell)
+    // Reload the open chat when its command joined it, as compaction does: a bare
+    // rebuild from the messages would drop its usage, Revert bar, failed-turn bar and
+    // hand-off banner, and detach the view from a run that started meanwhile.
     const open = currentIdRef.current
-    const messages = open ? added.get(open) : undefined
-    if (messages) chat.reset(itemsFromMessages(messages))
+    if (open && added.has(open)) void selectConversation(open)
     // Refused although its run looked over (still winding down, or a rewind held the
     // chat): look again shortly, a bounded number of times, rather than wait for a
     // run that may never come. A run starting or ending looks again anyway.
@@ -2517,7 +2519,7 @@ export default function App(): JSX.Element {
       if (heldShellRetry.current) clearTimeout(heldShellRetry.current)
       heldShellRetry.current = setTimeout(() => void flushHeldShellOutputRef.current(), 2000)
     }
-  }, [chat, recordHeldShell])
+  }, [recordHeldShell, selectConversation])
   flushHeldShellOutputRef.current = flushHeldShellOutput
   useEffect(() => {
     heldShellRetries.current = 0
@@ -2547,7 +2549,8 @@ export default function App(): JSX.Element {
       void recordHeldShell(held)
         .then((res) => {
           if (res.ok) {
-            if (currentIdRef.current === run.conversationId) chat.reset(itemsFromMessages(res.messages))
+            // Reloaded, not rebuilt from res.messages (see flushHeldShellOutput).
+            if (currentIdRef.current === run.conversationId) void selectConversation(held.conversationId)
           } else if (res.reason === 'busy') {
             heldShellOutput.current.hold(held)
             chat.notify(`!${run.command} finished while the agent was working. Its output joins the chat when this turn ends.`)
@@ -2556,7 +2559,7 @@ export default function App(): JSX.Element {
         })
         .catch(() => {})
     })
-  }, [chat, recordHeldShell, flushHeldShellOutput])
+  }, [chat, recordHeldShell, flushHeldShellOutput, selectConversation])
 
   // The agent's open `ask_user` question, if it is waiting on one. While it is, the
   // run can't read a steer (it is blocked on the answer), so Enter answers it instead.
@@ -3453,7 +3456,8 @@ export default function App(): JSX.Element {
     find: findOpen,
     connect: connectOpen,
     whatsNew: whatsNew !== null,
-    rewind: rewindPickerOpen || rewindConfirm !== null
+    rewind: rewindPickerOpen || rewindConfirm !== null,
+    pastEdit: pastEdit !== null
   }
   const overlaysRef = useRef(overlays)
   overlaysRef.current = overlays

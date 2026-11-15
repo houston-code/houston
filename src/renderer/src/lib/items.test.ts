@@ -15,7 +15,9 @@ import {
   systemNoteSummary,
   turnStatsByReply,
   MAX_LIVE_OUTPUT,
+  openQuestionIn,
   reduceEvent,
+  replyNumbersOf,
   type AssistantItem,
   type DisplayItem,
   type NoticeItem,
@@ -25,7 +27,8 @@ import {
   type UserItem
 } from './items'
 import { rewindableTurnIndices } from '@shared/rewind'
-import { APPROVAL_INTERRUPTED_NOTE } from '@shared/promptOutcome'
+import { APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
+import { replyMessageIndexes } from '@shared/chatStatus'
 import { describeTool } from './toolDisplay'
 
 describe('itemsFromMessages', () => {
@@ -1309,6 +1312,25 @@ describe('reduceEvent — subagent records', () => {
     expect(tool.records![0].steps).toHaveLength(1)
   })
 
+  it('keeps a background agent running after its dispatch call returns, until the run ends', () => {
+    const bg = { ...record, backgroundId: 'bg1' }
+    let items = reduceEvent(running(), ev({ type: 'subagent_start', parentCallId: 'c1', record: bg }))
+    items = reduceEvent(items, ev({ type: 'tool_result', callId: 'c1', name: 'dispatch_agent', ok: true, output: 'Started background agent bg1' }))
+    items = reduceEvent(
+      items,
+      ev({
+        type: 'subagent_step',
+        parentCallId: 'c1',
+        recordId: 'sa1',
+        step: { index: 0, turn: 1, kind: 'tool', tool: 'read_file', summary: 'Read a', ok: true }
+      })
+    )
+    expect((items[0] as ToolItem).records![0].status).toBe('running')
+    // The run ending stops it, so it does not spin on.
+    items = reduceEvent(items, ev({ type: 'done', stopReason: 'end_turn' }))
+    expect((items[0] as ToolItem).records![0].status).toBe('aborted')
+  })
+
   it('marks an agent that never reported its end as stopped once the call finishes', () => {
     let items = reduceEvent(running(), ev({ type: 'subagent_start', parentCallId: 'c1', record }))
     items = reduceEvent(items, ev({ type: 'tool_result', callId: 'c1', name: 'dispatch_agent', ok: true, output: '[subagent aborted]' }))
@@ -1420,5 +1442,114 @@ describe('live shell output', () => {
   it('still takes a plain progress line', () => {
     const items = reduceEvent(running(), { runId: 'r', type: 'tool_progress', callId: 'c', message: 'phase 2' })
     expect(tool(items).progress).toBe('phase 2')
+  })
+})
+
+describe('live replies match saved replies one to one', () => {
+  const ev = (e: Record<string, unknown>): AgentEvent => ({ runId: 'r', ...e }) as AgentEvent
+  const user = (id: string, text: string): UserItem => ({ kind: 'user', id, text })
+  const mainRound = (out = 10): AgentEvent =>
+    ev({ type: 'usage', inputTokens: 100, outputTokens: out, cost: 0.01, model: 'big' })
+  const replies = (items: DisplayItem[]): string[] =>
+    items.filter((it): it is AssistantItem => it.kind === 'assistant').map((it) => it.text)
+  const fold = (items: DisplayItem[], events: AgentEvent[]): DisplayItem[] => events.reduce(reduceEvent, items)
+
+  it('starts a new bubble for a round the loop continued with no event in between', () => {
+    const items = fold(
+      [user('u1', 'fix it')],
+      [ev({ type: 'text', delta: 'Done, the bug is fixed.' }), mainRound(), ev({ type: 'text', delta: 'I ran the tests.' }), mainRound(), ev({ type: 'done', stopReason: 'end_turn' })]
+    )
+    expect(replies(items)).toEqual(['Done, the bug is fixed.', 'I ran the tests.'])
+  })
+
+  it('numbers live replies the way main numbers the saved log', () => {
+    let items = fold(
+      [user('u1', 'fix it')],
+      [ev({ type: 'text', delta: 'Done.' }), mainRound(), ev({ type: 'text', delta: 'Ran the tests.' }), mainRound(), ev({ type: 'done', stopReason: 'end_turn' })]
+    )
+    items = fold([...items, user('u2', 'add a test')], [ev({ type: 'text', delta: 'Added the test.' }), mainRound(), ev({ type: 'done', stopReason: 'end_turn' })])
+    const saved: ChatMessage[] = [
+      { role: 'user', content: 'fix it' },
+      { role: 'assistant', content: 'Done.' },
+      { role: 'user', content: `${SYSTEM_NOTE_PREFIX} No check passed after the last edit.` },
+      { role: 'assistant', content: 'Ran the tests.' },
+      { role: 'user', content: 'add a test' },
+      { role: 'assistant', content: 'Added the test.' }
+    ]
+    const numbers = replyNumbersOf(items)
+    const at = replyMessageIndexes(saved)
+    expect(numbers.size).toBe(at.length)
+    for (const it of items) {
+      if (it.kind !== 'assistant') continue
+      expect(saved[at[numbers.get(it.id)!]].content).toBe(it.text)
+    }
+  })
+
+  it('gives no number to a partial reply the run never saved', () => {
+    for (const end of [ev({ type: 'done', stopReason: 'aborted' }), ev({ type: 'error', message: 'boom' })]) {
+      const items = fold([user('u1', 'go'), { kind: 'assistant', id: 'a0', text: 'Saved.', streaming: false }], [ev({ type: 'text', delta: 'Half a rep' }), end])
+      expect([...replyNumbersOf(items).keys()]).toEqual(['a0'])
+    }
+  })
+
+  it('keeps a round that streamed only reasoning open for the text that follows', () => {
+    const items = fold(
+      [user('u1', 'go')],
+      [ev({ type: 'reasoning', delta: 'thinking' }), mainRound(), ev({ type: 'text', delta: 'Out of steps.' }), ev({ type: 'done', stopReason: 'end_turn' })]
+    )
+    expect(items.filter((it) => it.kind === 'assistant')).toHaveLength(1)
+  })
+
+  it('adds a row for a call that never started, closing the bubble before it', () => {
+    const items = fold(
+      [user('u1', 'go')],
+      [ev({ type: 'text', delta: 'Let me look.' }), ev({ type: 'tool_result', callId: 'c9', name: 'run_shell', ok: false, output: 'Denied by a permission rule.' })]
+    )
+    expect(items.map((it) => it.kind)).toEqual(['user', 'assistant', 'tool'])
+    expect(items[1]).toMatchObject({ streaming: false })
+    expect(items[2]).toMatchObject({ id: 'c9', name: 'run_shell', output: 'Denied by a permission rule.' })
+  })
+
+  it("gives a turn's details line the same totals live and after a reload", () => {
+    const live = fold(
+      [user('u1', 'go')],
+      [
+        ev({ type: 'text', delta: 'Done.' }),
+        ev({ type: 'usage', inputTokens: 100, outputTokens: 50, cost: 0.01, model: 'big' }),
+        ev({ type: 'usage', inputTokens: 0, delegatedInputTokens: 1000, outputTokens: 700, cost: 0.2, model: 'small' }),
+        ev({ type: 'done', stopReason: 'end_turn' })
+      ]
+    )
+    const saved = itemsFromMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'Done.', model: 'big', usage: { inputTokens: 100, outputTokens: 50, cost: 0.01 } }
+    ])
+    expect([...turnStatsByReply(live).values()]).toEqual([...turnStatsByReply(saved).values()])
+  })
+})
+
+describe('questions the run asks outside ask_user', () => {
+  const ev = (e: Record<string, unknown>): AgentEvent => ({ runId: 'r', ...e }) as AgentEvent
+
+  it('settles a question still open when the run ends', () => {
+    let items: DisplayItem[] = [{ kind: 'user', id: 'u1', text: 'go' }]
+    items = reduceEvent(items, ev({ type: 'tool_question', callId: 'r:verify-git-1', question: 'Keep?', options: [{ label: 'Keep' }] }))
+    items = reduceEvent(items, ev({ type: 'done', stopReason: 'end_turn' }))
+    expect((items[1] as QuestionItem).answer).toBe(QUESTION_STOPPED_ANSWER)
+  })
+
+  it("does not offer an earlier turn's unanswered question as the open one", () => {
+    const q: QuestionItem = { kind: 'question', id: 'q1', question: 'Keep?', options: [] }
+    expect(openQuestionIn([{ kind: 'user', id: 'u1', text: 'go' }, q])).toBe(q)
+    expect(
+      openQuestionIn([
+        { kind: 'user', id: 'u1', text: 'go' },
+        q,
+        { kind: 'user', id: 'u2', text: 'next' }
+      ])
+    ).toBeNull()
+    expect(
+      openQuestionIn([{ kind: 'user', id: 'u1', text: 'go' }, q, { kind: 'user', id: 's', text: 'steer', steered: true }])
+    ).toBe(q)
   })
 })

@@ -24,6 +24,7 @@ function installApi() {
     approveTool: vi.fn((_runId: string, _callId: string, _decision: ToolApprovalDecision, _note?: string) =>
       Promise.resolve()
     ),
+    answerQuestion: vi.fn((_runId: string, _callId: string, _answer: string) => Promise.resolve()),
     setAgentPolicy: vi.fn((_runId: string, _policy: string) => Promise.resolve()),
     setAgentEffort: vi.fn((_runId: string, _effort: string) => Promise.resolve()),
     restoreCheckpoint: vi.fn((_runId: string) => Promise.resolve(3)),
@@ -270,6 +271,18 @@ describe('useChat', () => {
     emit({ runId: runId2, type: 'error', message: 'kaboom' })
     expect(result.current.running).toBe(false)
     expect(result.current.errored).toBe(true)
+  })
+
+  it('closes a question card as soon as it is answered, even one no tool result will close', async () => {
+    const { api, emit } = installApi()
+    const { result } = renderHook(() => useChat())
+    const runId = await sendAndGetRunId(result, api)
+    // A git-guard question, asked under a shell call's own id: no ask_user result follows.
+    emit({ runId, type: 'tool_question', callId: 'sh1.git.1', question: 'Keep the change?', options: [{ label: 'Keep' }, { label: 'Undo' }] })
+    act(() => result.current.answerQuestion('sh1.git.1', 'Undo'))
+    expect(api.answerQuestion).toHaveBeenCalledWith(runId, 'sh1.git.1', 'Undo')
+    const card = result.current.items.find((it) => it.kind === 'question')
+    expect(card).toMatchObject({ id: 'sh1.git.1', answer: 'Undo' })
   })
 
   it('keeps what the failed run reported, and seeds it from a saved failure on reset', async () => {
