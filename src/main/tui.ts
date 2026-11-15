@@ -1310,11 +1310,13 @@ export function homeRelative(path: string, home = process.env.HOME ?? process.en
 }
 
 /** Shorten a path for the status line: `~` for home, and only the last two segments. */
-export function shortCwd(cwd: string, home = process.env.HOME): string {
+export function shortCwd(cwd: string, home = process.env.HOME ?? process.env.USERPROFILE): string {
   const p = homeRelative(cwd, home)
-  const segs = p.split('/').filter(Boolean)
+  // A Windows path splits on either separator and keeps its own.
+  const sep = !p.includes('/') && p.includes('\\') ? '\\' : '/'
+  const segs = p.split(/[\\/]/).filter(Boolean)
   if (segs.length <= 2) return p
-  return `${p.startsWith('~') ? '~/' : '…/'}${segs.slice(-2).join('/')}`
+  return `${p.startsWith('~') ? `~${sep}` : `…${sep}`}${segs.slice(-2).join(sep)}`
 }
 
 /**

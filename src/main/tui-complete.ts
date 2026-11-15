@@ -109,7 +109,8 @@ export async function folderCompletions(
   home: string,
   readDir: (dir: string) => Promise<FolderEntry[]>
 ): Promise<string[]> {
-  const slash = partial.lastIndexOf('/')
+  // Windows also takes a backslash between folders.
+  const slash = Math.max(partial.lastIndexOf('/'), process.platform === 'win32' ? partial.lastIndexOf('\\') : -1)
   const head = slash >= 0 ? partial.slice(0, slash + 1) : ''
   const prefix = slash >= 0 ? partial.slice(slash + 1) : partial
   if (partial === '~') return home ? ['~/'] : []

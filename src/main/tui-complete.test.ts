@@ -322,7 +322,8 @@ describe('folder completion for /cd and /add-dir', () => {
     '/': [{ name: 'tmp', isDir: true }]
   }
   const readDir = async (dir: string): Promise<FolderEntry[]> => {
-    const hit = tree[dir.replace(/\/$/, '') || '/']
+    // join() writes backslashes on Windows; the fake tree is keyed in POSIX form.
+    const hit = tree[dir.replace(/\\/g, '/').replace(/\/$/, '') || '/']
     if (!hit) throw new Error('ENOENT')
     return hit
   }

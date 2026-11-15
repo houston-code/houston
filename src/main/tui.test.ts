@@ -1347,6 +1347,8 @@ describe('status line & progress', () => {
     expect(shortCwd('/Users/x/proj', '/Users/x')).toBe('~/proj')
     expect(shortCwd('/a/b/c/d/e', '/nope')).toBe('…/d/e')
     expect(shortCwd('/a/b', '/nope')).toBe('/a/b')
+    expect(shortCwd('C:\\Users\\x\\code\\app', 'C:\\Users\\x')).toBe('~\\code\\app')
+    expect(shortCwd('D:\\a\\_temp\\houston-cd-1\\b', 'C:\\Users\\x')).toBe('…\\houston-cd-1\\b')
   })
 
   it('homeRelative writes paths under home from ~ and leaves the rest whole', () => {
@@ -8074,8 +8076,8 @@ describe('/cd', () => {
       expect(text).toContain(`working folder is now ${join(root, 'b')}`)
       // The status line drawn after the move names the new folder.
       const status = text.split('\n').filter((l) => l.includes('anthropic/claude'))
-      expect(status[0]).toMatch(/houston-cd-[^/ ]+\/a\b/)
-      expect(status.at(-1)).toMatch(/houston-cd-[^/ ]+\/b\b/)
+      expect(status[0]).toMatch(/houston-cd-[^/\\ ]+[/\\]a\b/)
+      expect(status.at(-1)).toMatch(/houston-cd-[^/\\ ]+[/\\]b\b/)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
