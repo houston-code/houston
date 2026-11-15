@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { UnreadOutcome } from '@shared/chatStatus'
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_LABEL,
@@ -175,6 +175,21 @@ import { renderTranscript, sanitizeLines, transcriptPlain, type PagerSource } fr
 import { parseMemoryAction, runMemoryCommand, type MemoryAction, type MemoryCommandState } from './tui-memory'
 import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
+import {
+  CONFIG_KEYS,
+  configPatch,
+  findConfigKey,
+  nextConfigValue,
+  parseConfigArgs,
+  renderConfigHelp,
+  renderConfigValue,
+  type ConfigContext,
+  type ConfigKeyName,
+  type ConfigLive,
+  type ConfigOp
+} from './tui-config'
+import { renderStatus, type HostStatusFacts, type StatusView } from './tui-status'
+import { runFeedbackCommand, type IssueReportHost } from './tui-feedback'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 import {
   parseSessionFlag,
@@ -1875,6 +1890,12 @@ export type SlashResult =
   | { kind: 'compact'; focus?: string }
   /** The settings overview hub (/settings). */
   | { kind: 'settings' }
+  /** Read or change the terminal's settings (/config, /config key=value). */
+  | { kind: 'config'; op: ConfigOp }
+  /** What this session runs on, on one screen (/status). */
+  | { kind: 'status' }
+  /** Report an issue, after showing exactly what the report holds (/feedback, /bug). */
+  | { kind: 'feedback' }
   /** Environment diagnostics (/doctor). */
   | { kind: 'doctor' }
   /** Show or set how hard the model thinks before answering (/reasoning). */
@@ -2026,6 +2047,13 @@ export function parseSlashCommand(
     }
     case 'settings':
       return { kind: 'settings' }
+    case 'config':
+      return { kind: 'config', op: parseConfigArgs(arg, { settings, themes: Object.keys(THEMES) }) }
+    case 'status':
+      return { kind: 'status' }
+    case 'feedback':
+    case 'bug':
+      return { kind: 'feedback' }
     case 'doctor':
       return { kind: 'doctor' }
     case 'reasoning':
@@ -2222,6 +2250,9 @@ export const HELP_TEXT = [
   '  /skills /agents       list workspace skills / custom agents',
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
   '  /settings             settings overview + where to edit them',
+  '  /config [key[=value]] pick and change a setting, or show or set one (/config --help lists them)',
+  '  /status               version, model, approval, sandbox, network, MCP, settings sources, cost',
+  '  /feedback, /bug       report an issue: shows what the report holds, then opens it or prints its link',
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
@@ -2301,7 +2332,8 @@ export const STARTUP_TIPS = [
   'Ctrl-O opens the whole session full screen, with reasoning and full tool output',
   'Alt-T cycles how the model\'s reasoning shows: in full, one line, or hidden',
   '/copy puts the last reply, or one of its code blocks, on your clipboard',
-  'using a screen reader? /screen-reader on keeps the output to plain lines'
+  'using a screen reader? /screen-reader on keeps the output to plain lines',
+  '/config lists the terminal settings; Enter changes the highlighted one'
 ]
 
 /**
@@ -3449,6 +3481,10 @@ export interface TuiDeps {
   isMac?: boolean
   /** Absolute path to settings.json, shown by /settings, /hooks, and /mcp. */
   settingsPath?: () => string
+  /** What only the host knows for /status (install method, sandbox, this chat's network, managed policy). */
+  statusFacts?: (conversationId: string | null) => Promise<HostStatusFacts>
+  /** The desktop's issue report, for /feedback. Absent ⇒ /feedback says it's unavailable. */
+  issueReport?: IssueReportHost
   /** Read + validate an image file for `/image`; returns the attachment or an error. */
   loadImage?: (path: string) => { image: ImageAttachment } | { error: string; missing?: boolean }
   /**
@@ -4081,6 +4117,238 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     reasoningDisplay = d
     deps.updateSettings?.({ reasoningDisplay: d })
     deps.io.out(`${freshLine()}${paint(reasoningDisplayNote(d), 'dim')}\n`)
+  }
+  /**
+   * Change one of the terminal's own preferences and say so: the body of /vim,
+   * /verbose, /notify <mode>, /reduce-motion, /screen-reader and /theme <name>, shared
+   * with /config so a value set either way behaves the same.
+   */
+  const applyTerminalSetting = (
+    r:
+      | { kind: 'vim'; on: boolean }
+      | { kind: 'verbose'; on: boolean }
+      | { kind: 'reduce-motion'; on: boolean }
+      | { kind: 'screen-reader'; on: boolean }
+      | { kind: 'notify'; mode: NotifyMode }
+      | { kind: 'set-theme'; theme: ThemeName }
+  ): void => {
+    switch (r.kind) {
+      case 'vim':
+        if (!deps.updateSettings) {
+          deps.io.out(paint('· changing settings is unavailable here\n', 'dim'))
+          return
+        }
+        deps.updateSettings({ tuiEditor: r.on ? 'vim' : 'emacs' })
+        deps.io.out(
+          paint(
+            r.on
+              ? '· vim keys on: Esc for normal mode, i to type again (takes effect at the next prompt)\n'
+              : '· vim keys off: the composer is back to the readline keys\n',
+            'dim'
+          )
+        )
+        return
+      case 'verbose':
+        verbose = r.on
+        deps.updateSettings?.({ tuiVerbose: verbose })
+        deps.io.out(
+          paint(
+            verbose
+              ? '· verbose: showing each tool\'s output as it runs (/output reprints one in full)\n'
+              : '· verbose off: tool output collapses to one line again\n',
+            'dim'
+          )
+        )
+        return
+      case 'reduce-motion':
+        reduceMotion = r.on
+        deps.updateSettings?.({ reduceMotion })
+        applyAccessibility()
+        deps.io.out(
+          paint(
+            reduceMotion
+              ? '· reduced motion on: the activity line holds still and its timer updates every few seconds\n'
+              : '· reduced motion off: the spinner animates again\n',
+            'dim'
+          )
+        )
+        return
+      case 'screen-reader':
+        screenReader = r.on
+        deps.updateSettings?.({ tuiScreenReader: screenReader })
+        applyAccessibility()
+        paint = makeSessionPainter()
+        deps.io.setPaint?.(paint)
+        deps.io.out(
+          paint(
+            screenReader
+              ? '· screen-reader mode on: plain lines, no spinner or redraws, and numbered choices\n'
+              : '· screen-reader mode off: the spinner, colors and arrow-key pickers are back\n',
+            'dim'
+          )
+        )
+        return
+      case 'notify':
+        notifyMode = r.mode
+        deps.updateSettings?.({ tuiNotify: notifyMode })
+        deps.io.out(paint(`· notifications → ${notifyMode}, ${describeNotifyMode(notifyMode)}\n`, 'dim'))
+        return
+      case 'set-theme':
+        theme = r.theme
+        paint = makeSessionPainter()
+        deps.io.setPaint?.(paint)
+        // Persist it: a theme you have to re-pick on every launch is not a setting,
+        // it is a party trick.
+        deps.updateSettings?.({ tuiTheme: r.theme })
+        deps.io.out(paint(`· theme → ${r.theme}\n`, 'dim'))
+        return
+    }
+  }
+  const configLive = (): ConfigLive => ({ theme, verbose, reasoningDisplay, notifyMode, reduceMotion, screenReader })
+  const configContext = (): ConfigContext => ({ settings: deps.getSettings(), themes: Object.keys(THEMES) })
+  /** Save one /config value (already validated) through the same path its own command takes. */
+  const applyConfig = (key: ConfigKeyName, value: string): void => {
+    switch (key) {
+      case 'theme': {
+        const t = resolveTheme(value)
+        if (t) applyTerminalSetting({ kind: 'set-theme', theme: t })
+        return
+      }
+      case 'vim':
+      case 'verbose':
+      case 'reduce-motion':
+      case 'screen-reader':
+        applyTerminalSetting({ kind: key, on: value === 'on' })
+        return
+      case 'notify':
+        if (isNotifyMode(value)) applyTerminalSetting({ kind: 'notify', mode: value })
+        return
+      case 'thoughts':
+        if (isReasoningDisplay(value)) setReasoningDisplay(value)
+        return
+      default: {
+        const change = configPatch(key, value, deps.getSettings())
+        if (!change) return
+        if (!deps.updateSettings) {
+          deps.io.out(paint('· changing settings is unavailable here\n', 'dim'))
+          return
+        }
+        deps.updateSettings(change.patch)
+        deps.io.out(paint(`· ${change.note}\n`, 'dim'))
+      }
+    }
+  }
+  /** /status: the session's facts, the host's, and this folder's project config, on one screen. */
+  const statusReport = async (): Promise<string> => {
+    const current = deps.getSettings()
+    let host: HostStatusFacts | null
+    try {
+      host = deps.statusFacts ? await deps.statusFacts(conversationId) : null
+    } catch {
+      host = null
+    }
+    let project: StatusView['project']
+    try {
+      const cfg = await loadProjectConfig(opts.cwd)
+      let path = opts.cwd
+      try {
+        path = realpathSync(opts.cwd)
+      } catch {
+        // Trust records normalize the same way, so the raw path still matches.
+      }
+      const elevates = Boolean(cfg.elevatedHash)
+      project = {
+        exists: elevates || existsSync(resolvePath(opts.cwd, '.houston', 'settings.json')),
+        elevates,
+        trust: elevates ? folderTrustState(current.trustedFolders, path, cfg.elevatedHash) : 'undecided'
+      }
+    } catch {
+      project = null
+    }
+    const kind = providerId ? current.providers.find((p) => p.id === providerId)?.kind : undefined
+    return renderStatus(
+      {
+        version: deps.version ?? 'dev',
+        host,
+        provider:
+          providerId && model ? { id: providerId, model, name: kind ? modelDisplayName(kind, model) : model } : null,
+        effort,
+        policy,
+        mcp: {
+          configured: (current.mcpServers ?? []).filter((m) => m.enabled).length,
+          statuses: deps.mcpStatuses?.() ?? []
+        },
+        settingsPath: deps.settingsPath?.() ?? null,
+        project,
+        cost: formatSessionCost(sessionCost)
+      },
+      paint
+    )
+  }
+  /**
+   * /config: the picker (Enter steps the highlighted setting to its next value, or
+   * picks a model, then the list comes back on the same row), `--help`, one key, or
+   * `key=value`. In screen-reader mode the picker is a numbered list, and a typed
+   * `key=value` at its prompt sets that key.
+   */
+  const runConfig = async (op: ConfigOp): Promise<void> => {
+    if (op.op === 'error') return void deps.io.out(paint(`· ${op.message}\n`, 'yellow'))
+    if (op.op === 'help') {
+      return void deps.io.out(`${wrapHelp(renderConfigHelp(deps.getSettings(), configLive(), configContext()), columns())}\n`)
+    }
+    if (op.op === 'show') {
+      const spec = findConfigKey(op.key)
+      if (spec) deps.io.out(`${renderConfigValue(spec, deps.getSettings(), configLive(), configContext())}\n`)
+      return
+    }
+    if (op.op === 'set') return applyConfig(op.key, op.value)
+    if (!deps.io.select) {
+      return void deps.io.out(`${wrapHelp(renderConfigHelp(deps.getSettings(), configLive(), configContext()), columns())}\n`)
+    }
+    let cursor = 0
+    for (;;) {
+      const current = deps.getSettings()
+      const live = configLive()
+      const options = CONFIG_KEYS.map((k) => ({
+        label: `${k.key}: ${stripControlChars(k.current(current, live))}`,
+        value: k.key,
+        description: k.description
+      }))
+      const r = await deps.io.select({
+        title: 'Settings (Enter changes the highlighted one, Esc closes):',
+        options,
+        initialCursor: cursor,
+        maxRows: CONFIG_KEYS.length
+      })
+      if (r.kind === 'type' && r.text?.trim()) {
+        // A typed `key=value` at the numbered list (screen-reader mode).
+        const typed = parseConfigArgs(r.text, configContext())
+        if (typed.op === 'picker' || typed.op === 'help') return
+        await runConfig(typed)
+        continue
+      }
+      if (r.kind !== 'commit') return
+      const spec = findConfigKey(r.value)
+      if (!spec) return
+      cursor = CONFIG_KEYS.indexOf(spec)
+      if (spec.key === 'model') {
+        const sel = current.selected
+        const choices = modelChoices(current, sel?.providerId ?? null, sel?.model ?? null)
+        if (!choices.length) {
+          deps.io.out(paint('· no model is ready to pick: /login adds a provider key\n', 'yellow'))
+          continue
+        }
+        const m = await deps.io.select({
+          title: 'Model new chats start on:',
+          options: choices.map((c, i) => ({ label: c.label, value: String(i), description: c.description }))
+        })
+        const picked = m.kind === 'commit' ? choices[Number(m.value)] : undefined
+        if (picked) applyConfig('model', `${picked.providerId}/${picked.model}`)
+        continue
+      }
+      const next = nextConfigValue(spec, spec.current(current, live), configContext())
+      if (next) applyConfig(spec.key, next)
+    }
   }
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
@@ -5139,25 +5407,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         renderSettingsOverview(deps, paint, { reduceMotion, screenReader, notifyMode })
         continue
       }
+      if (result.kind === 'config') {
+        await runConfig(result.op)
+        continue
+      }
+      if (result.kind === 'status') {
+        deps.io.out(`${await statusReport()}\n`)
+        continue
+      }
+      if (result.kind === 'feedback') {
+        await runFeedbackCommand(deps, paint)
+        continue
+      }
       if (result.kind === 'add-dir') {
         deps.io.out(paint(`${applyAddDir(sessionAddDirs, result.path, opts.cwd)}\n`, 'dim'))
         continue
       }
       if (result.kind === 'vim') {
-        const on = result.on ?? deps.getSettings().tuiEditor !== 'vim'
-        if (!deps.updateSettings) {
-          deps.io.out(paint('· changing settings is unavailable here\n', 'dim'))
-          continue
-        }
-        deps.updateSettings({ tuiEditor: on ? 'vim' : 'emacs' })
-        deps.io.out(
-          paint(
-            on
-              ? '· vim keys on: Esc for normal mode, i to type again (takes effect at the next prompt)\n'
-              : '· vim keys off: the composer is back to the readline keys\n',
-            'dim'
-          )
-        )
+        applyTerminalSetting({ kind: 'vim', on: result.on ?? deps.getSettings().tuiEditor !== 'vim' })
         continue
       }
       if (result.kind === 'thoughts') {
@@ -5175,17 +5442,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'reduce-motion') {
-        reduceMotion = result.on ?? !reduceMotion
-        deps.updateSettings?.({ reduceMotion })
-        applyAccessibility()
-        deps.io.out(
-          paint(
-            reduceMotion
-              ? '· reduced motion on: the activity line holds still and its timer updates every few seconds\n'
-              : '· reduced motion off: the spinner animates again\n',
-            'dim'
-          )
-        )
+        applyTerminalSetting({ kind: 'reduce-motion', on: result.on ?? !reduceMotion })
         continue
       }
       if (result.kind === 'notify') {
@@ -5196,45 +5453,23 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         if (result.mode) {
-          notifyMode = result.mode
-          deps.updateSettings?.({ tuiNotify: notifyMode })
+          applyTerminalSetting({ kind: 'notify', mode: result.mode })
+          continue
         }
         deps.io.out(
           paint(
-            `· notifications${result.mode ? ' →' : ':'} ${notifyMode}, ${describeNotifyMode(notifyMode)}\n` +
-              (result.mode ? '' : `  /notify ${NOTIFY_MODES.join(' | ')} to change it\n`),
+            `· notifications: ${notifyMode}, ${describeNotifyMode(notifyMode)}\n  /notify ${NOTIFY_MODES.join(' | ')} to change it\n`,
             'dim'
           )
         )
         continue
       }
       if (result.kind === 'screen-reader') {
-        screenReader = result.on ?? !screenReader
-        deps.updateSettings?.({ tuiScreenReader: screenReader })
-        applyAccessibility()
-        paint = makeSessionPainter()
-        deps.io.setPaint?.(paint)
-        deps.io.out(
-          paint(
-            screenReader
-              ? '· screen-reader mode on: plain lines, no spinner or redraws, and numbered choices\n'
-              : '· screen-reader mode off: the spinner, colors and arrow-key pickers are back\n',
-            'dim'
-          )
-        )
+        applyTerminalSetting({ kind: 'screen-reader', on: result.on ?? !screenReader })
         continue
       }
       if (result.kind === 'verbose') {
-        verbose = result.on ?? !verbose
-        deps.updateSettings?.({ tuiVerbose: verbose })
-        deps.io.out(
-          paint(
-            verbose
-              ? '· verbose: showing each tool\'s output as it runs (/output reprints one in full)\n'
-              : '· verbose off: tool output collapses to one line again\n',
-            'dim'
-          )
-        )
+        applyTerminalSetting({ kind: 'verbose', on: result.on ?? !verbose })
         continue
       }
       if (result.kind === 'tasks') {
@@ -5609,13 +5844,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'set-theme') {
-        theme = result.theme
-        paint = makeSessionPainter()
-        deps.io.setPaint?.(paint)
-        // Persist it: a theme you have to re-pick on every launch is not a setting,
-        // it is a party trick.
-        deps.updateSettings?.({ tuiTheme: result.theme })
-        deps.io.out(paint(`· theme → ${result.theme}\n`, 'dim'))
+        applyTerminalSetting(result)
         continue
       }
       if (result.kind === 'compact') {
@@ -6763,6 +6992,8 @@ function renderSettingsOverview(
     '  The desktop app has the full settings panel: models, API keys, remote and',
     '  authenticated MCP servers, hooks, and more.',
     '  From the terminal you can edit a safe subset:',
+    `    ${paint('/config', 'cyan')}  pick and change a setting  ·  /config <key>=<value>  ·  /config --help`,
+    `    ${paint('/status', 'cyan')}  what this session runs on: model, approval, sandbox, network, settings sources`,
     `    ${paint('/hooks', 'cyan')}   list, or  /hooks add  ·  /hooks remove <n>`,
     `    ${paint('/mcp', 'cyan')}     list, or  /mcp add (stdio)  ·  /mcp remove <n>  ·  /mcp login|logout <n>`,
     `    ${paint('/trust', 'cyan')}   this folder's project-config trust  ·  /trust forget re-decides`,

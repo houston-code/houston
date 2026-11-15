@@ -16,6 +16,9 @@ import { defaultSettings } from './defaults'
  * the dumps themselves never go anywhere unless the user attaches them.
  */
 
+/** Where Help > Report an Issue and the terminal's /feedback send the user. */
+export const ISSUES_URL = 'https://github.com/houston-code/houston/issues/new'
+
 /** Doctor rows whose detail is a path; their status is always ok, so they add nothing. */
 const OMITTED_LABELS = new Set(['settings', 'workspace'])
 

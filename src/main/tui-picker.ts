@@ -93,6 +93,8 @@ export interface PickerSpec {
   preview?: (o: PickerOption, width: number) => string[]
   /** At most this many rows at once; the window follows the cursor. */
   maxRows?: number
+  /** The row the cursor starts on (clamped to the rows); default the first. */
+  initialCursor?: number
   /** Shown in place of the rows when there are none (or none match the filter). */
   empty?: string
   /** Replaces the default footer hint. */
@@ -192,7 +194,9 @@ export type PickerOutcome =
   | { kind: 'action'; id: string; value: string | null; text?: string }
 
 export function initialPickerState(spec: PickerSpec): PickerState {
-  const s: PickerState = { spec, cursor: 0, checked: new Set() }
+  const last = spec.options.length - 1
+  const cursor = Math.max(0, Math.min(last, Math.floor(spec.initialCursor ?? 0)))
+  const s: PickerState = { spec, cursor: Number.isFinite(cursor) ? cursor : 0, checked: new Set() }
   if (spec.filter) s.query = spec.initialQuery ?? ''
   return s
 }
