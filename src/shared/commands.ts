@@ -466,13 +466,17 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Ask a quick side question; the answer stays out of this chat',
     clients: ['gui', 'tui']
   },
-  { name: 'fork', group: 'Chat', description: 'Branch the current session into a copy', clients: ['gui', 'tui'] },
+  {
+    name: 'fork', group: 'Chat', args: '[n]',
+    description: 'Branch the current session into a copy, or from before message n', clients: ['gui', 'tui']
+  },
   { name: 'rename', group: 'Chat', args: '<title>', description: 'Give this chat a title', clients: ['tui'] },
   {
     name: 'export', group: 'Chat', args: '[md|json] [path]',
     description: 'Write this chat to a Markdown or JSON file', clients: ['tui']
   },
   { name: 'delete', group: 'Chat', description: 'Delete this chat (asks first)', clients: ['tui'] },
+  { name: 'open-in-app', group: 'Chat', description: 'Open this chat in the Houston desktop app', clients: ['tui'] },
   {
     name: 'permissions', group: 'Setup', args: '[add … | remove n]',
     description: 'List every permission rule that applies, or add or remove one of yours', clients: ['tui']
@@ -602,6 +606,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   rename: "in the app, rename a chat from its More actions menu in the sidebar",
   export: "in the app, export a chat from its More actions menu in the sidebar, or the File menu",
   delete: "in the app, delete a chat from its More actions menu in the sidebar",
+  'open-in-app': 'you are in the app already',
   permissions: 'in the app, saved rules are under Settings > Permissions',
   commit: 'in the app, commit from the Changes view, where Suggest message writes one',
   push: 'in the app, push from the Changes view',

@@ -223,6 +223,8 @@ export interface CliSubcommand {
   flags?: readonly CliWord[]
   /** Completes a folder as its first word (`open [dir]`). */
   dirArg?: boolean
+  /** Further `--help` lines for other forms of it (`open --chat <id>`). */
+  moreUsage?: readonly { usage: string; summary: string }[]
 }
 
 export const SHELLS = ['bash', 'zsh', 'fish'] as const
@@ -286,7 +288,14 @@ export const CLI_SUBCOMMANDS: readonly CliSubcommand[] = [
       { name: 'status', summary: 'whether it is installed and running' }
     ]
   },
-  { name: 'open', usage: 'open [dir]', summary: 'open a folder in the Houston desktop app', dirArg: true }
+  {
+    name: 'open',
+    usage: 'open [dir]',
+    summary: 'open a folder in the Houston desktop app',
+    dirArg: true,
+    flags: [{ name: '--chat', summary: 'open a saved chat by its id' }],
+    moreUsage: [{ usage: 'open --chat <id>', summary: 'open a saved chat in the Houston desktop app' }]
+  }
 ]
 
 /** The help column: labels up to this wide share a line with their help. */
@@ -310,7 +319,8 @@ export function renderOptions(flags: readonly CliFlag[] = CLI_FLAGS): string {
 
 /** The subcommand lines of the Usage block, rendered from CLI_SUBCOMMANDS. */
 export function renderSubcommands(subs: readonly CliSubcommand[] = CLI_SUBCOMMANDS): string {
-  return `${subs.map((s) => `${LABEL_INDENT}${`houston ${s.usage}`.padEnd(36)} ${s.summary}`).join('\n')}\n`
+  const line = (usage: string, summary: string): string => `${LABEL_INDENT}${`houston ${usage}`.padEnd(36)} ${summary}`
+  return `${subs.flatMap((s) => [line(s.usage, s.summary), ...(s.moreUsage ?? []).map((m) => line(m.usage, m.summary))]).join('\n')}\n`
 }
 
 /** Every spelling of the flags of one kind. */

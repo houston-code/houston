@@ -52,12 +52,15 @@ import { createSchedulerService, fireViaSpawn, schedulesFilePath, type Scheduler
 import { appSchedulerRunning, daemonPidPath, holdPidFile } from './scheduleDaemon'
 import { createWorktree, removeWorktree } from './agent/worktree'
 import { readFlagFile, resolveSessionInputs } from './sessionFlags'
+import { launchDetached, urlOpener } from '../cli/openInApp'
+import { chatDeepLink } from '@shared/deepLink'
 import {
   conversationWorktree,
   createSessionWorktree,
   finishSessionWorktree,
   comeBackCommand,
   resumeWorktreeFolder,
+  resumeChatFolder,
   type SessionWorktree
 } from './sessionWorktree'
 import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
@@ -160,6 +163,7 @@ import {
   peekConversation,
   searchConversations,
   forkConversation,
+  forkConversationAt,
   organizeConversation,
   conversationExists,
   detachConversationWorktree,
@@ -171,13 +175,16 @@ import {
 } from './conversations'
 
 /** Resume-picker rows, each marked with the desktop app's unread state for it. */
-function withUnread(convs: { id: string; title: string; updatedAt: number; workspace?: string }[]): ResumeEntry[] {
+function withUnread(
+  convs: { id: string; title: string; updatedAt: number; workspace?: string; pinned?: boolean }[]
+): ResumeEntry[] {
   const unread = new ReadStateStore(join(getUserDataDir(), 'read-state.json')).snapshot()
   return convs.map((c) => ({
     id: c.id,
     title: c.title,
     updatedAt: c.updatedAt,
     ...(c.workspace ? { workspace: c.workspace } : {}),
+    ...(c.pinned ? { pinned: true } : {}),
     ...(unread[c.id] ? { unread: unread[c.id].outcome } : {})
   }))
 }
@@ -186,9 +193,18 @@ function withUnread(convs: { id: string; title: string; updatedAt: number; works
 const RESUME_LIMIT = 20
 const RESUME_ALL_LIMIT = 50
 
-/** Newest first, `limit` at most, with the desktop's unread state. */
+/**
+ * Newest first, `limit` at most, with the desktop's unread state. Archived chats are
+ * left out, as the desktop sidebar leaves them out of its folders (its Archived
+ * section has them), so neither the picker nor `--continue` lands on one.
+ */
 function resumeEntries(convs: ConversationMeta[], limit: number): ResumeEntry[] {
-  return withUnread([...convs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit))
+  return withUnread(
+    convs
+      .filter((c) => !c.archived)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit)
+  )
 }
 
 /**
@@ -623,7 +639,10 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // folder (history, commands, trust). --resume of a worktree chat opens its worktree.
   let sessionWt: SessionWorktree | null = null
   if (!tui.usageError) {
+    const launchCwd = tui.cwd
     const wt = await startInWorktree(tui)
+    // The session moved (a worktree, a resumed chat's folder): the exit hint names it.
+    if (typeof wt !== 'number' && tui.cwd !== launchCwd) tui.launchCwd = launchCwd
     if (typeof wt === 'number') return wt
     sessionWt = wt
   }
@@ -797,6 +816,12 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         redo: (runId) => reapplyCheckpoint(runId)
       },
       // /rewind: the same engine as the desktop app's Rewind menu.
+      // /open-in-app: the chat as a houston://chat/<id> link, through the OS's URL
+      // handler (an argv array, never a shell string), like `houston open --chat`.
+      openInApp: async (id) => {
+        const { cmd, args } = urlOpener(process.platform, chatDeepLink(id))
+        await launchDetached(cmd, args)
+      },
       rewind: {
         preview: (conversationId, turn, mode, text) => previewRewind(conversationId, turn, mode, text),
         apply: (conversationId, turn, mode, text) => rewindConversation(conversationId, turn, mode, text),
@@ -1083,6 +1108,16 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           const forked = forkConversation(id)
           return forked ? { id: forked.id } : null
         },
+        // The desktop's fork from a message.
+        forkAt: (id, point) => {
+          const forked = forkConversationAt(id, point)
+          return forked ? { id: forked.id } : null
+        },
+        // Read from the chat itself, so a chat outside the folder's newest 20 (or in
+        // another folder) still shows its title.
+        title: (id) => peekConversation(id)?.title,
+        pin: (id, pinned) => organizeConversation(id, { pinned }),
+        archive: (id) => organizeConversation(id, { archived: true }),
         // The desktop sidebar's rename: marks the title as chosen, so it is never
         // replaced by a generated one.
         rename: (id, title) => organizeConversation(id, { title }),
@@ -1173,10 +1208,19 @@ async function startInWorktree(opts: {
     return setup.worktree
   }
   if (opts.resumeId) {
-    const folder = resumeWorktreeFolder(getConversation(opts.resumeId), opts.cwd)
+    const conv = peekConversation(opts.resumeId)
+    const folder = resumeWorktreeFolder(conv, opts.cwd)
     if (folder) {
       opts.cwd = folder
       process.stderr.write(`· opening the chat in its worktree: ${stripControlChars(folder)}\n`)
+      return null
+    }
+    // A chat saved in another folder runs there: its tools, rules and trust are that
+    // folder's, as when the desktop app opens it.
+    const home = resumeChatFolder(conv, opts.cwd)
+    if (home) {
+      opts.cwd = home
+      process.stderr.write(`· opening the chat in its folder: ${stripControlChars(home)}\n`)
     }
   }
   return null

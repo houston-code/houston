@@ -6769,6 +6769,207 @@ describe('/reasoning', () => {
   })
 })
 
+describe('chat hand-offs: resume by id, titles, model reconcile, rewind, fork, open in app', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+  const seeded = (over: Partial<ConversationSettingsPatch> = {}) =>
+    fakePersist([
+      {
+        id: 'far',
+        title: 'Far away chat',
+        updatedAt: 1,
+        messages: [
+          { role: 'user', content: 'first' },
+          { role: 'assistant', content: 'ok' },
+          { role: 'user', content: 'second' },
+          { role: 'assistant', content: 'done' }
+        ],
+        providerId: 'anthropic',
+        model: 'claude',
+        ...over
+      }
+    ])
+
+  it('--resume <id> opens a chat the folder list does not hold, titled from the chat', async () => {
+    const { d, rec } = deps(done)
+    const fp = seeded()
+    fp.persist.list = () => []
+    fp.persist.title = (id) => fp.store.get(id)?.title
+    fp.persist.rename = () => {}
+    d.persist = fp.persist
+    const t = fakeIo(['/rename', 'go', null])
+    d.io = t.io
+    await runTui({ ...opts, resumeId: 'far' }, d)
+    expect(t.text()).toContain('continuing "Far away chat" (4 messages)')
+    expect(t.text()).toContain('this chat is "Far away chat"')
+    expect(rec.runs[0].messages.map((m) => m.content)).toEqual(['first', 'ok', 'second', 'done', 'go'])
+  })
+
+  it('the exit hint names the folder when the session runs away from where it started', async () => {
+    const { d } = deps(done)
+    d.persist = fakePersist().persist
+    const t = fakeIo(['hi', null])
+    d.io = t.io
+    await runTui({ ...opts, cwd: '/proj/wt', launchCwd: '/proj' }, d)
+    expect(t.text()).toContain('houston --resume conv-1 -C /proj/wt\n')
+    expect(t.text()).not.toContain('houston --continue')
+  })
+
+  it("a chat whose model is gone moves to its provider's default, and says so", async () => {
+    const { d, rec } = deps(done)
+    d.persist = seeded({ model: 'retired-model' }).persist
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui({ ...opts, resumeId: 'far' }, d)
+    expect(t.text()).toContain("this chat's model (retired-model) is no longer set up, so it now uses claude")
+    expect(rec.runs[0]).toMatchObject({ providerId: 'anthropic', model: 'claude' })
+  })
+
+  it("a chat whose provider is gone keeps the session's model, and says so", async () => {
+    const { d, rec } = deps(done)
+    d.persist = seeded({ providerId: 'removed', model: 'm1' }).persist
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui({ ...opts, resumeId: 'far' }, d)
+    expect(t.text()).toContain("this chat's model (m1) is no longer set up, so it now uses claude")
+    expect(rec.runs[0]).toMatchObject({ providerId: 'anthropic', model: 'claude' })
+  })
+
+  it('a conversation rewind puts the message back in the composer', async () => {
+    const { d } = deps(done)
+    d.persist = fakePersist().persist
+    d.rewind = {
+      preview: async () => ({ ok: true, turns: 1, files: 0, conflicts: [], unavailable: 0 }),
+      apply: async (_id, _turn, _mode, text) => ({
+        ok: true,
+        messages: [],
+        text,
+        restored: 0,
+        conflicts: [],
+        unavailable: 0,
+        undoable: true
+      }),
+      undo: async () => ({ ok: true, messages: [], reapplied: 0, conflicts: [] })
+    }
+    const t = fakeIo(['y'])
+    const composed: Array<string | null> = ['fix the bug', '/rewind 1 conversation', null]
+    const initials: Array<string | undefined> = []
+    t.io.readComposer = async (_p, initial) => {
+      initials.push(initial)
+      return composed.shift() ?? null
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(initials).toEqual([undefined, undefined, 'fix the bug'])
+    expect(t.text()).toContain('your message is back in the prompt')
+  })
+
+  it('/fork <n> forks from before that message and hands it back to the composer', async () => {
+    const { d, rec } = deps(done)
+    const fp = seeded()
+    const points: unknown[] = []
+    fp.persist.forkAt = (id, point) => {
+      points.push([id, point])
+      fp.store.set('forked', { ...fp.store.get(id)!, messages: fp.store.get(id)!.messages.slice(0, 2) })
+      return { id: 'forked' }
+    }
+    d.persist = fp.persist
+    const t = fakeIo([])
+    const composed: Array<string | null> = ['/fork 2', 'second, but better', null]
+    const initials: Array<string | undefined> = []
+    t.io.readComposer = async (_p, initial) => {
+      initials.push(initial)
+      return composed.shift() ?? null
+    }
+    d.io = t.io
+    await runTui({ ...opts, resumeId: 'far' }, d)
+    expect(points).toEqual([['far', { kind: 'turn', n: 1, text: 'second' }]])
+    expect(initials[1]).toBe('second')
+    expect(t.text()).toContain('forked from before message 2')
+    expect(rec.runs[0].messages.map((m) => m.content)).toEqual(['first', 'ok', 'second, but better'])
+  })
+
+  it('/fork with a bad or missing message number forks nothing', async () => {
+    const { d } = deps(done)
+    const fp = seeded()
+    let forks = 0
+    fp.persist.forkAt = () => {
+      forks++
+      return null
+    }
+    d.persist = fp.persist
+    const t = fakeIo(['/fork x', '/fork 9', null])
+    d.io = t.io
+    await runTui({ ...opts, resumeId: 'far' }, d)
+    expect(forks).toBe(0)
+    expect(t.text()).toContain('usage: /fork')
+    expect(t.text()).toContain('no message 9 to fork from (there are 2)')
+  })
+
+  it('/open-in-app hands the saved chat to the desktop app', async () => {
+    const { d } = deps(done)
+    d.persist = seeded().persist
+    const opened: string[] = []
+    d.openInApp = async (id) => {
+      opened.push(id)
+    }
+    const t = fakeIo(['/open-in-app', null])
+    d.io = t.io
+    await runTui({ ...opts, resumeId: 'far' }, d)
+    expect(opened).toEqual(['far'])
+    expect(t.text()).toContain('opening this chat in the Houston app')
+  })
+
+  it('/open-in-app before anything is saved says so', async () => {
+    const { d } = deps(done)
+    d.persist = fakePersist().persist
+    d.openInApp = async () => {
+      throw new Error('should not open')
+    }
+    const t = fakeIo(['/open-in-app', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('nothing to open yet')
+  })
+
+  it('the resume picker pins, unpins and archives', async () => {
+    const { d } = deps(done)
+    const fp = seeded()
+    const calls: unknown[] = []
+    const base = fp.persist.list
+    let pinned = false
+    fp.persist.list = (w) => base(w).map((e) => ({ ...e, pinned }))
+    fp.persist.pin = (id, p) => {
+      calls.push(['pin', id, p])
+      pinned = p
+    }
+    fp.persist.archive = (id) => calls.push(['archive', id])
+    d.persist = fp.persist
+    const notices: string[] = []
+    const hints: string[] = []
+    const t = fakeIo(['/resume', null])
+    t.io.select = async (spec) => {
+      hints.push(spec.hint ?? '')
+      for (const id of ['pin', 'pin', 'archive']) {
+        const r = await spec.onAction!({ id, value: 'far', query: '' })
+        notices.push(r.notice ?? '')
+      }
+      return { kind: 'cancel' }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(calls).toEqual([
+      ['pin', 'far', true],
+      ['pin', 'far', false],
+      ['archive', 'far']
+    ])
+    expect(notices[0]).toBe('pinned "Far away chat"')
+    expect(notices[1]).toBe('unpinned "Far away chat"')
+    expect(notices[2]).toContain('archived "Far away chat"')
+    expect(hints[0]).toContain('ctrl-p pin')
+    expect(hints[0]).toContain('ctrl-e archive')
+  })
+})
+
 // Headless has had --continue/--resume since it existed. The terminal had neither,
 // so picking up where you left off meant launching and then running /resume — one
 // extra step, every time, for the most ordinary thing you do.

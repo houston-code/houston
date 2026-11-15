@@ -43,6 +43,25 @@ describe('houston open', () => {
     expect(await runOpenCommand(['--force'], deps())).toBe(2)
   })
 
+  it('--chat <id> opens a saved chat through a chat link', async () => {
+    const id = '1b4e28ba-2fa1-11d2-883f-0016d3cca427'
+    for (const args of [['--chat', id], [`--chat=${id.toUpperCase()}`]]) {
+      const d = deps()
+      expect(await runOpenCommand(args, d)).toBe(0)
+      const [, argv] = (d.launch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string[]]
+      expect(parseDeepLink(argv[0])).toEqual({ type: 'open-chat', conversationId: id })
+      expect(d.out.mock.calls.flat().join('')).toContain('Opening the chat in Houston.')
+    }
+  })
+
+  it('--chat refuses a missing or malformed id, and extra arguments, without launching', async () => {
+    for (const args of [['--chat'], ['--chat', 'nope'], ['--chat', '../x'], ['--chat', '1b4e28ba-2fa1-11d2-883f-0016d3cca427', 'more']]) {
+      const d = deps()
+      expect(await runOpenCommand(args, d)).toBe(2)
+      expect(d.launch).not.toHaveBeenCalled()
+    }
+  })
+
   it('reports a launcher failure', async () => {
     const d = deps({ launch: async () => Promise.reject(new Error('spawn xdg-open ENOENT')) })
     expect(await runOpenCommand([], d)).toBe(1)

@@ -1,6 +1,6 @@
 /**
  * `houston://` links: the small set of actions another app, a web page or the
- * terminal (`houston open <dir>`) can ask the desktop app to take. Every link is
+ * terminal (`houston open <dir>`, `houston open --chat <id>`, `/open-in-app`) can ask the desktop app to take. Every link is
  * untrusted input, so this parser accepts only these exact shapes and drops
  * everything else:
  *
@@ -128,6 +128,16 @@ function decodeSegment(s: string): string | null {
 /** The link that opens `absPath` as a new chat (built by `houston open`). */
 export function folderDeepLink(absPath: string): string {
   return `${DEEP_LINK_SCHEME}://open?path=${encodeURIComponent(absPath)}`
+}
+
+/** Whether `id` has the shape of a conversation id (what a chat link carries). */
+export function isConversationId(id: string): boolean {
+  return CONVERSATION_ID_RE.test(id)
+}
+
+/** The link that opens an existing chat (built by `houston open --chat` and `/open-in-app`). */
+export function chatDeepLink(conversationId: string): string {
+  return `${DEEP_LINK_SCHEME}://chat/${encodeURIComponent(conversationId)}`
 }
 
 /** The first argument that looks like a Houston link (Windows and Linux pass links on argv). */

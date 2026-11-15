@@ -42,7 +42,8 @@ export type DesktopCommandAction =
   | { kind: 'undo' }
   | { kind: 'redo' }
   | { kind: 'retry' }
-  | { kind: 'fork' }
+  /** Fork the chat: whole, or (`turn`, 0-based) from before that message. */
+  | { kind: 'fork'; turn?: number }
   | { kind: 'resume'; query: string }
   | { kind: 'btw'; question: string }
   | { kind: 'btw-clear' }
@@ -149,8 +150,10 @@ export function desktopCommandAction(name: string, args: string): DesktopCommand
       return { kind: 'redo' }
     case 'retry':
       return { kind: 'retry' }
-    case 'fork':
-      return { kind: 'fork' }
+    case 'fork': {
+      const n = Number(arg.trim())
+      return arg.trim() && Number.isInteger(n) && n >= 1 ? { kind: 'fork', turn: n - 1 } : { kind: 'fork' }
+    }
     case 'resume':
       return { kind: 'resume', query: arg }
     case 'btw':

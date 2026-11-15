@@ -93,6 +93,12 @@ describe('desktopCommandAction', () => {
     expect(desktopCommandAction('resume', 'auth')).toEqual({ kind: 'resume', query: 'auth' })
   })
 
+  it('reads /fork <n> as a message number, and anything else as the whole chat', () => {
+    expect(desktopCommandAction('fork', '')).toEqual({ kind: 'fork' })
+    expect(desktopCommandAction('fork', ' 2 ')).toEqual({ kind: 'fork', turn: 1 })
+    expect(desktopCommandAction('fork', '0')).toEqual({ kind: 'fork' })
+  })
+
   it('has an action for every shared command the app does not handle elsewhere', () => {
     // App handles these directly (chat lifecycle, listings, policy words, templates).
     const handledInApp = new Set(['new', 'clear', 'compact', 'plan', 'ask', 'auto', 'full', 'doctor', 'usage', 'help', 'skills', 'agents', 'agent', 'review', 'init'])
