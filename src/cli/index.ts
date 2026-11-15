@@ -270,7 +270,27 @@ function isDirectRun(): boolean {
  * npm package's launcher (packaging/npm/houston.cjs) requires the bundle and calls it
  * once Node's compile cache is on.
  */
+/**
+ * The marker the Homebrew and AUR wrappers set (scripts/render-packaging.mjs) beside a
+ * NODE_COMPILE_CACHE they chose themselves. A shell wrapper can only turn Node's compile
+ * cache on through the environment, which every process Houston starts would inherit.
+ */
+export const OWN_COMPILE_CACHE_MARKER = 'HOUSTON_OWN_COMPILE_CACHE'
+
+/**
+ * Drops the wrapper's NODE_COMPILE_CACHE (and its marker) once Node has read it at
+ * startup, so shell commands, MCP servers and hooks don't compile-cache the user's own
+ * programs into Houston's directory. A NODE_COMPILE_CACHE the user set carries no
+ * marker and stays.
+ */
+export function dropOwnCompileCacheEnv(env: NodeJS.ProcessEnv): void {
+  if (env[OWN_COMPILE_CACHE_MARKER] !== '1') return
+  delete env[OWN_COMPILE_CACHE_MARKER]
+  delete env.NODE_COMPILE_CACHE
+}
+
 export function startCli(): void {
+  dropOwnCompileCacheEnv(process.env)
   // Mirror the desktop headless path's fatal handling: log, one-line stderr, exit.
   process.on('uncaughtException', (err) => {
     logFatal('uncaughtException', err)

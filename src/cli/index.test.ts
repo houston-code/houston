@@ -16,9 +16,25 @@ vi.mock('./run', () => {
   }
 })
 
-import { USAGE, cliArgvError, main, nodeVersionError, shortUsage } from './index'
+import { USAGE, cliArgvError, dropOwnCompileCacheEnv, main, nodeVersionError, shortUsage } from './index'
 import { HEADLESS_FLAGS } from '../main/headless'
 import { CLI_SUBCOMMANDS, renderOptions } from './flags'
+
+describe('dropOwnCompileCacheEnv', () => {
+  it("removes the packaging wrapper's compile cache so child processes don't inherit it", () => {
+    const env: NodeJS.ProcessEnv = { NODE_COMPILE_CACHE: '/c/houston/compile-cache', HOUSTON_OWN_COMPILE_CACHE: '1', PATH: '/bin' }
+    dropOwnCompileCacheEnv(env)
+    expect(env).toEqual({ PATH: '/bin' })
+  })
+
+  it('leaves a NODE_COMPILE_CACHE the user set alone, including an empty one', () => {
+    for (const value of ['/mine', '']) {
+      const env: NodeJS.ProcessEnv = { NODE_COMPILE_CACHE: value }
+      dropOwnCompileCacheEnv(env)
+      expect(env).toEqual({ NODE_COMPILE_CACHE: value })
+    }
+  })
+})
 
 describe('nodeVersionError', () => {
   it('returns null when the runtime is new enough', () => {
