@@ -12,6 +12,7 @@ import {
   finishSessionWorktree,
   parseKeepOrRemove,
   resumeWorktreeFolder,
+  resumeChatFolder,
   shellQuote,
   worktreeWork,
   type SessionWorktree
@@ -296,4 +297,19 @@ describe('session worktree (real git)', () => {
     },
     TIMEOUT
   )
+})
+
+describe('resumeChatFolder', () => {
+  it("opens a chat from another folder in that folder, when it still exists", () => {
+    expect(resumeChatFolder({ workspace: '/other' }, '/here', () => true)).toBe('/other')
+    expect(resumeChatFolder({ workspace: '/here/' }, '/here', () => true)).toBeNull()
+    expect(resumeChatFolder({ workspace: '/gone' }, '/here', () => false)).toBeNull()
+    expect(resumeChatFolder({}, '/here', () => true)).toBeNull()
+    expect(resumeChatFolder(null, '/here')).toBeNull()
+  })
+
+  it('leaves a worktree chat to resumeWorktreeFolder', () => {
+    const wt = { path: '/r/.houston/worktrees/x', branch: 'houston/x', repoRoot: '/r' }
+    expect(resumeChatFolder({ workspace: wt.path, worktree: wt }, '/here', () => true)).toBeNull()
+  })
 })

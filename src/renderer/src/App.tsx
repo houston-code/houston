@@ -2313,6 +2313,8 @@ export default function App(): JSX.Element {
   // the new reply replaces the old one. Same rewind the message menu does, without
   // its confirmation: what goes away is only the reply being retried.
   const lastTurn = useFromItems(chatItems, lastUserTurnIn)
+  // Your messages as /rewind numbers them, for `/fork <n>`.
+  const turnTargets = useFromItems(chatItems, rewindTargets)
   const onRetryLast = useCallback(async () => {
     const id = currentId
     if (!id || !lastTurn || chat.running) return
@@ -2931,10 +2933,25 @@ export default function App(): JSX.Element {
           if (chat.errored && !chat.running) onRetry()
           else chat.notify('Nothing to retry: /retry runs your last message again after a turn fails.')
           return
-        case 'fork':
-          if (currentId) void onForkConversation(currentId)
-          else chat.notify('Nothing to fork yet: send a message first.')
+        case 'fork': {
+          if (!currentId) {
+            chat.notify('Nothing to fork yet: send a message first.')
+            return
+          }
+          if (action.turn === undefined) {
+            void onForkConversation(currentId)
+            return
+          }
+          // `/fork <n>`: from before your nth message (as /rewind numbers them), with
+          // that message back in the new chat's composer.
+          const target = turnTargets[action.turn]
+          if (!target) {
+            chat.notify(`There is no message ${action.turn + 1} to fork from.`)
+            return
+          }
+          void forkFrom({ kind: 'turn', n: target.turn, text: target.text }, target.text)
           return
+        }
         case 'resume':
           setPaletteSeed(action.query)
           setPaletteOpen(true)
@@ -3034,6 +3051,8 @@ export default function App(): JSX.Element {
       onReapply,
       onRetry,
       onForkConversation,
+      forkFrom,
+      turnTargets,
       onChangePolicy,
       onChangeReasoning,
       saveDefaults,

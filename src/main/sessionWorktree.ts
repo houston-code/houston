@@ -244,3 +244,19 @@ export function resumeWorktreeFolder(
   if (!path || !exists(path)) return null
   return resolvePath(cwd) === resolvePath(path) ? null : path
 }
+
+/**
+ * The folder a `--resume <id>` session should open in when the chat has no worktree
+ * of its own: the folder it was saved in, when that still exists and the session isn't
+ * already there, else null (the chat then opens where `houston` was started). Pure
+ * apart from the existence probe.
+ */
+export function resumeChatFolder(
+  conv: { workspace?: string; worktree?: ConversationWorktree } | null | undefined,
+  cwd: string,
+  exists: (p: string) => boolean = existsSync
+): string | null {
+  const path = conv?.workspace
+  if (!path || conv?.worktree || !exists(path)) return null
+  return resolvePath(cwd) === resolvePath(path) ? null : path
+}

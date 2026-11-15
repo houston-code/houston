@@ -146,7 +146,8 @@ the terminal. Only three kinds do anything:
   in any spelling, including `/\host\share` and `\\?\UNC\...`) are refused before
   Houston looks at them.
 - From a terminal, `houston open [dir]` (the standalone CLI) opens a folder, the current
-  one by default, in the desktop app.
+  one by default, in the desktop app, and `houston open --chat <id>` opens a saved chat
+  there. Inside `houston -i`, `/open-in-app` hands the chat you're in to the app.
 - Only one copy of the desktop app runs per profile. Launching it again brings the open
   window forward and passes it the link.
 
@@ -171,7 +172,8 @@ the terminal. Only three kinds do anything:
   cost.
 - Slash commands switch settings mid-session.
 - `--continue` reopens this folder's most recent chat at launch; `--resume <id>`
-  reopens a specific one.
+  reopens a specific one, wherever it was saved: a chat from another folder opens in
+  that folder (when it still exists), and a worktree chat in its worktree.
 - `--screen-reader` starts in screen-reader mode: plain lines, no redraws, and
   numbered choices. See "Screen-reader mode".
 - **First run.** With no model ready, it lists the providers that take a key, then
@@ -836,8 +838,8 @@ In the terminal:
 
 **Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/vim`, `/notify`, `/screen-reader`,
 `/reduce-motion`, `/verbose`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
-`/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/permissions`, `/schedule`, and
-`/exit`. Typed in the
+`/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/open-in-app`,
+`/permissions`, `/schedule`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
 
@@ -878,6 +880,9 @@ the model.
   - Ctrl-D, or `x` while the filter is empty, deletes it after a y/N question; deleting
     the chat you're in says so first, and you carry on in a new chat. A worktree that
     holds work is kept (use `/delete` inside the chat to remove it)
+  - Ctrl-P pins or unpins the chat and Ctrl-E archives it, as in the desktop sidebar;
+    archived chats are left out of the list (and of `--continue`), and the app's
+    Archived section has them
   - Ctrl-A switches between this folder and all folders; all folders shows each chat's
     folder
   Off a terminal that can't show the picker, it prints a numbered list to answer by
@@ -887,7 +892,17 @@ the model.
   didn't finish (an error, a Stop, or a limit it hit). An earlier run in those exchanges
   that ended short shows its notice under its own exchange, as the desktop shows it
   under its message.
-- Leaving prints the `houston --resume <id>` command that reopens the chat.
+- Leaving prints the `houston --resume <id>` command that reopens the chat. When the
+  session ran somewhere other than where you started it (a worktree, or a resumed
+  chat's own folder), the command names that folder with `-C`.
+- A reopened chat runs on its own model. When that model is no longer set up, it moves
+  to another model of the same provider (or keeps the session's) and says so, as the
+  desktop app does.
+- `/fork` copies the chat and carries on in the copy. `/fork <n>` forks from before
+  message n (numbered as in `/rewind`): the copy holds what came before it, and the
+  message is back in the prompt to change or send. The desktop app takes `/fork <n>`
+  too.
+- `/open-in-app` opens this chat in the Houston desktop app.
 
 **Terminal settings (/config).** `/config` opens a list of the settings the terminal
 understands, each with its value: `theme`, `vim`, `verbose`, `thoughts`, `notify`,
@@ -1897,7 +1912,8 @@ goes back:
 which one and what to rewind, shows the same summary, and asks you to confirm.
 
 `/rewind 3 code` skips the questions for message 3. The modes are `both`,
-`conversation`, and `code`.
+`conversation`, and `code`. After a conversation rewind, the message you rewound to
+is back in the prompt to edit or send again.
 
 ### Things to know
 

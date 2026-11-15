@@ -5,6 +5,8 @@ import {
   MAX_DEEP_LINK_LENGTH,
   deepLinkFromArgv,
   folderDeepLink,
+  chatDeepLink,
+  isConversationId,
   isAbsoluteLocalPath,
   parseDeepLink
 } from './deepLink'
@@ -143,5 +145,14 @@ describe('deepLinkFromArgv', () => {
     expect(deepLinkFromArgv(['/app/Houston', '--flag', 'houston://settings'])).toBe('houston://settings')
     expect(deepLinkFromArgv(['Houston', 'HOUSTON://settings'])).toBe('HOUSTON://settings')
     expect(deepLinkFromArgv(['Houston', '--acp'])).toBeNull()
+  })
+})
+
+describe('chatDeepLink', () => {
+  it('round-trips through the parser', () => {
+    const id = '1b4e28ba-2fa1-11d2-883f-0016d3cca427'
+    expect(parseDeepLink(chatDeepLink(id))).toEqual({ type: 'open-chat', conversationId: id })
+    expect(isConversationId(id)).toBe(true)
+    expect(isConversationId('conv-1')).toBe(false)
   })
 })

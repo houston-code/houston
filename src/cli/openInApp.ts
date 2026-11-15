@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process'
 import { realpathSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { folderDeepLink } from '@shared/deepLink'
+import { chatDeepLink, folderDeepLink, isConversationId } from '@shared/deepLink'
 
 /**
- * `houston open [dir]`: hand a folder to the desktop app as a new chat. The folder
+ * `houston open [dir]`: hand a folder to the desktop app as a new chat, and
+ * `houston open --chat <id>`: hand it a saved chat (a `houston://chat/<id>` link; the
+ * app says so when the chat no longer exists). The folder
  * travels as a `houston://open?path=…` link, opened through the OS's own URL handler
  * so it reaches whichever Houston install registered the scheme (and the running app,
  * through its single-instance lock). The app asks before opening a folder it has never
@@ -14,7 +16,9 @@ import { folderDeepLink } from '@shared/deepLink'
  * user path, which may contain shell metacharacters.
  */
 
-export const OPEN_USAGE = 'Usage: houston open [dir]   open a folder in the Houston desktop app (default: the current folder)'
+export const OPEN_USAGE =
+  'Usage: houston open [dir]         open a folder in the Houston desktop app (default: the current folder)\n' +
+  '       houston open --chat <id>   open a saved chat in the Houston desktop app'
 
 /** The OS command that opens a URL in its registered handler. */
 export function urlOpener(platform: NodeJS.Platform, url: string): { cmd: string; args: string[] } {
@@ -41,6 +45,19 @@ export async function runOpenCommand(args: string[], deps: OpenInAppDeps): Promi
     deps.out(`${OPEN_USAGE}\n`)
     return 0
   }
+  if (args[0] === '--chat' || args[0]?.startsWith('--chat=')) {
+    const id = args[0] === '--chat' ? args[1] : args[0].slice('--chat='.length)
+    const extra = args[0] === '--chat' ? args.slice(2) : args.slice(1)
+    if (!id || extra.length > 0) {
+      deps.err(`${OPEN_USAGE}\n`)
+      return 2
+    }
+    if (!isConversationId(id)) {
+      deps.err('Not a chat id. Chat ids look like 1b4e28ba-2fa1-11d2-883f-0016d3cca427 (houston prints one when you leave a chat).\n')
+      return 2
+    }
+    return launchLink(chatDeepLink(id.toLowerCase()), 'Opening the chat in Houston.', deps)
+  }
   if (positional.length > 1 || args.some((a) => a.startsWith('-'))) {
     deps.err(`${OPEN_USAGE}\n`)
     return 2
@@ -51,14 +68,18 @@ export async function runOpenCommand(args: string[], deps: OpenInAppDeps): Promi
     deps.err(`Not a folder: ${target}\n`)
     return 1
   }
-  const { cmd, args: argv } = urlOpener(deps.platform, folderDeepLink(dir))
+  return launchLink(folderDeepLink(dir), `Opening ${dir} in Houston.`, deps)
+}
+
+async function launchLink(link: string, done: string, deps: OpenInAppDeps): Promise<number> {
+  const { cmd, args: argv } = urlOpener(deps.platform, link)
   try {
     await deps.launch(cmd, argv)
   } catch (e) {
     deps.err(`Could not open the Houston app: ${(e as Error).message}\nIs the desktop app installed?\n`)
     return 1
   }
-  deps.out(`Opening ${dir} in Houston.\n`)
+  deps.out(`${done}\n`)
   return 0
 }
 

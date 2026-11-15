@@ -175,6 +175,8 @@ describe('cliArgvError', () => {
   it('renders its options and subcommands from the one flag table', () => {
     expect(USAGE).toContain(`Options:\n${renderOptions()}`)
     for (const sub of CLI_SUBCOMMANDS) expect(USAGE).toContain(`houston ${sub.usage}`)
+    for (const more of CLI_SUBCOMMANDS.flatMap((s) => s.moreUsage ?? [])) expect(USAGE).toContain(`houston ${more.usage}`)
+    expect(USAGE).toContain('houston open --chat <id>')
     for (const line of ['houston mcp add <name> -- <command> [args...]', 'houston mcp login <name>', 'houston completion zsh']) {
       expect(USAGE).toContain(line)
     }

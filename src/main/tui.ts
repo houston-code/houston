@@ -134,6 +134,8 @@ import {
 import { markdownLinks, type MarkdownLinks } from './tui-links'
 import { ReadFold, ReviewTally, isHiddenTool, readFoldLine, renderTurnError, toolImagesLine, turnModelsLabel } from './tui-runview'
 import { meterOnEvent, meterTokens, startMeter } from '@shared/runMeter'
+import { comeBackHint, parseForkArg, reconcileChatModel } from './tui-chat-handoff'
+import type { ForkPoint } from '@shared/conversation-io'
 import { htmlToAnsi } from './syntax'
 import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
 import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
@@ -291,6 +293,12 @@ export interface TuiOptions extends SessionFlags {
    */
   continueSession?: boolean
   resumeId?: string
+  /**
+   * The folder `houston` was started in, when the session moved elsewhere before
+   * the TUI began (a `-w` worktree, or a resumed chat's own folder). The exit hint
+   * names `cwd` then, since the plain command would look in this one.
+   */
+  launchCwd?: string
   /**
    * The theme the terminal's background suggests (`light` on a light background),
    * used only while no theme is saved: a `/theme` choice always wins.
@@ -1361,6 +1369,8 @@ export interface ResumeEntry {
   unread?: UnreadOutcome
   /** The folder the chat belongs to (shown when the picker lists every folder). */
   workspace?: string
+  /** Pinned in the desktop sidebar (marked in the picker, which can unpin it). */
+  pinned?: boolean
 }
 
 /** Persistence hooks, injected so the driver stays testable without a real store. */
@@ -1396,6 +1406,17 @@ export interface TuiPersist {
   searchAll?: (query: string) => ResumeEntry[]
   /** Duplicate a conversation (fresh id, copied history); null if it can't be forked. */
   fork: (id: string) => { id: string } | null
+  /**
+   * Fork from one message (the desktop's "Fork from here"): a new chat holding the
+   * conversation up to that point. Absent ⇒ `/fork <n>` is unavailable.
+   */
+  forkAt?: (id: string, point: ForkPoint) => { id: string } | null
+  /** A chat's saved title, read from the chat itself (any folder, any age). */
+  title?: (id: string) => string | undefined
+  /** Archive a chat (the desktop sidebar's Archive). Absent ⇒ the picker has no archive key. */
+  archive?: (id: string) => void
+  /** Pin or unpin a chat (the desktop sidebar's Pin). Absent ⇒ the picker has no pin key. */
+  pin?: (id: string, pinned: boolean) => void
   /** Give a conversation a title of the user's choosing. Absent ⇒ /rename is unavailable. */
   rename?: (id: string, title: string) => void
   /**
@@ -1625,6 +1646,7 @@ export function renderSessionRow(
   const detail = [
     `  ${paint(formatRelativeTime(c.updatedAt, opts.now), 'dim')}`,
     unreadMark(c, paint),
+    c.pinned ? `  ${paint('pinned', 'yellow')}` : '',
     opts.current ? `  ${paint('(this chat)', 'green')}` : '',
     folder ? `  ${paint(folder, 'magenta')}` : ''
   ].join('')
@@ -1632,9 +1654,18 @@ export function renderSessionRow(
 }
 
 /** The arrow-key `/resume` picker's footer: every key it takes. */
-export function sessionPickerHint(o: { rename: boolean; remove: boolean; scope: boolean; all: boolean }): string {
+export function sessionPickerHint(o: {
+  rename: boolean
+  remove: boolean
+  scope: boolean
+  all: boolean
+  pin?: boolean
+  archive?: boolean
+}): string {
   const keys = ['↑/↓ move', 'enter open', '1-9 open row', 'type to filter']
   if (o.rename) keys.push('ctrl-r rename')
+  if (o.pin) keys.push('ctrl-p pin')
+  if (o.archive) keys.push('ctrl-e archive')
   if (o.remove) keys.push('ctrl-d or x delete')
   if (o.scope) keys.push(o.all ? 'ctrl-a this folder' : 'ctrl-a all folders')
   return [...keys, 'esc cancel'].join(' · ')
@@ -1942,7 +1973,10 @@ export type SlashResult =
   | { kind: 'exit' }
   | { kind: 'clear' }
   | { kind: 'resume'; query: string }
-  | { kind: 'fork' }
+  /** Fork the chat: whole (/fork), or as it was before message `turn` (/fork <n>). */
+  | { kind: 'fork'; turn?: number; bad?: true }
+  /** Hand this chat to the desktop app (/open-in-app). */
+  | { kind: 'open-in-app' }
   /** Write this chat to a file (/export [md|json] [path]). */
   | { kind: 'export'; format: ExportFormat; path?: string }
   /** Give this chat a title (/rename <title>); empty shows the current one. */
@@ -2114,7 +2148,9 @@ export function parseSlashCommand(
     case 'aside':
       return { kind: 'btw', question: arg.trim() }
     case 'fork':
-      return { kind: 'fork' }
+      return { kind: 'fork', ...parseForkArg(arg) }
+    case 'open-in-app':
+      return { kind: 'open-in-app' }
     case 'export':
       return { kind: 'export', ...parseExportArgs(arg) }
     case 'rename':
@@ -2340,10 +2376,11 @@ export const HELP_TEXT = [
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
   '  /btw [question]       ask a quick side question; the answer stays out of this chat (alone: latest answers, then asks)',
   '  /btw clear            start this chat\'s side chat over',
-  '  /fork                 branch the current session into a copy',
+  '  /fork [n]             branch the current session into a copy, or from before message n (as numbered in /rewind)',
   '  /rename <title>       give this chat a title',
   '  /export [md|json] [path]  write this chat to a file (Markdown by default)',
   '  /delete               delete this chat (asks first)',
+  '  /open-in-app          open this chat in the Houston desktop app',
   '  /permissions [remove n]  all rules that apply, with warnings; or remove one',
   '  /permissions add …    add a rule of your own: allow|ask|deny <tool> <pattern> [--exact]',
   '  /cost                 show session token + cost totals, by model and by subagent',
@@ -3782,6 +3819,11 @@ export interface TuiDeps {
     redo: (runId: string) => Promise<number>
   }
   /**
+   * Hand a saved chat to the desktop app (a `houston://chat/<id>` link through the
+   * OS's URL handler). Absent ⇒ /open-in-app says it is unavailable.
+   */
+  openInApp?: (conversationId: string) => Promise<void>
+  /**
    * Rewind the chat to an earlier message (agent/rewind.ts): preview, apply, undo.
    * Absent ⇒ /rewind says it is unavailable.
    */
@@ -4229,6 +4271,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   const currentTitle = (): string | null => {
     if (!conversationId || !deps.persist) return null
     try {
+      // From the chat itself: the folder's recent list stops at 20 chats, and a chat
+      // opened from another folder or a worktree is not in it at all.
+      if (deps.persist.title) return deps.persist.title(conversationId) ?? null
       return deps.persist.list(opts.cwd).find((c) => c.id === conversationId)?.title ?? null
     } catch {
       return null
@@ -4285,15 +4330,23 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
   }
   // Opening a saved chat (--continue, /resume, /spawned) switches the session to that
-  // chat's own settings, the ones it last ran under. A stored model whose provider is
-  // gone keeps the session's; values a chat never stored keep the session's too, and
+  // chat's own settings, the ones it last ran under. A stored model that is no longer
+  // set up moves to another of its provider's models, or keeps the session's (and says
+  // so); values a chat never stored keep the session's too, and
   // the first turn then writes them. Says what changed, so a switch is never silent.
   const adoptChatSettings = (conv: ConversationSettingsPatch): void => {
     const before = settingsKey()
-    const known = deps.getSettings().providers.some((p) => p.id === conv.providerId)
-    if (conv.providerId && conv.model && known) {
-      providerId = conv.providerId
-      model = conv.model
+    const providers = deps.getSettings().providers
+    const known = providers.some((p) => p.id === conv.providerId)
+    // The chat's model when it is still set up; otherwise the desktop app's fallback
+    // (another model of its provider, else this session's), and say so.
+    const chosen = reconcileChatModel(providers, conv, { providerId: providerId ?? '', model: model ?? '' })
+    if (chosen) {
+      if (chosen.model) {
+        providerId = chosen.providerId
+        model = chosen.model
+      }
+      if (chosen.note) deps.io.out(paint(`· ${chosen.note}\n`, 'yellow'))
     }
     if (isReasoningEffort(conv.reasoningEffort)) effort = conv.reasoningEffort
     if (isApprovalPolicy(conv.approvalPolicy)) {
@@ -4301,7 +4354,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.io.setMode?.(policy)
     }
     const complete =
-      known && conv.model && isReasoningEffort(conv.reasoningEffort) && isApprovalPolicy(conv.approvalPolicy)
+      known && !chosen?.note && conv.model && isReasoningEffort(conv.reasoningEffort) && isApprovalPolicy(conv.approvalPolicy)
     persistedSettings = complete ? settingsKey() : null
     if (settingsKey() !== before) {
       deps.io.out(
@@ -4912,10 +4965,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // where you left off is the launch itself rather than a step after it.
   if ((opts.continueSession || opts.resumeId) && deps.persist) {
     const wanted = opts.resumeId
-    let entry: ResumeEntry | undefined
+    let entry: Pick<ResumeEntry, 'id' | 'title'> | undefined
     try {
+      // --resume <id> opens that chat wherever it was saved, not only among this
+      // folder's newest (the host has already moved the session into its folder).
       entry = wanted
-        ? deps.persist.list(opts.cwd).find((c) => c.id === wanted)
+        ? (deps.persist.list(opts.cwd).find((c) => c.id === wanted) ??
+          (deps.persist.get(wanted) ? { id: wanted, title: deps.persist.title?.(wanted) ?? 'New chat' } : undefined))
         : deps.persist.list(opts.cwd)[0]
     } catch {
       entry = undefined
@@ -4946,7 +5002,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       })
       applyLaunchTitle()
     } else if (wanted) {
-      deps.io.out(paint(`· no saved session "${wanted}" in this folder; starting fresh\n`, 'yellow'))
+      deps.io.out(paint(`· no saved session "${terminalText(wanted, { lines: false })}"; starting fresh\n`, 'yellow'))
     } else {
       deps.io.out(paint('· no saved session in this folder yet; starting fresh\n', 'dim'))
     }
@@ -5106,9 +5162,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
       })
     }
+    if (persist.pin) actions.push({ id: 'pin', keys: ['ctrl-p'] })
+    if (persist.archive) actions.push({ id: 'archive', keys: ['ctrl-e'] })
     if (canScope) actions.push({ id: 'scope', keys: ['ctrl-a'], global: true })
     const hint = (): string =>
-      sessionPickerHint({ rename: !!persist.rename, remove: !!persist.remove, scope: canScope, all })
+      sessionPickerHint({
+        rename: !!persist.rename,
+        remove: !!persist.remove,
+        scope: canScope,
+        all,
+        pin: !!persist.pin,
+        archive: !!persist.archive
+      })
     const outcome = await select({
       title: heading(),
       options: toOptions(initial),
@@ -5149,6 +5214,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           if (!next || next === title) return { notice: 'title unchanged' }
           persist.rename!(id, next)
           return { options: rows(req.query.trim()), notice: `renamed to "${next}"` }
+        }
+        // The desktop sidebar's Pin and Archive: an archived chat leaves this list (the
+        // app's Archived section has it), and a pinned one is marked here and pinned there.
+        if (req.id === 'pin') {
+          const pinned = !byId.get(id)?.pinned
+          persist.pin!(id, pinned)
+          return { options: rows(req.query.trim()), notice: pinned ? `pinned "${title}"` : `unpinned "${title}"` }
+        }
+        if (req.id === 'archive') {
+          persist.archive!(id)
+          return { options: rows(req.query.trim()), notice: `archived "${title}"; the desktop app's Archived section has it` }
         }
         if (req.id === 'delete') {
           // The picker asks one yes/no, so a worktree holding work is kept (the safe
@@ -5652,9 +5728,29 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· nothing to fork yet; start a conversation first\n', 'dim'))
           continue
         }
+        if (result.bad) {
+          deps.io.out(paint('· usage: /fork, or /fork <n> to fork from before message n (numbers as in /rewind)\n', 'dim'))
+          continue
+        }
         let forked: { id: string } | null
+        let draft = ''
         try {
-          forked = deps.persist.fork(conversationId)
+          if (result.turn !== undefined) {
+            const point = rewindPoints(messages)[result.turn]
+            if (!point) {
+              const count = rewindPoints(messages).length
+              deps.io.out(paint(`· no message ${result.turn + 1} to fork from (there are ${count})\n`, 'yellow'))
+              continue
+            }
+            if (!deps.persist.forkAt) {
+              deps.io.out(paint('· forking from a message is unavailable here\n', 'dim'))
+              continue
+            }
+            draft = turnText(messages[point.messageIndex])
+            forked = deps.persist.forkAt(conversationId, { kind: 'turn', n: result.turn, text: draft })
+          } else {
+            forked = deps.persist.fork(conversationId)
+          }
         } catch (e) {
           deps.io.out(paint(`· could not fork this session: ${(e as Error).message}\n`, 'dim'))
           continue
@@ -5667,7 +5763,41 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // The fork is a fresh conversation whose stored model we don't track; mark it
         // stale so the next turn re-syncs the meta to the active model.
         persistedSettings = null
+        if (result.turn !== undefined) {
+          // The fork holds the chat up to that message; the message itself goes back in
+          // the prompt to edit or send, as the desktop's fork from a message does.
+          messages = deps.persist.get(forked.id)?.messages ?? messages.slice(0, rewindPoints(messages)[result.turn].messageIndex)
+          // The meter and /undo described the longer chat.
+          contextTokens = 0
+          contextParts = null
+          lastRunId = null
+          if (deps.io.readComposer) halfDraft = draft
+          deps.io.out(
+            paint(
+              `· forked from before message ${result.turn + 1}: continuing on a copy, original left intact${deps.io.readComposer && draft ? '; that message is back in the prompt' : ''}\n`,
+              'dim'
+            )
+          )
+          continue
+        }
         deps.io.out(paint('· forked: continuing on a copy, original left intact\n', 'dim'))
+        continue
+      }
+      if (result.kind === 'open-in-app') {
+        if (!deps.openInApp) {
+          deps.io.out(paint('· opening chats in the desktop app is unavailable here\n', 'dim'))
+          continue
+        }
+        if (!conversationId || !deps.persist) {
+          deps.io.out(paint('· nothing to open yet; this chat is not saved\n', 'dim'))
+          continue
+        }
+        try {
+          await deps.openInApp(conversationId)
+          deps.io.out(paint('· opening this chat in the Houston app\n', 'dim'))
+        } catch (e) {
+          deps.io.out(paint(`· couldn't open the Houston app: ${terminalText((e as Error).message, { lines: false })}\n`, 'yellow'))
+        }
         continue
       }
       if (result.kind === 'capability') {
@@ -5936,7 +6066,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         lastRunId = null
         deps.io.out(paint(`· ${rewindDoneText(mode, res)} /rewind undo reverses it.\n`, res.conflicts.length ? 'yellow' : 'dim'))
         if (rewindsConversation(mode) && res.text.trim()) {
-          deps.io.out(paint(`· your message was: ${res.text}\n`, 'dim'))
+          // Back in the composer to edit and send again, as in the desktop app; a
+          // terminal without the line editor can only show it.
+          if (deps.io.readComposer) {
+            halfDraft = res.text
+            deps.io.out(paint('· your message is back in the prompt to edit or send\n', 'dim'))
+          } else {
+            deps.io.out(paint(`· your message was: ${res.text}\n`, 'dim'))
+          }
         }
         continue
       }
@@ -7368,12 +7505,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   deps.io.signal?.({ title: '' })
   // The way back to this chat, which nothing else on screen names.
   if (conversationId && deps.persist) {
-    deps.io.out(
-      paint(
-        `\nThis chat is saved. To come back to it:\n  houston --resume ${conversationId}\n  houston --continue   (the latest chat in this folder)\n`,
-        'dim'
-      )
-    )
+    deps.io.out(paint(comeBackHint(conversationId, opts.cwd, opts.launchCwd), 'dim'))
   }
   // Anything the host still has to finish (background sessions) prints its wait first.
   await deps.beforeExit?.()
