@@ -1631,6 +1631,9 @@ anything that could run programs outside the sandbox (a run with nobody to ask u
   finishes. A tool call that takes longer than a second shows its own running time on
   its row.
 - **Terminal:** the spinner line shows the same running time.
+- **Notices read the same everywhere.** A retry ("Connection issue, retrying (2/6): ..."),
+  a model fallback, a compaction, a verification result and a missing runtime are
+  worded alike in the desktop app, the terminal, `houston -p` and editors.
 
 ### Long replies
 

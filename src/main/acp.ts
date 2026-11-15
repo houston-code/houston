@@ -28,9 +28,7 @@ import {
   type ToolApprovalDecision,
   type ConversationSettingsPatch,
   REASONING_EFFORTS,
-  retryProgress,
 } from '@shared/agent'
-import { throttleNotice } from '@shared/rateLimit'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
 import { fitAcpFrame } from './acpFrame'
@@ -46,6 +44,7 @@ import { resolveContextWindow } from '@shared/usage'
 import { formatReceiptLines } from '@shared/evidence'
 import { formatReadinessLines } from '@shared/planReadiness'
 import { runtimeMissingLine } from '@shared/runtimes'
+import { compactionNoticeText, modelFallbackText, retryNoticeText, verificationNoticeText } from '@shared/runNotices'
 import { assertNever } from '@shared/assert'
 import { approvalAskReasons } from '@shared/approvalReasons'
 import { SubagentTermLines } from '@shared/subagents'
@@ -2055,13 +2054,13 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         case 'compaction':
           if (compactionUpdates()) {
             up({ sessionUpdate: 'compaction_update', compactionId: newId(), status: 'completed' })
-          } else notice(`Compacted ${e.summarized} earlier messages to free up context.`)
+          } else notice(compactionNoticeText(e.summarized))
           break
         case 'retry':
-          notice(e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `Retrying (${retryProgress(e)}): ${e.message}`, 'warning')
+          notice(retryNoticeText(e), 'warning')
           break
         case 'model_fallback':
-          notice(`${e.from} is unavailable, falling back to ${e.to}: ${e.reason}`, 'warning')
+          notice(modelFallbackText(e), 'warning')
           break
         case 'limit':
           state.limit = e.reason
@@ -2071,7 +2070,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           notice(formatReceiptLines(e.receipt).join('\n'))
           break
         case 'verification':
-          notice(`Verification ${e.passed ? 'passed' : 'failed'}.`, e.passed ? 'info' : 'warning')
+          notice(verificationNoticeText(e.passed), e.passed ? 'info' : 'warning')
           break
         case 'runtime_missing':
           notice(runtimeMissingLine(e), 'warning')
