@@ -3460,6 +3460,86 @@ describe('run_shell git guard', () => {
   })
 })
 
+describe('run_shell moved to the background while it runs', () => {
+  // A foreground command the user moves (Ctrl-B): the call returns at once and the
+  // process carries on as a background shell, its earlier output in the result.
+  const moveWhenPrinted = (marker: string): { moved: Promise<void>; offer: NonNullable<ToolContext['offerBackground']>; offered: () => number; unoffered: () => number } => {
+    let move: (() => void) | null = null
+    let offers = 0
+    let unoffers = 0
+    let seen = ''
+    let release!: () => void
+    const moved = new Promise<void>((r) => (release = r))
+    ctx = {
+      ...ctx,
+      conversationId: 'chat-move',
+      onShellOutput: (chunk) => {
+        seen += chunk
+        if (move && seen.includes(marker)) {
+          const m = move
+          move = null
+          m()
+          release()
+        }
+      }
+    }
+    return {
+      moved,
+      offer: (m) => {
+        offers++
+        move = m
+        return () => {
+          unoffers++
+        }
+      },
+      offered: () => offers,
+      unoffered: () => unoffers
+    }
+  }
+
+  for (const withSession of [false, true]) {
+    it(`returns the shell id and keeps the process running${withSession ? ' (shell session)' : ''}`, async () => {
+      if (withSession && !backendSupportsSession()) return
+      const m = moveWhenPrinted('first')
+      const seen: EvidenceDraft[] = []
+      ctx = {
+        ...ctx,
+        offerBackground: m.offer,
+        recordEvidence: (e) => seen.push(e),
+        ...(withSession ? { shellSession: createShellSession(workspace) } : {})
+      }
+      const out = await run('run_shell', { command: 'echo first; sleep 1; echo second' })
+      await m.moved
+      expect(m.offered()).toBe(1)
+      expect(m.unoffered()).toBe(1)
+      const id = /background shell (\w+)/.exec(out)?.[1]
+      expect(id).toBeTruthy()
+      expect(out).toContain('The user moved this command to the background')
+      expect(out).toContain(`read_shell_output({ shell_id: "${id}" })`)
+      expect(out).toContain('first')
+      expect(out).not.toContain('[exit code')
+      expect(seen).toEqual([expect.objectContaining({ kind: 'shell', background: true, shellId: id, exitCode: null })])
+      // Still running, and later reads pick up only what came after the move.
+      expect(readShellOutput(id!).running).toBe(true)
+      await vi.waitFor(() => expect(readShellOutput(id!, { full: true }).running).toBe(false), { timeout: 10_000 })
+      const full = readShellOutput(id!, { full: true })
+      expect(full.exitCode).toBe(0)
+      expect(full.stdout).toContain('first')
+      expect(full.stdout).toContain('second')
+    })
+  }
+
+  it('a command that finishes without being moved returns its output as usual and withdraws the offer', async () => {
+    const m = moveWhenPrinted('never printed')
+    ctx = { ...ctx, offerBackground: m.offer }
+    const out = await run('run_shell', { command: 'echo done' })
+    expect(out).toContain('done')
+    expect(out).toContain('[exit code: 0]')
+    expect(m.offered()).toBe(1)
+    expect(m.unoffered()).toBe(1)
+  })
+})
+
 describe('run_shell evidence', () => {
   // What the turn's receipt is built from: the runner's own exit code and output, not
   // the "[exit code: N]" text the model reads.

@@ -701,6 +701,56 @@ describe('runWithBackend — honest sandboxed flag', () => {
       vi.useRealTimers()
     }
   })
+
+  it('detach hands the running command back with what it printed, dropping its timeout and abort-kill', async () => {
+    vi.useFakeTimers()
+    try {
+      const child = makeFakeChild()
+      child.signalCode = null
+      const signalTree = vi.fn()
+      const ac = new AbortController()
+      const detach = new AbortController()
+      const p = runWithBackend(fakeBackend(true), baseOpts({ timeoutMs: 1_000, signal: ac.signal, detach: detach.signal }), {
+        spawn: fakeSpawn(child),
+        signalTree,
+        drainMs: 20
+      })
+      child.stdout.emit('data', Buffer.from('building\n'))
+      child.stderr.emit('data', Buffer.from('warn\n'))
+      detach.abort()
+      const r = await p
+      expect(r.exitCode).toBeNull()
+      expect(r.detached?.child).toBe(child)
+      expect(r.detached?.stdout).toBe('building\n')
+      expect(r.detached?.stderr).toBe('warn\n')
+      // The runner no longer reads it: the new owner's listeners are the only ones.
+      expect(child.stdout.listenerCount('data')).toBe(0)
+      expect(child.stderr.listenerCount('data')).toBe(0)
+      // Neither the old timeout nor a later cancel reaches it through the runner.
+      await vi.advanceTimersByTimeAsync(5_000)
+      ac.abort()
+      expect(signalTree).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('detach after the command ended changes nothing: the run settles with its exit code', async () => {
+    const child = makeFakeChild()
+    child.signalCode = null
+    const detach = new AbortController()
+    const p = runWithBackend(fakeBackend(true), baseOpts({ detach: detach.signal }), {
+      spawn: fakeSpawn(child),
+      signalTree: vi.fn(),
+      drainMs: 20
+    })
+    child.exitCode = 0
+    detach.abort()
+    child.emit('close', 0)
+    const r = await p
+    expect(r.exitCode).toBe(0)
+    expect(r.detached).toBeUndefined()
+  })
 })
 
 describe('signalProcessTree', () => {

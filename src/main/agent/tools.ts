@@ -65,10 +65,13 @@ import {
   backendSupportsSession,
   clampToolResult,
   DEFAULT_TIMEOUT_MS,
+  killProcessTree,
   runSandboxed,
   sandboxAvailable,
   spawnSandboxed,
-  type EgressProxyEndpoints
+  type DetachedProcess,
+  type EgressProxyEndpoints,
+  type SandboxRunResult
 } from '../sandbox'
 import {
   backgroundShellGroups,
@@ -194,6 +197,12 @@ export interface ToolContext {
    * shows it live. Observation only: the tool's result is built as before.
    */
   onShellOutput?: (chunk: string) => void
+  /**
+   * Offers a foreground run_shell command to the client while it runs, so the user can
+   * move it to the background (the terminal's Ctrl-B, see foregroundShells.ts). The
+   * command passes how to move it and calls the returned function when it ends.
+   */
+  offerBackground?: (move: () => void) => () => void
   /**
    * The conversation this run belongs to, when started from the UI. Tagged onto a
    * background shell so the tasks indicator can open the run that spawned it.
@@ -2280,30 +2289,43 @@ const runShell: ToolDef = {
             watch?.(chunk)
           }
         : undefined
-    const result = session
-      ? await runInSession({
-          command,
-          session,
-          workspace: ctx.workspace,
-          roots: rootsOf(ctx),
-          allowNetwork: ctx.allowNetwork,
-          egressProxy: ctx.egressProxy,
-          timeoutMs,
-          signal: ctx.signal,
-          ...(onOutput ? { onOutput } : {}),
-          run: runSandboxed
-        })
-      : await runSandboxed({
-          command,
-          cwd: ctx.workspace,
-          workspace: ctx.workspace,
-          roots: rootsOf(ctx),
-          allowNetwork: ctx.allowNetwork,
-          egressProxy: ctx.egressProxy,
-          timeoutMs,
-          signal: ctx.signal,
-          ...(onOutput ? { onOutput } : {})
-        })
+    // The user can move this command to the background while it runs: the call then
+    // returns now, and the process carries on in the background registry.
+    const detach = ctx.offerBackground ? new AbortController() : null
+    const unoffer = detach && ctx.offerBackground ? ctx.offerBackground(() => detach.abort()) : null
+    const startedAt = Date.now()
+    let result: SandboxRunResult
+    try {
+      result = session
+        ? await runInSession({
+            command,
+            session,
+            workspace: ctx.workspace,
+            roots: rootsOf(ctx),
+            allowNetwork: ctx.allowNetwork,
+            egressProxy: ctx.egressProxy,
+            timeoutMs,
+            signal: ctx.signal,
+            ...(onOutput ? { onOutput } : {}),
+            ...(detach ? { detach: detach.signal } : {}),
+            run: runSandboxed
+          })
+        : await runSandboxed({
+            command,
+            cwd: ctx.workspace,
+            workspace: ctx.workspace,
+            roots: rootsOf(ctx),
+            allowNetwork: ctx.allowNetwork,
+            egressProxy: ctx.egressProxy,
+            timeoutMs,
+            signal: ctx.signal,
+            ...(onOutput ? { onOutput } : {}),
+            ...(detach ? { detach: detach.signal } : {})
+          })
+    } finally {
+      unoffer?.()
+    }
+    if (result.detached) return adoptForeground(command, result.detached, startedAt, ctx)
     const segments: string[] = []
     if (result.stdout) segments.push(result.stdout.trimEnd())
     if (result.stderr) segments.push(result.stderr.trimEnd())
@@ -2390,6 +2412,48 @@ const runShell: ToolDef = {
     if (gitNote) parts.push(gitNote)
     return parts.join('\n')
   }
+}
+
+/** Last lines of a moved command's output that go back in its tool result. */
+const MOVED_OUTPUT_LINES = 20
+
+/**
+ * A foreground command the user moved to the background while it ran: register the
+ * still-running process as a background shell (reads start after what it already
+ * printed, which goes back in this result), keep it tied to the turn's cancel the way
+ * a background start is, and tell the model how to follow it.
+ */
+function adoptForeground(
+  command: string,
+  detached: DetachedProcess,
+  startedAt: number,
+  ctx: ToolContext
+): string {
+  const { child } = detached
+  const id = registerShell(command, child, ctx.conversationId, ctx.workspace, {
+    ...(ctx.signal ? { signal: ctx.signal } : {}),
+    adopted: { stdout: detached.stdout, stderr: detached.stderr, startedAt }
+  })
+  if (ctx.signal) {
+    const signal = ctx.signal
+    if (signal.aborted) killProcessTree(child)
+    else {
+      const onAbort = (): void => killProcessTree(child)
+      signal.addEventListener('abort', onAbort, { once: true })
+      child.once('exit', () => signal.removeEventListener('abort', onAbort))
+    }
+  }
+  ctx.recordEvidence?.({ kind: 'shell', command, background: true, shellId: id, exitCode: null, timedOut: false, output: '' })
+  const printed = [detached.stdout.trimEnd(), detached.stderr.trimEnd()].filter(Boolean).join('\n')
+  const tail = printed.split('\n').slice(-MOVED_OUTPUT_LINES).join('\n')
+  const body = tail ? clampToolResult(tail, ctx.shellOutputMaxBytes) : ''
+  const reported = ctx.conversationId ? ' You will be told when it exits.' : ''
+  return [
+    `The user moved this command to the background while it ran; it is still running as background shell ${id}. ` +
+      `Read its output with read_shell_output({ shell_id: "${id}" }), wait for it to finish with wait_for({ id: "${id}" }), ` +
+      `and stop it with kill_shell({ shell_id: "${id}" }).${reported} A cd or export it makes no longer carries over to later commands.`,
+    ...(body ? [`Output so far (last lines):\n${body}`] : ['It has printed nothing yet.'])
+  ].join('\n')
 }
 
 const readShellOutputTool: ToolDef = {

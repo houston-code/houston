@@ -29,6 +29,7 @@ import {
 } from './agent/loop'
 import { killAllShells, killShell, listShells, shellTail } from './agent/shells'
 import { stopSubagent } from './agent/subagentStops'
+import { backgroundForegroundShells } from './agent/foregroundShells'
 import { lspManager } from './agent/lsp/manager'
 import { flushRuleUsage } from './ruleUsage'
 import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type SignalProcess } from './signalCleanup'
@@ -927,6 +928,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       setRunPolicy,
       setRunEffort,
       steerRun,
+      backgroundShells: (runId) => backgroundForegroundShells(runId),
       editText: (initial) => editInEditor(initial),
       persistHistory,
       // /copy: the platform's clipboard helper when this is a local session (never

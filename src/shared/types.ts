@@ -962,6 +962,11 @@ export interface AppSettings {
   /** The terminal's /verbose: show each tool's output as it runs. Absent = off. */
   tuiVerbose?: boolean
   /**
+   * The terminal's /focus: only your messages, one line per tool call, and each
+   * turn's final reply. Absent = off.
+   */
+  tuiFocus?: boolean
+  /**
    * How the terminal shows the model's reasoning as it streams (/thoughts, Alt-T):
    * 'show' prints it as it arrives, 'summary' one line per thought when it ends,
    * 'hide' nothing. The transcript viewer (Ctrl-O) always has it in full. Absent =

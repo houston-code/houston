@@ -733,14 +733,43 @@ export function runWithBackend(
     }
     const watchOut = watchStream(new StringDecoder('utf8'))
     const watchErr = watchStream(new StringDecoder('utf8'))
-    child.stdout?.on('data', (c: Buffer) => {
+    const onStdout = (c: Buffer): void => {
       out.push(c)
       watchOut(c)
-    })
-    child.stderr?.on('data', (c: Buffer) => {
+    }
+    const onStderr = (c: Buffer): void => {
       err.push(c)
       watchErr(c)
-    })
+    }
+    child.stdout?.on('data', onStdout)
+    child.stderr?.on('data', onStderr)
+
+    // Detach: hand the running command back instead of waiting for it. Its timeout
+    // and abort-kill go, and this runner stops reading it; the caller attaches its own
+    // listeners before any further output can arrive (the resolve is a microtask, the
+    // next chunk an I/O callback). A command that already ended has nothing to hand back.
+    if (opts.detach && !opts.detach.aborted) {
+      const detachSignal = opts.detach
+      const onDetach = (): void => {
+        if (settled || terminating || child.exitCode !== null || child.signalCode !== null) return
+        settled = true
+        clearTimeout(timer)
+        if (drainTimer) clearTimeout(drainTimer)
+        cleanupAbort()
+        child.stdout?.off('data', onStdout)
+        child.stderr?.off('data', onStderr)
+        resolve({
+          stdout: out.toString(),
+          stderr: err.toString(),
+          exitCode: null,
+          timedOut: false,
+          sandboxed: backend.sandboxed,
+          detached: { child, stdout: out.toString(), stderr: err.toString() }
+        })
+      }
+      detachSignal.addEventListener('abort', onDetach, { once: true })
+      child.once('close', () => detachSignal.removeEventListener('abort', onDetach))
+    }
 
     child.on('error', (e) => {
       if (settled) return

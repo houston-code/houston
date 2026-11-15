@@ -27,7 +27,11 @@ export type EditorKey =
   | { type: 'newline' }
   | { type: 'backspace' }
   | { type: 'delete' }
-  | { type: 'left' }
+  /**
+   * `ctrlB`: it came from Ctrl-B, which moves the cursor at the composer but, while a
+   * turn runs, moves the running command to the background.
+   */
+  | { type: 'left'; ctrlB?: true }
   | { type: 'right' }
   | { type: 'up' }
   | { type: 'down' }
@@ -346,7 +350,7 @@ function controlKey(ch: string, pasted: boolean): EditorKey | null {
     case '\x01':
       return { type: 'home' }
     case '\x02':
-      return { type: 'left' }
+      return { type: 'left', ctrlB: true }
     case '\x03':
       return { type: 'interrupt' }
     case '\x04':

@@ -804,7 +804,7 @@ safe subset in place. In the desktop app:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
 **Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/cd`, `/vim`, `/notify`, `/screen-reader`,
-`/reduce-motion`, `/verbose`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
+`/reduce-motion`, `/verbose`, `/focus`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
 `/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/permissions`, and
 `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
@@ -1043,6 +1043,7 @@ long as it needs to be.
 | `Ctrl-C` | discard the draft (`Up` brings it back; twice in a row to leave) |
 | `Esc` | *while the agent works:* clear what you typed, or stop the run if nothing is typed |
 | `Ctrl-Z` | suspend Houston to your shell (macOS and Linux); `fg` brings it back with the draft as it was. Works while a turn runs too: the run is not cancelled, it carries on after `fg` |
+| `Ctrl-B` | while the agent waits on a shell command: move it to the background. The command keeps running as a background shell (`/tasks` lists it), and the agent gets its shell id at once and carries on, reading its output later. Says so when no command is running. At the prompt, `Ctrl-B` moves the cursor left as before |
 | `Ctrl-D` | leave (on an empty composer) |
 | `Shift-Tab` | switch approval mode (plan → ask → auto-edit → full auto → plan) |
 
@@ -1131,13 +1132,25 @@ Setting `HOUSTON_REDUCE_MOTION=1` in the environment turns it on for that launch
 
 ## Seeing what the tools did
 
-While a turn runs, each tool result collapses to one line: the transcript is a
-conversation, not a log. To see more:
+While a turn runs, each tool call and its result print as one line: what it did, what
+it worked on, and how it went (`· Read  src/a.ts · 40 lines`, `· Run  npm test · exit 0 · 12s`).
+Calls of one kind in a row share the line (`· Read  a.ts · 40 lines, b.ts · 12 lines`).
+The line prints once the result is in (the activity line names the tool meanwhile); when
+something has to show first (a command's progress, an approval, a subagent), the call's
+row prints first and its result goes under it. A successful edit that ran without a
+prompt prints its file and line counts. In screen-reader mode, and under `/verbose`, each
+call is still announced as it starts. To see more, or less:
 
 - **Failures show themselves.** A failed tool prints its first lines without you
   asking, so you can see why.
 - **`/verbose`** shows each tool's full output as it runs. `/verbose off` stops it,
   and plain `/verbose` toggles. The choice is remembered for later sessions.
+- **`/focus`** shows only your messages, one line per tool call (an edit with its
+  `+`/`−` counts, a failure marked `✗` with its exit code), and each turn's final reply.
+  The model's reasoning, what it says between tool calls, progress lines and subagents'
+  working are left out; errors, approvals and questions still show. `/focus off` turns
+  it off, plain `/focus` toggles, and the choice is remembered. Nothing is lost:
+  `Ctrl-O` has everything.
 - **`/output`** reprints the last tool result in full, after the fact. `/output 3`
   goes three results back. Nothing extra is stored for this: the whole output was
   always kept in the conversation.
@@ -2673,9 +2686,14 @@ Markdown button. A review's row links to the same view for each of its reviewers
 Loop control sets how much a chat keeps (4 MB by default). Past that, the oldest
 subagents keep their task, steps, and report but drop step results and diffs.
 
-**In the terminal,** a line is printed per step under the dispatch (a review's
-reviewers only with `/verbose`), then an end line marked the same way (a check, or `!`
-for a partial or missing report), then the report. `--json` emits `subagent_start`,
+**In the terminal,** a start line is printed under the dispatch, then an end line
+marked the same way (a check, or `!` for a partial or missing report), then the report.
+While agents run, a live panel under the activity line shows each one: its name, how
+many steps it has taken, how long it has run, and the step it is on, updated in place.
+Press Enter on an empty line to watch their steps live, full screen (`q` closes it; it
+also closes by itself when an approval or question needs you). The steps themselves are
+printed as lines only under `/verbose` (a review's reviewers only then) and in
+screen-reader mode, which has no panel. `--json` emits `subagent_start`,
 `subagent_step`, and `subagent_end` (whose `outcome` is `done`, `limit`, `empty`, or
 `error`).
 
@@ -2937,6 +2955,12 @@ short), how long it has run, and, for a command, the last line it printed.
 - **It works while a turn runs.** Type `/tasks`, `/tasks <n>`, or `/tasks kill <n>` and
   press Enter: it runs at once instead of waiting for the turn, prints the plain list
   (no picker), and the turn keeps going.
+- **`Ctrl-B` moves a running command here.** While the agent waits on a shell command
+  (a slow build, a server started without `background: true`), `Ctrl-B` moves it to the
+  background: it keeps running as a background command, the agent gets its id and what
+  it printed so far at once and carries on (reading the rest with `read_shell_output`
+  or `wait_for`), and `/tasks` lists it. A `cd` or `export` it makes no longer carries
+  over to the agent's later commands. Stopping the turn still stops it.
 
 The desktop app shows background commands in the **Background tasks** list of the
 right-hand dock, and each subagent under the tool call that started it.

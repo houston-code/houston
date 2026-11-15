@@ -25,6 +25,11 @@ export interface PagerSource {
   render: (width: number) => TranscriptDoc
   /** The whole transcript as plain text, for `v` (open it in $VISUAL/$EDITOR). */
   plain: () => string
+  /**
+   * A live document (subagents at work): calls `changed` whenever `render` would give
+   * something new, and returns how to stop. The viewer redraws, following the end.
+   */
+  subscribe?: (changed: () => void) => () => void
 }
 
 type Style = Parameters<Painter>[1]

@@ -1719,6 +1719,36 @@ describe('the transcript viewer (pager)', () => {
     }
   }
 
+  it('a live source redraws as it changes, following the end, and a prompt closes the viewer', async () => {
+    const f = fakeRl()
+    const t = harness({ createInterface: () => f.rl })
+    let lines = 50
+    let changed: (() => void) | null = null
+    const live: PagerSource = {
+      title: 'Subagents at work (live)',
+      render: () => ({ lines: Array.from({ length: lines }, (_, i) => `row ${i}`), prompts: [] }),
+      plain: () => '',
+      subscribe: (c) => {
+        changed = c
+        return () => {
+          changed = null
+        }
+      }
+    }
+    const open = t.io.pager!(live)
+    expect(t.text()).toContain('row 49')
+    lines = 52
+    changed!()
+    expect(t.text()).toContain('row 51')
+    // An approval needs the keyboard: the viewer gives it up and stops listening.
+    const answer = t.io.readLine('Allow? ')
+    await open
+    expect(changed).toBeNull()
+    expect(t.text().lastIndexOf(ALT_OFF)).toBeGreaterThan(t.text().lastIndexOf('row 51'))
+    f.submit('y')
+    await expect(answer).resolves.toBe('y')
+  })
+
   it('opens on the alternate screen at the end of the session, and q leaves it', async () => {
     const t = harness()
     const open = t.io.pager!(source())
@@ -1873,6 +1903,31 @@ describe('the transcript viewer (pager)', () => {
     t.io.stopSpinner!()
   })
 
+  it('mid-run, Ctrl-B goes to the driver; the left arrow does not', () => {
+    const t = harness()
+    let moves = 0
+    t.io.onBackground!(() => moves++)
+    t.io.startSpinner!('Run')
+    t.stdin.push('\x1b[D')
+    expect(moves).toBe(0)
+    t.stdin.push('\x02')
+    expect(moves).toBe(1)
+    t.io.stopSpinner!()
+  })
+
+  it('at the composer, Ctrl-B still moves the cursor left', async () => {
+    const t = harness()
+    let moves = 0
+    t.io.onBackground!(() => moves++)
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('ac')
+    t.stdin.push('\x02')
+    t.stdin.push('b')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('abc')
+    expect(moves).toBe(0)
+  })
+
   it('Alt-T at the composer lets the driver print its note, then redraws the draft', async () => {
     const t = harness()
     t.io.onCycleThoughts!(() => t.io.out('· thoughts: hidden\n'))
@@ -1883,6 +1938,115 @@ describe('the transcript viewer (pager)', () => {
     expect(out.lastIndexOf('draft')).toBeGreaterThan(out.indexOf('· thoughts: hidden'))
     t.stdin.push('\r')
     await expect(read).resolves.toBe('draft')
+  })
+})
+
+describe('the live panel under the spinner', () => {
+  function harness() {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let ticks: Array<() => void> = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 40,
+      now: () => 1000,
+      schedule: (fn) => {
+        ticks.push(fn)
+        return () => {
+          ticks = ticks.filter((x) => x !== fn)
+        }
+      }
+    })
+    return { io, stdin, written, text: () => written.join(''), tick: () => ticks.forEach((fn) => fn()) }
+  }
+
+  it('draws its rows under the spinner line, each cut to the width, and erases them before output', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.io.setLivePanel!(() => [`  ▸ agent one ${'x'.repeat(100)}`, '    Enter watches it live'])
+    const drawn = t.text()
+    const rows = drawn.slice(drawn.lastIndexOf('Working')).split('\n').slice(1)
+    expect(rows[0]).toMatch(/^ {2}▸ agent one x+…$/)
+    expect(rows[0].length).toBeLessThanOrEqual(39)
+    // Back up to the spinner line, so the next frame redraws in place.
+    expect(rows[1]).toContain('\x1b[2A')
+    t.io.out('real output\n')
+    const after = t.text().slice(drawn.length)
+    expect(after.startsWith('\x1b[?2026h\r\x1b[2K\x1b[J') || after.startsWith('\r\x1b[2K\x1b[J')).toBe(true)
+    // The timer's next frame draws it again, below the output.
+    t.tick()
+    expect(t.text().slice(drawn.length)).toContain('▸ agent one')
+    t.io.setLivePanel!(null)
+    const cleared = t.text().length
+    t.tick()
+    expect(t.text().slice(cleared)).not.toContain('▸')
+    t.io.stopSpinner!()
+  })
+
+  it('never erases a half-written line of output: the spinner and panel go below it', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.io.setLivePanel!(() => ['  ▸ agent'])
+    t.io.out('I need')
+    const mark = t.text().length
+    t.tick()
+    const frame = t.text().slice(mark)
+    // A new row first, never an erase of the line still being written.
+    expect(frame.replace('\x1b[?2026h', '').startsWith('\n\r\x1b[2K')).toBe(true)
+    expect(frame).not.toContain('\x1b[J')
+    expect(frame).toContain('▸ agent')
+    // The next output erases the frame and its panel, under the partial line.
+    const before = t.text().length
+    t.io.out('more\n')
+    expect(t.text().slice(before)).toContain('\r\x1b[2K\x1b[J')
+    t.io.stopSpinner!()
+  })
+
+  it('goes with the turn: stopping the spinner erases it and forgets it', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.io.setLivePanel!(() => ['  ▸ agent'])
+    const mark = t.text().length
+    t.io.stopSpinner!()
+    expect(t.text().slice(mark)).toContain('\r\x1b[2K\x1b[J')
+    t.io.startSpinner!('Working')
+    const before = t.text().length
+    t.tick()
+    expect(t.text().slice(before)).not.toContain('▸')
+    t.io.stopSpinner!()
+  })
+
+  it('Enter on an empty line opens the live view only while the panel shows', () => {
+    const t = harness()
+    let opened = 0
+    t.io.onOpenLivePanel!(async () => void opened++)
+    t.io.startSpinner!('Working')
+    t.stdin.push('\r')
+    expect(opened).toBe(0)
+    t.io.setLivePanel!(() => ['  ▸ agent'])
+    t.stdin.push('\r')
+    expect(opened).toBe(1)
+    // A typed line still steers or queues: Enter sends it rather than opening the view.
+    t.stdin.push('more')
+    t.stdin.push('\r')
+    expect(opened).toBe(1)
+    expect(t.io.takeQueued!()).toEqual(['more'])
+    t.io.stopSpinner!()
+  })
+
+  it('in screen-reader mode draws nothing at all', () => {
+    const t = harness()
+    t.io.setAccessibility!({ screenReader: true })
+    t.io.startSpinner!('Working')
+    const before = t.text().length
+    t.io.setLivePanel!(() => ['  ▸ agent'])
+    t.tick()
+    const out = t.text().slice(before)
+    expect(out).not.toContain('▸')
+    expect(out).not.toContain('\x1b[')
+    t.io.stopSpinner!()
   })
 })
 

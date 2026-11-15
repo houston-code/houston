@@ -61,6 +61,10 @@ import {
 
 /** Carriage-return + erase-line: rewinds to column 0 and clears the current line. */
 const CLEAR_LINE = '\r\x1b[2K'
+/** Erase from the cursor to the end of the screen: the live panel's rows under the spinner. */
+const ERASE_BELOW = '\x1b[J'
+/** Most rows the live panel under the spinner takes (see setLivePanel). */
+export const LIVE_PANEL_ROWS = 6
 
 /**
  * Synchronized output (DEC private mode 2026): a terminal that supports it holds
@@ -432,6 +436,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // label changes are printed once, as lines), reads use the append-only line reader
   // below, pickers are numbered lists, and every write goes through plainText.
   let screenReader = false
+  // The live panel under the spinner line (subagents at work, see setLivePanel), and
+  // how many of its rows are on screen now, so the next erase takes them too.
+  let panelRender: ((width: number) => string[]) | null = null
+  let panelRows = 0
+  const eraseSpinner = (): string => {
+    const below = panelRows > 0 ? ERASE_BELOW : ''
+    panelRows = 0
+    return CLEAR_LINE + below
+  }
   // The last status line printed in screen-reader mode, so a repeat says nothing.
   let announced: string | null = null
   const announce = (s: string): void => {
@@ -476,9 +489,22 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     tick++
     // The transcript viewer owns the screen while it is open.
     if (pagerOpen) return
-    // Below a half-written line, not over it.
-    repaint(`${midLine ? '\n' : ''}${CLEAR_LINE}${line}`)
+    // The panel's rows go under the spinner line, each cut to the width so none wraps,
+    // and the cursor goes back up to the end of the spinner line: everything below it
+    // is erased (ERASE_BELOW) before the next frame or the next real output.
+    const rows = panelRender
+      ? panelRender(width)
+          .slice(0, LIVE_PANEL_ROWS)
+          .map((r) => filterTerminalOutput(truncateVisible(r, width)))
+      : []
+    // Below a half-written line, not over it (no panel is on screen then: real output
+    // erased it before the line was started).
+    const erase = midLine ? `\n${CLEAR_LINE}` : eraseSpinner()
     midLine = false
+    panelRows = rows.length
+    const col = visibleWidth(line)
+    const back = rows.length ? `\x1b[${rows.length}A\r${col > 0 ? `\x1b[${col}C` : ''}` : ''
+    repaint(erase + line + rows.map((r) => `\n${r}`).join('') + back)
   }
   const startTimer = (): void => {
     if (screenReader) return
@@ -493,9 +519,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       cancelTimer()
       cancelTimer = null
     }
-    // Erase the spinner's line, never a half-written line of output, and nothing while
-    // the transcript viewer has the screen or in screen-reader mode (no redraws there).
-    if (erase && !pagerOpen && !screenReader && !midLine) rawWrite(CLEAR_LINE)
+    // Erase the spinner's line (and the live panel under it), never a half-written line
+    // of output, and nothing while the transcript viewer has the screen or in
+    // screen-reader mode (no redraws there).
+    if (erase && !pagerOpen && !screenReader && !midLine) rawWrite(eraseSpinner())
   }
   /** Start a prompt at the left edge: below a half-written line rather than on it. */
   const toFreshLine = (): void => {
@@ -530,7 +557,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     // control character, so no string can repaint the lines above, write the
     // clipboard or query the terminal (see filterTerminalOutput).
     // A line still being written holds no spinner, and is continued instead.
-    if (cancelTimer && !midLine) repaint(CLEAR_LINE + safe)
+    if (cancelTimer && !midLine) repaint(eraseSpinner() + safe)
     else rawWrite(safe)
     midLine = !endsLine(safe)
   }
@@ -563,6 +590,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   let imagePasteHandler: ((req: ImagePasteRequest) => ImagePasteResult) | null = null
   // Esc Esc on an empty composer: the driver opens the rewind picker.
   let rewindHandler: (() => void) | null = null
+  // Ctrl-B mid-run: the driver moves the running command to the background.
+  let backgroundHandler: (() => void) | null = null
+  // Enter on an empty line mid-run while the live panel shows: the driver opens the live view.
+  let panelOpenHandler: (() => Promise<void>) | null = null
+  // Closes the open transcript viewer, so a prompt that needs the keyboard can have it.
+  let closePager: (() => void) | null = null
   // The draft Ctrl-S put aside. Kept here, across reads, so a stash survives sending
   // something else first: that is what it is for.
   let composerStash: DraftSnapshot | null = null
@@ -634,6 +667,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         case 'cycle-thoughts':
           cycleThoughtsHandler?.()
           break
+        case 'left':
+          // Ctrl-B mid-run (the arrow key does nothing on this one line).
+          if (key.ctrlB) backgroundHandler?.()
+          break
         case 'suspend':
           // Ctrl-Z mid-run: hand the terminal back and stop. The run is not
           // cancelled; it carries on from where it was once `fg` resumes us.
@@ -643,7 +680,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               break
             }
             atomically(() => {
-              rawWrite(`${CLEAR_LINE}${paint(NO_SUSPEND_NOTE, 'dim')}\n`)
+              rawWrite(`${eraseSpinner()}${paint(NO_SUSPEND_NOTE, 'dim')}\n`)
               drawSpinner()
             })
             break
@@ -684,6 +721,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               queued.push(line)
               if (screenReader) announce(`queued for after this turn (${queued.length} waiting)`)
             }
+          } else if (panelRender && panelOpenHandler) {
+            // Enter with nothing typed, while the panel shows agents at work: watch
+            // their steps live in the viewer.
+            void panelOpenHandler()
+            return
           }
           draft = ''
           drawSpinner()
@@ -779,6 +821,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         return
       }
       pending = resolve
+      // A prompt needs the keyboard: a viewer open over the run gives it up.
+      closePager?.()
       // A per-read AbortController so cancelRead / EOF can cancel this exact
       // question (see `settle`), leaving no dangling callback for the next read.
       const ac = new AbortController()
@@ -839,6 +883,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     return new Promise<string | null>((resolve) => {
       // Hand stdin from the streaming Ctrl-C watcher / spinner to this reader, and
       // drop any type-ahead so buffered bytes can't seed the secret.
+      closePager?.()
       stopTimer(true)
       toFreshLine()
       stopInterruptWatch()
@@ -1297,6 +1342,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return plainRead(promptNow())
 
     return new Promise<string | null>((resolve) => {
+      closePager?.()
       stopTimer(true)
       toFreshLine()
       stopInterruptWatch()
@@ -1790,6 +1836,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       let editing = false
       let done = false
       pagerOpen = true
+      let unsubscribe: (() => void) | null = null
       const draw = (): void => {
         const screen = renderPagerScreen(state, doc, { rows: rows(), cols: width, title: source.title, paint })
         // Every row is positioned and cleared on its own: nothing scrolls, nothing wraps.
@@ -1809,6 +1856,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const finish = (): void => {
         if (done) return
         done = true
+        closePager = null
+        unsubscribe?.()
         stopResize?.()
         try {
           unlisten()
@@ -1878,6 +1927,18 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         rawWrite(ALT_SCREEN_ON + HIDE_CURSOR)
         listen()
         stopResize = onResize?.(onTerminalResize) ?? null
+        closePager = finish
+        // A live source (subagents at work) redraws as it changes, following the end
+        // when the view was already there.
+        unsubscribe =
+          source.subscribe?.(() => {
+            if (done || editing) return
+            const following = state.top >= maxTop(doc, rows() - 1)
+            doc = source.render(width - 1)
+            const end = maxTop(doc, rows() - 1)
+            state = { ...state, top: following ? end : Math.min(state.top, end) }
+            draw()
+          }) ?? null
         draw()
       } catch {
         finish()
@@ -1893,6 +1954,19 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     onCycleThoughts: (handler) => {
       cycleThoughtsHandler = handler
+    },
+    onBackground: (handler) => {
+      backgroundHandler = handler
+    },
+    onOpenLivePanel: (handler) => {
+      panelOpenHandler = handler
+    },
+    setLivePanel: (render) => {
+      // Screen-reader mode never redraws in place: the driver prints step lines instead.
+      if (screenReader) return
+      if (!render && !panelRender) return
+      panelRender = render
+      if (spinnerLabel !== null && cancelTimer) drawSpinner()
     },
     // Erase the current terminal line (e.g. the composer's typed-but-abandoned input
     // on Ctrl-C) so the next prompt redraws clean.
@@ -2027,7 +2101,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     stopSpinner: () => {
       spinnerLabel = null
       announced = null
+      // The panel belongs to the turn: erased with the spinner line, gone with it.
       stopTimer(true)
+      panelRender = null
       stopInterruptWatch()
     },
     select: async (spec) => {
@@ -2036,6 +2112,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // region and fight its cursor-up redraw, tearing it. The picker also owns
       // stdin (its own raw keypress + Ctrl-C cancel), so release the watcher first.
       if (screenReader) return selectNumbered(spec)
+      closePager?.()
       stopTimer(true)
       toFreshLine()
       stopInterruptWatch()

@@ -492,6 +492,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'focus', group: 'Terminal', args: '[on|off]',
+    description: 'Show only your messages, one line per tool call, and the final reply',
+    clients: ['tui']
+  },
+  {
     name: 'thoughts', group: 'Terminal', args: '[show|summary|hide]',
     description: "How the model's reasoning shows as it streams (Alt-T cycles it)",
     clients: ['tui']
@@ -666,6 +671,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   notify: 'in the app, notifications and sounds are under Settings > General > Notifications',
   'screen-reader': 'the app works with your screen reader as it is, and Settings has Read replies to screen readers',
   verbose: 'in the app, open a tool row to see its full output',
+  focus: 'the app folds each tool call into a row you can open',
   output: 'in the app, open a tool row to see its full output',
   thoughts: 'in the app, reasoning folds above each reply; Settings > Appearance > Always show reasoning keeps it open',
   transcript: 'in the app, the chat itself is the full transcript: open a tool row or the reasoning to see it in full',
