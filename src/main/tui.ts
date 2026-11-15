@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { UnreadOutcome } from '@shared/chatStatus'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, realpathSync, statSync } from 'node:fs'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_LABEL,
@@ -72,7 +72,7 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { quotaIsLow, quotaStatusText, throttleNotice, type ProviderQuota } from '@shared/rateLimit'
+import { quotaIsLow, quotaStatusText, resetClock, throttleNotice, type ProviderQuota } from '@shared/rateLimit'
 import { providerQuota } from './providers/quota'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
@@ -120,11 +120,13 @@ import {
   chatToMarkdown,
   defaultExportName,
   parseExportArgs,
+  redactExport,
   renderPermissionRules,
   renderRecap,
   sessionPreviewLines,
-  type ExportFormat
+  type ExportArgs
 } from './tui-sessions'
+import { redactSecrets } from './agent/redact'
 import { htmlToAnsi } from './syntax'
 import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
 import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
@@ -392,6 +394,30 @@ export function applyAddDir(dirs: string[], path: string, base: string): string 
   if (dirs.includes(added.dir)) return `· ${added.dir} is already added`
   dirs.push(added.dir)
   return `· added ${added.dir} for this session: the agent can read and edit it from the next message`
+}
+
+/**
+ * Where `/cd <path>` goes: `path` with a leading `~` read as the home folder and a
+ * relative one taken from `base`, resolved through symlinks, as long as it is an
+ * existing directory. Never creates anything.
+ */
+export function resolveCdTarget(
+  path: string,
+  base: string,
+  home = process.env.HOME ?? process.env.USERPROFILE ?? ''
+): { dir: string } | { error: string } {
+  const v = path.trim()
+  if (!v) return { error: 'needs the path of a folder, like ../other-project' }
+  const expanded = v === '~' ? home : v.startsWith('~/') && home ? `${home}${v.slice(1)}` : v
+  const target = isAbsolute(expanded) ? expanded : resolvePath(base, expanded)
+  let dir: string
+  try {
+    dir = realpathSync(target)
+    if (statSync(dir).isDirectory()) return { dir }
+  } catch {
+    return { error: `no such folder: ${v}` }
+  }
+  return { error: `not a folder: ${v}` }
 }
 
 /**
@@ -1354,6 +1380,19 @@ export interface TuiPersist {
   searchAll?: (query: string) => ResumeEntry[]
   /** Duplicate a conversation (fresh id, copied history); null if it can't be forked. */
   fork: (id: string) => { id: string } | null
+  /**
+   * Fork from one of the user's messages (`/fork n`, the rewind picker's "Fork from
+   * here"): a new chat holding the conversation before it, as the desktop's "Fork from
+   * here" makes. `text` is the message as the client shows it, so a log that moved on
+   * is refused rather than cut at the wrong place. Null when that message is gone.
+   * Absent: /fork n is unavailable.
+   */
+  forkAt?: (id: string, point: { turn: number; text: string }) => { id: string } | null
+  /**
+   * Record that a chat now works in another folder (`/cd`), so it is listed, resumed
+   * and continued there. Absent: the chat keeps the folder it started in.
+   */
+  setWorkspace?: (id: string, workspace: string) => void
   /** Give a conversation a title of the user's choosing. Absent ⇒ /rename is unavailable. */
   rename?: (id: string, title: string) => void
   /**
@@ -1510,6 +1549,50 @@ export function renderRewindPoints(points: RewindPoint[], paint: Painter, max = 
 export function parseRewindSelection(answer: string, count: number): number | null {
   const n = Number(answer.trim())
   return answer.trim() !== '' && Number.isInteger(n) && n >= 1 && n <= count ? n - 1 : null
+}
+
+/**
+ * What else `/rewind` can do from a message, after the shared modes (the terminal
+ * offers these in the same list, numbered on from them).
+ */
+export type RewindExtra = 'summarize-from' | 'summarize-before' | 'fork'
+
+export const REWIND_EXTRA_INFO: readonly { action: RewindExtra; label: string; hint: string }[] = [
+  {
+    action: 'summarize-from',
+    label: 'Summarize from here',
+    hint: 'Replace this message and everything after it with a summary. Files stay as they are.'
+  },
+  {
+    action: 'summarize-before',
+    label: 'Summarize up to here',
+    hint: 'Replace everything before this message with a summary. Files stay as they are.'
+  },
+  {
+    action: 'fork',
+    label: 'Fork from here',
+    hint: 'Open a new chat with the conversation before this message. This chat stays as it is.'
+  }
+]
+
+/** A `/rewind` choice past the modes (its number in the list, or a name), or null. */
+export function parseRewindExtra(answer: string): RewindExtra | null {
+  const a = answer.trim().toLowerCase()
+  const n = Number(a)
+  if (a !== '' && Number.isInteger(n)) return REWIND_EXTRA_INFO[n - REWIND_MODE_INFO.length - 1]?.action ?? null
+  if (a === 'summarize-from' || a === 'summarize' || a === 'from') return 'summarize-from'
+  if (a === 'summarize-before' || a === 'before' || a === 'upto') return 'summarize-before'
+  if (a === 'fork') return 'fork'
+  return null
+}
+
+/** The `/rewind` choices list: the shared modes, then the terminal's extra actions. */
+export function renderRewindChoices(paint: Painter): string {
+  const rows = [
+    ...REWIND_MODE_INFO.map((c) => ({ label: c.label, hint: c.hint })),
+    ...REWIND_EXTRA_INFO.map((c) => ({ label: c.label, hint: c.hint }))
+  ]
+  return `${paint('Rewind what?', 'bold')}\n${rows.map((c, i) => `  ${paint(String(i + 1), 'cyan')}  ${c.label}  ${paint(c.hint, 'dim')}`).join('\n')}`
 }
 
 /** A mode from `/rewind`'s mode prompt (a number or a name), or null to cancel. */
@@ -1912,9 +1995,13 @@ export type SlashResult =
   | { kind: 'exit' }
   | { kind: 'clear' }
   | { kind: 'resume'; query: string }
-  | { kind: 'fork' }
-  /** Write this chat to a file (/export [md|json] [path]). */
-  | { kind: 'export'; format: ExportFormat; path?: string }
+  /**
+   * Branch this chat into a copy (/fork), or with `turn` (/fork n, 0-based like
+   * /rewind's), into a new chat holding the conversation before that message.
+   */
+  | { kind: 'fork'; turn?: number; bad?: boolean }
+  /** Write this chat to a file or the clipboard (/export [md|json] [path] [--copy] ...). */
+  | ({ kind: 'export' } & ExportArgs)
   /** Give this chat a title (/rename <title>); empty shows the current one. */
   | { kind: 'rename'; title: string }
   /** Delete this chat, after a confirmation (/delete). */
@@ -1951,6 +2038,8 @@ export type SlashResult =
   | { kind: 'vim'; on?: boolean }
   /** `/add-dir <path>` adds a session directory; a bare `/add-dir` lists them. */
   | { kind: 'add-dir'; path: string }
+  /** `/cd <path>` moves the session's working folder; a bare `/cd` says where it is. */
+  | { kind: 'cd'; path: string }
   /** Turn reduced motion on or off (/reduce-motion); bare toggles. */
   | { kind: 'reduce-motion'; on?: boolean }
   /** Turn screen-reader mode on or off (/screen-reader); bare toggles. */
@@ -1963,7 +2052,7 @@ export type SlashResult =
    * Rewind to an earlier message (/rewind [n] [mode]), or undo the last rewind
    * (/rewind undo). Without `turn` the driver lists the messages and asks.
    */
-  | { kind: 'rewind'; undo: boolean; turn?: number; mode?: RewindMode }
+  | { kind: 'rewind'; undo: boolean; turn?: number; mode?: RewindMode; action?: RewindExtra }
   /**
    * Summarize everything different in the working tree (/changes), or with `last`,
    * show the diff of an edit this session made (`/diff last [n]`, n edits back).
@@ -2068,8 +2157,12 @@ export function parseSlashCommand(
     case 'btw':
     case 'aside':
       return { kind: 'btw', question: arg.trim() }
-    case 'fork':
-      return { kind: 'fork' }
+    case 'fork': {
+      const a = arg.trim()
+      if (!a) return { kind: 'fork' }
+      const n = Number(a)
+      return Number.isInteger(n) && n >= 1 ? { kind: 'fork', turn: n - 1 } : { kind: 'fork', bad: true }
+    }
     case 'export':
       return { kind: 'export', ...parseExportArgs(arg) }
     case 'rename':
@@ -2112,6 +2205,8 @@ export function parseSlashCommand(
     }
     case 'add-dir':
       return { kind: 'add-dir', path: arg.trim() }
+    case 'cd':
+      return { kind: 'cd', path: arg.trim() }
     case 'vim': {
       const a = arg.trim().toLowerCase()
       if (a === 'on') return { kind: 'vim', on: true }
@@ -2141,7 +2236,14 @@ export function parseSlashCommand(
       const n = Number(first)
       const turn = first && Number.isInteger(n) && n >= 1 ? n - 1 : undefined
       const mode = second ? (parseRewindMode(second) ?? undefined) : undefined
-      return { kind: 'rewind', undo: false, ...(turn !== undefined ? { turn } : {}), ...(mode ? { mode } : {}) }
+      const action = second && !mode ? (parseRewindExtra(second) ?? undefined) : undefined
+      return {
+        kind: 'rewind',
+        undo: false,
+        ...(turn !== undefined ? { turn } : {}),
+        ...(mode ? { mode } : {}),
+        ...(action ? { action } : {})
+      }
     }
     case 'undo':
       return { kind: 'undo', redo: false }
@@ -2286,9 +2388,10 @@ export const HELP_TEXT = [
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
   '  /btw <question>       ask a quick side question; the answer stays out of this chat',
   '  /btw clear            start this chat\'s side chat over',
-  '  /fork                 branch the current session into a copy',
+  '  /fork [n]             branch the current session into a copy; with n, a new chat from just before your n-th message',
   '  /rename <title>       give this chat a title',
   '  /export [md|json] [path]  write this chat to a file (Markdown by default)',
+  '  /export --copy        put it on the clipboard instead; also --no-reasoning, --no-tools; secrets are masked (--no-redact keeps them)',
   '  /delete               delete this chat (asks first)',
   '  /permissions [remove n]  list the saved permission rules, or remove one',
   '  /cost                 show session token + cost totals',
@@ -2304,11 +2407,12 @@ export const HELP_TEXT = [
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
   '  /add-dir [path]       let the agent work in another folder this session (alone: list them)',
+  '  /cd <path>            move this session to another folder (Tab completes it); the chat moves with it',
   '  /notify [mode]        bell and notification when it needs you: auto | osc | bell | off',
   '  /screen-reader [on|off]  plain lines for screen readers, numbered choices',
   '  /reduce-motion [on|off]  a still activity line instead of the spinner',
   '  /undo, /redo          revert (or restore) the files the last turn changed',
-  '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
+  '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both; or summarize from or up to it, or fork from it (/rewind undo)',
   '  /changes              what is different in the working tree (also /diff)',
   "  /diff last [n]        show the diff of this session's last edit (n edits back)",
   '  /verbose [on|off]     show each tool\'s full output as it runs',
@@ -2381,6 +2485,7 @@ export const STARTUP_TIPS = [
   'Ctrl-O opens the whole session full screen, with reasoning and full tool output',
   'Alt-T cycles how the model\'s reasoning shows: in full, one line, or hidden',
   '/copy puts the last reply, or one of its code blocks, on your clipboard',
+  '/cd <path> moves the session to another folder; Tab completes the path',
   'using a screen reader? /screen-reader on keeps the output to plain lines',
   '/config lists the terminal settings; Enter changes the highlighted one'
 ]
@@ -3490,6 +3595,17 @@ export interface TuiDeps {
    * shell, bounded in time and output (tests inject a fake).
    */
   runContextShell?: (command: string) => Promise<ShellCapture>
+  /**
+   * Replace part of a chat with a summary (the rewind picker's "Summarize from here" and
+   * "Summarize up to here"), saved so `/rewind undo` reverses it. Absent: not offered.
+   */
+  summarize?: (
+    id: string,
+    providerId: string,
+    model: string,
+    part: { turn: number; text: string; side: 'from' | 'before' },
+    opts?: CompactOptions
+  ) => Promise<CompactResult>
   /** Compact the given conversation on demand (the `/compact` command). */
   compact?: (id: string, providerId: string, model: string, opts?: CompactOptions) => Promise<CompactResult>
   /** Persist a settings patch (for /hooks and /mcp editing). Absent ⇒ editing disabled. */
@@ -3552,6 +3668,16 @@ export interface TuiDeps {
    * OSC 52, which the command always sends too.
    */
   copyText?: (text: string) => boolean
+  /**
+   * The session's working folder moved (`/cd`): whatever the host keeps per folder (the
+   * command menu, composer history) follows it. `TuiOptions.cwd` already holds the new one.
+   */
+  onCwdChange?: (cwd: string) => void
+  /**
+   * A masker for text leaving the machine (`/export`): the transcript redacter, bound to
+   * this install's stored secret values. Absent: the redacter's patterns alone.
+   */
+  secretRedactor?: () => (text: string) => string
   /**
    * Spend and tokens per day and per project over the chats saved on this computer,
    * for `/usage` (the desktop usage view's report). Absent ⇒ the command says so.
@@ -4143,7 +4269,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
   // Short project label, folded into titles/notifications so two terminals in two
   // projects are tellable apart at a glance.
-  const workspaceName = workspaceLabel(opts.cwd)
+  let workspaceName = workspaceLabel(opts.cwd)
   // Which attention signals fire (/notify). Read once rather than per event (that
   // would cost a settings load on every streamed token); /notify changes it live.
   let notifyMode: NotifyMode = resolveNotifyMode(settings)
@@ -4332,7 +4458,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         },
         settingsPath: deps.settingsPath?.() ?? null,
         project,
-        cost: formatSessionCost(sessionCost)
+        cost: formatSessionCost(sessionCost),
+        usageLimitWait: current.usageLimitWait !== false
       },
       paint
     )
@@ -4500,6 +4627,122 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
+  // The rewind picker's "Summarize from here" / "Summarize up to here": the /compact
+  // summarizer over that part of the chat, saved as a rewind so /rewind undo reverses it.
+  const summarizeAround = async (turn: number, point: RewindPoint, side: 'from' | 'before'): Promise<void> => {
+    if (!deps.summarize || !conversationId || !providerId || !model) {
+      deps.io.out(paint('· summarizing part of a chat is unavailable here\n', 'dim'))
+      return
+    }
+    const count = side === 'from' ? messages.length - point.messageIndex : point.messageIndex
+    if (count <= 0) {
+      deps.io.out(paint(`· nothing before message ${turn + 1} to summarize\n`, 'dim'))
+      return
+    }
+    deps.io.out(
+      `${paint(`Summarize ${side === 'from' ? 'from' : 'up to'} “${terminalText(point.label, { lines: false })}”?`, 'bold')} ` +
+        `${side === 'from' ? `Replaces this message and everything after it (${plural(count, 'message')})` : `Replaces the ${plural(count, 'message')} before it`} with a summary. Files stay as they are, and /rewind undo brings the messages back.\n`
+    )
+    const focusAns = await deps.io.readLine('What should the summary keep in detail? (Enter for nothing in particular) ', {
+      discardPending: true
+    })
+    if (focusAns === null) {
+      deps.io.out(paint('· cancelled\n', 'dim'))
+      return
+    }
+    const yes = await deps.io.readLine('Summarize? [y/N] ', { discardPending: true })
+    if (!yes || !/^y(es)?$/i.test(yes.trim())) {
+      deps.io.out(paint('· cancelled\n', 'dim'))
+      return
+    }
+    deps.io.out(paint('· summarizing… (Esc or Ctrl-C cancels)\n', 'dim'))
+    const ctl = new AbortController()
+    compactAbort = ctl
+    deps.io.startSpinner?.('Summarizing')
+    let res: CompactResult
+    try {
+      const focus = focusAns.trim()
+      res = await deps.summarize(
+        conversationId,
+        providerId,
+        model,
+        { turn, text: turnText(messages[point.messageIndex]), side },
+        {
+          signal: ctl.signal,
+          ...(focus ? { focus } : {}),
+          onRetry: ({ attempt, max }) =>
+            deps.io.setSpinnerLabel?.(`Summarizing (retrying, attempt ${attempt}${max ? ` of ${max}` : ''})`)
+        }
+      )
+    } catch (e) {
+      res = { ok: false, summarized: 0, error: (e as Error).message }
+    } finally {
+      compactAbort = null
+      deps.io.stopSpinner?.()
+    }
+    if (res.ok && res.messages) {
+      messages = res.messages
+      // The meter measured the log before the rewrite, as after a rewind.
+      contextTokens = 0
+      contextParts = null
+      // The last turn's run may now be inside the summary: /undo must not reach for it.
+      if (side === 'from') lastRunId = null
+      deps.io.out(
+        paint(
+          `· summarized ${plural(res.summarized, 'message')} ${side === 'from' ? `from message ${turn + 1} on` : `before message ${turn + 1}`}; files are as they were. /rewind undo reverses it.\n`,
+          'dim'
+        )
+      )
+    } else if (res.ok) {
+      deps.io.out(paint('· nothing to summarize there\n', 'dim'))
+    } else if (res.reason === 'cancelled') {
+      deps.io.out(paint('· summary cancelled; nothing changed\n', 'dim'))
+    } else {
+      deps.io.out(paint(`· couldn't summarize: ${stripControlChars(res.error ?? 'unknown error')}\n`, 'yellow'))
+    }
+  }
+  // `/fork n` and the rewind picker's "Fork from here": a new chat with the conversation
+  // before message `turn`, which waits in the prompt to edit or send, as in the desktop.
+  const forkFromMessage = (turn: number): void => {
+    if (!deps.persist?.forkAt) {
+      deps.io.out(paint('· forking from a message is unavailable here\n', 'dim'))
+      return
+    }
+    if (!conversationId) {
+      deps.io.out(paint('· nothing to fork yet; start a conversation first\n', 'dim'))
+      return
+    }
+    const points = rewindPoints(messages)
+    const point = points[turn]
+    if (!point) {
+      deps.io.out(paint(`· no message ${turn + 1} to fork from (there ${points.length === 1 ? 'is 1' : `are ${points.length}`})\n`, 'yellow'))
+      return
+    }
+    const text = turnText(messages[point.messageIndex])
+    let forked: { id: string } | null
+    try {
+      forked = deps.persist.forkAt(conversationId, { turn, text })
+    } catch (e) {
+      deps.io.out(paint(`· could not fork from that message: ${stripControlChars((e as Error).message)}\n`, 'yellow'))
+      return
+    }
+    if (!forked) {
+      deps.io.out(paint("· couldn't fork from that message; it is no longer in this chat\n", 'yellow'))
+      return
+    }
+    conversationId = forked.id
+    messages = deps.persist.get(forked.id)?.messages ?? messages.slice(0, point.messageIndex)
+    resetChatState()
+    // A fresh conversation whose stored model we don't track, as for a whole-chat fork.
+    persistedSettings = null
+    if (text.trim()) halfDraft = [halfDraft, text].filter(Boolean).join('\n\n')
+    deps.io.out(
+      paint(
+        `· forked from message ${turn + 1}: a new chat with the ${plural(messages.length, 'message')} before it, original left intact${text.trim() ? '; that message is back in the prompt to edit or send' : ''}\n`,
+        'dim'
+      )
+    )
+  }
 
   // Custom slash commands from the workspace's `.houston/commands`, loaded once for
   // the session. Merged with the first-party template commands (e.g. /review), which
@@ -4512,7 +4755,56 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       /* no custom commands — fine, carry on with the built-ins */
     }
   }
-  const templateCommands = mergeCommands(BUILTIN_TEMPLATE_COMMANDS, customCommands)
+  let templateCommands = mergeCommands(BUILTIN_TEMPLATE_COMMANDS, customCommands)
+
+  // `/cd <path>`: move the session's working folder, and with it everything a session
+  // reads from its folder, as a fresh start there would: the project's trust question,
+  // its own commands, the status line, and the chat's recorded folder. The agent's
+  // instructions, project settings and sandbox roots follow on the next message, since
+  // each run reads them from the folder it is given.
+  const changeFolder = async (path: string): Promise<void> => {
+    if (!path) {
+      deps.io.out(paint(`· working folder: ${stripControlChars(homeRelative(opts.cwd))}. /cd <path> moves it\n`, 'dim'))
+      return
+    }
+    const target = resolveCdTarget(path, opts.cwd)
+    if ('error' in target) {
+      deps.io.out(paint(`· /cd ${stripControlChars(target.error)}\n`, 'yellow'))
+      return
+    }
+    let current = opts.cwd
+    try {
+      current = realpathSync(opts.cwd)
+    } catch {
+      // A folder removed under the session: any existing one is a move.
+    }
+    if (target.dir === current) {
+      deps.io.out(paint(`· already in ${stripControlChars(homeRelative(target.dir))}\n`, 'dim'))
+      return
+    }
+    opts.cwd = target.dir
+    workspaceName = workspaceLabel(opts.cwd)
+    deps.io.signal?.({ title: idleTitle(workspaceName) })
+    deps.onCwdChange?.(opts.cwd)
+    if (conversationId && deps.persist?.setWorkspace) {
+      try {
+        deps.persist.setWorkspace(conversationId, opts.cwd)
+      } catch (e) {
+        deps.io.out(paint(`· couldn't record the chat's new folder: ${stripControlChars((e as Error).message)}\n`, 'yellow'))
+      }
+    }
+    deps.io.out(paint(`· working folder is now ${stripControlChars(homeRelative(opts.cwd))}\n`, 'dim'))
+    await promptFolderTrust(opts.cwd, deps, paint)
+    customCommands = []
+    if (deps.commands) {
+      try {
+        customCommands = await deps.commands()
+      } catch {
+        /* no custom commands there: the built-ins still work */
+      }
+    }
+    templateCommands = mergeCommands(BUILTIN_TEMPLATE_COMMANDS, customCommands)
+  }
 
   // Ctrl-C at the composer (no run in flight): first press discards the in-progress
   // input and re-prompts; a second press within the window exits, like a shell. The
@@ -5335,20 +5627,49 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· nothing to export yet; this chat has no messages\n', 'dim'))
           continue
         }
-        if (!deps.writeExport) {
+        if (!deps.writeExport && !(result.copy && !result.path)) {
           deps.io.out(paint('· export is unavailable here\n', 'dim'))
+          continue
+        }
+        if (result.bad) {
+          deps.io.out(
+            paint(
+              `· /export has no option ${stripControlChars(result.bad)}: use --copy, --no-reasoning, --no-tools or --no-redact\n`,
+              'yellow'
+            )
+          )
           continue
         }
         const at = new Date(nowFn())
         const title = currentTitle() ?? 'Houston chat'
         const meta = { id: conversationId, title, providerId, model, at }
-        const content = result.format === 'json' ? chatToJson(messages, meta) : chatToMarkdown(messages, meta)
+        const kept = { reasoning: !result.noReasoning, tools: !result.noTools }
+        // Secrets are masked unless asked not to: an export is made to leave this machine.
+        const redact = result.noRedact ? null : (deps.secretRedactor?.() ?? ((t: string) => redactSecrets(t)))
+        const content =
+          result.format === 'json'
+            ? chatToJson(redact ? redactExport(messages, redact) : messages, meta, kept)
+            : chatToMarkdown(messages, meta, kept)
+        const text = redact && result.format === 'md' ? redact(content) : content
+        const masked = redact ? ' (secrets masked; --no-redact keeps them)' : ''
+        if (result.copy) {
+          const native = putOnClipboard(text, deps)
+          const what = `this chat as ${result.format === 'json' ? 'JSON' : 'Markdown'}`
+          deps.io.out(
+            paint(
+              `✓ copied ${what} (${describeCopied(text)})${native ? '' : ', if your terminal allows clipboard access'}${masked}\n`,
+              'green'
+            )
+          )
+          if (!result.path) continue
+        }
         const target = result.path ?? defaultExportName(title, at, result.format)
+        if (!deps.writeExport) continue
         try {
-          const written = deps.writeExport(target, content)
-          deps.io.out(paint(`· exported ${plural(messages.length, 'message')} to ${written}\n`, 'dim'))
+          const written = deps.writeExport(target, text)
+          deps.io.out(paint(`· exported ${plural(messages.length, 'message')} to ${stripControlChars(written)}${masked}\n`, 'dim'))
         } catch (e) {
-          deps.io.out(paint(`· couldn't export: ${(e as Error).message}\n`, 'yellow'))
+          deps.io.out(paint(`· couldn't export: ${stripControlChars((e as Error).message)}\n`, 'yellow'))
         }
         continue
       }
@@ -5442,6 +5763,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         )
         continue
       }
+      if (result.kind === 'fork' && (result.bad || result.turn !== undefined)) {
+        if (result.bad) {
+          deps.io.out(paint('· usage: /fork, or /fork <n> to fork from message n (/rewind lists them)\n', 'yellow'))
+          continue
+        }
+        forkFromMessage(result.turn ?? 0)
+        continue
+      }
       if (result.kind === 'fork') {
         if (!deps.persist || !conversationId) {
           deps.io.out(paint('· nothing to fork yet; start a conversation first\n', 'dim'))
@@ -5495,6 +5824,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'feedback') {
         await runFeedbackCommand(deps, paint)
+        continue
+      }
+      if (result.kind === 'cd') {
+        await changeFolder(result.path)
         continue
       }
       if (result.kind === 'add-dir') {
@@ -5688,17 +6021,26 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         let mode = result.mode
-        if (!mode) {
-          deps.io.out(
-            `${paint('Rewind what?', 'bold')}\n${REWIND_MODE_INFO.map((c, i) => `  ${paint(String(i + 1), 'cyan')}  ${c.label}  ${paint(c.hint, 'dim')}`).join('\n')}\n`
-          )
+        let action = result.action
+        if (!mode && !action) {
+          deps.io.out(`${renderRewindChoices(paint)}\n`)
           const ans = await deps.io.readLine('[1] > ', { discardPending: true })
           mode = ans === null ? undefined : (parseRewindMode(ans) ?? undefined)
-          if (!mode) {
+          action = ans === null || mode ? undefined : (parseRewindExtra(ans) ?? undefined)
+          if (!mode && !action) {
             deps.io.out(paint('· cancelled\n', 'dim'))
             continue
           }
         }
+        if (action === 'fork') {
+          forkFromMessage(turn)
+          continue
+        }
+        if (action) {
+          await summarizeAround(turn, point, action === 'summarize-from' ? 'from' : 'before')
+          continue
+        }
+        if (!mode) continue
         const text = turnText(messages[point.messageIndex])
         const preview = await deps.rewind.preview(conversationId, turn, mode, text)
         if (!preview.ok) {
@@ -6534,6 +6876,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
         case 'retry':
+          if (e.throttle?.resetAt !== undefined) {
+            // A usage limit the loop waits out: the turn carries on by itself at reset.
+            const at = resetClock(e.throttle.resetAt)
+            deps.io.setSpinnerLabel?.(`Waiting for the limit to reset at ${at}`)
+            deps.io.out(paint(`\n· limit resets at ${at}; continuing then (Esc to cancel)\n`, 'yellow'))
+            retryStreak = 0
+            break
+          }
           deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
           if (retryStreak === 0) {
             const line = e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `retrying (${retryProgress(e)})… ${e.message}`
@@ -7159,6 +7509,17 @@ export function copyPreviewLines(text: string, paint: Painter): string[] {
  * over SSH, where the terminal allows it); the platform's own clipboard helper is
  * used too when this is a local session.
  */
+/**
+ * Put `text` on the clipboard both ways /copy does: OSC 52 (which reaches the user's own
+ * clipboard over SSH) and the platform's helper when this is a local session. True when
+ * the helper took it. OSC 52 carries the text base64'd, so nothing in it reaches the
+ * terminal as an escape sequence.
+ */
+function putOnClipboard(text: string, deps: TuiDeps): boolean {
+  deps.io.out(osc52Copy(text))
+  return deps.copyText?.(text) === true
+}
+
 async function runCopyCommand(
   cmd: { index: number; bad?: boolean },
   messages: readonly ChatMessage[],
@@ -7224,10 +7585,7 @@ async function runCopyCommand(
       what = `code block ${n}${blocks.length > 1 ? ` of ${blocks.length}` : ''} from ${which}`
     }
   }
-  // The reply goes on the clipboard as the model wrote it: OSC 52 carries it base64'd,
-  // so nothing in it reaches the terminal as an escape sequence.
-  deps.io.out(osc52Copy(text))
-  const native = deps.copyText?.(text) === true
+  const native = putOnClipboard(text, deps)
   const size = describeCopied(text)
   deps.io.out(
     paint(

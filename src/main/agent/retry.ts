@@ -56,7 +56,119 @@ export const MAX_EXTENDED_IDLE_RETRIES = 1
  * one, so clamp it: we retry early, and if the server still isn't ready it just says so
  * again — the attempt budget bounds the total either way.
  */
-const RETRY_AFTER_CAP_MS = 60_000
+export const RETRY_AFTER_CAP_MS = 60_000
+
+/**
+ * A usage or rate limit that resets further out than {@link RETRY_AFTER_CAP_MS} (an
+ * hourly or daily plan allowance) is waited out in one go rather than retried early,
+ * so the turn carries on by itself once the limit resets (`usageLimitWait`). Longest
+ * such wait: a reset further out than this fails the turn as before.
+ */
+export const MAX_LIMIT_WAIT_MS = 6 * 60 * 60_000
+
+/** Most times one run waits for a usage limit to reset before it gives up. */
+export const MAX_LIMIT_WAITS = 3
+
+/** An OpenAI-style reset duration ("1s", "6m0s", "1h2m3.5s", "20ms"), in ms. */
+function resetDurationMs(raw: string): number | undefined {
+  const v = raw.trim()
+  if (!v) return undefined
+  if (/^\d+(\.\d+)?$/.test(v)) return Number(v) * 1000
+  const m = /^(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+)ms)?$/.exec(v)
+  if (!m || !m.slice(1).some((x) => x !== undefined)) return undefined
+  const [h, min, s, ms] = m.slice(1).map((x) => Number(x ?? 0))
+  return ((h * 60 + min) * 60 + s) * 1000 + ms
+}
+
+/** A reset time named as an instant (RFC 3339, or epoch seconds), as epoch ms. */
+function resetInstantMs(raw: string): number | undefined {
+  const v = raw.trim()
+  if (!v) return undefined
+  if (/^\d{9,11}$/.test(v)) return Number(v) * 1000
+  const at = Date.parse(v)
+  return Number.isNaN(at) ? undefined : at
+}
+
+/** A usage-limit body's own reset fields (`resets_in_seconds`, `resets_at`), as epoch ms. */
+function bodyResetAt(err: unknown, now: number): number | undefined {
+  const bodies: unknown[] = []
+  const e = err as { error?: unknown; message?: unknown } | null | undefined
+  if (e?.error && typeof e.error === 'object') {
+    bodies.push(e.error, (e.error as { error?: unknown }).error)
+  }
+  const msg = e?.message
+  if (typeof msg === 'string' && msg.length <= ERROR_JSON_MAX) {
+    const start = msg.indexOf('{')
+    if (start >= 0) {
+      try {
+        const parsed = JSON.parse(msg.slice(start)) as { error?: unknown }
+        bodies.push(parsed, parsed?.error)
+      } catch {
+        // Not JSON: nothing more to read.
+      }
+    }
+  }
+  for (const b of bodies) {
+    if (!b || typeof b !== 'object') continue
+    const o = b as { resets_in_seconds?: unknown; resets_at?: unknown }
+    if (typeof o.resets_in_seconds === 'number' && Number.isFinite(o.resets_in_seconds) && o.resets_in_seconds >= 0) {
+      return now + o.resets_in_seconds * 1000
+    }
+    if (typeof o.resets_at === 'number' && Number.isFinite(o.resets_at) && o.resets_at > 0) {
+      return o.resets_at * 1000
+    }
+  }
+  return undefined
+}
+
+/**
+ * When a throttled request's limit resets, as epoch ms, read uncapped (unlike
+ * {@link retryAfterHintMs}), or undefined when the failure is not a rate or usage limit
+ * (a 429 that isn't an exhausted quota) or names no reset.
+ *
+ * Read in order of authority: the wait the server asked for (`Retry-After`,
+ * `retry-after-ms`, or an in-band error's own value), the reset a usage-limit body
+ * names, then the latest reset the rate-limit headers report (Anthropic's
+ * `anthropic-ratelimit-*-reset` instants, OpenAI's `x-ratelimit-reset-*` durations),
+ * then a Gemini `RetryInfo` delay.
+ */
+export function limitResetAt(err: unknown, now: number = Date.now()): number | undefined {
+  const e = err as { status?: unknown; retryAfterMs?: unknown; headers?: unknown } | null | undefined
+  if (e?.status !== 429 || isQuotaExhaustedError(err)) return undefined
+  const direct = e.retryAfterMs
+  if (typeof direct === 'number' && Number.isFinite(direct) && direct >= 0) return now + direct
+  const rawMs = headerValue(e.headers, 'retry-after-ms')?.trim()
+  if (rawMs && Number.isFinite(Number(rawMs))) return now + Math.max(0, Number(rawMs))
+  const raw = headerValue(e.headers, 'retry-after')?.trim()
+  if (raw) {
+    const secs = Number(raw)
+    if (Number.isFinite(secs)) return now + Math.max(0, secs) * 1000
+    const at = Date.parse(raw)
+    if (!Number.isNaN(at)) return Math.max(now, at)
+  }
+  const body = bodyResetAt(err, now)
+  if (body !== undefined) return Math.max(now, body)
+  const resets: number[] = []
+  for (const name of [
+    'anthropic-ratelimit-unified-reset',
+    'anthropic-ratelimit-requests-reset',
+    'anthropic-ratelimit-tokens-reset',
+    'anthropic-ratelimit-input-tokens-reset',
+    'anthropic-ratelimit-output-tokens-reset'
+  ]) {
+    const v = headerValue(e.headers, name)
+    const at = v === undefined ? undefined : resetInstantMs(v)
+    if (at !== undefined) resets.push(at)
+  }
+  for (const name of ['x-ratelimit-reset-requests', 'x-ratelimit-reset-tokens']) {
+    const v = headerValue(e.headers, name)
+    const ms = v === undefined ? undefined : resetDurationMs(v)
+    if (ms !== undefined) resets.push(now + ms)
+  }
+  if (resets.length) return Math.max(now, ...resets)
+  const google = googleRetryDelayMs(err)
+  return google === undefined ? undefined : now + google
+}
 
 /**
  * A provider failure that arrived **in-band** (as a stream `error` event) rather than as

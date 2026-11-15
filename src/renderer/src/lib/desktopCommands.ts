@@ -42,7 +42,8 @@ export type DesktopCommandAction =
   | { kind: 'undo' }
   | { kind: 'redo' }
   | { kind: 'retry' }
-  | { kind: 'fork' }
+  /** `turn` (0-based, as the rewind picker numbers the messages): fork from that message. */
+  | { kind: 'fork'; turn?: number; invalid?: string }
   | { kind: 'resume'; query: string }
   | { kind: 'btw'; question: string }
   | { kind: 'btw-clear' }
@@ -149,8 +150,11 @@ export function desktopCommandAction(name: string, args: string): DesktopCommand
       return { kind: 'redo' }
     case 'retry':
       return { kind: 'retry' }
-    case 'fork':
-      return { kind: 'fork' }
+    case 'fork': {
+      if (!arg) return { kind: 'fork' }
+      const n = Number(arg)
+      return Number.isInteger(n) && n >= 1 ? { kind: 'fork', turn: n - 1 } : { kind: 'fork', invalid: arg }
+    }
     case 'resume':
       return { kind: 'resume', query: arg }
     case 'btw':

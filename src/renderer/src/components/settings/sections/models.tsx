@@ -664,6 +664,21 @@ export function LoopControlSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
       <label className="field field--checkbox">
         <input
           type="checkbox"
+          checked={settings.usageLimitWait !== false}
+          onChange={(e) =>
+            setSettings((s) => ({ ...s, usageLimitWait: e.target.checked }))
+          }
+        />
+        <span>
+          Wait for usage limits to reset: when the provider stops a turn at a limit that
+          says when it resets, continue the turn then (up to three times a turn, at most
+          six hours each). Stop cancels the wait. Off: the turn fails with the limit&apos;s
+          error. On by default.
+        </span>
+      </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
           checked={settings.doneEvidenceNote !== false}
           onChange={(e) =>
             setSettings((s) => ({ ...s, doneEvidenceNote: e.target.checked }))

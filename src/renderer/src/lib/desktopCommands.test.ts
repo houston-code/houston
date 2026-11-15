@@ -88,6 +88,13 @@ describe('desktopCommandAction', () => {
     expect(desktopCommandAction('btw', 'clear')).toEqual({ kind: 'btw-clear' })
   })
 
+  it('reads /fork n as forking from that message', () => {
+    expect(desktopCommandAction('fork', '')).toEqual({ kind: 'fork' })
+    expect(desktopCommandAction('fork', ' 3 ')).toEqual({ kind: 'fork', turn: 2 })
+    expect(desktopCommandAction('fork', 'last')).toEqual({ kind: 'fork', invalid: 'last' })
+    expect(desktopCommandAction('fork', '0')).toEqual({ kind: 'fork', invalid: '0' })
+  })
+
   it('passes a model or session search through', () => {
     expect(desktopCommandAction('model', ' opus ')).toEqual({ kind: 'model', query: 'opus' })
     expect(desktopCommandAction('resume', 'auth')).toEqual({ kind: 'resume', query: 'auth' })

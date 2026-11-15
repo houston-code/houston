@@ -3,7 +3,8 @@ import { clearChildReportFlag, setWakeHost, takeBackgroundEvents, wakeNote } fro
 import { getMcpRegistryServer, searchMcpRegistry } from './mcpRegistry'
 import { existsSync, fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
+import { readdir, stat } from 'node:fs/promises'
 import { isatty } from 'node:tty'
 import { spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -39,7 +40,7 @@ import { resolveEgressMode } from '@shared/egress'
 import { ISSUES_URL, issueReportBody, issueReportUrl } from '@shared/issueReport'
 import { overrideForConversation } from './agent/overrides'
 import { loadManagedPolicy, resolveManagedPolicyPath } from './agent/managedPolicy'
-import { redactSecrets } from './agent/redact'
+import { createSecretRedactor, redactSecrets } from './agent/redact'
 import type { AgentEvent, ConversationMeta } from '@shared/agent'
 import { setSpawnBackend } from './agent/spawn'
 import { setSchedulerBackend } from './agent/scheduler'
@@ -64,7 +65,7 @@ import { runUserShell } from './userShell'
 import { loadAgents } from './agent/agents'
 import { loadSlashCommands } from './agent/commands'
 import { deleteChat, planChatDelete, stopAndDeleteConversation } from './deleteChat'
-import { compactConversationNow } from './agent/compact'
+import { compactConversationNow, summarizeConversationPart } from './agent/compact'
 import {
   getConversationCheckpoint,
   restoreCheckpoint,
@@ -127,6 +128,7 @@ import { createTerminalIo, resolveColor } from './tui-io'
 import { resolveAccessibility } from './tui-a11y'
 import {
   makeCompleter,
+  folderCompletions,
   commandMenu,
   renderCommandMenu,
   makeMentionMenu,
@@ -149,6 +151,8 @@ import {
   peekConversation,
   searchConversations,
   forkConversation,
+  forkConversationAt,
+  setConversationWorkspace,
   organizeConversation,
   conversationExists,
   detachConversationWorktree,
@@ -638,7 +642,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // Per-workspace composer history (Up/Down recall across restarts). Keyed by a
   // hash of the cwd so each project keeps its own history under userData.
   const histDir = join(getUserDataDir(), 'tui-history')
-  const histFile = join(histDir, `${createHash('sha1').update(tui.cwd).digest('hex').slice(0, 16)}.txt`)
+  const historyFileFor = (cwd: string): string =>
+    join(histDir, `${createHash('sha1').update(cwd).digest('hex').slice(0, 16)}.txt`)
+  let histFile = historyFileFor(tui.cwd)
   let history = parseHistory(safeRead(histFile))
   const persistHistory = (line: string): void => {
     history = appendHistory(line, history)
@@ -665,17 +671,22 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // already knew their names. Loaded once; the menu redraws on every keystroke and
   // must not touch the disk.
   let menuCommands: CommandSpec[] = [...COMMANDS]
-  void loadSlashCommands(tui.cwd)
-    .then((custom) => {
-      menuCommands = mergeCommands(COMMANDS, custom).map((c) => ({
-        name: c.name,
-        description: c.description,
-        ...(c.args ? { args: c.args } : {})
-      }))
-    })
-    .catch(() => {
-      /* no custom commands — the built-ins still list */
-    })
+  const loadMenuCommands = (cwd: string): void => {
+    void loadSlashCommands(cwd)
+      .then((custom) => {
+        // A /cd since this load began: the newer folder's commands win.
+        if (cwd !== tui.cwd) return
+        menuCommands = mergeCommands(COMMANDS, custom).map((c) => ({
+          name: c.name,
+          description: c.description,
+          ...(c.args ? { args: c.args } : {})
+        }))
+      })
+      .catch(() => {
+        /* no custom commands — the built-ins still list */
+      })
+  }
+  loadMenuCommands(tui.cwd)
 
   // A light terminal with no saved theme starts on the light theme. Asked before the
   // composer starts reading the keyboard, so the terminal's reply never lands in it.
@@ -707,7 +718,22 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     // Ctrl-X Ctrl-E in the composer, same editor hand-off plan review uses.
     editText: (initial) => editInEditor(initial, 'MESSAGE.md'),
     // Read live, like the menu: the workspace's commands load after startup.
-    completer: makeCompleter((q) => findFiles(tui.cwd, q), () => menuCommands),
+    completer: makeCompleter(
+      (q) => findFiles(tui.cwd, q),
+      () => menuCommands,
+      // `/cd` and `/add-dir` complete folder names, a link to a folder included.
+      (partial) =>
+        folderCompletions(partial, tui.cwd, homedir(), async (dir) =>
+          Promise.all(
+            (await readdir(dir, { withFileTypes: true })).map(async (e) => ({
+              name: e.name,
+              isDir:
+                e.isDirectory() ||
+                (e.isSymbolicLink() && (await stat(join(dir, e.name)).then((s) => s.isDirectory(), () => false)))
+            }))
+          )
+        )
+    ),
     // Read live, so /vim applies at the next prompt rather than the next launch.
     editorMode: () => (getSettings().tuiEditor === 'vim' ? 'vim' : 'emacs'),
     rows: () => process.stdout.rows || 24,
@@ -880,6 +906,15 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // /copy: the platform's clipboard helper when this is a local session (never
       // over SSH, where OSC 52 is the way to the user's own clipboard).
       copyText: (text) => writeClipboardText(text),
+      // /cd: the command menu and composer history are per folder, so they follow it.
+      onCwdChange: (cwd) => {
+        menuCommands = [...COMMANDS]
+        loadMenuCommands(cwd)
+        histFile = historyFileFor(cwd)
+        history = parseHistory(safeRead(histFile))
+      },
+      // /export: the transcript redacter, with this install's stored secrets read fresh.
+      secretRedactor: () => createSecretRedactor(collectSecrets()),
       // /usage: the desktop usage view's report, summed locally from the saved chats.
       usageReport: () => computeUsageReport(),
       clipboardImage: () => {
@@ -918,6 +953,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       commands: () => loadSlashCommands(tui.cwd),
       // On-demand context compaction for the /compact command.
       compact: (id, providerId, model, opts) => compactConversationNow(id, providerId, model, opts),
+      // The rewind picker's "Summarize from here" / "Summarize up to here".
+      summarize: (id, providerId, model, part, opts) => summarizeConversationPart(id, providerId, model, part, opts),
       // Settings editing for /hooks and /mcp (writes the shared settings.json, 0600).
       updateSettings: (patch) => {
         updateSettings(patch)
@@ -1022,6 +1059,13 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         searchAll: (query) => resumeEntries(searchConversations(query), RESUME_ALL_LIMIT),
         fork: (id) => {
           const forked = forkConversation(id)
+          return forked ? { id: forked.id } : null
+        },
+        // /cd: the chat now lives in the new folder, for the app's sidebar and /resume.
+        setWorkspace: (id, workspace) => setConversationWorkspace(id, workspace),
+        // The desktop's "Fork from here" on one of the user's messages.
+        forkAt: (id, point) => {
+          const forked = forkConversationAt(id, { kind: 'turn', n: point.turn, text: point.text })
           return forked ? { id: forked.id } : null
         },
         // The desktop sidebar's rename: marks the title as chosen, so it is never

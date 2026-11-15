@@ -1984,6 +1984,18 @@ export function setConversationSettings(id: string, patch: ConversationSettingsP
 }
 
 /**
+ * Move a chat to another folder (the terminal's `/cd`): it is listed, resumed and run
+ * there from now on. A worktree record stays, since the chat still owns that checkout
+ * and is what cleans it up. Does not bump `updatedAt`. Unknown ids are a no-op.
+ */
+export function setConversationWorkspace(id: string, workspace: string): void {
+  const open = openForBookkeeping(id)
+  if (!open || !workspace || open.conv.workspace === workspace) return
+  open.conv.workspace = workspace
+  open.save()
+}
+
+/**
  * Point a chat whose worktree was removed back at the repo it came from, so it still
  * opens (and can be continued) from the repo root. Keeps its messages; drops the
  * worktree record so nothing tries to use or remove the gone checkout again. Does

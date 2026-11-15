@@ -357,6 +357,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'cd', group: 'Terminal', args: '<path>',
+    description: "Move this session's working folder, and the chat with it",
+    clients: ['tui']
+  },
+  {
     name: 'notify', group: 'Terminal', args: '[auto|osc|bell|off]',
     description: 'Choose the bell and notification sent when a run needs you',
     clients: ['tui']
@@ -418,11 +423,15 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Ask a quick side question; the answer stays out of this chat',
     clients: ['gui', 'tui']
   },
-  { name: 'fork', group: 'Chat', description: 'Branch the current session into a copy', clients: ['gui', 'tui'] },
+  {
+    name: 'fork', group: 'Chat', args: '[n]',
+    description: 'Branch the current session into a copy, or fork from your n-th message',
+    clients: ['gui', 'tui']
+  },
   { name: 'rename', group: 'Chat', args: '<title>', description: 'Give this chat a title', clients: ['tui'] },
   {
-    name: 'export', group: 'Chat', args: '[md|json] [path]',
-    description: 'Write this chat to a Markdown or JSON file', clients: ['tui']
+    name: 'export', group: 'Chat', args: '[md|json] [path] [--copy]',
+    description: 'Write this chat to a Markdown or JSON file, or copy it (secrets masked)', clients: ['tui']
   },
   { name: 'delete', group: 'Chat', description: 'Delete this chat (asks first)', clients: ['tui'] },
   {
@@ -531,6 +540,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   status: 'in the app, Settings > About shows the version, and /doctor checks the setup',
   feedback: 'in the app, use Help > Report an Issue',
   'add-dir': 'in the app, add folders the agent may use under Settings, Workspace, Additional folders',
+  cd: 'in the app, the project folder button by the message box opens another folder, in a new chat',
   'reduce-motion': 'the app follows your system\'s reduce motion setting',
   notify: 'in the app, notifications and sounds are under Settings > General > Notifications',
   'screen-reader': 'the app works with your screen reader as it is, and Settings has Read replies to screen readers',

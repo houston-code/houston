@@ -10,7 +10,9 @@ import {
   chatToMarkdown,
   defaultExportName,
   EXPORT_TOOL_LINES,
+  exportMessages,
   parseExportArgs,
+  redactExport,
   renderPermissionRules,
   renderRecap,
   sessionPreviewLines,
@@ -211,5 +213,62 @@ describe('renderPermissionRules', () => {
 
   it('says how a rule gets saved when there are none', () => {
     expect(renderPermissionRules([], paint, 0)).toContain('no saved permission rules')
+  })
+})
+
+describe('/export options', () => {
+  const meta = { id: 'c1', title: 'Chat', providerId: 'p', model: 'm', at: new Date(0) }
+  const log: ChatMessage[] = [
+    { role: 'user', content: 'go', images: [{ mediaType: 'image/png', data: 'sk-ant-api03-notakeyjustbytes0000' }] },
+    {
+      role: 'assistant',
+      content: '',
+      reasoning: [{ text: 'plan it', signature: 'sk-ant-sig-opaque-0000000000' }],
+      toolCalls: [{ id: 't1', name: 'run_shell', arguments: { command: 'echo sk-ant-api03-abcdefghijklmnopqrstuvwx' } }]
+    },
+    { role: 'tool', content: 'out', toolCallId: 't1', toolName: 'run_shell' },
+    { role: 'assistant', content: 'done', reasoning: [{ text: 'wrap up' }] }
+  ]
+
+  it('reads the options anywhere on the line and reports an unknown one', () => {
+    expect(parseExportArgs('--copy')).toEqual({ format: 'md', copy: true })
+    expect(parseExportArgs('json --no-tools out.json --no-reasoning')).toEqual({
+      format: 'json',
+      path: 'out.json',
+      noTools: true,
+      noReasoning: true
+    })
+    expect(parseExportArgs('a.md --NO-REDACT')).toEqual({ format: 'md', path: 'a.md', noRedact: true })
+    expect(parseExportArgs('a.md --wat --nope')).toEqual({ format: 'md', path: 'a.md', bad: '--wat' })
+  })
+
+  it('folds the reasoning into the Markdown, and leaves it or the tools out on request', () => {
+    const full = chatToMarkdown(log, meta)
+    expect(full).toContain('<details><summary>Reasoning</summary>\n\nplan it')
+    expect(full).toContain('**run_shell**')
+    const lean = chatToMarkdown(log, meta, { reasoning: false, tools: false })
+    expect(lean).not.toContain('plan it')
+    expect(lean).not.toContain('run_shell')
+    expect(lean).not.toContain('out')
+    expect(lean).toContain('## Houston\n\ndone')
+  })
+
+  it('drops the reasoning or the tool messages from the JSON, and a reply left empty', () => {
+    const noTools = exportMessages(log, { reasoning: true, tools: false })
+    expect(noTools.map((m) => m.role)).toEqual(['user', 'assistant', 'assistant'])
+    expect(noTools[1]).toEqual({ role: 'assistant', content: '', reasoning: [{ text: 'plan it', signature: 'sk-ant-sig-opaque-0000000000' }] })
+    const bare = exportMessages(log, { reasoning: false, tools: false })
+    expect(bare).toEqual([log[0], { role: 'assistant', content: 'done' }])
+    expect(JSON.parse(chatToJson(log, meta, { reasoning: false, tools: true })).messages[3]).toEqual({ role: 'assistant', content: 'done' })
+    expect(exportMessages(log, { reasoning: true, tools: true })).toBe(log)
+  })
+
+  it('masks secrets in every string but attachment bytes and reasoning signatures', () => {
+    const masked = redactExport(log, (s) => s.replace(/sk-ant-[\w-]+/g, '[redacted:anthropic-key]'))
+    expect(JSON.stringify(masked[1].toolCalls)).toContain('echo [redacted:anthropic-key]')
+    expect(masked[0].images?.[0].data).toBe('sk-ant-api03-notakeyjustbytes0000')
+    expect(masked[1].reasoning?.[0].signature).toBe('sk-ant-sig-opaque-0000000000')
+    // The input is left as it was.
+    expect(JSON.stringify(log[1].toolCalls)).toContain('sk-ant-api03-abcdefghijklmnopqrstuvwx')
   })
 })

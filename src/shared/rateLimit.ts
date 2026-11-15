@@ -13,12 +13,27 @@ export interface ThrottleInfo {
   remainingRequests?: number
   /** Tokens left in the provider's current window, when its headers said. */
   remainingTokens?: number
+  /**
+   * Set while the run waits out a usage limit until it resets (epoch ms), rather than
+   * retrying early: the turn carries on by itself then. `waitMs` is the wait to it.
+   */
+  resetAt?: number
+}
+
+/** "14:05": a reset time as the terminal states it (local time, 24-hour). */
+export function resetClock(ms: number): string {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
 /** "20s", "1m 30s": a wait as people read it. */
 function waitText(ms: number): string {
   const s = Math.max(1, Math.round(ms / 1000))
   if (s < 60) return `${s}s`
+  if (s >= 3600) {
+    const m = Math.round((s % 3600) / 60)
+    return m === 60 ? `${Math.floor(s / 3600) + 1}h` : `${Math.floor(s / 3600)}h${m ? ` ${m}m` : ''}`
+  }
   return `${Math.floor(s / 60)}m${s % 60 ? ` ${s % 60}s` : ''}`
 }
 
@@ -31,6 +46,9 @@ export function throttleNotice(t: ThrottleInfo, progress: string): string {
   if (t.remainingRequests !== undefined) left.push(`${t.remainingRequests.toLocaleString('en-US')} requests`)
   if (t.remainingTokens !== undefined) left.push(`${t.remainingTokens.toLocaleString('en-US')} tokens`)
   const quota = left.length ? ` ${left.join(' and ')} left in this window.` : ''
+  if (t.resetAt !== undefined) {
+    return `Usage limit reached. It resets at ${resetClock(t.resetAt)} (in ${waitText(t.waitMs)}); continuing then (${progress}).${quota}`
+  }
   const asked = t.retryAfterMs !== undefined ? ', as the provider asked' : ''
   return `Rate limited by the provider. Retrying in ${waitText(t.waitMs)}${asked} (${progress}).${quota}`
 }

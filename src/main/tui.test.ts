@@ -18,6 +18,7 @@ import type {
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import type { PagerSource } from './tui-pager'
 import type { DeletePlan } from './deleteChat'
+import type { CompactResult } from './agent/compact'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
 import type { RegistryServer } from '@shared/mcpRegistry'
@@ -136,6 +137,9 @@ import {
   renderRewindPoints,
   parseRewindSelection,
   parseRewindMode,
+  parseRewindExtra,
+  renderRewindChoices,
+  resolveCdTarget,
   runEndNotice
 } from './tui'
 import { drivePicker, type PickerKey, type PickerOutcome, type PickerSpec } from './tui-picker'
@@ -7092,6 +7096,433 @@ describe('/rewind', () => {
     other.io = t.io
     await runTui(opts, other)
     expect(t.text()).toContain('rewind is unavailable here')
+  })
+})
+
+describe('/rewind summarize and fork, /fork n', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+  const ESC = String.fromCharCode(27)
+
+  it('parses the extra choices by name or by their number after the modes', () => {
+    const st = settings()
+    expect(parseSlashCommand('/rewind 2 fork', st)).toEqual({ kind: 'rewind', undo: false, turn: 1, action: 'fork' })
+    expect(parseSlashCommand('/rewind 2 summarize', st)).toEqual({
+      kind: 'rewind',
+      undo: false,
+      turn: 1,
+      action: 'summarize-from'
+    })
+    expect(parseSlashCommand('/rewind 1 before', st)).toEqual({
+      kind: 'rewind',
+      undo: false,
+      turn: 0,
+      action: 'summarize-before'
+    })
+    expect(parseRewindExtra('4')).toBe('summarize-from')
+    expect(parseRewindExtra('5')).toBe('summarize-before')
+    expect(parseRewindExtra('6')).toBe('fork')
+    expect(parseRewindExtra('3')).toBeNull()
+    expect(parseRewindExtra('7')).toBeNull()
+    expect(parseRewindExtra('')).toBeNull()
+    expect(parseSlashCommand('/fork', st)).toEqual({ kind: 'fork' })
+    expect(parseSlashCommand('/fork 3', st)).toEqual({ kind: 'fork', turn: 2 })
+    expect(parseSlashCommand('/fork zero', st)).toEqual({ kind: 'fork', bad: true })
+    expect(parseSlashCommand('/fork 0', st)).toEqual({ kind: 'fork', bad: true })
+  })
+
+  it('lists the shared modes and then the extra choices, numbered', () => {
+    const out = renderRewindChoices(makePainter(false))
+    expect(out).toMatch(/1\s+Conversation and code[\s\S]*3\s+Code only[\s\S]*4\s+Summarize from here[\s\S]*5\s+Summarize up to here[\s\S]*6\s+Fork from here/)
+  })
+
+  function forkingPersist() {
+    const fp = fakePersist()
+    const forks: Array<[string, { turn: number; text: string }]> = []
+    fp.persist.forkAt = (id, point) => {
+      forks.push([id, point])
+      const src = fp.store.get(id)
+      if (!src) return null
+      const at = src.messages.findIndex((m) => m.content === point.text)
+      const fid = `fork-${forks.length}`
+      fp.store.set(fid, { ...src, title: `${src.title} (fork)`, messages: src.messages.slice(0, at) })
+      return { id: fid }
+    }
+    return { ...fp, forks }
+  }
+
+  it('/fork n forks from that message and the next turn continues on the copy', async () => {
+    const { d, rec } = deps(done)
+    const fp = forkingPersist()
+    d.persist = fp.persist
+    const t = fakeIo(['first', 'second', 'third', '/fork 2', 'again', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(fp.forks).toEqual([['conv-1', { turn: 1, text: 'second' }]])
+    expect(t.text()).toContain('forked from message 2: a new chat with the 1 message before it, original left intact')
+    // The next message goes to the fork, which holds only what came before message 2.
+    expect(rec.runs.at(-1)?.messages.map((m) => m.content)).toEqual(['first', 'again'])
+    expect(fp.store.get('fork-1')?.messages.map((m) => m.content)).toEqual(['first', 'again'])
+    // The original chat is untouched.
+    expect(fp.store.get('conv-1')?.messages.map((m) => m.content)).toEqual(['first', 'second', 'third'])
+  })
+
+  it('/fork n refuses a bad number, a missing message, and a chat with nothing yet', async () => {
+    const { d } = deps(done)
+    const fp = forkingPersist()
+    d.persist = fp.persist
+    const t = fakeIo(['/fork 1', 'first', '/fork 5', '/fork x', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text).toContain('nothing to fork yet')
+    expect(text).toContain('no message 5 to fork from (there is 1)')
+    expect(text).toContain('usage: /fork, or /fork <n>')
+    expect(fp.forks).toEqual([])
+  })
+
+  it('/fork n puts the message back in the composer to edit or send', async () => {
+    const { d } = deps(done)
+    const fp = forkingPersist()
+    d.persist = fp.persist
+    const t = fakeIo(['first', 'second', '/fork 2', null])
+    const initials: Array<string | undefined> = []
+    t.io.readComposer = async (_p, initial) => {
+      initials.push(initial)
+      return t.io.readLine('> ')
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(initials.at(-1)).toBe('second')
+  })
+
+  it('"Fork from here" in the /rewind list forks without rewinding', async () => {
+    const { d } = deps(done)
+    const fp = forkingPersist()
+    d.persist = fp.persist
+    const applied: string[] = []
+    d.rewind = {
+      preview: async () => ({ ok: true, turns: 1, files: 0, conflicts: [], unavailable: 0 }),
+      apply: async () => {
+        applied.push('apply')
+        return { ok: false, error: 'no' }
+      },
+      undo: async () => ({ ok: false, error: 'no' })
+    }
+    const t = fakeIo(['first', 'second', '/rewind', '2', '6', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(fp.forks).toEqual([['conv-1', { turn: 1, text: 'second' }]])
+    expect(applied).toEqual([])
+    expect(t.text()).toContain('Fork from here')
+  })
+
+  function summarizingDeps(result: CompactResult) {
+    const calls: Array<{ id: string; part: { turn: number; text: string; side: string }; focus?: string }> = []
+    const summarize: NonNullable<TuiDeps['summarize']> = async (id, _p, _m, part, o) => {
+      calls.push({ id, part, ...(o?.focus ? { focus: o.focus } : {}) })
+      return result
+    }
+    return { summarize, calls }
+  }
+
+  it('"Summarize from here" asks for a focus, confirms, and continues on the summarized log', async () => {
+    const { d, rec } = deps(done)
+    d.persist = fakePersist().persist
+    const summary: ChatMessage[] = [
+      { role: 'user', content: 'first' },
+      { role: 'user', content: 'Summary of the earlier conversation: second and third' },
+      { role: 'assistant', content: 'ok' }
+    ]
+    const { summarize, calls } = summarizingDeps({ ok: true, summarized: 2, messages: summary })
+    d.summarize = summarize
+    d.rewind = {
+      preview: async () => ({ ok: true, turns: 1, files: 0, conflicts: [], unavailable: 0 }),
+      apply: async () => ({ ok: false, error: 'no' }),
+      undo: async () => ({ ok: false, error: 'no' })
+    }
+    const t = fakeIo(['first', 'second', 'third', '/rewind 2 summarize', 'the API shape', 'y', 'next', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(calls).toEqual([{ id: 'conv-1', part: { turn: 1, text: 'second', side: 'from' }, focus: 'the API shape' }])
+    const text = t.text()
+    expect(text).toContain('Replaces this message and everything after it (2 messages) with a summary')
+    expect(text).toContain('summarized 2 messages from message 2 on; files are as they were. /rewind undo reverses it.')
+    expect(rec.runs.at(-1)?.messages.map((m) => m.content)).toEqual([...summary.map((m) => m.content), 'next'])
+    // The focus and confirmation prompts drop type-ahead, like every rewind prompt.
+    for (const r of t.reads.slice(4, 6)) expect(r.discardPending).toBe(true)
+    expect(t.spinner).toContain('start:Summarizing')
+  })
+
+  it('"Summarize up to here" from the list sends the before side; no, a cancel, and an error change nothing', async () => {
+    const { d } = deps(done)
+    d.persist = fakePersist().persist
+    const { summarize, calls } = summarizingDeps({ ok: false, summarized: 0, error: 'The model returned an empty summary.' })
+    d.summarize = summarize
+    d.rewind = {
+      preview: async () => ({ ok: true, turns: 1, files: 0, conflicts: [], unavailable: 0 }),
+      apply: async () => ({ ok: false, error: 'no' }),
+      undo: async () => ({ ok: false, error: 'no' })
+    }
+    const t = fakeIo(['first', 'second', '/rewind', '2', '5', '', 'n', '/rewind 1 before', '/rewind 2 before', '', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text).toContain('Replaces the 1 message before it with a summary')
+    expect(text).toContain('cancelled')
+    expect(text).toContain('nothing before message 1 to summarize')
+    expect(text).toContain("couldn't summarize: The model returned an empty summary.")
+    expect(calls).toEqual([{ id: 'conv-1', part: { turn: 1, text: 'second', side: 'before' } }])
+  })
+
+  it('shows the rewind choices and the summary prompts as plain lines in screen-reader mode', async () => {
+    const { d } = deps(done)
+    d.persist = fakePersist().persist
+    const { summarize } = summarizingDeps({ ok: true, summarized: 1, messages: [{ role: 'user', content: 'x' }] })
+    d.summarize = summarize
+    d.rewind = {
+      preview: async () => ({ ok: true, turns: 1, files: 0, conflicts: [], unavailable: 0 }),
+      apply: async () => ({ ok: false, error: 'no' }),
+      undo: async () => ({ ok: false, error: 'no' })
+    }
+    const t = fakeIo(['first', '/rewind', '1', '4', '', 'y', null])
+    d.io = t.io
+    await runTui({ ...opts, color: true, screenReader: true }, d)
+    const text = t.text()
+    expect(text).not.toContain(ESC)
+    expect(text).toMatch(/4\s+Summarize from here/)
+    expect(text).toContain('summarized 1 message from message 1 on')
+  })
+})
+
+describe('/cd', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+  const ESC = String.fromCharCode(27)
+
+  function folders() {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'houston-cd-')))
+    mkdirSync(join(root, 'a', 'sub'), { recursive: true })
+    mkdirSync(join(root, 'b'))
+    writeFileSync(join(root, 'file.txt'), 'x')
+    return root
+  }
+
+  it('resolves a folder relative to the current one or home, and refuses what is not one', () => {
+    const root = folders()
+    try {
+      expect(resolveCdTarget('sub', join(root, 'a'))).toEqual({ dir: join(root, 'a', 'sub') })
+      expect(resolveCdTarget('../b', join(root, 'a'))).toEqual({ dir: join(root, 'b') })
+      expect(resolveCdTarget('~/b', '/elsewhere', root)).toEqual({ dir: join(root, 'b') })
+      expect(resolveCdTarget('~', '/elsewhere', root)).toEqual({ dir: root })
+      expect(resolveCdTarget('nope', root)).toEqual({ error: 'no such folder: nope' })
+      expect(resolveCdTarget('file.txt', root)).toEqual({ error: 'not a folder: file.txt' })
+      expect(resolveCdTarget('  ', root)).toEqual({ error: 'needs the path of a folder, like ../other-project' })
+      expect(parseSlashCommand('/cd ../b', settings())).toEqual({ kind: 'cd', path: '../b' })
+      expect(parseSlashCommand('/cd', settings())).toEqual({ kind: 'cd', path: '' })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('moves the session: runs, the status line, the chat record, the host and the commands follow', async () => {
+    const root = folders()
+    try {
+      const { d } = deps(done)
+      const fp = fakePersist()
+      const moved: Array<[string, string]> = []
+      fp.persist.setWorkspace = (id, workspace) => {
+        moved.push([id, workspace])
+        const c = fp.store.get(id)
+        if (c) c.workspace = workspace
+      }
+      d.persist = fp.persist
+      const hostMoves: string[] = []
+      d.onCwdChange = (cwd) => hostMoves.push(cwd)
+      const workspaces: string[] = []
+      const startRun = d.startRun
+      d.startRun = async (req, send, onMessages) => {
+        workspaces.push(req.workspace)
+        return startRun(req, send, onMessages)
+      }
+      let loads = 0
+      d.commands = async () => {
+        loads++
+        return []
+      }
+      const o = { ...opts, cwd: join(root, 'a') }
+      const t = fakeIo(['first', '/cd ../b', 'second', null])
+      d.io = t.io
+      await runTui(o, d)
+      expect(workspaces).toEqual([join(root, 'a'), join(root, 'b')])
+      expect(o.cwd).toBe(join(root, 'b'))
+      expect(moved).toEqual([['conv-1', join(root, 'b')]])
+      expect(hostMoves).toEqual([join(root, 'b')])
+      // Once at launch, once for the new folder.
+      expect(loads).toBe(2)
+      const text = t.text()
+      expect(text).toContain(`working folder is now ${join(root, 'b')}`)
+      // The status line drawn after the move names the new folder.
+      const status = text.split('\n').filter((l) => l.includes('anthropic/claude'))
+      expect(status[0]).toMatch(/houston-cd-[^/ ]+\/a\b/)
+      expect(status.at(-1)).toMatch(/houston-cd-[^/ ]+\/b\b/)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('asks the new folder’s trust question, as a fresh start there would', async () => {
+    const root = folders()
+    try {
+      mkdirSync(join(root, 'b', '.houston'))
+      writeFileSync(
+        join(root, 'b', '.houston', 'settings.json'),
+        JSON.stringify({ permissionRules: [{ action: 'allow', tool: 'run_shell', match: 'make *' }] })
+      )
+      const { d } = deps(done)
+      const patches: Array<Partial<AppSettings>> = []
+      d.updateSettings = (p) => patches.push(p)
+      const t = fakeIo(['/cd ../b', 'n', null])
+      d.io = t.io
+      await runTui({ ...opts, cwd: join(root, 'a') }, d)
+      expect(t.text()).toContain('This project asks for extra permissions.')
+      expect(t.reads.some((r) => r.prompt.startsWith('Trust this folder?'))).toBe(true)
+      expect(patches).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('says where it is when bare, refuses a missing folder, and prints plain lines for a screen reader', async () => {
+    const root = folders()
+    try {
+      const { d } = deps(done)
+      const hostMoves: string[] = []
+      d.onCwdChange = (cwd) => hostMoves.push(cwd)
+      const o = { ...opts, cwd: root, color: true, screenReader: true }
+      const t = fakeIo(['/cd', '/cd nope', '/cd .', '/cd a', null])
+      d.io = t.io
+      await runTui(o, d)
+      const text = t.text()
+      expect(text).toContain(`working folder: ${root}. /cd <path> moves it`)
+      expect(text).toContain('/cd no such folder: nope')
+      expect(text).toContain(`already in ${root}`)
+      expect(text).toContain(`working folder is now ${join(root, 'a')}`)
+      expect(text).not.toContain(ESC)
+      expect(hostMoves).toEqual([join(root, 'a')])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('/export options', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+  const key = `sk-ant-api03-${'a'.repeat(40)}`
+
+  function exportDeps(reply: ChatMessage[]) {
+    const { d } = deps(done, {}, (req) => [...req.messages, ...reply])
+    d.persist = fakePersist().persist
+    const written: Array<[string, string]> = []
+    d.writeExport = (path, content) => {
+      written.push([path, content])
+      return `/proj/${path}`
+    }
+    const copied: string[] = []
+    d.copyText = (text) => {
+      copied.push(text)
+      return true
+    }
+    return { d, written, copied }
+  }
+
+  it('masks secrets by default and says so; --no-redact keeps them', async () => {
+    const { d, written } = exportDeps([{ role: 'assistant', content: 'noted' }])
+    const t = fakeIo([`my key is ${key}`, '/export a.md', '/export json b.json', '/export c.md --no-redact', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(written[0][1]).not.toContain(key)
+    expect(written[0][1]).toContain('[redacted:')
+    expect(written[1][1]).not.toContain(key)
+    expect(JSON.parse(written[1][1]).messages[0].content).toContain('[redacted:')
+    expect(written[2][1]).toContain(key)
+    expect(t.text()).toContain('exported 2 messages to /proj/a.md (secrets masked; --no-redact keeps them)')
+  })
+
+  it('uses the host redacter when it has one', async () => {
+    const { d, written } = exportDeps([])
+    d.secretRedactor = () => (s) => s.replaceAll('hunter2', '[redacted:secret]')
+    const t = fakeIo(['the password is hunter2', '/export a.md', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(written[0][1]).toContain('the password is [redacted:secret]')
+  })
+
+  it('--copy puts the export on the clipboard instead of in a file, or both with a path', async () => {
+    const { d, written, copied } = exportDeps([{ role: 'assistant', content: 'done it' }])
+    const t = fakeIo(['hi', '/export --copy', '/export json --copy out.json', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(copied).toHaveLength(2)
+    expect(copied[0]).toContain('## You\n\nhi')
+    expect(JSON.parse(copied[1]).messages[1].content).toBe('done it')
+    expect(written.map((w) => w[0])).toEqual(['out.json'])
+    expect(t.text()).toContain('copied this chat as Markdown')
+    expect(t.text()).toContain('copied this chat as JSON')
+    // OSC 52 carries it too, for a terminal over SSH.
+    expect(t.text()).toContain(`${String.fromCharCode(27)}]52;c;`)
+  })
+
+  it('--no-tools and --no-reasoning leave those parts out; an unknown option is reported', async () => {
+    const reply: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: [{ text: 'thinking hard' }],
+        toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'a.ts' } }]
+      },
+      { role: 'tool', content: 'file body', toolCallId: 'c1', toolName: 'read_file' },
+      { role: 'assistant', content: 'all read', reasoning: [{ text: 'now answer' }] }
+    ]
+    const { d, written } = exportDeps(reply)
+    const t = fakeIo(['go', '/export full.md', '/export lean.md --no-tools --no-reasoning', '/export x.md --nope', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const [full, lean] = written.map((w) => w[1])
+    expect(full).toContain('thinking hard')
+    expect(full).toContain('read_file')
+    expect(full).toContain('file body')
+    expect(lean).not.toContain('thinking hard')
+    expect(lean).not.toContain('now answer')
+    expect(lean).not.toContain('read_file')
+    expect(lean).not.toContain('file body')
+    expect(lean).toContain('all read')
+    expect(written).toHaveLength(2)
+    expect(t.text()).toContain('/export has no option --nope')
+  })
+})
+
+describe('usage limit wait notice', () => {
+  it('says when the limit resets and that the turn continues then', async () => {
+    const resetAt = new Date(2026, 10, 15, 14, 5).getTime()
+    const { d } = deps([
+      {
+        runId: 'x',
+        type: 'retry',
+        attempt: 1,
+        max: 3,
+        message: '429 usage limit',
+        throttle: { waitMs: 3_600_000, resetAt }
+      },
+      { runId: 'x', type: 'text', delta: 'back again' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui({ ...opts, color: true, screenReader: true }, d)
+    const text = t.text()
+    expect(text).toContain('limit resets at 14:05; continuing then (Esc to cancel)')
+    expect(text).toContain('back again')
+    expect(text).not.toContain(String.fromCharCode(27))
+    expect(text).not.toContain('tried 1 more time')
   })
 })
 

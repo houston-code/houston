@@ -45,6 +45,7 @@ import {
   reorderConversations,
   otherConversationsInWorktree,
   detachConversationWorktree,
+  setConversationWorkspace,
   setConversationError,
   setConversationSettings,
   setMessages,
@@ -1206,6 +1207,21 @@ describe('otherConversationsInWorktree', () => {
     expect(after.messages).toHaveLength(1)
     // Unknown ids are a no-op.
     expect(() => detachConversationWorktree('nope', '/repo')).not.toThrow()
+  })
+
+  it('moves a chat to another folder (/cd), keeping its messages and its worktree record', () => {
+    const worktree = { path: '/repo/.houston/worktrees/feat', branch: 'feat', repoRoot: '/repo' }
+    const c = createConversation({ workspace: worktree.path, providerId: 'p', model: 'm', worktree })
+    setMessages(c.id, [{ role: 'user', content: 'hi' }])
+    const before = getConversation(c.id)!.updatedAt
+    setConversationWorkspace(c.id, '/elsewhere')
+    const after = getConversation(c.id)!
+    expect(after.workspace).toBe('/elsewhere')
+    expect(after.worktree).toEqual(worktree)
+    expect(after.messages).toHaveLength(1)
+    expect(after.updatedAt).toBe(before)
+    expect(listConversations().find((m) => m.id === c.id)?.workspace).toBe('/elsewhere')
+    expect(() => setConversationWorkspace('nope', '/x')).not.toThrow()
   })
 })
 
