@@ -16,6 +16,7 @@ import {
 import {
   startRun,
   steerRun,
+  unsteerRun,
   resolveApproval,
   resolveQuestion,
   resolvePlan,
@@ -26,6 +27,7 @@ import {
   cancelAllRuns,
   waitForRunsToEnd
 } from './agent/loop'
+import { createDraftStore } from './tui-drafts'
 import { killAllShells, killShell, listShells, shellTail } from './agent/shells'
 import { stopSubagent } from './agent/subagentStops'
 import { lspManager } from './agent/lsp/manager'
@@ -895,6 +897,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       setRunPolicy,
       setRunEffort,
       steerRun,
+      unsteerRun,
+      // Each chat's unsent draft, one 0600 file per chat under userData.
+      drafts: createDraftStore(join(getUserDataDir(), 'tui-drafts'), { warn: (m) => log.warn(m) }),
       editText: (initial) => editInEditor(initial),
       persistHistory,
       // /copy: the platform's clipboard helper when this is a local session (never

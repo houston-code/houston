@@ -25,8 +25,11 @@ const CSI_MOVES = new RegExp(`${ESC}\\[[0-9;?]*[A-Za-z]|\\r`, 'g')
 /** The picker's redraw: back to column 0, up over its rows, erase to the end. */
 const PICKER_REDRAW = new RegExp(`\\r${ESC}\\[\\d+A${ESC}\\[0J`)
 const CURSOR_UP = new RegExp(`${ESC}\\[(\\d+)A`, 'g')
-/** A foreground colour (standard, bright, or 256-colour); dim and bold are not colour. */
-const COLOUR = new RegExp(`${ESC}\\[(3[0-7]|9[0-7]|38;)`)
+/**
+ * A foreground colour (standard, bright, or 256-colour) SGR; dim and bold are not
+ * colour, and neither is a cursor move like `ESC[31C`.
+ */
+const COLOUR = new RegExp(`${ESC}\\[(?:\\d+;)*(?:3[0-7]|9[0-7]|38;[\\d;]*)m`)
 /** Text with its SGR codes removed (for asserting on content). */
 const stripSgr = (s: string): string => s.replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '')
 
@@ -1136,10 +1139,13 @@ describe('mid-run input', () => {
     t.io.setMode!('auto-edit')
     t.io.startSpinner!('Working')
     for (const c of 'please also update the changelog and the readme when you are done with this') t.stdin.push(c)
+    // Each frame is the spinner line, then the rows under it (the typing hint here).
     const frames = t.text().split('\x1b[2K').slice(1)
     expect(frames.length).toBeGreaterThan(70)
-    for (const f of frames) expect(visibleWidth(f.replace(CSI_MOVES, ''))).toBeLessThanOrEqual(79)
-    const last = frames.at(-1)!.replace(CSI_MOVES, '')
+    for (const f of frames) {
+      for (const row of f.replace(CSI_MOVES, '').split('\n')) expect(visibleWidth(row)).toBeLessThanOrEqual(79)
+    }
+    const last = frames.at(-1)!.replace(CSI_MOVES, '').split('\n')[0]
     expect(last).toContain('› …') // the start is what goes
     expect(last.endsWith('when you are done with this')).toBe(true) // the end, where you type, stays
     expect(last).toContain('[auto-edit]')
@@ -1229,13 +1235,139 @@ describe('mid-run input', () => {
     expect(interrupts).toBe(1)
   })
 
-  it('flattens a pasted block onto the one-line draft', () => {
+  it('keeps the line breaks of a pasted block, shown as a mark on the activity line', () => {
     const t = harness()
     t.io.startSpinner!('Working')
-    t.stdin.push('\x1b[200~one\ntwo\x1b[201~')
+    t.stdin.push('\x1b[200~one\r\ntwo\x1b[201~')
     t.tick()
+    expect(t.text()).toContain('one ↵ two')
     t.stdin.push('\r')
-    expect(t.io.takeQueued!()).toEqual(['one two'])
+    expect(t.io.takeQueued!()).toEqual(['one\ntwo'])
+  })
+
+  it('Alt-Enter and Ctrl-J add a line break instead of sending', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('first line')
+    t.stdin.push('\x1b\r') // Alt-Enter
+    t.stdin.push('second')
+    t.stdin.push('\n') // Ctrl-J
+    t.stdin.push('third\r')
+    expect(t.io.takeQueued!()).toEqual(['first line\nsecond\nthird'])
+  })
+
+  it('takes over bracketed paste and Shift-Enter while the turn runs, and hands them back', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    expect(t.text()).toContain('\x1b[?2004h')
+    expect(t.text()).toContain('\x1b[>4;1m')
+    t.io.stopSpinner!()
+    expect(t.text()).toContain('\x1b[?2004l')
+    expect(t.text()).toContain('\x1b[>4;0m')
+  })
+
+  it('Tab queues the line for after the turn without steering it', () => {
+    const t = harness()
+    const steered: string[] = []
+    t.io.onSteer!((text) => {
+      steered.push(text)
+      return true
+    })
+    t.io.startSpinner!('Working')
+    t.stdin.push('after you finish\t')
+    expect(steered).toEqual([])
+    expect(t.text()).toContain('queued: after you finish')
+    expect(t.io.takeQueued!()).toEqual(['after you finish'])
+  })
+
+  it('lists steers and follow-ups under the activity line until they land', () => {
+    const t = harness()
+    const ids: string[] = []
+    t.io.onSteer!((_text, id) => {
+      ids.push(id)
+      return true
+    })
+    t.io.startSpinner!('Working')
+    t.stdin.push('use YAML\r')
+    t.stdin.push('then docs\t')
+    let out = t.text()
+    expect(out).toContain('steering next: use YAML')
+    expect(out).toContain('queued: then docs')
+    expect(out).toContain('Up on an empty line takes the last one back')
+    // The steer lands: its row goes, the follow-up stays.
+    t.io.steerLanded!(ids[0])
+    out = t.text().split('\x1b[2K').at(-1)!
+    expect(out).not.toContain('use YAML')
+    expect(out).toContain('queued: then docs')
+    // Steers are handed back by the run itself, so only the follow-up is taken here.
+    expect(t.io.takeQueued!()).toEqual(['then docs'])
+  })
+
+  it('erases the rows under the activity line before output is printed', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('later\t')
+    t.io.out('streamed line\n')
+    expect(t.text()).toContain('\r\x1b[2K\x1b[Jstreamed line')
+  })
+
+  it('Up on an empty line takes the last follow-up back to edit', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('one\t')
+    t.stdin.push('two\t')
+    t.stdin.push('\x1b[A') // Up
+    t.stdin.push(' more\t')
+    expect(t.io.takeQueued!()).toEqual(['one', 'two more'])
+  })
+
+  it('Up takes a steer back from the run, unless the run already read it', () => {
+    const t = harness()
+    let canTakeBack = true
+    const unsteered: string[] = []
+    let steerId = ''
+    t.io.onSteer!((_text, id) => {
+      steerId = id
+      return true
+    })
+    t.io.onUnsteer!((id) => {
+      unsteered.push(id)
+      return canTakeBack
+    })
+    t.io.startSpinner!('Working')
+    t.stdin.push('use YAML\r')
+    t.stdin.push('\x1b[A')
+    expect(unsteered).toEqual([steerId])
+    expect(t.io.takeDraft!()).toBe('use YAML')
+
+    t.io.startSpinner!('Working')
+    canTakeBack = false
+    t.stdin.push('too late\r')
+    t.stdin.push('\x1b[A')
+    expect(t.io.takeDraft!()).toBe('') // it stayed a steer
+  })
+
+  it('reports every change to what is typed and waiting, flagging acknowledged ones', () => {
+    const t = harness()
+    const seen: Array<[string, string[], boolean]> = []
+    t.io.onPendingInput!((p, acked) => seen.push([p.draft, p.queued, acked]))
+    t.io.startSpinner!('Working')
+    t.stdin.push('hi')
+    t.stdin.push('\t')
+    expect(seen.at(0)).toEqual(['hi', [], false])
+    expect(seen.at(-1)).toEqual(['', ['hi'], true])
+  })
+
+  it('a command acted on mid-run is not left waiting', () => {
+    const t = harness()
+    t.io.onSteer!(() => 'handled')
+    const seen: boolean[] = []
+    t.io.onPendingInput!((_p, acked) => seen.push(acked))
+    t.io.startSpinner!('Working')
+    t.stdin.push('/tasks\r')
+    expect(t.io.takeQueued!()).toEqual([])
+    expect(t.text()).not.toContain('steering next')
+    expect(seen.at(-1)).toBe(true)
   })
 
   // A paste is as untrusted here as in the composer: its tail must not submit.
@@ -2390,6 +2522,18 @@ describe('screen-reader mode', () => {
     expect(t.io.takeQueued!()).toEqual(['also check docs'])
     expect(t.text()).toContain('queued for after this turn (1 waiting)')
     expect(t.text()).not.toContain('also check docs')
+    expect(t.text()).not.toMatch(REDRAW)
+    t.io.stopSpinner!()
+  })
+
+  it('mid-run Tab and Up say what happened, as lines', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('later\t')
+    expect(t.text()).toContain('queued for after this turn (1 waiting)')
+    t.stdin.push('\x1b[A')
+    expect(t.text()).toContain('took back: later')
+    expect(t.text()).not.toContain('Up on an empty line') // no rows are drawn here
     expect(t.text()).not.toMatch(REDRAW)
     t.io.stopSpinner!()
   })

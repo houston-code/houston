@@ -999,6 +999,12 @@ long as it needs to be.
   bracketed-paste support.
 - **History:** messages are remembered per project folder and survive restarts,
   multi-line ones included.
+- **Drafts:** what you have typed but not sent is saved for each chat (in Houston's
+  user data folder, readable only by you). Quitting, clearing it with `Ctrl-C`, or
+  switching chats with `/resume` doesn't lose it: the next time the chat opens
+  (`/resume`, `--resume`, `--continue`), the prompt starts with it and a note says so.
+  A new chat's draft is kept for the folder until its first message. Sending the
+  message forgets it.
 - **Shell commands:** a line starting with `!` runs in your own shell. See "Running
   your own commands".
 - **Finding all this:** the startup banner shows two tips about keys and prefixes like
@@ -1033,6 +1039,8 @@ long as it needs to be.
 | `Esc Esc` | press twice quickly: clear the draft (`Up` brings it back); on an empty composer, open the `/rewind` list |
 | `Ctrl-C` | discard the draft (`Up` brings it back; twice in a row to leave) |
 | `Esc` | *while the agent works:* clear what you typed, or stop the run if nothing is typed |
+| `Enter` / `Tab` | *while the agent works:* steer the running turn / queue the message for after it (see "Typing while it works") |
+| `Up` | *while the agent works, on an empty line:* take the newest waiting message back to edit |
 | `Ctrl-Z` | suspend Houston to your shell (macOS and Linux); `fg` brings it back with the draft as it was. Works while a turn runs too: the run is not cancelled, it carries on after `fg` |
 | `Ctrl-D` | leave (on an empty composer) |
 | `Shift-Tab` | switch approval mode (plan → ask → auto-edit → full auto → plan) |
@@ -1521,6 +1529,21 @@ and its context, and waiting lets the agent keep building on the wrong thing.
 - Until it reaches the model, it waits as a chip above the message box, marked with
   the steer icon. Its × takes it back.
 
+### In the terminal
+
+- What you type shows on the activity line under the spinner. `Enter` steers the
+  running turn; `Tab` **queues** the message instead, to be sent as the next turn when
+  this one finishes.
+- `Shift-Enter`, `Alt-Enter` or `Ctrl-J` adds a line break, and a pasted block keeps
+  its lines, so a follow-up can be several lines long. On the activity line a line
+  break shows as `↵`.
+- Each message still waiting is listed under the activity line: `steering next:` until
+  it reaches the model, `queued:` until the turn ends. `Up` on an empty line takes the
+  newest one back into what you are typing, to edit or drop; a steer the model has
+  already read stays where it is.
+- In screen-reader mode nothing is drawn under the activity line: each message is
+  announced once as it is sent or queued, and `Up` says what it took back.
+
 ### Special cases
 
 - **The agent asked you something.** While it waits on a question, `Enter` answers the
@@ -1542,7 +1565,8 @@ and its context, and waiting lets the agent keep building on the wrong thing.
   retries, the turn hit its step limit): the message stays as a queued chip to send or
   clear.
 - **Restarts:** queued messages are saved with the chat, so quitting or restarting
-  Houston keeps them.
+  Houston keeps them. In the terminal, messages still waiting when Houston quits come
+  back in the prompt the next time you open the chat, to edit or send.
 - **Terminal interrupts:** a message typed before you interrupt a turn is put back in
   the prompt for you to edit or send.
 

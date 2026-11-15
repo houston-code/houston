@@ -233,6 +233,14 @@ import {
   type McpDraft
 } from '@shared/mcpCatalog'
 import { stripInvisible, invisibleNote } from '@shared/invisibleChars'
+import {
+  createDraftSaver,
+  draftKey,
+  draftRestoreNote,
+  draftRestoreText,
+  type DraftRecord,
+  type DraftStore
+} from './tui-drafts'
 
 /**
  * Interactive terminal mode: a stay-resident REPL you converse with directly in
@@ -2383,7 +2391,8 @@ export const HELP_TEXT = [
   '  Ctrl-C                clear the message (twice to exit; Up brings it back); Ctrl-D exits',
   '  ultrathink            a word in the message: think harder for that turn',
   '',
-  'While a turn runs: type and press Enter to steer it; Esc or Ctrl-C stops it.',
+  'While a turn runs: type, then Enter steers it or Tab queues for after it.',
+  'Up on an empty line takes the last waiting message back. Esc or Ctrl-C stops it.',
   '',
   'Approvals (one key press answers):',
   '  y                     allow this call once',
@@ -2407,6 +2416,7 @@ export const STARTUP_TIPS = [
   'Ctrl-_ undoes your last edit in the prompt; Ctrl-^ redoes it',
   'Esc Esc on an empty prompt rewinds to an earlier message',
   'type while the agent works and press Enter to steer it',
+  'while the agent works, Tab queues what you typed for after the turn instead of steering',
   '/tasks lists background shells and subagents, even while a turn runs',
   'Shift-Enter or Ctrl-J starts a new line',
   '/resume filters saved chats as you type; Ctrl-A shows every folder',
@@ -3346,7 +3356,7 @@ export interface TuiIo {
   readComposer?: (
     prompt: string | (() => string),
     initial?: string,
-    opts?: { ultrathinkEffect?: () => UltrathinkEffect }
+    opts?: { ultrathinkEffect?: () => UltrathinkEffect; onDraft?: (text: string) => void }
   ) => Promise<string | null>
   /**
    * Read a line without echoing it — for pasting an API key in the `/login` flow.
@@ -3409,11 +3419,21 @@ export interface TuiIo {
    * as the next turn. Absent off-TTY / in tests, where nothing is queued.
    */
   /**
-   * Register the handler for a line typed while a turn runs. It returns true when
-   * the live turn took the line as a course correction; false sends it to the
-   * follow-up queue instead. Absent ⇒ everything queues, as it did before.
+   * Register the handler for a line typed while a turn runs (Enter). It returns true
+   * when the live turn took the line as a course correction under `id`; false sends
+   * it to the follow-up queue instead; `'handled'` when it was acted on and is not
+   * waiting on anything (a `/tasks` mid-run). Absent ⇒ everything queues.
    */
-  onSteer?: (handler: (text: string) => boolean) => void
+  onSteer?: (handler: (text: string, id: string) => boolean | 'handled') => void
+  /** Register the handler that takes a steer back from the live run before it lands. */
+  onUnsteer?: (handler: (id: string) => boolean) => void
+  /** The steer saved under `id` reached the model: it leaves the waiting list. */
+  steerLanded?: (id: string) => void
+  /**
+   * Register the handler told when the mid-run draft or the waiting messages change,
+   * so they can be saved; `acked` when a message was just shown as queued or steered.
+   */
+  onPendingInput?: (handler: (p: { draft: string; queued: string[] }, acked: boolean) => void) => void
   takeQueued?: () => string[]
   /**
    * Take (and clear) the line typed while the agent was working but not yet sent:
@@ -3510,7 +3530,14 @@ export interface TuiDeps {
    * caller fall back to sending the line as its own turn. Absent ⇒ no steering, and
    * a line typed mid-run queues as a follow-up.
    */
-  steerRun?: (runId: string, text: string) => boolean
+  steerRun?: (runId: string, text: string, id?: string) => boolean
+  /** Take a steer back before the run reads it; false when it already landed. */
+  unsteerRun?: (runId: string, id: string) => boolean
+  /**
+   * Where each chat's unsent draft is saved (see tui-drafts.ts), so a quit, a Ctrl-C
+   * or a /resume doesn't lose it. Absent ⇒ drafts live only as long as the process.
+   */
+  drafts?: DraftStore
   io: TuiIo
   /**
    * Optional persistence. When present, each session is saved as a conversation
@@ -4488,6 +4515,29 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // A message handed back to the composer without the interrupted-turn notice: a `#`
   // line the user stepped back from remembering.
   let keptDraft = ''
+  // The chat's unsent draft, saved as it changes so a quit, a Ctrl-C or a /resume
+  // can't lose it (see tui-drafts.ts). What was typed mid-run and acknowledged on
+  // screen is written at once; the text being typed, after a pause.
+  const draftSaver = deps.drafts
+    ? createDraftSaver(deps.drafts, (fn, ms) => {
+        const id = setTimeout(fn, ms)
+        id.unref?.()
+        return () => clearTimeout(id)
+      })
+    : null
+  const saveDraft = (record: DraftRecord | null, now = false): void =>
+    draftSaver?.update(draftKey(conversationId, opts.cwd), record, now)
+  // What the driver holds unsent (a draft handed back by an interrupt, a half-typed
+  // line, follow-ups still to dispatch), saved as this chat's draft.
+  const saveHeldDraft = (): void =>
+    saveDraft({ text: [restoreDraft, keptDraft, halfDraft].filter(Boolean).join('\n\n'), queued: pendingQueued }, true)
+  // A chat's saved draft, read when the chat is opened: the next composer starts with it.
+  let savedDraft: DraftRecord | null = null
+  const loadSavedDraft = (): void => {
+    draftSaver?.flush()
+    savedDraft = deps.drafts?.load(draftKey(conversationId, opts.cwd)) ?? null
+  }
+  deps.io.onPendingInput?.((p, acked) => saveDraft({ text: p.draft, queued: p.queued }, acked))
   // Set while a /btw side chat answer is in flight: Ctrl-C / Esc stops it.
   let stopSideChat: (() => void) | null = null
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
@@ -4687,14 +4737,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // never steering: injected into the run it reached the model as the literal text
   // "/plan" and the command never ran. Declining it queues it, so it runs as a
   // command once the turn ends.
-  deps.io.onSteer?.((typed) => {
+  deps.io.onSteer?.((typed, id) => {
     if (!activeRunId) return false
     const slash = parseSlashCommand(typed.trim(), deps.getSettings(), templateCommands)
     // /tasks only reads the task lists or stops one task, so it runs now rather than
     // waiting for the turn: that is when you want to see what the turn started.
     if (slash.kind === 'tasks') {
       runTasks(slash.op, true).catch(() => {})
-      return true
+      return 'handled'
     }
     if (slash.kind !== 'not-a-command' && slash.kind !== 'unknown') return false
     // A `!` line is a shell escape, never text for the model: declined, it queues and
@@ -4704,10 +4754,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // The same invisible-character strip as a message sent from the composer.
     const cleaned = stripInvisible(typed)
     if (!cleaned.text.trim()) return false
-    const took = deps.steerRun?.(activeRunId, cleaned.text) ?? false
+    const took = deps.steerRun?.(activeRunId, cleaned.text, id) ?? false
     if (took && cleaned.removed) deps.io.out(paint(`\n· ${invisibleNote(cleaned.removed)}\n`, 'dim'))
     return took
   })
+  // Up on an empty mid-run line takes the newest steer back, if the run has not read it.
+  deps.io.onUnsteer?.((id) => (activeRunId ? (deps.unsteerRun?.(activeRunId, id) ?? false) : false))
   // Ctrl-C. Also called by a picker that took the key itself (an approval, a question,
   // a plan), so it stops the run there as it does everywhere else while one works.
   const interrupt = (): void => {
@@ -4802,6 +4854,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (conv) {
       conversationId = entry!.id
       messages = conv.messages
+      loadSavedDraft()
       deps.io.out(
         paint(`· continuing "${terminalText(entry!.title, { lines: false })}" (${plural(messages.length, 'message')})\n`, 'dim')
       )
@@ -4826,6 +4879,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.io.out(paint('· no saved session in this folder yet; starting fresh\n', 'dim'))
     }
   }
+  // A new chat: the folder's new-chat draft, left there by a quit before its first send.
+  if (!conversationId) loadSavedDraft()
 
   // Alt-T, at the composer or mid-run: the live turn's next thought already follows it.
   deps.io.onCycleThoughts?.(() => setReasoningDisplay(nextReasoningDisplay(reasoningDisplay)))
@@ -5149,10 +5204,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       const kept = keptDraft
       keptDraft = ''
       if (draft) deps.io.out(paint('· not sent (the turn was interrupted): back in the prompt to edit or send\n', 'dim'))
-      const text = await deps.io.readComposer(
-        () => composerPrompt(policy, paint, screenReader),
-        draft || kept || half || undefined,
-        {
+      // The draft this chat had when it was last open (or when Houston last quit).
+      const saved = savedDraft ? draftRestoreText(savedDraft) : ''
+      if (saved) deps.io.out(paint(`${draftRestoreNote(savedDraft!)}\n`, 'dim'))
+      savedDraft = null
+      const initial = [draft, kept, half, saved].filter(Boolean).join('\n\n')
+      const text = await deps.io.readComposer(() => composerPrompt(policy, paint, screenReader), initial || undefined, {
+        onDraft: (t) => saveDraft({ text: t, queued: [] }),
         // Read on each redraw: what the keyword would do on this chat's model right now.
         ultrathinkEffect: () =>
           ultrathinkEffect(
@@ -5203,6 +5261,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
     }
     atComposer = false // sub-prompts below are not the composer
+    // What was typed is now on its way (a turn or a command): the saved draft is what
+    // is still held, if anything. A Ctrl-C or a quit leaves the saved draft as it was.
+    if (raw !== null) saveHeldDraft()
     // Background work finished while the composer was idle: its news is this turn's
     // input. Taken now, not when it arrived, so a draft typed meanwhile still wins.
     let wakeTurn = false
@@ -5397,6 +5458,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         conversationId = id
         messages = conv.messages
         resetChatState()
+        loadSavedDraft()
         deps.io.out(paint(`· resumed: ${plural(messages.length, 'message')}\n`, 'dim'))
         const recap = renderRecap(messages, paint, { width: columns() })
         if (recap) deps.io.out(`${recap}\n`)
@@ -5656,6 +5718,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         messages = conv.messages
         resetChatState()
         adoptChatSettings(conv)
+        loadSavedDraft()
         deps.io.out(
           paint(
             stillRunning
@@ -6045,6 +6108,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           pendingQueued = [...pendingQueued, ...typedWhile]
           if (halfTyped) halfDraft = [halfDraft, halfTyped].filter(Boolean).join('\n\n')
         }
+        saveHeldDraft()
         continue
       }
       if (result.kind === 'unknown') {
@@ -6115,6 +6179,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           pendingQueued = [...pendingQueued, ...typed]
           if (halfTyped) halfDraft = [halfDraft, halfTyped].filter(Boolean).join('\n\n')
         }
+        saveHeldDraft()
         continue
       }
       if (result.kind === 'proposals') {
@@ -6994,6 +7059,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // turned escapes into keys, not text), but it is echoed straight to a
           // terminal, and the next caller of steerRun may not be a keyboard.
           deps.io.out(paint(`\n· steering: ${stripControlChars(e.text)}\n`, 'cyan'))
+          if (e.id) deps.io.steerLanded?.(e.id)
           break
         case 'steers_returned':
           returnedSteers.push(...e.texts)
@@ -7039,6 +7105,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       pendingQueued = [...pendingQueued, ...unsent]
       if (typing) halfDraft = [halfDraft, typing].filter(Boolean).join('\n\n')
     }
+    saveHeldDraft()
 
     // A plan-mode turn hands off to execution through the present_plan flow: the agent
     // calls present_plan, the plan_ready case above renders it and collects an
@@ -7048,6 +7115,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // mode after ordinary questions.
   }
 
+  // A draft still waiting on its pause in typing is written before we go.
+  draftSaver?.flush()
   // Hand the tab back with no title of ours; the shell sets its own at the next
   // prompt, and a lingering "Houston · proj" would be a lie once we're gone.
   deps.io.signal?.({ title: '' })

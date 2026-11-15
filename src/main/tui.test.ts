@@ -18,6 +18,7 @@ import type {
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import type { PagerSource } from './tui-pager'
 import type { DeletePlan } from './deleteChat'
+import type { DraftRecord, DraftStore } from './tui-drafts'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
 import type { RegistryServer } from '@shared/mcpRegistry'
@@ -6028,6 +6029,175 @@ describe('queued follow-ups', () => {
   })
 })
 
+describe('saved drafts', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  function memoryDrafts() {
+    const saved = new Map<string, DraftRecord>()
+    const writes: string[] = []
+    const drafts: DraftStore = {
+      load: (k) => saved.get(k) ?? null,
+      save: (k, r) => {
+        writes.push(k)
+        if (r && (r.text.trim() || r.queued.length)) saved.set(k, r)
+        else saved.delete(k)
+      }
+    }
+    return { drafts, saved, writes }
+  }
+
+  /** A composer that types `typed` as its draft (reported through onDraft), then answers. */
+  function draftIo(script: Array<{ typed?: string; answer: string | null }>) {
+    const base = fakeIo([])
+    const initials: Array<string | undefined> = []
+    let i = 0
+    base.io.readComposer = async (_p, initial, o) => {
+      initials.push(initial)
+      const step = script[i++] ?? { answer: null }
+      if (step.typed !== undefined) o?.onDraft?.(step.typed)
+      return step.answer
+    }
+    return { ...base, initials }
+  }
+
+  it('keeps a draft left unsent at quit, and opens the next session with it', async () => {
+    const m = memoryDrafts()
+    const first = deps(done)
+    const t1 = draftIo([{ typed: 'half a thought', answer: null }])
+    first.d.io = t1.io
+    first.d.drafts = m.drafts
+    await runTui(opts, first.d)
+    expect(m.saved.get('new:/proj')).toEqual({ text: 'half a thought', queued: [] })
+
+    const second = deps(done)
+    const t2 = draftIo([{ answer: null }])
+    second.d.io = t2.io
+    second.d.drafts = m.drafts
+    await runTui(opts, second.d)
+    expect(t2.initials[0]).toBe('half a thought')
+    expect(t2.text()).toContain('restored the draft you had not sent')
+  })
+
+  it('forgets the draft once it is sent', async () => {
+    const m = memoryDrafts()
+    m.saved.set('new:/proj', { text: 'old', queued: [] })
+    const { d } = deps(done)
+    const t = draftIo([{ typed: 'send this', answer: 'send this' }, { answer: null }])
+    d.io = t.io
+    d.drafts = m.drafts
+    await runTui(opts, d)
+    expect(m.saved.size).toBe(0)
+  })
+
+  // A Ctrl-C clears the composer, and a second one quits: the text stays saved.
+  it('keeps the draft a Ctrl-C cleared, for the next time the chat opens', async () => {
+    const m = memoryDrafts()
+    const { d } = deps(done)
+    const t = draftIo([{ typed: 'do not lose me', answer: null }])
+    d.io = t.io
+    d.drafts = m.drafts
+    let interrupt: (() => void) | null = null
+    t.io.onInterrupt = (h) => {
+      interrupt = h
+    }
+    const read = t.io.readComposer!
+    t.io.readComposer = async (p, initial, o) => {
+      const r = await read(p, initial, o)
+      interrupt?.()
+      interrupt?.()
+      return r
+    }
+    await runTui(opts, d)
+    expect(m.saved.get('new:/proj')?.text).toBe('do not lose me')
+  })
+
+  it('saves messages typed mid-run at once, under the chat, and drops them once sent', async () => {
+    const m = memoryDrafts()
+    const { d, rec } = deps(done)
+    const t = draftIo([{ answer: 'go' }, { answer: null }])
+    d.io = t.io
+    d.drafts = m.drafts
+    d.persist = fakePersist().persist
+    let pending: ((p: { draft: string; queued: string[] }, acked: boolean) => void) | null = null
+    t.io.onPendingInput = (h) => {
+      pending = h
+    }
+    const queued = [['then add tests']]
+    t.io.takeQueued = () => queued.shift() ?? []
+    let midRun: DraftRecord | undefined
+    let midKey: string | undefined
+    const run = d.startRun
+    d.startRun = async (req, send, onMessages) => {
+      pending?.({ draft: '', queued: ['then add tests'] }, true)
+      midKey = m.writes.at(-1)
+      midRun = m.saved.get(midKey!)
+      await run(req, send, onMessages)
+    }
+    await runTui(opts, d)
+    // Written before anything else happened, under the chat the turn belongs to.
+    expect(midRun).toEqual({ text: '', queued: ['then add tests'] })
+    expect(midKey).toMatch(/^conv-/)
+    // It went out as the next turn, so nothing is left saved.
+    expect(rec.runs.at(-1)?.messages.at(-1)?.content).toBe('then add tests')
+    expect(m.saved.size).toBe(0)
+  })
+
+  it('passes the steer id to the run, takes steers back from it, and clears landed ones', async () => {
+    const { d } = deps(done)
+    const t = draftIo([{ answer: 'go' }, { answer: null }])
+    d.io = t.io
+    const steers: Array<[string, string | undefined]> = []
+    const unsteers: string[] = []
+    d.steerRun = (_r, text, id) => {
+      steers.push([text, id])
+      return true
+    }
+    d.unsteerRun = (_r, id) => {
+      unsteers.push(id)
+      return true
+    }
+    const hold: {
+      steer: ((text: string, id: string) => boolean | 'handled') | null
+      unsteer: ((id: string) => boolean) | null
+    } = { steer: null, unsteer: null }
+    const landed: string[] = []
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    t.io.onUnsteer = (h) => {
+      hold.unsteer = h
+    }
+    t.io.steerLanded = (id) => landed.push(id)
+    d.startRun = async (req, send) => {
+      expect(hold.steer?.('use YAML', 'id-1')).toBe(true)
+      expect(hold.unsteer?.('id-1')).toBe(true)
+      send({ runId: req.runId, type: 'steered', text: 'use YAML', id: 'id-1' })
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+    expect(steers).toEqual([['use YAML', 'id-1']])
+    expect(unsteers).toEqual(['id-1'])
+    expect(landed).toEqual(['id-1'])
+    // With no run, there is nothing to take back from.
+    expect(hold.unsteer?.('id-1')).toBe(false)
+  })
+
+  it('/resume opens the chat with the draft it was left with', async () => {
+    const m = memoryDrafts()
+    m.saved.set('c1', { text: 'where I was', queued: ['a follow-up'] })
+    const { persist } = fakePersist([{ id: 'c1', title: 'Old chat', updatedAt: 1, messages: [] }])
+    const { d } = deps(done)
+    const t = draftIo([{ answer: '/resume' }, { answer: null }])
+    t.io.readLine = async () => '1'
+    d.io = t.io
+    d.drafts = m.drafts
+    d.persist = persist
+    await runTui(opts, d)
+    expect(t.initials[1]).toBe('a follow-up\n\nwhere I was')
+    expect(t.text()).toContain('restored 1 message typed during a turn')
+  })
+})
+
 // The approval mode was invisible while a turn ran (the composer's status line is
 // gone), and could only be changed for the NEXT turn — so loosening it to get past
 // a wall meant interrupting the work you were trying to unblock.
@@ -7646,9 +7816,9 @@ describe('steering a running turn', () => {
       steers.push([runId, text])
       return true
     }
-    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    const hold: { steer: ((text: string) => boolean | 'handled') | null } = { steer: null }
     t.io.onSteer = (h) => {
-      hold.steer = h
+      hold.steer = (text) => h(text, 'steer-1')
     }
     d.startRun = async (req, send) => {
       // Someone types while this turn is running.
@@ -7668,9 +7838,9 @@ describe('steering a running turn', () => {
     const t = fakeIo(['go', null])
     d.io = t.io
     d.steerRun = () => false
-    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    const hold: { steer: ((text: string) => boolean | 'handled') | null } = { steer: null }
     t.io.onSteer = (h) => {
-      hold.steer = h
+      hold.steer = (text) => h(text, 'steer-1')
     }
     d.startRun = async (req, send) => {
       expect(hold.steer?.('too late')).toBe(false)
@@ -7690,9 +7860,9 @@ describe('steering a running turn', () => {
       steers.push(text)
       return true
     }
-    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    const hold: { steer: ((text: string) => boolean | 'handled') | null } = { steer: null }
     t.io.onSteer = (h) => {
-      hold.steer = h
+      hold.steer = (text) => h(text, 'steer-1')
     }
     d.startRun = async (req, send) => {
       expect(hold.steer?.('/approval plan')).toBe(false)
@@ -7736,9 +7906,9 @@ describe('steering a running turn', () => {
     const t = fakeIo([null])
     d.io = t.io
     d.steerRun = () => true // would accept — but there is no run to hand it to
-    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    const hold: { steer: ((text: string) => boolean | 'handled') | null } = { steer: null }
     t.io.onSteer = (h) => {
-      hold.steer = h
+      hold.steer = (text) => h(text, 'steer-1')
     }
     await runTui(opts, d)
     expect(hold.steer?.('anything')).toBe(false)
@@ -9372,9 +9542,9 @@ describe('composer keys handled by the driver', () => {
       steers.push(text)
       return true
     }
-    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    const hold: { steer: ((text: string) => boolean | 'handled') | null } = { steer: null }
     t.io.onSteer = (h) => {
-      hold.steer = h
+      hold.steer = (text) => h(text, 'steer-1')
     }
     d.startRun = async (req, send) => {
       hold.steer?.(`use YAML${String.fromCodePoint(0x2066)}`)
@@ -9558,18 +9728,18 @@ describe('/tasks', () => {
       selects++
       return { kind: 'cancel' }
     }
-    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    const hold: { steer: ((text: string) => boolean | 'handled') | null } = { steer: null }
     t.io.onSteer = (h) => {
-      hold.steer = h
+      hold.steer = (text) => h(text, 'steer-1')
     }
     let liveRun = ''
     let midOut = ''
     d.startRun = async (req, send) => {
       liveRun = req.runId
       for (const e of agentEvents(false)) send({ ...e, runId: req.runId } as AgentEvent)
-      expect(hold.steer?.('/tasks')).toBe(true)
-      expect(hold.steer?.('/tasks 2')).toBe(true)
-      expect(hold.steer?.('/tasks kill 2')).toBe(true)
+      expect(hold.steer?.('/tasks')).toBe('handled')
+      expect(hold.steer?.('/tasks 2')).toBe('handled')
+      expect(hold.steer?.('/tasks kill 2')).toBe('handled')
       await new Promise((r) => setTimeout(r, 0))
       midOut = t.text()
       send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
@@ -9594,9 +9764,9 @@ describe('/tasks', () => {
     d.now = () => NOW_T
     const f = fakeTasks([])
     d.backgroundTasks = f.tasks
-    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    const hold: { steer: ((text: string) => boolean | 'handled') | null } = { steer: null }
     t.io.onSteer = (h) => {
-      hold.steer = h
+      hold.steer = (text) => h(text, 'steer-1')
     }
     let liveRun = ''
     let midOut = ''
@@ -9608,9 +9778,9 @@ describe('/tasks', () => {
       send({ runId: r, type: 'tool_result', callId: 'call1', name: 'dispatch_agent', output: 'Started background agent bg1 ("scan the repo").', ok: true })
       send({ runId: r, type: 'text', delta: 'It is working on it.' })
       send({ runId: r, type: 'notice', message: 'Waiting for 1 background agent to finish' })
-      expect(hold.steer?.('/tasks')).toBe(true)
-      expect(hold.steer?.('/tasks 1')).toBe(true)
-      expect(hold.steer?.('/tasks kill 1')).toBe(true)
+      expect(hold.steer?.('/tasks')).toBe('handled')
+      expect(hold.steer?.('/tasks 1')).toBe('handled')
+      expect(hold.steer?.('/tasks kill 1')).toBe('handled')
       await new Promise((res) => setTimeout(res, 0))
       midOut = t.text()
       send({
@@ -9640,9 +9810,9 @@ describe('/tasks', () => {
     const f = fakeTasks([])
     f.tasks.stopSubagent = () => false
     d.backgroundTasks = f.tasks
-    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    const hold: { steer: ((text: string) => boolean | 'handled') | null } = { steer: null }
     t.io.onSteer = (h) => {
-      hold.steer = h
+      hold.steer = (text) => h(text, 'steer-1')
     }
     d.startRun = async (req, send) => {
       for (const e of agentEvents(false)) send({ ...e, runId: req.runId } as AgentEvent)
