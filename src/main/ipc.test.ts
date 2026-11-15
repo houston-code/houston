@@ -161,7 +161,7 @@ import {
   getConversation,
   setMessages
 } from './conversations'
-import { configureHasKey, updateSettings } from './store'
+import { configureHasKey, configureHeaderSecrets, updateSettings } from './store'
 import { takeQueue } from './agent/queue'
 
 // registerIpc wires the scheduler, whose store lives under the profile directory.
@@ -884,6 +884,31 @@ describe('rewind IPC', () => {
     expect(getConversation(convId)?.messages).toEqual([])
   })
 
+  it('refuses to start or retry a run another Houston process is running, before saving anything', async () => {
+    configureHasKey(() => false)
+    updateSettings({ desktopNotifications: false })
+    // The schedule daemon (any live process but this one) is running this chat.
+    mkdirSync(join(userDir, 'runs'), { recursive: true })
+    writeFileSync(join(userDir, 'runs', `${process.ppid}.json`), JSON.stringify({ pid: process.ppid, conversations: [convId] }))
+    const send = vi.fn()
+    const sender = { id: 1, send, isDestroyed: () => false }
+    const before = getConversation(convId)?.messages
+    await handler(IPC.agentStart)({ sender }, {
+      runId: 'r-elsewhere', conversationId: convId, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: 'continue'
+    })
+    await handler(IPC.agentRetry)({ sender }, {
+      runId: 'r-elsewhere-2', conversationId: convId, providerId: 'p', model: 'm', approvalPolicy: 'ask'
+    })
+    expect(h.runAndDrain).not.toHaveBeenCalled()
+    for (const runId of ['r-elsewhere', 'r-elsewhere-2']) {
+      expect(send).toHaveBeenCalledWith(
+        IPC.agentEvent,
+        expect.objectContaining({ type: 'error', runId, message: expect.stringContaining('another Houston session') })
+      )
+    }
+    expect(getConversation(convId)?.messages).toEqual(before)
+  })
+
   it("sends a run's events to every chat window as well as the one that started it", async () => {
     configureHasKey(() => false)
     updateSettings({ desktopNotifications: false })
@@ -1445,6 +1470,54 @@ describe('requests while startup is still running', () => {
   it('waits for nothing when no startup work is given', () => {
     registerIpc()
     expect(version()).toEqual(expect.any(String))
+  })
+
+  it('reads no settings before the credential store is ready', async () => {
+    // A settings file with a cleartext MCP header, which the first read moves into the
+    // credential store: a store that is not ready yet refuses it, as at launch.
+    const userDir = mkdtempSync(join(tmpdir(), 'houston-ipc-startup-'))
+    setUserDataDir(userDir)
+    writeFileSync(
+      join(userDir, 'settings.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        mcpServers: [{ id: 's1', name: 's1', transport: 'http', command: '', url: 'https://mcp.example.test', headers: { Authorization: 'Bearer hand-edited' } }]
+      })
+    )
+    let storeReady = false
+    const vault = new Map<string, Record<string, string>>()
+    const early: string[] = []
+    configureHeaderSecrets({
+      get: (scope) => vault.get(scope) ?? {},
+      set: (scope, headers) => {
+        if (!storeReady) {
+          early.push(scope)
+          throw new Error('credential store not ready')
+        }
+        vault.set(scope, headers)
+      },
+      remove: (scope) => void vault.delete(scope)
+    })
+    try {
+      let finish!: () => void
+      const startup = new Promise<void>((resolve) => (finish = resolve))
+      registerIpc(startup)
+      expect(early).toEqual([])
+      storeReady = true
+      finish()
+      await startup
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(early).toEqual([])
+      expect([...vault.values()]).toEqual([{ Authorization: 'Bearer hand-edited' }])
+      const onDisk = JSON.parse(readFileSync(join(userDir, 'settings.json'), 'utf8')) as {
+        mcpServers: Array<{ headers: Record<string, string> }>
+      }
+      expect(onDisk.mcpServers[0].headers).toEqual({ Authorization: '' })
+    } finally {
+      setUserDataDir(MODULE_USER_DIR)
+      rmSync(userDir, { recursive: true, force: true })
+    }
   })
 })
 

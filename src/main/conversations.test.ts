@@ -588,6 +588,39 @@ describe('fork from a message', () => {
   it('returns null for a chat that is gone', () => {
     expect(forkConversationAt('00000000-0000-4000-8000-000000000000', { kind: 'reply', n: 0 })).toBeNull()
   })
+
+  it("drops the source's compaction summary when the fork is cut before it", () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, log)
+    setCompaction(c.id, { cut: 5, summary: 'summary of the source' })
+    const fork = forkConversationAt(c.id, { kind: 'reply', n: 1 })!
+    expect(fork.messages).toHaveLength(4)
+    expect(fork.compaction).toBeUndefined()
+    expect(peekConversation(fork.id)!.compaction).toBeUndefined()
+    // The source keeps its own.
+    expect(peekConversation(c.id)!.compaction).toEqual({ cut: 5, summary: 'summary of the source' })
+  })
+
+  it('keeps a compaction summary the fork still holds all of', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, log)
+    setCompaction(c.id, { cut: 3, summary: 'summary of the start', evictBefore: 5 })
+    const fork = forkConversationAt(c.id, { kind: 'reply', n: 1 })!
+    // The summary stands in for messages 0..3, all kept; the watermark is clamped.
+    expect(peekConversation(fork.id)!.compaction).toEqual({ cut: 3, summary: 'summary of the start', evictBefore: 4 })
+  })
+
+  it('clamps a spawned history length to what the fork kept', () => {
+    const c = createConversation({
+      workspace: '/ws',
+      providerId: 'p',
+      model: 'm',
+      spawnedFrom: { conversationId: 'parent', title: 'Parent', historyLength: 6 }
+    })
+    setMessages(c.id, log)
+    const fork = forkConversationAt(c.id, { kind: 'reply', n: 1 })!
+    expect(peekConversation(fork.id)!.spawnedFrom).toEqual({ conversationId: 'parent', title: 'Parent', historyLength: 4 })
+  })
 })
 
 describe('saveSideChat (persisted)', () => {

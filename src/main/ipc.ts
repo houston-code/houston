@@ -140,6 +140,7 @@ import {
 } from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal, killTerminalsOf } from './terminal'
 import { log } from './logger'
+import { RUNNING_ELSEWHERE_MESSAGE, conversationRunningElsewhere } from './runMarkers'
 import { createRendererErrorLogger } from './crashRecovery'
 import { dismissEnvKeyOffers, dismissedEnvKeyOffers, envKeyOffers, envKeyValue } from './envKeys'
 import { setMenuState, setTerminalFocused } from './menu'
@@ -1482,7 +1483,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
       if (typeof command !== 'string' || !command.trim()) return { ok: false, reason: 'missing' }
       const conv = getConversation(id)
       if (!conv) return { ok: false, reason: 'missing' }
-      if (activeRunForConversation(conv.id) || rewindInProgress(conv.id)) return { ok: false, reason: 'busy' }
+      if (activeRunForConversation(conv.id) || rewindInProgress(conv.id) || conversationRunningElsewhere(conv.id) !== null) {
+        return { ok: false, reason: 'busy' }
+      }
       const text = typeof output === 'string' ? output.slice(-SHELL_ESCAPE_MAX_CHARS) : ''
       const code = typeof exitCode === 'number' && Number.isFinite(exitCode) ? exitCode : 0
       const turn = shellEscapeTurn(command.trim().slice(0, 4000), text, code)
@@ -1578,6 +1581,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
           const conv = peekConversation(cid)
           return (
             activeRunForConversation(cid) !== null ||
+            conversationRunningElsewhere(cid) !== null ||
             (conv !== null && runningShellsFor(cid, conv.workspace).length > 0)
           )
         },
@@ -1720,6 +1724,13 @@ export function registerIpc(ready?: Promise<unknown>): void {
       })
       return
     }
+    // A run another Houston process has going in this chat (the schedule daemon, a
+    // terminal session): refused before the message is saved, since this process's
+    // save and that run's would overwrite each other.
+    if (conversationRunningElsewhere(conv.id) !== null) {
+      emitEvent(event.sender, conv.id, { runId: req.runId, type: 'error', message: RUNNING_ELSEWHERE_MESSAGE })
+      return
+    }
 
     const images = sanitizeAttachments(resolveStoredImages(req.images))
     const invokedAs = sanitizeInvocation(req.invokedAs)
@@ -1816,6 +1827,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
           message:
             'This conversation already has a run in progress. Wait for it to finish or stop it before retrying.'
         })
+        return
+      }
+      if (conversationRunningElsewhere(conv.id) !== null) {
+        emitEvent(event.sender, conv.id, { runId: req.runId, type: 'error', message: RUNNING_ELSEWHERE_MESSAGE })
         return
       }
       // Same boundary validation as agentStart: an unknown policy fails open, so coerce.
@@ -2106,8 +2121,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
   })
   attention = chat
   // Unread marks come back from disk on launch; show them on the app icon now rather
-  // than waiting for the first status change.
-  updateAppBadge(chat.snapshot())
+  // than waiting for the first status change. Once startup is done: the badge reads
+  // settings, whose first read must wait for the credential store (see index.ts).
+  afterReady(() => updateAppBadge(chat.snapshot()))
 
   // The status of every chat with something to show (a live run, its blocking
   // prompts, or an unread mark), for the sidebar's per-chat signal. The renderer reads

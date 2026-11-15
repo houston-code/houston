@@ -558,9 +558,14 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
         } else if (s.paused) {
           delete s.paused
           // Pick up from now: what came due while paused is skipped, not fired in a burst.
+          // A one-shot has no later occurrence to skip to, so it keeps its time and runs
+          // once on the next check, as a one-shot missed while the app was closed does;
+          // re-deriving it would leave it unfired and listed forever.
           const spec = specOf(s)
           const at = now()
-          if (spec && s.nextRunAt !== null && s.nextRunAt <= at) s.nextRunAt = nextOccurrence(spec, new Date(at))
+          if (spec && spec.kind !== 'once' && s.nextRunAt !== null && s.nextRunAt <= at) {
+            s.nextRunAt = nextOccurrence(spec, new Date(at))
+          }
         }
         save()
         return { ...s }
