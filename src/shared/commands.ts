@@ -444,7 +444,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     name: 'trust', group: 'Setup',
     description: "Show this folder's project-config trust (/trust forget re-decides)",
     clients: ['gui', 'tui'],
-    gui: { description: "Review this folder's project-config trust in Settings" }
+    gui: { description: "Review this folder's project-config trust in Settings (/trust forget asks again)" }
   },
   { name: 'hooks', group: 'Extend', description: 'List configured hooks', clients: ['gui', 'tui'] },
   {
@@ -457,7 +457,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     name: 'theme', group: 'Setup', args: '[name]',
     description: 'List or switch the color theme',
     clients: ['gui', 'tui'],
-    gui: { description: 'Open Appearance settings', args: null }
+    gui: { description: 'Switch the app theme (system, dark, light), or open Appearance settings', args: '[system|dark|light]' }
   },
   { name: 'image', group: 'Terminal', args: '[path]', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
   { name: 'cwd', group: 'Setup', description: 'Show the working directory', clients: ['gui', 'tui'] },

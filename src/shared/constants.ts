@@ -130,6 +130,8 @@ export const IPC = {
   folderTrustStatus: 'folderTrust:status',
   /** Persist the user's trust decision for a workspace ('trusted' | 'never'). */
   folderTrustDecide: 'folderTrust:decide',
+  /** Forget a workspace's trust decision so it is asked again (/trust forget). */
+  folderTrustForget: 'folderTrust:forget',
   workingTreeChanges: 'workingTree:changes',
   /** Just the counts of workingTreeChanges (files, lines, branch, ship state) for the badge. */
   workingTreeStats: 'workingTree:stats',

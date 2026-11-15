@@ -164,12 +164,16 @@ describe('command groups', () => {
     const tui = Object.fromEntries(builtinCommands('tui').map((c) => [c.name, c]))
     expect(gui.settings.description).toBe('Open Settings, or one page of it')
     expect(gui.settings.args).toBe('[page]')
-    expect(gui.theme.description).toBe('Open Appearance settings')
-    expect(gui.theme.args).toBeUndefined()
+    // The app's themes are its own (system, dark, light), not the terminal's palettes.
+    expect(gui.theme.description).toBe('Switch the app theme (system, dark, light), or open Appearance settings')
+    expect(gui.theme.args).toBe('[system|dark|light]')
     for (const name of ['memory', 'trust', 'mcp']) {
       expect(gui[name].description, name).toContain('Settings')
-      expect(gui[name].description, name).not.toMatch(/forget|\(add|\(show/)
+      expect(gui[name].description, name).not.toMatch(/\(add|\(show/)
     }
+    // `/trust forget` works in both; the page edits memories and MCP servers.
+    expect(gui.trust.description).toContain('/trust forget')
+    expect(gui.memory.description).not.toContain('forget')
     // The terminal keeps its own wording.
     expect(tui.settings.description).toBe('Show a summary of your current settings')
     expect(tui.theme.args).toBe('[name]')
