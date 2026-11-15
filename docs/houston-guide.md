@@ -1958,7 +1958,10 @@ and in a new terminal tab below the chat in the desktop app.
 - **In the desktop app** the command gets a terminal tab of its own, which keeps its
   output after the command ends. The chat shows the command you typed and how it ended;
   click it to see exactly what the agent was given. A command that finishes while the
-  agent is working is not added, and a notice says so: run it again once the turn ends.
+  agent is working is kept, and joins the chat once that turn ends.
+- **Typed while the agent works,** a `!` line is never sent to the model as text. In
+  the desktop app it runs right away in its own tab. In the terminal it waits, like a
+  `/command`, and runs once the turn ends.
 - `!` alone, or `!` in the middle of a line, is ordinary text. So is a `!` line sent
   with an image or attached context.
 

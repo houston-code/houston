@@ -7321,6 +7321,32 @@ describe('steering a running turn', () => {
     expect(steers).toEqual(['/usr/local/bin is not on PATH'])
   })
 
+  // Steering "!npm test" sent the model the literal text and the command never ran.
+  // Declined, it queues and runs as a shell escape once the turn ends.
+  it('never steers with a ! line, so it runs in the shell after the turn', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    const steers: string[] = []
+    d.steerRun = (_runId, text) => {
+      steers.push(text)
+      return true
+    }
+    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    d.startRun = async (req, send) => {
+      expect(hold.steer?.('!npm test')).toBe(false)
+      expect(hold.steer?.('  !git status')).toBe(false)
+      // A lone `!` is not a command: still ordinary steering text.
+      expect(hold.steer?.('!')).toBe(true)
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+    expect(steers).toEqual(['!'])
+  })
+
   it('says nothing to steer when no turn is running', async () => {
     const { d } = deps(done)
     const t = fakeIo([null])

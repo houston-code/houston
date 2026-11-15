@@ -376,6 +376,24 @@ describe('Composer', () => {
     expect(input.value).toBe('')
   })
 
+  // Steered, "!npm test" reached the model as text and never ran.
+  it('runs a ! line in the terminal while a run is in progress, never steering it', () => {
+    const onShellEscape = vi.fn()
+    const props = baseProps({ running: true, onShellEscape })
+    render(<Composer {...props} />)
+
+    const input = type('!npm test')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onShellEscape).toHaveBeenCalledWith('npm test')
+    expect(props.onSteer).not.toHaveBeenCalled()
+    expect(props.onSend).not.toHaveBeenCalled()
+
+    // Mod+Enter (queue) runs it too, rather than queueing its text.
+    fireEvent.keyDown(type('!git status'), { key: 'Enter', ctrlKey: true })
+    expect(onShellEscape).toHaveBeenLastCalledWith('git status')
+    expect(props.onSend).not.toHaveBeenCalled()
+  })
+
   it('holds /compact while a run is in progress, keeping the text', () => {
     const compact: Command = { name: 'compact', description: 'Compact the conversation' }
     const props = baseProps({ running: true, commands: [...COMMANDS, compact] })
