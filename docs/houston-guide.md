@@ -95,7 +95,8 @@ The full GUI:
   short follow-up, shown faintly in the empty message box. `Tab` puts it in the box to
   send or change. Each suggestion is a small extra request to the model (the same kind
   as the one that names a chat), billed like any other.
-- **Message box.** `Ctrl+R` searches the messages you sent before (type to filter,
+- **Message box.** `Ctrl+R` searches the messages you sent before, from every folder
+  (type to filter,
   `Ctrl+R` or the arrows for an older match, `Enter` to put it in the box). A very large
   paste (40 lines or more, or about 4,000 characters) folds into a **Pasted text** chip
   that is sent as pasted; **Expand** puts it back in the box. Dropping a file attaches
@@ -430,8 +431,10 @@ and cost as usage.
 - **Sessions** are Houston conversations. The editor can list and reopen them
   (with the history replayed, or resumed without it), close one it no longer shows,
   and delete one. Deleting works as in the desktop app: a running prompt and the
-  chat's background commands stop first. They also show up in the desktop app and in
-  `houston -i --resume <id>`.
+  chat's background commands stop first. They also show up in the desktop app, and in
+  the terminal's `/resume` (Ctrl-A lists every folder). `houston -i --resume <id>`
+  finds one only when started in the session's folder and the chat is among that
+  folder's 20 most recent.
 - **Extra folders** the editor adds to a session (`additionalDirectories`) can be
   read and written by that session's runs, like the folders under Settings >
   Workspace, but only for that session and never saved. Each must be an existing
@@ -895,6 +898,9 @@ Any Markdown file at `.houston/commands/<name>.md` becomes a `/name` command.
   `deploy $1 at version $2`. With no placeholder at all, the arguments are appended.
 - **Description:** optional frontmatter sets it. Without it, the first line is used
   (so existing commands keep working).
+- **Running one:** in the desktop app, `/name` fills the message box with the expanded
+  prompt, for you to read, change, and send. In the terminal it runs at once. A
+  command with frontmatter options (below) or dynamic context runs at once in both.
 
 ```markdown
 ---
@@ -973,9 +979,9 @@ long as it needs to be.
   one). `Shift-Enter` works in terminals that report it as a separate key; in the rest
   it sends, so use `Ctrl-J` there.
 - **Pasting:** paste anything, including many lines. The whole block lands in the
-  composer as one editable message and is never sent line by line. A large paste
-  collapses to a short placeholder like `[#1 pasted 120 lines]` so it doesn't bury the
-  screen; the real text is what gets sent. This works even in terminals without
+  composer as one editable message and is never sent line by line. A paste of more
+  than 5 lines or 800 characters collapses to a short placeholder like
+  `[#1 pasted 120 lines]` so it doesn't bury the screen; the real text is what gets sent. This works even in terminals without
   bracketed-paste support.
 - **History:** messages are remembered per project folder and survive restarts,
   multi-line ones included.
@@ -1102,8 +1108,11 @@ Setting `HOUSTON_REDUCE_MOTION=1` in the environment turns it on for that launch
 
 ## Seeing what the tools did
 
-While a turn runs, each tool result collapses to one line: the transcript is a
-conversation, not a log. To see more:
+In the desktop app, each tool call is a row in the chat: open it to see the call's
+full arguments and output.
+
+In the terminal, while a turn runs, each tool result collapses to one line: the
+transcript is a conversation, not a log. To see more there:
 
 - **Failures show themselves.** A failed tool prints its first lines without you
   asking, so you can see why.
@@ -2245,7 +2254,9 @@ window names each rule exactly as it was saved (a shell command is saved as its
 command prefixes, a web fetch as the site), with **Undo** to remove it again and
 **Permissions** to open Settings > Permissions. Undo removes the rule from your saved
 rules; the run already under way keeps using it until it ends. If an existing rule
-already covered the call, the note says so and nothing new is saved.
+already covered the call, the note says so and nothing new is saved. In the terminal,
+the answered prompt reads "Always allowed (rule saved)" or "Always denied (rule
+saved)"; `/permissions` lists the rule and `/permissions remove <n>` removes it.
 
 **What you approve is what runs.** A shell command is shown in full under the prompt,
 never cut to fit, and a memory about to be saved shows its description and body.
@@ -2279,6 +2290,9 @@ refusal, so the agent isn't told you rejected something you never answered.
 
 ### Switching mode
 
+- **Desktop app:** the **Approval mode** control under the message box picks one.
+  `Shift+Tab` in the message box (or anywhere outside a text field) steps to the next,
+  and `/plan`, `/ask`, `/auto`, `/full` or `/approval <mode>` set one directly.
 - **Terminal:** `Shift-Tab` steps through the modes, from most restrictive to least and
   back around to plan. `/approval <mode>` sets one directly.
 - **Works mid-turn.** It applies to the run in progress: if a turn stops for an
@@ -2427,7 +2441,9 @@ the same way, and counts toward the same decision.
   the name and contents of every plugin file. If it changes (say a pull adds a hook,
   widens a command's `allowed-tools`, changes a template's `` !`command` ``, or adds
   or edits a plugin file), the folder drops back to
-  untrusted and Houston asks again. The prompt names each plugin file it covers.
+  untrusted and Houston asks again. The prompt names each plugin file it covers.  In the
+  terminal the question comes at the next session start (or after `/trust forget`);
+  until then the changed config stays off.
 - **Headless runs** never prompt; they note when an untrusted folder's extra config is
   being ignored.
 - **Once trusted:** project `allow` rules sit *below* your own rules (they fill gaps,
