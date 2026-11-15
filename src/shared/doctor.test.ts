@@ -32,6 +32,17 @@ describe('buildDoctorReport — terminal group is client-specific', () => {
     expect(titles(f)).toContain('Terminal')
   })
 
+  it('says in the terminal that app screenshots and mockups are desktop-only, without a warning', () => {
+    const f = facts({ terminal: { tty: true, color: true, columns: 120, term: 'xterm-256color' } })
+    const row = buildDoctorReport(f).groups.find((g) => g.title === 'Terminal')!.checks.find((c) => c.label === 'app screenshots')
+    expect(row).toMatchObject({ status: 'ok' })
+    expect(row?.detail).toContain('desktop app only')
+    expect(row?.detail).toContain('view_localhost')
+    // The desktop app's own report has no such row.
+    const desktop = buildDoctorReport(facts()).groups.flatMap((g) => g.checks)
+    expect(desktop.some((c) => c.label === 'app screenshots')).toBe(false)
+  })
+
   // The grading itself is client-agnostic, so a spot-check is enough here; the full
   // matrix lives in tui-doctor.test.ts.
   it('grades a sandbox that does not confine as a warning, not an ok', () => {

@@ -277,6 +277,13 @@ export function buildDoctorReport(f: DoctorFacts, client: DoctorClient = 'termin
           label: 'color',
           status: 'ok',
           detail: `${t.color ? 'on' : 'off'} (TERM=${t.term || 'unset'})`
+        },
+        {
+          // The tools that drive a browser engine exist only in the desktop app, and a
+          // terminal session drops them from the agent's tool list without a word.
+          label: 'app screenshots',
+          status: 'ok',
+          detail: 'desktop app only: looking at the running app (view_localhost) and rendering mockups need it'
         }
       ]
     })

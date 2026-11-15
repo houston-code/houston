@@ -89,7 +89,8 @@ import {
 } from './store'
 import { getUserDataDir } from './userData'
 import { ReadStateStore } from './readState'
-import { log } from './logger'
+import { log, logFilePath } from './logger'
+import { takeTerminalWhatsNew } from './update-state'
 import {
   runTui,
   makePainter,
@@ -867,6 +868,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       },
       sideChat: terminalSideChat(),
       takeLegacyRulesNotice: () => takeLegacyRulesTerminalNotice(() => legacyRulesNoticeApplies()),
+      // Once per upgrade, from the terminal's own record (the app keeps its own).
+      takeWhatsNew: () => (version === 'dev' ? null : takeTerminalWhatsNew(version)),
       // Wake the session when background work it started finishes at an idle composer.
       wake: {
         register: (tryWake) =>
@@ -1005,7 +1008,15 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
             collectSecrets()
           ),
         url: (body) => (body === null ? ISSUES_URL : issueReportUrl(ISSUES_URL, body)),
-        open: (url) => openWithSystemHandler(url)
+        open: (url) => openWithSystemHandler(url),
+        // Shown on screen only, never put in the report: the log can name your folders.
+        logPath: () => {
+          try {
+            return logFilePath()
+          } catch {
+            return null
+          }
+        }
       },
       io,
       highlightHtml: (lang, codeStr) => (hljs ? highlightToHtml(hljs, lang, codeStr) : null),

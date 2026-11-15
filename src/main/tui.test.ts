@@ -2550,6 +2550,49 @@ describe('runTui', () => {
     expect(t.text()).toContain('$0.020')
   })
 
+  it('/cost names what each subagent spent, as the desktop breakdown does', async () => {
+    const record = {
+      id: 'r1',
+      label: 'Explore the parser',
+      model: 'claude-haiku',
+      usage: { input: 1200, output: 80, costUsd: 0.004 }
+    } as unknown as NonNullable<ChatMessage['subagents']>[number]
+    const { d } = deps(
+      [
+        { runId: 'x', type: 'usage', inputTokens: 100, outputTokens: 50, cost: 0.01 },
+        { runId: 'x', type: 'done', stopReason: 'end_turn' }
+      ],
+      {},
+      (req) => [...req.messages, { role: 'tool', toolCallId: 'c1', content: 'done', subagents: [record] } as ChatMessage]
+    )
+    const t = fakeIo(['go', '/cost', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('Subagents (included above):')
+    expect(t.text()).toContain('Explore the parser')
+  })
+
+  it("/bug prints the host's issue link, and the What's new note prints once at start", async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    // `p` prints the link at /feedback's question (/bug is its other name).
+    const t = fakeIo(['/bug', 'p', '/help', null])
+    d.io = t.io
+    let taken = 0
+    d.takeWhatsNew = () => (taken++ === 0 ? { version: '9.9.9', highlights: 'Adds a thing.' } : null)
+    d.issueReport = {
+      body: () => 'abc',
+      url: (b) => `https://github.com/houston-code/houston/issues/new?body=${b ?? ''}`,
+      open: () => false,
+      logPath: () => '/logs/houston.log'
+    }
+    await runTui(opts, d)
+    expect(t.text()).toContain("What's new in Houston 9.9.9: Adds a thing.")
+    expect(t.text().split("What's new").length).toBe(2)
+    expect(taken).toBe(1)
+    expect(t.text()).toContain('issues/new?body=abc')
+    expect(t.text()).toContain('/logs/houston.log')
+  })
+
   it('persists the session as a conversation on the first turn', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const fp = fakePersist()
