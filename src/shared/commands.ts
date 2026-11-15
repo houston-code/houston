@@ -154,6 +154,7 @@ export const COMMAND_ALIASES: Readonly<Record<string, string>> = {
   think: 'reasoning',
   proposed: 'proposals',
   bashes: 'tasks',
+  schedules: 'schedule',
   paste: 'image',
   bug: 'feedback',
   q: 'quit'
@@ -441,6 +442,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     name: 'permissions', group: 'Setup', args: '[add … | remove n]',
     description: 'List every permission rule that applies, or add or remove one of yours', clients: ['tui']
   },
+  {
+    name: 'schedule', group: 'Setup', args: '[add | pause|resume|run|delete n]',
+    description: 'Scheduled runs: list, create, pause, resume, run now, or delete one (also /schedules)',
+    clients: ['tui']
+  },
   { name: 'cost', group: 'Setup', description: 'Session token and cost totals', clients: ['gui', 'tui'] },
   {
     name: 'context', group: 'Setup',
@@ -566,6 +572,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   push: 'in the app, push from the Changes view',
   ship: "in the app, the Changes view's Create PR button sends the same request",
   pr: "in the app, the branch's pull request and its checks show beside the message box",
+  schedule: 'in the app, scheduled runs are under Settings > Scheduled runs',
   exit: 'close the window to leave',
   quit: 'close the window to leave'
 }

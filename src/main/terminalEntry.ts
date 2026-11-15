@@ -975,6 +975,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // (safeStorage on the desktop, cli-credentials.json on the CLI); absent only
       // if no writable store was wired, which disables /login gracefully.
       ...(canSetKey() ? { setKey: (id: string, key: string) => setProviderKey(id, key) } : {}),
+      // /schedule: the same scheduler service (and schedules.json) the agent's
+      // schedule tools and the desktop's Scheduled runs page use.
+      schedules: sessions.scheduler,
       isMac: process.platform === 'darwin',
       settingsPath: () => join(getUserDataDir(), 'settings.json'),
       // /status: what only the host knows. The network state is this chat's own

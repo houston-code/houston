@@ -188,6 +188,7 @@ import {
   runPermissionsCommand,
   type PermissionsOp
 } from './tui-permissions'
+import { parseScheduleArgs, runScheduleCommand, type ScheduleBackend, type ScheduleOp } from './tui-schedules'
 import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import {
@@ -2031,6 +2032,8 @@ export type SlashResult =
   | { kind: 'trust'; op: 'status' | 'forget' | 'list' | 'usage'; index?: number }
   /** Review saved memories (/memory [show|edit|pin|unpin|forget <n>|undo|on|off|folder]). */
   | { kind: 'memory'; action: MemoryAction }
+  /** List, pause, resume, run now, delete, or create scheduled runs (/schedule). */
+  | { kind: 'schedule'; op: ScheduleOp }
   /** Set or replace a provider API key, or add a host (/login, /providers). */
   | { kind: 'login' }
   /**
@@ -2222,6 +2225,9 @@ export function parseSlashCommand(
       return { kind: 'mcp', action: parseSettingsAction(arg) }
     case 'memory':
       return { kind: 'memory', action: parseMemoryAction(arg) }
+    case 'schedule':
+    case 'schedules':
+      return { kind: 'schedule', op: parseScheduleArgs(arg) }
     case 'trust': {
       const a = arg.trim().toLowerCase()
       if (!a) return { kind: 'trust', op: 'status' }
@@ -2362,6 +2368,7 @@ export const HELP_TEXT = [
   '  /copy [n]             copy a reply (n back; default the last) or one of its code blocks',
   '  /hooks [verb n]       lifecycle hooks (yours, then the project\'s): add, edit <n>, remove <n>',
   '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
+  '  /schedule [verb n]    scheduled runs: list; add; show, pause, resume, run (now), delete <n> (also /schedules)',
   '  /mcp [verb n]         list MCP servers (status, last error); tools · enable · disable · remove · login · logout <n>',
   '  /mcp add [--url u]    add a stdio server (guided), or a remote one: --url <url> [name] [--sse]',
   "  /mcp reconnect <n>    restart a server's connection now (/mcp reconnect all: every one)",
@@ -3615,6 +3622,8 @@ export interface TuiDeps {
   permissionPolicy?: () => Promise<PermissionPolicyView>
   /** When each permission rule last decided a call, keyed by permissionRuleKey. */
   ruleUsage?: () => Record<string, number>
+  /** The scheduler service the host wired, for /schedule. Absent ⇒ the command says it's unavailable. */
+  schedules?: ScheduleBackend
   /** Whether the host is macOS — filters the provider catalog (e.g. oMLX). Defaults to the current platform. */
   isMac?: boolean
   /** Absolute path to settings.json, shown by /settings, /hooks, and /mcp. */
@@ -5966,6 +5975,22 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             out: (t) => deps.io.out(t)
           },
           memoryState,
+          paint
+        )
+        continue
+      }
+      if (result.kind === 'schedule') {
+        await runScheduleCommand(
+          result.op,
+          {
+            ...(deps.schedules ? { scheduler: deps.schedules } : {}),
+            getSettings: deps.getSettings,
+            readLine: deps.io.readLine,
+            out: (t) => deps.io.out(t),
+            cwd: opts.cwd,
+            ...(providerId && model ? { providerId, model } : {}),
+            now: nowFn
+          },
           paint
         )
         continue
