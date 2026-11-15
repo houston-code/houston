@@ -3127,8 +3127,8 @@ Turn on **Run scheduled runs when Houston is closed** under Settings > Scheduled
 to have them fire on time anyway.
 
 - **What it sets up.** A small background process starts when you log in (a
-  LaunchAgent on macOS, a systemd user service on Linux, a Task Scheduler task on
-  Windows), for your user only and without admin rights. It runs the Houston app with
+  LaunchAgent on macOS, a systemd user service on Linux, an entry in your user's Run
+  key on Windows), for your user only and without admin rights. It runs the Houston app with
   no window, so it uses the keys you saved in the app.
 - **How its runs behave.** Each fires as a background chat, like one started from the
   terminal: anything that needs your approval is declined, and ask_user gets "use your
@@ -3147,7 +3147,10 @@ From the terminal, with keys from environment variables or `cli-credentials.json
 | `houston schedule-daemon uninstall` | stops it and removes it from login |
 | `houston schedule-daemon status` | says whether it is installed and running |
 
-One daemon runs per profile; a second one exits at once.
+One daemon runs per profile; a second one exits at once. The app and the terminal use
+the same login item, so neither replaces the other's: `install` refuses while the app's
+is on, and the app leaves one the terminal installed alone. On Windows, `install`
+refuses a profile moved with `HOUSTON_DATA_DIR`, which a login entry there can't keep.
 
 ## Review and multi-step tools
 

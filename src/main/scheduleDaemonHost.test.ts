@@ -23,7 +23,8 @@ function login(results: Record<string, number> = {}): LoginAgentDeps & { files: 
     },
     writeFile: (p, c) => void files.set(p, c),
     readFile: (p) => files.get(p) ?? null,
-    removeFile: (p) => void files.delete(p)
+    removeFile: (p) => void files.delete(p),
+    sleep: async () => {}
   }
 }
 
@@ -100,5 +101,15 @@ describe('the Settings toggle', () => {
     const before = l.calls.length
     await ensureScheduleDaemon(host(l))
     expect(l.calls.length).toBe(before)
+  })
+
+  it('at startup, leaves an agent the terminal installed alone', async () => {
+    const l = login()
+    const path = loginAgentPath('darwin', '/home/mac-user')!
+    const cli = launchAgentPlist({ program: '/opt/homebrew/opt/node/bin/node', args: ['/opt/houston/cli.cjs', 'schedule-daemon', 'run'] })
+    l.files.set(path, cli)
+    await ensureScheduleDaemon(host(l))
+    expect(l.files.get(path)).toBe(cli)
+    expect(l.calls).toEqual([])
   })
 })

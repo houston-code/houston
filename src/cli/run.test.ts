@@ -4,9 +4,39 @@ import { join } from 'node:path'
 import tls from 'node:tls'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { permissionRuleKey, type PermissionRule } from '@shared/types'
-import { selectRunMode, wireCliHost } from './run'
+import { cliDaemonCommand, selectRunMode, stableLauncherPath, wireCliHost } from './run'
 import { noteRuleUsed } from '../main/agentHost'
 import { flushRuleUsage, resetRuleUsageForTests } from '../main/ruleUsage'
+
+describe('cliDaemonCommand', () => {
+  it('records Homebrew kegs through their stable links, so an upgrade does not strand the login agent', () => {
+    const links = new Set(['/opt/homebrew/opt/node@22/bin/node', '/opt/homebrew/opt/houston/libexec/houston-cli.cjs'])
+    const cmd = cliDaemonCommand({
+      execPath: '/opt/homebrew/Cellar/node@22/22.23.4/bin/node',
+      script: '/opt/homebrew/bin/houston',
+      realpath: () => '/opt/homebrew/Cellar/houston/0.9.0/libexec/houston-cli.cjs',
+      env: { HOUSTON_DATA_DIR: '/p' },
+      exists: (p) => links.has(p)
+    })
+    expect(cmd).toEqual({
+      program: '/opt/homebrew/opt/node@22/bin/node',
+      args: ['/opt/homebrew/opt/houston/libexec/houston-cli.cjs', 'schedule-daemon', 'run'],
+      env: { HOUSTON_DATA_DIR: '/p' },
+      logFile: join('/p', 'schedule-daemon.out.log')
+    })
+  })
+
+  it('keeps any other path, and a keg whose link is missing, as it is', () => {
+    expect(stableLauncherPath('/usr/local/bin/node', () => true)).toBe('/usr/local/bin/node')
+    expect(stableLauncherPath('/home/u/.nvm/versions/node/v22.1.0/bin/node', () => true)).toBe(
+      '/home/u/.nvm/versions/node/v22.1.0/bin/node'
+    )
+    expect(stableLauncherPath('/usr/local/Cellar/node/26.1.0/bin/node', () => false)).toBe('/usr/local/Cellar/node/26.1.0/bin/node')
+    expect(stableLauncherPath('/home/linuxbrew/.linuxbrew/Cellar/node/26.1.0/bin/node', () => true)).toBe(
+      '/home/linuxbrew/.linuxbrew/opt/node/bin/node'
+    )
+  })
+})
 
 describe('selectRunMode', () => {
   const tty = (argv: string[]) => selectRunMode(argv, '/cwd', true)

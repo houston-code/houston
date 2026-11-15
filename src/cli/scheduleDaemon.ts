@@ -46,6 +46,14 @@ export async function runScheduleDaemonCommand(args: string[], deps: ScheduleDae
         deps.err('houston: a login agent is not supported on this platform. Run `houston schedule-daemon run` from your own service manager instead.\n')
         return 1
       }
+      // The desktop app's daemon uses the same login entry; replacing it would switch
+      // scheduled runs to this CLI's keys and profile behind the app's back.
+      if (state.installed && state.byApp) {
+        deps.err(
+          "houston: the desktop app's schedule daemon is already installed (Settings > Scheduled runs). Turn it off there, or run `houston schedule-daemon uninstall`, then install again.\n"
+        )
+        return 1
+      }
       const r = await deps.install(deps.command())
       if (!r.ok) {
         deps.err(`houston: couldn't install the schedule daemon: ${r.error}\n`)
@@ -66,7 +74,7 @@ export async function runScheduleDaemonCommand(args: string[], deps: ScheduleDae
     case 'status': {
       const s = await deps.state()
       if (!s.supported) deps.out('Login agent: not supported on this platform.\n')
-      else deps.out(`Login agent: ${s.installed ? 'installed' : 'not installed'}.\n`)
+      else deps.out(`Login agent: ${s.installed ? (s.byApp ? 'installed by the desktop app' : 'installed') : 'not installed'}.\n`)
       deps.out(s.pid !== null ? `Daemon: running (pid ${s.pid}).\n` : 'Daemon: not running.\n')
       return 0
     }
