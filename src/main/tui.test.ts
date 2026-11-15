@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { AppSettings, Hook, McpServerConfig, McpServerStatus, ProviderConfig } from '@shared/types'
+import type { AppSettings, Hook, McpServerConfig, McpServerStatus, PermissionRule, ProviderConfig } from '@shared/types'
 import { catalogForPlatform } from '@shared/provider-catalog'
 import type {
   AgentEvent,
@@ -4392,6 +4392,28 @@ describe('runTui — plan review (present_plan)', () => {
     expect(rec.elicitations).toEqual([['run-1', 'm1:e1', { action: 'accept', content: { email: 'a@example.com' } }]])
   })
 
+  it('after "always allow", names the rule the run saved and how to remove it', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'a1', name: 'run_shell', summary: 'npm test', args: { command: 'npm test' }, kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    let rules: PermissionRule[] = [{ action: 'deny', tool: 'run_shell', match: 'rm -rf /', source: 'settings', addedAt: 1 }]
+    const base = d.getSettings
+    d.getSettings = () => ({ ...base(), permissionRules: rules })
+    // The run saves the rule as it applies the decision, as the loop does.
+    d.resolveApproval = (r, c, dec) => {
+      rec.approvals.push([r, c, dec])
+      rules = [...rules, { action: 'allow', tool: 'run_shell', match: 'npm test', source: 'prompt', addedAt: Date.now() }]
+    }
+    const t = fakeIo(['go', '!', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.approvals).toEqual([['run-1', 'a1', 'rule-allow']])
+    expect(t.text()).toContain('Saved a permission rule:')
+    expect(t.text()).toContain('2. Allow run_shell: npm test')
+    expect(t.text()).toContain('/permissions remove 2')
+  })
+
   it('declines an elicitation on "n" and cancels on end-of-input', async () => {
     const elicit = (id: string): AgentEvent => ({
       runId: 'x',
@@ -5049,6 +5071,46 @@ describe('promptFolderTrust', () => {
       const edited = trustDeps([''], first.patches[0])
       await promptFolderTrust(ws, edited.d, makePainter(false))
       expect(edited.text()).toContain('trusted configuration changed')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('asks once per configuration in a session, and again when it changes', async () => {
+    const ws = makeWorkspace(elevatingProject)
+    try {
+      const asked = new Set<string>()
+      const t = trustDeps([''])
+      await promptFolderTrust(ws, t.d, makePainter(false), { asked })
+      expect(t.text()).toContain('asks for extra permissions')
+      expect(t.text()).toContain('or sooner if they change')
+      // Declined, unchanged: the per-turn re-check stays quiet.
+      const again = trustDeps([''])
+      await promptFolderTrust(ws, again.d, makePainter(false), { asked })
+      expect(again.text()).not.toContain('asks for extra permissions')
+      // Changed: asked again.
+      writeFileSync(join(ws, '.houston/settings.json'), JSON.stringify({ ...elevatingProject, mcpServers: [] }))
+      const changed = trustDeps([''])
+      await promptFolderTrust(ws, changed.d, makePainter(false), { asked })
+      expect(changed.text()).toContain('asks for extra permissions')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('re-checks after a turn that added elevating config to the project', async () => {
+    const ws = makeWorkspace()
+    try {
+      const t = trustDeps(['go', 'y', null])
+      t.d.startRun = async (req, send) => {
+        // The turn writes an allow rule into the project's settings.
+        mkdirSync(join(ws, '.houston'), { recursive: true })
+        writeFileSync(join(ws, '.houston/settings.json'), JSON.stringify(elevatingProject))
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+      await runTui({ cwd: ws, approvalPolicy: 'ask', color: false }, t.d)
+      expect(t.text()).toContain('This project asks for extra permissions.')
+      expect(t.patches.some((p) => p.trustedFolders?.[0]?.decision === 'trusted')).toBe(true)
     } finally {
       rmSync(ws, { recursive: true, force: true })
     }

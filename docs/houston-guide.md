@@ -828,6 +828,9 @@ the model.
   <pattern> [--exact]` adds one at the end of your list, checked the same way the rules
   editor checks it; an allow that approves every call asks first. Rules in a project's
   `.houston/settings.json` are edited in that file.
+  After "Always allow" or "Always deny" at a prompt, the terminal prints the rule it
+  saved (a shell command may be saved as a shorter prefix), with its number and the
+  `/permissions remove <n>` that takes it back.
 - `/resume [search]` (or `/sessions`) opens a picker of this folder's saved chats,
   newest first, marked unread or failed as in the desktop sidebar. Under the list it
   previews the highlighted chat: its title, when it was last updated, how many messages
@@ -2487,9 +2490,9 @@ the same way, and counts toward the same decision.
   the name and contents of every plugin file. If it changes (say a pull adds a hook,
   widens a command's `allowed-tools`, changes a template's `` !`command` ``, or adds
   or edits a plugin file), the folder drops back to
-  untrusted and Houston asks again. The prompt names each plugin file it covers.  In the
-  terminal the question comes at the next session start (or after `/trust forget`);
-  until then the changed config stays off.
+  untrusted and Houston asks again. The prompt names each plugin file it covers.
+  Both the app and the terminal check again after every turn, so config a turn adds
+  is asked about right away; the terminal asks once per configuration in a session.
 - **Headless runs** never prompt; they note when an untrusted folder's extra config is
   being ignored.
 - **Once trusted:** project `allow` rules sit *below* your own rules (they fill gaps,
