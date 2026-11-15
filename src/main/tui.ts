@@ -4604,13 +4604,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
   /**
    * Change one of the terminal's own preferences and say so: the body of /vim,
-   * /verbose, /notify <mode>, /reduce-motion, /screen-reader and /theme <name>, shared
+   * /verbose, /focus, /notify <mode>, /reduce-motion, /screen-reader and /theme <name>, shared
    * with /config so a value set either way behaves the same.
    */
   const applyTerminalSetting = (
     r:
       | { kind: 'vim'; on: boolean }
       | { kind: 'verbose'; on: boolean }
+      | { kind: 'focus'; on: boolean }
       | { kind: 'reduce-motion'; on: boolean }
       | { kind: 'screen-reader'; on: boolean }
       | { kind: 'notify'; mode: NotifyMode }
@@ -4640,6 +4641,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             verbose
               ? '· verbose: showing each tool\'s output as it runs (/output reprints one in full)\n'
               : '· verbose off: tool output collapses to one line again\n',
+            'dim'
+          )
+        )
+        return
+      case 'focus':
+        focusView = r.on
+        deps.updateSettings?.({ tuiFocus: focusView })
+        deps.io.out(
+          paint(
+            focusView
+              ? '· focus: only your messages, one line per tool call, and the final reply (Ctrl-O has everything)\n'
+              : '· focus off: the turn\'s working shows again\n',
             'dim'
           )
         )
@@ -4688,7 +4701,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         return
     }
   }
-  const configLive = (): ConfigLive => ({ theme, verbose, reasoningDisplay, notifyMode, reduceMotion, screenReader })
+  const configLive = (): ConfigLive => ({ theme, verbose, focus: focusView, reasoningDisplay, notifyMode, reduceMotion, screenReader })
   const configContext = (): ConfigContext => ({ settings: deps.getSettings(), themes: Object.keys(THEMES) })
   /** Save one /config value (already validated) through the same path its own command takes. */
   const applyConfig = (key: ConfigKeyName, value: string): void => {
@@ -4700,6 +4713,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       case 'vim':
       case 'verbose':
+      case 'focus':
       case 'reduce-motion':
       case 'screen-reader':
         applyTerminalSetting({ kind: key, on: value === 'on' })
@@ -6365,16 +6379,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'focus') {
-        focusView = result.on ?? !focusView
-        deps.updateSettings?.({ tuiFocus: focusView })
-        deps.io.out(
-          paint(
-            focusView
-              ? '· focus: only your messages, one line per tool call, and the final reply (Ctrl-O has everything)\n'
-              : '· focus off: the turn\'s working shows again\n',
-            'dim'
-          )
-        )
+        applyTerminalSetting({ kind: 'focus', on: result.on ?? !focusView })
         continue
       }
       if (result.kind === 'verbose') {

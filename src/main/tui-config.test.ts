@@ -29,6 +29,7 @@ const ctx = (over: Partial<AppSettings> = {}): ConfigContext => ({ settings: set
 const live: ConfigLive = {
   theme: 'default',
   verbose: false,
+  focus: false,
   reasoningDisplay: 'summary',
   notifyMode: 'auto',
   reduceMotion: false,
@@ -43,6 +44,14 @@ describe('findConfigKey', () => {
     expect(findConfigKey('default-model')?.key).toBe('model')
     expect(findConfigKey('nope')).toBeNull()
     expect(findConfigKey('')).toBeNull()
+  })
+
+  it('takes /focus as a plain on/off key', () => {
+    const spec = findConfigKey('tuiFocus')!
+    expect(spec.key).toBe('focus')
+    expect(parseConfigArgs('focus=yes', ctx())).toEqual({ op: 'set', key: 'focus', value: 'on' })
+    expect(nextConfigValue(spec, spec.current(settings(), live), ctx())).toBe('on')
+    expect(configPatch('focus', 'on', settings())).toBeNull()
   })
 
   it('lists no key that holds a secret', () => {
