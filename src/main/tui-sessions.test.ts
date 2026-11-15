@@ -123,6 +123,37 @@ describe('renderRecap', () => {
   it('is empty for a chat with nothing to show', () => {
     expect(renderRecap([], paint)).toBe('')
   })
+
+  it('shows each earlier run-end notice under its exchange, leaving the latest to the closing line', () => {
+    const out = renderRecap(
+      [
+        { role: 'user', content: 'q1' },
+        { role: 'assistant', content: 'partial', runEnds: [{ reason: 'aborted', at: '2026-11-13T10:00:00Z' }] },
+        { role: 'user', content: 'q2' },
+        {
+          role: 'assistant',
+          content: 'more',
+          unanswered: [{ reason: 'aborted', at: '2026-11-13T10:01:00Z' }],
+          runEnds: [
+            { reason: 'limit', limit: 'max-steps', at: '2026-11-13T10:01:30Z' },
+            { reason: 'error', message: 'boom\x1b[2J', at: '2026-11-13T10:02:00Z' }
+          ]
+        },
+        { role: 'user', content: 'q3' },
+        { role: 'assistant', content: 'cut', runEnds: [{ reason: 'aborted', at: '2026-11-13T10:03:00Z' }] }
+      ],
+      paint
+    )
+    const lines = out.split('\n')
+    expect(lines.indexOf('  · Stopped.')).toBe(lines.indexOf('  houston › partial') + 1)
+    const more = lines.indexOf('  houston › more')
+    // Oldest first: the older unanswered record, then the current ones.
+    expect(lines[more + 1]).toBe('  · Stopped.')
+    expect(lines[more + 2]).toMatch(/^ {2}· Reached the step limit/)
+    expect(lines[more + 3]).toBe('  · boom[2J')
+    // The last exchange's Stop is the latest run's ending: runEndNotice says it.
+    expect(lines.at(-1)).toBe('  houston › cut')
+  })
 })
 
 const meta = { id: 'conv-1', title: 'Greet fallback', providerId: 'anthropic', model: 'claude', at: new Date('2026-11-13T10:00:00Z') }

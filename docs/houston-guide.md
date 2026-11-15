@@ -162,6 +162,13 @@ the terminal. Only three kinds do anything:
   Links are off when color is off (no TTY, `NO_COLOR`) and in
   screen-reader mode. Tables narrow their widest columns to fit the terminal, wrapping
   long cells, and a long code line wraps under the block's edge.
+- **What a run shows.** Tool calls read the way the desktop's rows do: a burst of file
+  reads prints as one line ("Read 3 files  a.ts, b.ts, c.ts"), directory listings get
+  no line (`/verbose` shows every call), a tool that returned images says how many, and
+  a finished review ends with its severity tally ("2 high · 1 low"). A turn stopped
+  from somewhere other than your keyboard (a hook, another client) says "Stopped.". The
+  line that ends each turn names the model or models it ran on, then its tokens and
+  cost.
 - Slash commands switch settings mid-session.
 - `--continue` reopens this folder's most recent chat at launch; `--resume <id>`
   reopens a specific one.
@@ -676,7 +683,9 @@ went wrong in plain words and offers the next step:
 
 Anything else reads "The last turn failed" with Retry and Run the doctor.
 **Details** shows the provider's own message, which is also in the transcript.
-`/retry` works in both clients.
+`/retry` works in both clients. The terminal prints the provider's message, the same
+plain-words explanation, and the commands for those steps (`/retry`, `/login` for
+provider settings, `/doctor`, `/model` to switch).
 
 ### A smaller model for side tasks
 
@@ -856,7 +865,9 @@ the model.
   number.
 - Resuming a chat (`/resume`, `--continue`, `--resume <id>`) replays its last three
   exchanges, so you can see where you left off, and says how its last turn ended when it
-  didn't finish (an error, a Stop, or a limit it hit).
+  didn't finish (an error, a Stop, or a limit it hit). An earlier run in those exchanges
+  that ended short shows its notice under its own exchange, as the desktop shows it
+  under its message.
 - Leaving prints the `houston --resume <id>` command that reopens the chat.
 
 **Terminal settings (/config).** `/config` opens a list of the settings the terminal
@@ -1675,7 +1686,8 @@ anything that could run programs outside the sandbox (a run with nobody to ask u
   text while a reply streams and replaced by the provider's own figure when each reply
   finishes. A tool call that takes longer than a second shows its own running time on
   its row.
-- **Terminal:** the spinner line shows the same running time.
+- **Terminal:** the spinner line shows the same running time and output tokens
+  ("1m 5s · 2.4k tokens"), counted the same way.
 - **Notices read the same everywhere.** A retry ("Connection issue, retrying (2/6): ..."),
   a model fallback, a compaction, a verification result and a missing runtime are
   worded alike in the desktop app, the terminal, `houston -p` and editors.

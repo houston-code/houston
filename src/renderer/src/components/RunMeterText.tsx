@@ -1,5 +1,5 @@
 import { useTick } from '../hooks/useTick'
-import { meterText, type RunMeter } from '../lib/runMeter'
+import { meterText, type RunMeter } from '@shared/runMeter'
 
 /**
  * The status bar's live meter for a running turn: elapsed time and output tokens so

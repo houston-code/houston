@@ -13,7 +13,7 @@ import type { ImageAttachment } from '@shared/images'
 import type { PromptInvocation } from '@shared/promptInvocation'
 import type { SessionUsage } from '@shared/usage'
 import { elicitationOutcome, reduceEvent, systemNoteSummary, type DisplayItem, type PlanStatus } from '../lib/items'
-import { meterOnEvent, startMeter, type RunMeter } from '../lib/runMeter'
+import { meterOnEvent, startMeter, type RunMeter } from '@shared/runMeter'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 
 /**

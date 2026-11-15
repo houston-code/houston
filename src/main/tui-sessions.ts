@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { ChatMessage } from '@shared/agent'
 import { COMPACTION_SUMMARY_PREFIX, SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import { latestRunEnd, runEndNoticeText, runEndRecords } from '@shared/runEnd'
 import type { PermissionRule } from '@shared/types'
 import type { Painter } from './tui'
 import { stripControlChars } from './tui-wrap'
@@ -87,8 +88,10 @@ export const RECAP_EXCHANGES = 3
 /**
  * The last few exchanges of a chat, shown when it is resumed so you can see where you
  * left off: each message you sent (two lines at most) and the reply text that answered
- * it (four lines at most). Tool calls are left out; `/export` has everything. Empty for
- * a chat with nothing to show.
+ * it (four lines at most), then how any run in that exchange ended short (an error, a
+ * Stop, a limit), where the desktop shows the same notice under its message. The
+ * latest run's ending is left to `runEndNotice`, which says it last. Tool calls are
+ * left out; `/export` has everything. Empty for a chat with nothing to show.
  */
 export function renderRecap(
   messages: ChatMessage[],
@@ -101,6 +104,7 @@ export function renderRecap(
   if (!shown.length) return ''
   const more = starts.length > shown.length ? ` (the last ${shown.length} of ${starts.length} messages)` : ''
   const lines: string[] = [paint(`· where you left off${more}:`, 'dim')]
+  const latest = latestRunEnd(messages)
   for (const start of shown) {
     const next = starts.find((i) => i > start) ?? messages.length
     clip(personText(messages[start]), 2, width).forEach((l, i) =>
@@ -117,6 +121,10 @@ export function renderRecap(
       )
     } else {
       lines.push(`  ${paint('houston ›', 'cyan')} ${paint('(no reply)', 'dim')}`)
+    }
+    for (const r of messages.slice(start, next).flatMap(runEndRecords)) {
+      if (r === latest) continue
+      for (const l of clip(runEndNoticeText(r), 1, width)) lines.push(`  ${paint(`· ${l}`, 'yellow')}`)
     }
   }
   return lines.join('\n')

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentEvent } from '@shared/agent'
+import type { AgentEvent } from './agent'
 import { meterOnEvent, meterText, meterTokens, startMeter } from './runMeter'
 
 const text = (delta: string): AgentEvent => ({ runId: 'r', type: 'text', delta })

@@ -427,6 +427,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // keeps the transcript tear-free.
   let spinnerLabel: string | null = null
   let spinnerStart = 0
+  // The turn's output tokens so far, shown after the clock.
+  let spinnerTokens = 0
   let tick = 0
   let cancelTimer: (() => void) | null = null
   // Reduced motion: a still mark instead of the frames, and the timer refreshed every
@@ -471,7 +473,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         ...(modeLabel ? { mode: modeLabel } : {}),
         ...(status ? { status } : {}),
         ...(shownDraft ? { draft: shownDraft } : {}),
-        ...(waiting.length ? { queued: waiting.length } : {})
+        ...(waiting.length ? { queued: waiting.length } : {}),
+        ...(spinnerTokens > 0 ? { tokens: spinnerTokens } : {})
       })
     // A wrapped spinner line can't be erased in place: every frame would leave the
     // row above it behind. The status is the first thing to go when the line is full,
@@ -2110,6 +2113,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       disarmReminder()
       spinnerLabel = filterTerminalOutput(label)
       spinnerStart = now()
+      spinnerTokens = 0
       tick = 0
       // Said once, as a line: what it is doing now.
       if (screenReader) {
@@ -2130,6 +2134,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         announced = safeLabel
         announce(lowerFirst(safeLabel))
       }
+    },
+    setSpinnerTokens: (tokens) => {
+      // Shown on the next redraw; screen-reader mode never draws the spinner.
+      spinnerTokens = tokens
     },
     stopSpinner: () => {
       spinnerLabel = null
