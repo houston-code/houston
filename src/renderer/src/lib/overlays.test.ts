@@ -13,7 +13,8 @@ const none: OverlayFlags = {
   find: false,
   connect: false,
   whatsNew: false,
-  rewind: false
+  rewind: false,
+  pastEdit: false
 }
 const only = (key: keyof OverlayFlags): OverlayFlags => ({ ...none, [key]: true })
 
@@ -26,7 +27,8 @@ const MODALS: (keyof OverlayFlags)[] = [
   'help',
   'viewer',
   'palette',
-  'rewind'
+  'rewind',
+  'pastEdit'
 ]
 
 describe('overlays', () => {

@@ -356,7 +356,14 @@ export function useChat(conversationId: string | null = null): ChatController {
   }, [])
 
   const answerQuestion = useCallback((callId: string, answer: string) => {
-    if (runIdRef.current) void window.api.answerQuestion(runIdRef.current, callId, answer)
+    if (!runIdRef.current) return
+    void window.api.answerQuestion(runIdRef.current, callId, answer)
+    // Optimistic UI: close the card now. An ask_user result replaces this with the
+    // answer the run recorded; the git-guard and verification questions get no
+    // result event, so without this their card would stay open for good.
+    setItems((prev) =>
+      prev.map((it) => (it.kind === 'question' && it.id === callId ? { ...it, answer } : it))
+    )
   }, [])
 
   const answerElicitation = useCallback((elicitId: string, result: ElicitationResult) => {

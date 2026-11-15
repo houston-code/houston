@@ -14,7 +14,8 @@ const h = vi.hoisted(() => ({
   getSettings: vi.fn(),
   collectSecrets: vi.fn(() => [] as string[]),
   createProvider: vi.fn(),
-  peekConversation: vi.fn()
+  peekConversation: vi.fn(),
+  peekConversationHeader: vi.fn()
 }))
 vi.mock('../agentHost', () => ({
   getProvider: h.getProvider,
@@ -22,7 +23,10 @@ vi.mock('../agentHost', () => ({
   collectSecrets: h.collectSecrets
 }))
 vi.mock('../providers', () => ({ createProvider: h.createProvider }))
-vi.mock('../conversations', () => ({ peekConversation: h.peekConversation }))
+vi.mock('../conversations', () => ({
+  peekConversation: h.peekConversation,
+  peekConversationHeader: h.peekConversationHeader
+}))
 
 const chat: ChatMessage[] = [
   { role: 'user', content: 'add a --shout flag' },
@@ -74,6 +78,7 @@ describe('maybeSuggestNext', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     h.peekConversation.mockReturnValue({ id: 'c1', messages: chat })
+    h.peekConversationHeader.mockReturnValue({ id: 'c1', messageCount: chat.length })
     h.getProvider.mockReturnValue({ id: 'p', kind: 'openai-compatible', models: [] })
   })
 
@@ -108,6 +113,16 @@ describe('maybeSuggestNext', () => {
     expect(req.system).toBe(suggestSystemPrompt)
     expect(req.maxTokens).toBe(TITLE_MAX_TOKENS)
     expect(req.tools).toBeUndefined()
+  })
+
+  it('drops a suggestion when the chat moved on to a newer turn while it was asked', async () => {
+    h.getSettings.mockReturnValue({ suggestNextPrompt: true })
+    h.createProvider.mockReturnValue(streamOf('Now add tests'))
+    // The next message landed in the log while the model was answering.
+    h.peekConversationHeader.mockReturnValue({ id: 'c1', messageCount: chat.length + 1 })
+    const onSuggestion = vi.fn()
+    await maybeSuggestNext({ conversationId: 'c1', providerId: 'p', model: 'm', onSuggestion })
+    expect(onSuggestion).not.toHaveBeenCalled()
   })
 
   it('stays silent when the provider fails or cannot be made', async () => {

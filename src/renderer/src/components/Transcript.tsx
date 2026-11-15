@@ -22,6 +22,7 @@ import {
   rewindTargets,
   turnStartIndex,
   turnStatsByReply,
+  replyNumbersOf,
   type DisplayItem,
   type RewindItemTarget
 } from '../lib/items'
@@ -31,7 +32,6 @@ import type { RewindMode } from '@shared/rewind'
 import { Popover } from './Popover'
 import { groupItems, type RenderNode } from '../lib/toolDisplay'
 import { ItemBoundary } from './ItemBoundary'
-import { countsAsReply } from '@shared/chatStatus'
 import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
 import { scrollBehavior } from '../lib/motion'
@@ -834,14 +834,7 @@ export function Transcript({
   // Each turn's details, keyed by its last reply.
   const turnStats = useMemo(() => turnStatsByReply(items), [items])
   // Each reply's position among the replies, by item id ("Mark unread from here").
-  const replyNumbers = useMemo(() => {
-    const out = new Map<string, number>()
-    // Counted by the same rule main numbers saved replies with (forkCut, the unread
-    // anchor), so "the Nth reply" names one message on both sides.
-    for (const it of items)
-      if (it.kind === 'assistant' && countsAsReply(it.text, !!it.reasoning)) out.set(it.id, out.size)
-    return out
-  }, [items])
+  const replyNumbers = useMemo(() => replyNumbersOf(items), [items])
 
   // A coarse, polite status for screen readers — the streaming transcript is
   // otherwise silent to assistive tech. Announces on change only (not on mount).

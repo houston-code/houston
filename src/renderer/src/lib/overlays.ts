@@ -27,6 +27,8 @@ export interface OverlayFlags {
   whatsNew: boolean
   /** The rewind picker or its confirmation. */
   rewind: boolean
+  /** The `/changes last` dialog (one past edit's diff). */
+  pastEdit: boolean
 }
 
 /** A full-window modal or side drawer is open over the chat (each has a backdrop). */
@@ -40,7 +42,8 @@ export function modalOpen(f: OverlayFlags): boolean {
     f.help ||
     f.viewer ||
     f.palette ||
-    f.rewind
+    f.rewind ||
+    f.pastEdit
   )
 }
 
