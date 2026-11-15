@@ -90,6 +90,11 @@ describe('desktopCommandAction', () => {
 
   it('passes a model or session search through', () => {
     expect(desktopCommandAction('model', ' opus ')).toEqual({ kind: 'model', query: 'opus' })
+    expect(desktopCommandAction('model', 'fallback add gpt-5')).toEqual({
+      kind: 'settings',
+      section: 'models',
+      query: 'fallback models'
+    })
     expect(desktopCommandAction('resume', 'auth')).toEqual({ kind: 'resume', query: 'auth' })
   })
 

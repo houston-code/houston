@@ -139,6 +139,8 @@ export function desktopCommandAction(name: string, args: string): DesktopCommand
       return theme ? { kind: 'theme', theme } : { kind: 'theme', invalid: arg }
     }
     case 'model': {
+      // `/model fallback ...` edits the fallback list, which lives on the Models page.
+      if (/^fallbacks?\b/i.test(arg)) return { kind: 'settings', section: 'models', query: 'fallback models' }
       const { rest, asDefault } = splitDefaultFlag(arg)
       return { kind: 'model', query: rest, ...(asDefault ? { asDefault } : {}) }
     }

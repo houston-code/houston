@@ -752,7 +752,15 @@ Name backup models for Houston to try when your selected model can't serve a tur
 - the conversation no longer fits the model's context window, even after compacting
 - the provider doesn't serve the model
 
-Set them as an ordered list in settings.json:
+Edit the list in Settings > Providers & Models > **Fallback models** (add a ready
+model, move one up or down, remove one), or in the terminal:
+
+- `/model fallback` lists them, numbered, marking any a run would skip
+- `/model fallback add <model>` adds one at the end (a model id, `provider/model`, or a
+  provider for its default model)
+- `/model fallback remove <n>`, `up <n>`, `down <n>` remove or move one
+
+Both write the same ordered list in settings.json:
 
 ```json
 "fallbackModels": [
@@ -860,7 +868,7 @@ In the terminal:
 **Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/cd`, `/vim`, `/keybindings`, `/notify`, `/statusline`, `/screen-reader`,
 `/reduce-motion`, `/verbose`, `/focus`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
 `/tasks`, `/queue`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/open-in-app`,
-`/permissions`, `/schedule`, and `/exit`. Typed in the
+`/permissions`, `/schedule`, `/scorecard`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
 
@@ -2313,6 +2321,16 @@ time, and totals for the last 7 days, the last 30 days, and all time, plus the u
 spend. It ends with the rate limits each provider reported this session (requests and
 tokens left, and when the window refills). The cost reminder is set with
 `costCeilingUsd` in settings.json there.
+
+### Loop scorecard (/scorecard)
+
+The loop scorecard shows how each model has behaved across your chats, aggregated on
+this computer from the saved chats (only counts, never message content, and nothing is
+sent anywhere). For each model: its runs, average steps and tool calls per run, how
+often a run finished cleanly (the rest hit an error or were cut off), total and
+per-run estimated cost, output tokens, and the tools it used most. Figures are
+approximate. In the desktop app it opens from Settings > Providers & Models > **Open
+loop scorecard**; in the terminal, `/scorecard` prints it.
 
 ## Version and updates
 

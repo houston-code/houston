@@ -436,7 +436,12 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'ask', group: 'Modes', description: 'Approval: ask before every edit and command', clients: ['gui', 'tui'] },
   { name: 'auto', group: 'Modes', description: 'Approval: auto-approve edits, ask for commands', clients: ['gui', 'tui'] },
   { name: 'full', group: 'Modes', description: 'Approval: full auto (sandboxed)', clients: ['gui', 'tui'] },
-  { name: 'model', group: 'Modes', args: '[name]', description: 'List or switch the active model', clients: ['gui', 'tui'] },
+  {
+    name: 'model', group: 'Modes', args: '[name]',
+    description: 'List or switch the active model (/model fallback: models to try when it fails)',
+    clients: ['gui', 'tui'],
+    gui: { description: 'List or switch the active model' }
+  },
   {
     name: 'login', group: 'Setup', args: '[edit|remove|forget-key <provider>]',
     description: 'Set or update an API key; edit or remove a provider (also: /providers)',
@@ -483,6 +488,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     name: 'usage', group: 'Setup',
     description: 'Spend and tokens per day and per project, from the chats on this computer',
     clients: ['gui', 'tui']
+  },
+  {
+    name: 'scorecard', group: 'Setup',
+    description: 'How each model has behaved across your chats: steps, tools, clean finishes, cost',
+    clients: ['tui']
   },
   {
     name: 'doctor', group: 'Setup',
@@ -759,6 +769,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   ship: "in the app, the Changes view's Create PR button sends the same request",
   pr: "in the app, the branch's pull request and its checks show beside the message box",
   schedule: 'in the app, scheduled runs are under Settings > Scheduled runs',
+  scorecard: 'in the app, open the loop scorecard from Settings > Providers & Models',
   exit: 'close the window to leave',
   quit: 'close the window to leave'
 }
