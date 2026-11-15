@@ -45,11 +45,13 @@ describe('keyToPickerKey', () => {
     expect(keyToPickerKey({ name: 'return' })).toEqual({ type: 'enter' })
     expect(keyToPickerKey({ name: 'space' })).toEqual({ type: 'space' })
     expect(keyToPickerKey({ name: 'escape' })).toEqual({ type: 'cancel' })
-    expect(keyToPickerKey({ name: 'c', ctrl: true })).toEqual({ type: 'cancel' })
+    // Ctrl-C is not Esc: it stops the run, where Esc only answers the picker.
+    expect(keyToPickerKey({ name: 'c', ctrl: true })).toEqual({ type: 'interrupt' })
   })
-  it('maps digits and printable chars', () => {
+  it('maps digits and printable chars, keeping the char', () => {
     expect(keyToPickerKey({ name: '2', sequence: '2' })).toEqual({ type: 'digit', n: 2 })
-    expect(keyToPickerKey({ sequence: 'x' })).toEqual({ type: 'char' })
+    expect(keyToPickerKey({ sequence: 'x' })).toEqual({ type: 'char', ch: 'x' })
+    expect(keyToPickerKey({ sequence: '!' })).toEqual({ type: 'char', ch: '!' })
   })
   it('ignores non-printable / unknown keys', () => {
     expect(keyToPickerKey({ sequence: '\t' })).toBeNull()
@@ -83,13 +85,50 @@ describe('reducePicker (single-select)', () => {
     const { s: s2 } = drive(initialPickerState(spec), [{ type: 'digit', n: 9 }])
     expect(s2.cursor).toBe(0) // out of range: no move
   })
-  it('a printable char requests typed fallback', () => {
-    const { outcome } = drive(initialPickerState(spec), [{ type: 'char' }])
-    expect(outcome).toEqual({ kind: 'type' })
+  it('a printable char requests typed fallback, carrying the char', () => {
+    const { outcome } = drive(initialPickerState(spec), [{ type: 'char', ch: 'u' }])
+    expect(outcome).toEqual({ kind: 'type', seed: 'u' })
   })
   it('cancel returns cancel', () => {
     const { outcome } = drive(initialPickerState(spec), [{ type: 'cancel' }])
     expect(outcome).toEqual({ kind: 'cancel' })
+  })
+  it('an interrupt is its own outcome, not a cancel', () => {
+    expect(drive(initialPickerState(spec), [{ type: 'interrupt' }]).outcome).toEqual({ kind: 'interrupt' })
+    expect(reducePicker(initialPickerState({ title: '', options: [] }), { type: 'interrupt' }).outcome).toEqual({
+      kind: 'interrupt'
+    })
+  })
+})
+
+describe('reducePicker (option keys)', () => {
+  const keyed: PickerSpec = {
+    title: '',
+    options: [
+      { label: 'Allow', value: 'allow', key: 'y' },
+      { label: 'Always allow', value: 'rule-allow', key: '!' },
+      { label: 'Deny with a reason…', value: 'deny-note' },
+      { label: 'Deny', value: 'deny', key: 'n' }
+    ]
+  }
+  it("commits an option's key at once, whatever the cursor is on", () => {
+    expect(drive(initialPickerState(keyed), [{ type: 'down' }, { type: 'char', ch: 'y' }]).outcome).toEqual({
+      kind: 'commit',
+      value: 'allow'
+    })
+    expect(drive(initialPickerState(keyed), [{ type: 'char', ch: 'N' }]).outcome).toEqual({ kind: 'commit', value: 'deny' })
+    expect(drive(initialPickerState(keyed), [{ type: 'char', ch: '!' }]).outcome).toEqual({
+      kind: 'commit',
+      value: 'rule-allow'
+    })
+  })
+  it('hands any other key to the typed answer as its first character', () => {
+    expect(drive(initialPickerState(keyed), [{ type: 'char', ch: 'u' }]).outcome).toEqual({ kind: 'type', seed: 'u' })
+  })
+  it('ignores a key that picks nothing when there is no typed answer', () => {
+    const { s, outcome } = drive(initialPickerState({ ...keyed, typeLabel: null }), [{ type: 'char', ch: 'u' }])
+    expect(outcome).toBeUndefined()
+    expect(s.cursor).toBe(0)
   })
   it('space is a no-op in single-select', () => {
     const { s } = drive(initialPickerState(spec), [{ type: 'space' }])
@@ -132,6 +171,27 @@ describe('renderPicker', () => {
   it('names what Esc does in the footer', () => {
     expect(renderPicker(initialPickerState(spec), paint).at(-1)).toMatch(/esc cancel$/)
     expect(renderPicker(initialPickerState({ ...spec, escLabel: 'deny' }), paint).at(-1)).toMatch(/esc deny$/)
+  })
+  it('shows option keys beside the labels and says what typing does', () => {
+    const lines = renderPicker(
+      initialPickerState({
+        title: '',
+        escLabel: 'deny',
+        typeLabel: 'type a reason to deny',
+        options: [
+          { label: 'Allow', value: 'allow', key: 'y' },
+          { label: 'Deny with a reason…', value: 'deny-note' }
+        ]
+      }),
+      paint
+    )
+    expect(lines[0]).toBe('› y  Allow')
+    expect(lines[1]).toBe('     Deny with a reason…')
+    expect(lines.at(-1)).toBe('↑/↓ move · enter or its key confirms · type a reason to deny · esc deny')
+    // No typed answer: the footer doesn't offer one.
+    const plan = renderPicker(initialPickerState({ ...spec, typeLabel: null }), paint).at(-1)
+    expect(plan).toBe('↑/↓ move · enter confirm · esc cancel')
+    expect(renderPicker(initialPickerState(spec), paint).at(-1)).toContain('type for a custom answer')
   })
   it('omits the heading line when the title is empty', () => {
     const lines = renderPicker(initialPickerState({ ...spec, title: '' }), paint)
@@ -181,7 +241,7 @@ describe('renderPicker', () => {
 
     it('hands off to the typed prompt on enter/char, cancels on esc', () => {
       expect(reducePicker(empty, { type: 'enter' }).outcome).toEqual({ kind: 'type' })
-      expect(reducePicker(empty, { type: 'char' }).outcome).toEqual({ kind: 'type' })
+      expect(reducePicker(empty, { type: 'char', ch: 'h' }).outcome).toEqual({ kind: 'type', seed: 'h' })
       expect(reducePicker(empty, { type: 'cancel' }).outcome).toEqual({ kind: 'cancel' })
     })
   })
@@ -211,9 +271,10 @@ describe('filtering and action pickers', () => {
     expect(richKeyToPickerKey({ sequence: 'x' })).toEqual({ type: 'text', ch: 'x' })
     expect(richKeyToPickerKey({ name: 'backspace', sequence: '\x7f' })).toEqual({ type: 'backspace' })
     expect(richKeyToPickerKey({ name: 'r', ctrl: true, sequence: '\x12' })).toEqual({ type: 'ctrl', name: 'r' })
-    expect(richKeyToPickerKey({ name: 'c', ctrl: true })).toEqual({ type: 'cancel' })
+    // Ctrl-C stops the run, where Esc only cancels the picker.
+    expect(richKeyToPickerKey({ name: 'c', ctrl: true })).toEqual({ type: 'interrupt' })
     expect(richKeyToPickerKey({ name: '3', sequence: '3' })).toEqual({ type: 'digit', n: 3 })
-    expect(pickerKeyFor(spec, { sequence: 'x' })).toEqual({ type: 'char' })
+    expect(pickerKeyFor(spec, { sequence: 'x' })).toEqual({ type: 'char', ch: 'x' })
     expect(pickerKeyFor(spec, { name: 'backspace' })).toBeNull()
     expect(pickerKeyFor(rich, { sequence: 'x' })).toEqual({ type: 'text', ch: 'x' })
   })
@@ -438,6 +499,44 @@ describe('numbered picker (screen-reader mode)', () => {
     const multi = { ...approval, multiSelect: true }
     expect(parseNumberedPick(multi, '3, 1 3')).toEqual({ kind: 'commit', value: 'allow, session' })
   })
+
+  // The numbered list answers the way the picker does: an option's key picks it, and
+  // where there is no typed answer (a plan, the network questions) other text asks again.
+  describe('with option keys', () => {
+    const keyed: PickerSpec = {
+      title: 'Choose:',
+      escLabel: 'deny',
+      typeLabel: 'type a reason to deny',
+      options: [
+        { label: 'Allow once', value: 'allow', key: 'y' },
+        { label: 'Deny with a reason…', value: 'deny-note' },
+        { label: 'Deny', value: 'deny', key: 'n' }
+      ]
+    }
+    it('lists each key after its number and says what typing does', () => {
+      expect(renderNumberedPicker(keyed)).toEqual([
+        'Choose:',
+        '1, or y. Allow once',
+        '2. Deny with a reason…',
+        '3, or n. Deny',
+        'Type a number or the key after it and press Enter. Or type a reason to deny. Enter on its own: deny.'
+      ])
+      expect(renderNumberedPicker({ ...keyed, typeLabel: null }).at(-1)).toBe(
+        'Type a number or the key after it and press Enter. Enter on its own: deny.'
+      )
+    })
+    it('commits a key, and keeps other text as the typed answer', () => {
+      expect(parseNumberedPick(keyed, 'Y')).toEqual({ kind: 'commit', value: 'allow' })
+      expect(parseNumberedPick(keyed, ' n ')).toEqual({ kind: 'commit', value: 'deny' })
+      expect(parseNumberedPick(keyed, 'use pnpm')).toEqual({ kind: 'type', text: 'use pnpm' })
+    })
+    it('asks again for text where there is no typed answer', () => {
+      expect(parseNumberedPick({ ...keyed, typeLabel: null }, 'maybe')).toEqual({
+        kind: 'invalid',
+        message: 'Choose 1 to 3, or type y, n.'
+      })
+    })
+  })
 })
 
 // /tasks: Enter views the highlighted task and `x` stops it, so `x` is an action
@@ -455,9 +554,9 @@ describe('action keys without a filter', () => {
 
   it('maps keys through the rich mapping, and leaves plain pickers as before', () => {
     expect(pickerKeyFor(tasks, { sequence: 'x', name: 'x' })).toEqual({ type: 'text', ch: 'x' })
-    expect(pickerKeyFor(tasks, { name: 'c', sequence: '\x03', ctrl: true })).toEqual({ type: 'cancel' })
+    expect(pickerKeyFor(tasks, { name: 'c', sequence: '\x03', ctrl: true })).toEqual({ type: 'interrupt' })
     // Without actions, `x` is still a request to type.
-    expect(pickerKeyFor(spec, { sequence: 'x', name: 'x' })).toEqual({ type: 'char' })
+    expect(pickerKeyFor(spec, { sequence: 'x', name: 'x' })).toEqual({ type: 'char', ch: 'x' })
   })
 
   it('ends with the action and the highlighted option', () => {

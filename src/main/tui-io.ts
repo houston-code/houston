@@ -137,6 +137,8 @@ export interface ReadlineLike {
   resume(): void
   on(event: string, cb: () => void): void
   close(): void
+  /** Type text into the open question as if the user had (node:readline's `write`). */
+  write?(data: string): void
 }
 
 export interface TerminalIoDeps {
@@ -770,7 +772,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
 
   // A normal echoed line read. Extracted so `readSecret` can reuse it as its
   // off-TTY fallback (where masking isn't possible anyway).
-  const plainRead = (prompt: string, opts?: { discardPending?: boolean }): Promise<string | null> =>
+  const plainRead = (prompt: string, opts?: { discardPending?: boolean; initial?: string }): Promise<string | null> =>
     new Promise<string | null>((resolve) => {
       if (closed) {
         resolve(null) // interface already ended — no more reads possible
@@ -814,6 +816,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         if (spinnerLabel !== null) startInterruptWatch() // …and re-arm Ctrl-C
         resolve(answer)
       })
+      // The line opens with this already typed (a picker's key that began the answer).
+      if (opts?.initial) rl.write?.(opts.initial)
     })
 
   /**
@@ -2035,6 +2039,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       stopTimer(true)
       toFreshLine()
       stopInterruptWatch()
+      // A key answers the picker in one press, so drop what was typed before it was on
+      // screen: a stray buffered "y" must not approve something the user never saw.
+      drainInput()
       try {
         return await runPicker(spec, rl, repaint, paint, stdin, {
           size: () => ({ rows: deps.rows?.() ?? process.stdout.rows ?? 0, columns: columnsNow() }),

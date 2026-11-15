@@ -1455,7 +1455,7 @@ const CTRLC = '\u0003'
 function fakeIo(inputs: Array<string | null>) {
   const out: string[] = []
   const interrupts: Array<() => void> = []
-  const reads: Array<{ prompt: string; discardPending: boolean }> = []
+  const reads: Array<{ prompt: string; discardPending: boolean; initial?: string }> = []
   const spinner: string[] = [] // 'start:label' | 'label:x' | 'stop'
   const statuses: string[] = [] // every setStatus, in order
   let clears = 0
@@ -1464,7 +1464,11 @@ function fakeIo(inputs: Array<string | null>) {
     out: (s) => out.push(s),
     clearLine: () => clears++,
     readLine: async (prompt, opts) => {
-      reads.push({ prompt, discardPending: Boolean(opts?.discardPending) })
+      reads.push({
+        prompt,
+        discardPending: Boolean(opts?.discardPending),
+        ...(opts?.initial !== undefined ? { initial: opts.initial } : {})
+      })
       const next = idx < inputs.length ? inputs[idx++] : null
       // A Ctrl-C at this read fires the interrupt handler(s) and ends the read with
       // null, exactly as cancelRead would settle a pending prompt on a real Ctrl-C.
@@ -1888,6 +1892,70 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(rec.approvals).toEqual([['run-1', 'c1', 'deny']])
+    // The typed prompt says which keys it takes, since the picker that listed them is gone.
+    expect(t.text()).toContain('[y] allow once   [a] allow for this chat')
+  })
+
+  it("answers an approval with the picker's keys", async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'tool_approval', callId: 'c2', name: 'run_shell', summary: 'ls', kind: 'shell', shellNetwork: true },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['run ls', null])
+    const specs: PickerSpec[] = []
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return { kind: 'commit', value: spec.options.find((o) => o.key === 'y')!.value }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    // y / n / a / ! / x, as typed answers read them; a reason has no key.
+    expect(specs[0].options.map((o) => o.key)).toEqual(['y', 'a', '!', 'n', undefined, 'x'])
+    expect(specs[0].typeLabel).toBe('type a reason to deny')
+    // The network question is yes or no, with nothing to type.
+    expect(specs[1].options.map((o) => o.key)).toEqual(['y', 'n'])
+    expect(specs[1].typeLabel).toBeNull()
+    expect(rec.approvals).toEqual([
+      ['run-1', 'c1', 'allow'],
+      ['run-1', 'c2', 'always']
+    ])
+  })
+
+  it('a key that is not an answer starts the reason for a denial, keeping that key', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'npm i', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['install', 'use pnpm', null])
+    t.io.select = async () => ({ kind: 'type', seed: 'u' })
+    const notes: Array<string | undefined> = []
+    d.io = t.io
+    d.resolveApproval = (_r, _c, _dec, note) => notes.push(note)
+    await runTui(opts, d)
+    const read = t.reads.find((r) => r.prompt.startsWith('Why not?'))
+    expect(read).toEqual({ prompt: 'Why not? (what should it do instead) ', discardPending: false, initial: 'u' })
+    expect(notes).toEqual(['use pnpm'])
+    expect(t.text()).toContain('↳ Denied: use pnpm')
+    expect(rec.approvals).toEqual([])
+  })
+
+  // Ctrl-C at the picker used to deny the one call and let the turn carry on, where
+  // the typed prompt (and /help) stop the run.
+  it('Ctrl-C at the approval picker stops the run', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['run ls', null])
+    t.io.select = async () => ({ kind: 'interrupt' })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.cancels).toEqual(['run-1'])
+    expect(t.text()).toContain('^C interrupted')
+    // Settled so nothing waits on it, but not reported as the user's refusal.
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'deny']])
+    expect(t.text()).not.toContain('↳ Denied')
   })
 
   it('picker cancel denies an approval (safe default)', async () => {
@@ -1900,6 +1968,55 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(rec.approvals).toEqual([['run-1', 'c1', 'deny']])
+  })
+
+  it('Ctrl-C at a question or plan picker stops the run', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Which?', options: [{ label: 'A' }] },
+      { runId: 'x', type: 'plan_ready', callId: 'p1', plan: { title: 'Plan' } },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    t.io.select = async () => ({ kind: 'interrupt' })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.cancels).toEqual(['run-1', 'run-1'])
+    expect(rec.questions).toEqual([['run-1', 'q1', '']])
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
+    // Neither dropped to a typed prompt.
+    expect(t.reads.filter((r) => r.prompt === '> ')).toEqual([])
+  })
+
+  it('a typed key at a question picker opens the custom answer with it', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Which?', options: [{ label: 'Alpha' }] },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['choose', 'hello there', null])
+    t.io.select = async () => ({ kind: 'type', seed: 'h' })
+    d.io = t.io
+    await runTui(opts, d)
+    // Opened with the key, and not draining what the user typed after it.
+    expect(t.reads.at(-2)).toEqual({ prompt: '> ', discardPending: false, initial: 'h' })
+    expect(rec.questions).toEqual([['run-1', 'q1', 'hello there']])
+  })
+
+  it('offers the plan actions on their keys, with nothing to type', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'plan_ready', callId: 'p1', plan: { title: 'Plan' } },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['plan it', null])
+    const specs: PickerSpec[] = []
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return { kind: 'commit', value: 'reject' }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(specs[0].options.map((o) => o.key)).toEqual(['a', 'k', 'e', 's', 'r'])
+    expect(specs[0].typeLabel).toBeNull()
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
   })
 
   it('uses the picker for an ask_user question', async () => {
@@ -4011,14 +4128,34 @@ describe('runTui — plan review (present_plan)', () => {
     if (decision.kind === 'accept') expect(decision.editedBody).toContain('Edited by hand.')
   })
 
-  it('edit with no editor configured falls back to accepting as presented', async () => {
+  // "Edit the plan, then run" is chosen to change the plan before it runs: with no
+  // editor, an aborted edit (Vim's :cq) or an emptied plan, accepting it as presented
+  // ran exactly what the user meant to change.
+  it('edit with no editor configured says so and asks again, accepting nothing', async () => {
     const { d, rec } = deps(withPlan())
-    const t = fakeIo(['do it', 'e', null])
+    const t = fakeIo(['do it', 'e', 'r', null])
     d.io = t.io
     // No editText dep wired → no editor available.
     await runTui(opts, d)
-    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'accept', mode: 'auto-edit' }]])
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
     expect(t.text()).toMatch(/no editor available/i)
+    // Asked again with the keys shown, since there is no picker to list them.
+    expect(t.text().split('[a] Accept & run')).toHaveLength(3)
+  })
+
+  it('an edit that is cancelled or emptied asks again instead of accepting', async () => {
+    for (const result of [null, '  \n']) {
+      const { d, rec } = deps(withPlan())
+      const t = fakeIo(['do it', null])
+      const picks = ['edit', 'accept-ask']
+      t.io.select = async () => ({ kind: 'commit', value: picks.shift()! })
+      d.io = t.io
+      d.editText = async () => result
+      await runTui(opts, d)
+      expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'accept', mode: 'ask' }]])
+      expect(t.text()).toMatch(result === null ? /edit cancelled/ : /edited plan is empty/)
+      expect(t.text()).toContain('choose again')
+    }
   })
 
   // Parity guard (runtime complement to the assertNever compile guard): every
@@ -5215,6 +5352,25 @@ describe('attention signals', () => {
     expect(t.signals.filter((s) => s.alert)).toHaveLength(0)
   })
 
+  // The tab kept saying "needs approval" after the answer while the agent worked on,
+  // and a stopped run (which sends no finished signal) never set it back to idle.
+  it('says working once a prompt is answered, and idle once the run returns, however it ended', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'a1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'aborted' }
+    ])
+    const t = signalIo(['go', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const titles = t.signals.map((s) => s.title).filter((x) => x !== undefined)
+    const approval = titles.indexOf('● needs approval · proj')
+    expect(approval).toBeGreaterThan(0)
+    expect(titles[approval - 1]).toBe('● working · proj') // set at turn start
+    expect(titles[approval + 1]).toBe('● working · proj') // answered: working again
+    expect(titles[approval + 2]).toBe('Houston · proj') // the run returned
+    expect(titles.slice(approval + 3)).toEqual(['']) // and the tab is handed back on exit
+  })
+
   it('sets an idle title at startup so the tab is never blank', async () => {
     const { d } = deps([])
     const t = signalIo([null])
@@ -6317,6 +6473,63 @@ describe('# memory capture', () => {
     await runTui(opts, d)
     expect(calls).toBe(0)
     expect(t.text()).toContain('not remembered')
+  })
+
+  // "#123 is failing" or a pasted "# Spec" starts with # without being a note.
+  it('sends a # line as a message when asked, typed or picked', async () => {
+    const typed = deps(done)
+    typed.d.io = fakeIo(['#123 is failing, fix it', 's', null]).io
+    typed.d.saveMemory = async () => 'x'
+    await runTui(opts, typed.d)
+    expect(typed.rec.runs.map((r) => r.messages.at(-1)?.content)).toEqual(['#123 is failing, fix it'])
+
+    const picked = deps(done)
+    const t = fakeIo(['# Spec', null])
+    const specs: PickerSpec[] = []
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return { kind: 'commit', value: 'send' }
+    }
+    picked.d.io = t.io
+    let saves = 0
+    picked.d.saveMemory = async () => {
+      saves++
+      return 'x'
+    }
+    await runTui(opts, picked.d)
+    expect(specs[0].options.map((o) => o.label)).toEqual(['This project', 'Everywhere', 'Send as message'])
+    expect(saves).toBe(0)
+    expect(picked.rec.runs.map((r) => r.messages.at(-1)?.content)).toEqual(['# Spec'])
+  })
+
+  it('Esc at the scope picker saves and sends nothing, and puts the line back in the composer', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo([])
+    const composed = ['# always lint', null]
+    const initials: Array<string | undefined> = []
+    t.io.readComposer = async (_prompt, initial) => {
+      initials.push(initial)
+      return composed.shift() ?? null
+    }
+    const asked: string[] = []
+    t.io.select = async (spec) => {
+      asked.push(spec.title)
+      return { kind: 'cancel' }
+    }
+    d.io = t.io
+    let saves = 0
+    d.saveMemory = async () => {
+      saves++
+      return 'x'
+    }
+    await runTui(opts, d)
+    expect(asked).toEqual(['Remember this where?'])
+    // Not re-asked as text, not saved, not sent: back as the next draft.
+    expect(t.reads).toEqual([])
+    expect(saves).toBe(0)
+    expect(rec.runs).toHaveLength(0)
+    expect(initials).toEqual([undefined, '# always lint'])
+    expect(t.text()).toContain('not remembered: back in the prompt to edit or send')
   })
 
   it('reports a write failure rather than throwing', async () => {

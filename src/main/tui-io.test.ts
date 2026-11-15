@@ -142,6 +142,18 @@ describe('createTerminalIo lifecycle', () => {
     expect(f.calls).toEqual(['pause', 'resume', 'question', 'pause'])
   })
 
+  it('opens a read with `initial` already typed', () => {
+    const f = fakeRl()
+    const typed: string[] = []
+    f.rl.write = (d) => typed.push(d)
+    const io = createTerminalIo({ createInterface: () => f.rl, write: () => {}, drainInput: () => {} })
+    io.readLine('> ', { initial: 'u' })
+    expect(f.calls).toContain('question')
+    expect(typed).toEqual(['u'])
+    io.readLine('> ')
+    expect(typed).toEqual(['u'])
+  })
+
   it('drains buffered input before a discardPending (sensitive) read', () => {
     const f = fakeRl()
     let drained = 0
@@ -1575,7 +1587,8 @@ describe('sub-prompts and the picker after the composer', () => {
     const t2 = pickerHarness()
     const plain = t2.io.select!({ title: 'Choose:', options: models.slice(0, 3) })
     t2.stdin.push('g')
-    await expect(plain).resolves.toEqual({ kind: 'type' })
+    // The key that handed off starts the typed answer.
+    await expect(plain).resolves.toEqual({ kind: 'type', seed: 'g' })
   })
 
   // Printed above an open picker, a notice goes through the same output filter as
@@ -1605,6 +1618,41 @@ describe('sub-prompts and the picker after the composer', () => {
     expect(after.slice(notice)).toContain('› gpt-0') // and drawn again below
     t.stdin.push('\r')
     await expect(picked).resolves.toEqual({ kind: 'commit', value: '0' })
+  })
+
+  // A key answers the picker in one press, so what was typed before it appeared must not.
+  it('the picker drops type-ahead, answers to option keys, and reports Ctrl-C as an interrupt', async () => {
+    const stdin = fakeTty()
+    let drained = 0
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: () => {},
+      columns: () => 80,
+      drainInput: () => {
+        drained++
+      }
+    })
+    const spec = {
+      title: '',
+      options: [
+        { label: 'Allow', value: 'allow', key: 'y' },
+        { label: 'Deny', value: 'deny', key: 'n' }
+      ]
+    }
+    const keyed = io.select!(spec)
+    expect(drained).toBe(1)
+    stdin.push('n')
+    await expect(keyed).resolves.toEqual({ kind: 'commit', value: 'deny' })
+    const typed = io.select!(spec)
+    stdin.push('u')
+    await expect(typed).resolves.toEqual({ kind: 'type', seed: 'u' })
+    const stopped = io.select!(spec)
+    stdin.push('\x03')
+    await expect(stopped).resolves.toEqual({ kind: 'interrupt' })
+    const escaped = io.select!(spec)
+    stdin.push('\x1b')
+    await expect(escaped).resolves.toEqual({ kind: 'cancel' })
   })
 
   it('the composer joins a character split across two reads', async () => {
