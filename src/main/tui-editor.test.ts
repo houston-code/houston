@@ -701,3 +701,16 @@ describe('parseImagePaths', () => {
     expect(parseImagePaths('file:///bad%E0%A4.png')).toBeNull()
   })
 })
+
+describe('renderEditor ghost text', () => {
+  const plain = makePainter(false)
+  it('shows the ghost only on an empty draft, cut to the row, cursor left at the prompt', () => {
+    const empty = initialEditorState([], '')
+    const v = renderEditor(empty, { prompt: '> ', width: 20, paint: plain, ghost: 'a much longer suggestion than fits' })
+    expect(v.rows[0].startsWith('> a much')).toBe(true)
+    expect(v.rows[0].length).toBeLessThanOrEqual(20)
+    expect(v.cursorCol).toBe(2)
+    const typed = initialEditorState([], 'x')
+    expect(renderEditor(typed, { prompt: '> ', width: 20, paint: plain, ghost: 'hint' }).rows[0]).toBe('> x')
+  })
+})
