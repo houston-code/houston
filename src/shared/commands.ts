@@ -313,9 +313,10 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['gui', 'tui']
   },
   {
-    name: 'changes', group: 'Review and undo',
-    description: 'What is different in the working tree (also /diff)',
-    clients: ['gui', 'tui']
+    name: 'changes', group: 'Review and undo', args: '[turn|chat] [revert] [path]',
+    description: "What changed (working tree, this turn, or this chat), a file's diff, or revert a file (also /diff)",
+    clients: ['gui', 'tui'],
+    gui: { description: 'Open the Changes view (also /diff)', args: null }
   },
   {
     name: 'commit', group: 'Review and undo', args: '[message]',

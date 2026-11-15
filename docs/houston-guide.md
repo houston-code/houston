@@ -775,7 +775,7 @@ Both clients accept the same names, so a command learned in one works in the oth
 | `/init` | write or improve `AGENTS.md`, the project's instructions file |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
 | `/rewind` | go back to an earlier message: the conversation, the code, or both. `/rewind <n> [both\|conversation\|code]` goes to message n (numbered as in the list), and `/rewind undo` reverses the last rewind |
-| `/changes` (or `/diff`) | what's different in the working tree; `/changes last [n]` shows the diff of this chat's latest edit, or the one n edits back |
+| `/changes` (or `/diff`) | what's different in the working tree; `/changes last [n]` shows the diff of this chat's latest edit, or the one n edits back (the terminal also takes a scope, a file, or `revert <file>`) |
 | `/skills`, `/agents` | list the workspace's skills and custom agents (run a skill with `/<skill-name>`) |
 | `/help` | list the available commands (in the desktop app, opens the command palette on them) |
 
@@ -1685,6 +1685,9 @@ A single reply also has an output limit.
 | `/undo` | puts back the files the last turn changed |
 | `/redo` | re-applies them |
 | `/changes` (or `/diff`) | summarizes everything different in the working tree: each file with its status and lines gained and lost, plus a total |
+| `/changes turn`, `/changes chat` | *terminal:* the same list for what the chat's latest turn, or the whole chat, changed (the Changes view's other two scopes) |
+| `/changes [turn\|chat] <path>` | *terminal:* that file's diff in the scope, with real line numbers and the changed words marked (long diffs stop after 200 lines) |
+| `/changes [turn\|chat] revert <path>` | *terminal:* shows the file's diff, asks `[y/N]`, and on a yes puts it back, as the Changes view's **Revert** does |
 | `/diff last [n]` | *terminal:* shows the diff of this session's last edit, or the one `n` edits back |
 
 - **Edits you didn't approve one by one still show up.** In the terminal, an edit that
@@ -1697,6 +1700,12 @@ A single reply also has an output limit.
 - **Limits.** `/undo` covers the last turn's file writes only. It doesn't undo shell
   commands, and it doesn't touch git history.
 - `/changes` is the natural question after a long autonomous run.
+- **Reverting from the terminal.** `/changes revert <path>` discards the file's uncommitted
+  changes (or deletes it, if git doesn't have it yet); with `turn` or `chat` it puts the file
+  back as it was before that turn or chat. Anything but `y` keeps the file. A file that
+  changed again after the diff was shown is refused, so a revert never discards what you
+  didn't see, and the revert waits while the chat's run is going. A path can be a unique
+  end of one (`/changes app.ts`); write `./turn` for a file named like a scope.
 
 ### The Changes view (desktop app)
 
