@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -397,4 +397,40 @@ describe.skipIf(!hasGit)('a repository git cannot open', () => {
     expect(changes.isRepo).toBe(false)
     expect(changes.unreadable).toBeUndefined()
   })
+})
+
+describe.skipIf(!hasGit)('a workspace in a subfolder of the repository', () => {
+  const GIT_TIMEOUT = 30_000
+
+  it('lists only changes under the workspace, with paths relative to it, and the badge agrees', async () => {
+    const top = freshRepo()
+    const ws = join(top, 'pkg')
+    mkdirSync(ws, { recursive: true })
+    writeFileSync(join(ws, 'mod.txt'), 'one\n')
+    commit(top)
+    writeFileSync(join(ws, 'mod.txt'), 'one\ntwo\n')
+    writeFileSync(join(ws, 'new.txt'), 'new\n')
+    writeFileSync(join(top, 'a.txt'), 'outside\n')
+
+    const full = await collectWorkingTreeChanges(ws)
+    expect(full.files.map((f) => f.path).sort()).toEqual(['mod.txt', 'new.txt'])
+    const stats = await collectWorkingTreeStats(ws)
+    expect(stats.fileCount).toBe(full.files.length)
+    expect(stats.added).toBe(full.added)
+    expect(stats.removed).toBe(full.removed)
+  }, GIT_TIMEOUT)
+
+  it('fingerprints a further edit to a file that was already dirty', async () => {
+    const top = freshRepo()
+    const ws = join(top, 'pkg')
+    mkdirSync(ws, { recursive: true })
+    writeFileSync(join(ws, 'f.txt'), 'one\n')
+    commit(top)
+    writeFileSync(join(ws, 'f.txt'), 'two\n')
+    const before = await workingTreeFingerprint(ws)
+    expect(before).not.toBeNull()
+    // Same status line (still " M"), different size: only the stat tells them apart.
+    writeFileSync(join(ws, 'f.txt'), 'three, longer\n')
+    expect(await workingTreeFingerprint(ws)).not.toBe(before)
+  }, GIT_TIMEOUT)
 })

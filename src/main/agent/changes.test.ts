@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileDiffSignature, type ChangeRevertRequest } from '@shared/changes'
@@ -250,4 +250,29 @@ describe('chat and turn scopes', () => {
     // The same request again: the diff it names is gone.
     expect(await revertChange(req, deps([]))).toMatchObject({ ok: false, error: expect.stringMatching(/changed since/) })
   })
+})
+
+describe('revertChange, working tree in a subfolder of the repository', () => {
+  maybe(
+    'reverts the tracked file under the workspace, not a path doubled below it',
+    async () => {
+      const top = repo()
+      const ws = join(top, 'pkg')
+      mkdirSync(ws, { recursive: true })
+      writeFileSync(join(ws, 'c.txt'), 'original\n')
+      git(top, 'add', '.')
+      git(top, 'commit', '-qm', 'pkg')
+      writeFileSync(join(ws, 'c.txt'), 'edited\n')
+      // A change outside the workspace is not this workspace's to list or revert.
+      writeFileSync(join(top, 'b.txt'), 'outside edit\n')
+
+      const listed = (await collectWorkingTreeChanges(ws)).files.map((f) => f.path)
+      expect(listed).toEqual(['c.txt'])
+      expect(await revertChange(await treeReq(ws, 'c.txt'), deps([ws]))).toEqual({ ok: true })
+      expect(readFileSync(join(ws, 'c.txt'), 'utf8')).toBe('original\n')
+      expect(existsSync(join(ws, 'pkg'))).toBe(false)
+      expect(readFileSync(join(top, 'b.txt'), 'utf8')).toBe('outside edit\n')
+    },
+    TIMEOUT
+  )
 })
