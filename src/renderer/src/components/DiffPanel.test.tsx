@@ -242,7 +242,8 @@ describe('DiffPanel', () => {
     render(<DiffPanel workspace="/repo" commitForm conversationId="c1" />)
     expect(await screen.findByLabelText('Commit message')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Suggest message' })).toBeInTheDocument()
-    expect(gitBranchSync).toHaveBeenCalledWith('/repo')
+    // The form reads the branch in an effect, which can run after the form is on screen.
+    await waitFor(() => expect(gitBranchSync).toHaveBeenCalledWith('/repo'))
   })
 
   it('offers the turn and chat scopes only once the chat exists', async () => {
