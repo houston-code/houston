@@ -9691,3 +9691,241 @@ describe('-w / --worktree', () => {
     expect(parseTuiArgs(['-i', '-w', 'x', '--resume', 'abc'], '/d')?.usageError).toMatch(/cannot be combined/)
   })
 })
+
+describe('/config, /status and /feedback', () => {
+  const ESC = String.fromCharCode(27)
+
+  /** deps whose settings follow updateSettings, as the real store does. */
+  function liveDeps(over: Partial<AppSettings> = {}) {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    let cur = settings({ selected: { providerId: 'anthropic', model: 'claude' }, ...over })
+    const saved: Array<Partial<AppSettings>> = []
+    d.getSettings = () => cur
+    d.updateSettings = (p) => {
+      saved.push(p)
+      cur = { ...cur, ...p }
+    }
+    return { d, saved, current: () => cur }
+  }
+
+  it('parses /config, /status, /feedback and /bug', () => {
+    const s = settings()
+    expect(parseSlashCommand('/config', s)).toEqual({ kind: 'config', op: { op: 'picker' } })
+    expect(parseSlashCommand('/config vim=on', s)).toEqual({ kind: 'config', op: { op: 'set', key: 'vim', value: 'on' } })
+    expect(parseSlashCommand('/config theme=mono', s)).toEqual({ kind: 'config', op: { op: 'set', key: 'theme', value: 'mono' } })
+    expect(parseSlashCommand('/status', s)).toEqual({ kind: 'status' })
+    expect(parseSlashCommand('/feedback', s)).toEqual({ kind: 'feedback' })
+    expect(parseSlashCommand('/bug', s)).toEqual({ kind: 'feedback' })
+  })
+
+  it("/config key=value saves through the same path as the key's own command", async () => {
+    const { d, saved, current } = liveDeps()
+    const t = fakeIo([
+      '/config theme=light',
+      '/config vim=on',
+      '/config verbose true',
+      '/config thoughts=hide',
+      '/config model=llama',
+      '/config approval=full',
+      '/config memory=off',
+      null
+    ])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text).toContain('· theme → light')
+    expect(text).toContain('· vim keys on')
+    expect(text).toContain('· verbose: showing')
+    expect(text).toContain('thoughts: hidden')
+    expect(text).toContain('default model → ollama/llama')
+    expect(text).toContain('default approval → full-auto')
+    expect(text).toContain('memory off')
+    expect(saved).toEqual(
+      expect.arrayContaining([
+        { tuiTheme: 'light' },
+        { tuiEditor: 'vim' },
+        { tuiVerbose: true },
+        { reasoningDisplay: 'hide' },
+        { selected: { providerId: 'ollama', model: 'llama' } },
+        { approvalPolicy: 'full-auto' },
+        { memoryEnabled: false }
+      ])
+    )
+    expect(current().selected).toEqual({ providerId: 'ollama', model: 'llama' })
+  })
+
+  it('/config with a bad key or value changes nothing and says why', async () => {
+    const { d, saved } = liveDeps()
+    const t = fakeIo(['/config colour=red', '/config vim=maybe', '/config vim', '/config --help', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text).toContain('no setting "colour" here: /config --help lists them')
+    expect(text).toContain('vim can\'t be "maybe": use on | off')
+    expect(text).toContain('vim: off')
+    expect(text).toContain('Settings (/config):')
+    expect(text).toContain('desktop-notifications')
+    expect(saved).toEqual([])
+  })
+
+  it('the /config picker steps the highlighted value and comes back on the same row', async () => {
+    const { d, saved } = liveDeps()
+    const t = fakeIo(['/config', null])
+    const specs: PickerSpec[] = []
+    const picks: PickerOutcome[] = [
+      { kind: 'commit', value: 'vim' },
+      { kind: 'commit', value: 'notify' },
+      { kind: 'cancel' }
+    ]
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return picks.shift() ?? { kind: 'cancel' }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(specs).toHaveLength(3)
+    const labels = (i: number): string[] => specs[i].options.map((o) => o.label)
+    expect(labels(0)).toContain('vim: off')
+    expect(labels(1)).toContain('vim: on')
+    expect(specs[1].initialCursor).toBe(specs[0].options.findIndex((o) => o.value === 'vim'))
+    // notify started at auto; Enter steps it to osc.
+    expect(labels(2)).toContain('notify: osc')
+    expect(saved).toEqual([{ tuiEditor: 'vim' }, { tuiNotify: 'osc' }])
+    expect(specs[0].options.some((o) => /key|token|secret/i.test(o.value))).toBe(false)
+  })
+
+  it('the /config picker picks the default model from the ready ones', async () => {
+    const { d, saved } = liveDeps()
+    const t = fakeIo(['/config', null])
+    const picks: PickerOutcome[] = [{ kind: 'commit', value: 'model' }, { kind: 'commit', value: '1' }, { kind: 'cancel' }]
+    const specs: PickerSpec[] = []
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return picks.shift() ?? { kind: 'cancel' }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(specs[1].title).toBe('Model new chats start on:')
+    expect(saved).toEqual([{ selected: { providerId: 'ollama', model: 'llama' } }])
+  })
+
+  it('in screen-reader mode a typed key=value at the numbered list sets it, with no escapes', async () => {
+    const { d, saved } = liveDeps()
+    const t = fakeIo(['/config', null])
+    const picks: PickerOutcome[] = [{ kind: 'type', text: 'notify=bell' }, { kind: 'type', text: '' }]
+    t.io.select = async () => picks.shift() ?? { kind: 'cancel' }
+    d.io = t.io
+    await runTui({ ...opts, color: true, screenReader: true }, d)
+    expect(saved).toContainEqual({ tuiNotify: 'bell' })
+    expect(t.text()).toContain('notifications → bell')
+    expect(t.text()).not.toContain(ESC)
+  })
+
+  it('/config with no picker prints the list', async () => {
+    const { d } = liveDeps()
+    const t = fakeIo(['/config', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('Settings (/config):')
+  })
+
+  it('/status shows the session, host and settings facts as plain lines', async () => {
+    const { d } = liveDeps({
+      mcpServers: [
+        { id: 'a', command: 'x', enabled: true },
+        { id: 'b', command: 'y', enabled: true },
+        { id: 'c', command: 'z', enabled: false }
+      ] as McpServerConfig[]
+    })
+    d.version = '9.9.9'
+    d.settingsPath = () => '/profile/settings.json'
+    d.mcpStatuses = () =>
+      [
+        { id: 'a', state: 'connected' },
+        { id: 'b', state: 'error', error: 'spawn failed' }
+      ] as McpServerStatus[]
+    const asked: Array<string | null> = []
+    d.statusFacts = async (id) => {
+      asked.push(id)
+      return {
+        installMethod: 'npm',
+        sandbox: { backend: 'bubblewrap', enforced: true },
+        egressMode: 'allowlist',
+        network: null,
+        managed: { path: '/etc/houston/managed-settings.json', rules: 2 }
+      }
+    }
+    const t = fakeIo(['/status', null])
+    d.io = t.io
+    await runTui({ ...opts, color: true, screenReader: true }, d)
+    const text = t.text()
+    expect(asked).toEqual([null])
+    expect(text).toMatch(/version:\s+Houston 9\.9\.9/)
+    expect(text).toMatch(/installed with:\s+npm/)
+    expect(text).toMatch(/model:\s+claude, anthropic/)
+    expect(text).toMatch(/approval:\s+ask/)
+    expect(text).toMatch(/sandbox:\s+bubblewrap, enforced/)
+    expect(text).toMatch(/shell network:\s+off until you allow it/)
+    expect(text).toMatch(/MCP servers:\s+1 connected, 1 failed/)
+    expect(text).toMatch(/user settings:\s+\/profile\/settings\.json/)
+    expect(text).toMatch(/project settings:\s+none in this folder/)
+    expect(text).toMatch(/managed policy:\s+\/etc\/houston\/managed-settings\.json \(2 rules\)/)
+    expect(text).toMatch(/session cost:\s+0\+0 tok/)
+    expect(text).not.toContain(ESC)
+    expect(text).not.toContain('spawn failed')
+  })
+
+  it("/status reports this folder's project config and its trust", async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'houston-status-'))
+    try {
+      mkdirSync(join(ws, '.houston'))
+      writeFileSync(
+        join(ws, '.houston/settings.json'),
+        JSON.stringify({ permissionRules: [{ action: 'allow', tool: 'run_shell', match: 'npm test*' }] })
+      )
+      const { d } = liveDeps()
+      const t = fakeIo(['/status', null])
+      // Answer the trust prompt with "no" so the folder stays undecided.
+      const ask = t.io.readLine
+      t.io.readLine = async (prompt, o) => (/trust/i.test(prompt) ? 'n' : ask(prompt, o))
+      d.io = t.io
+      await runTui({ ...opts, cwd: ws }, d)
+      expect(t.text()).toMatch(/project settings:\s+present, not trusted yet/)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('/bug shows the report, then opens it only once chosen', async () => {
+    const { d } = liveDeps()
+    const opened: string[] = []
+    d.issueReport = {
+      body: () => '### Environment\n\n- Houston 9.9.9',
+      url: (b) => `https://example.invalid/new?body=${encodeURIComponent(b ?? '')}`,
+      open: (u) => {
+        opened.push(u)
+        return true
+      }
+    }
+    const t = fakeIo(['/bug', null])
+    let shownFirst = false
+    t.io.select = async () => {
+      // The report was on screen before the question, and nothing had opened.
+      shownFirst = t.text().includes('- Houston 9.9.9') && opened.length === 0
+      return { kind: 'commit', value: 'open' }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(shownFirst).toBe(true)
+    expect(opened).toHaveLength(1)
+  })
+
+  it('/settings points at /config and /status', async () => {
+    const { d } = liveDeps()
+    const t = fakeIo(['/settings', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('/config')
+    expect(t.text()).toContain('/status')
+  })
+})

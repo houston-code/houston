@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { app, shell } from 'electron'
-import { issueReportBody, issueReportUrl } from '@shared/issueReport'
+import { ISSUES_URL, issueReportBody, issueReportUrl } from '@shared/issueReport'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
 import { log, logFilePath } from './logger'
@@ -9,8 +9,7 @@ import { recentCrashDumps } from './crashRecovery'
 import { openExternalSafely } from './safeExternal'
 import { getUserDataDir } from './userData'
 
-/** Where Help → Report an Issue… sends the user. */
-export const ISSUES_URL = 'https://github.com/houston-code/houston/issues/new'
+export { ISSUES_URL }
 
 /**
  * Help → Open Logs: show the log file selected in the OS file manager, or open its

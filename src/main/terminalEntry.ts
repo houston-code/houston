@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { clearChildReportFlag, setWakeHost, takeBackgroundEvents, wakeNote } from './agent/backgroundEvents'
 import { getMcpRegistryServer, searchMcpRegistry } from './mcpRegistry'
-import { fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { isatty } from 'node:tty'
@@ -32,8 +32,14 @@ import { lspManager } from './agent/lsp/manager'
 import { flushRuleUsage } from './ruleUsage'
 import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type SignalProcess } from './signalCleanup'
 import { disconnectAllMcp, getMcpStatuses, reconnectMcpServers } from './mcp/manager'
-import { runMcpOAuthFlow } from './mcp/oauth'
-import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
+import { openWithSystemHandler, runMcpOAuthFlow } from './mcp/oauth'
+import { canStoreMcpOAuth, collectSecrets, setMcpOAuth } from './agentHost'
+import { activeBackendId, isSandboxed } from './sandbox'
+import { resolveEgressMode } from '@shared/egress'
+import { ISSUES_URL, issueReportBody, issueReportUrl } from '@shared/issueReport'
+import { overrideForConversation } from './agent/overrides'
+import { loadManagedPolicy, resolveManagedPolicyPath } from './agent/managedPolicy'
+import { redactSecrets } from './agent/redact'
 import type { AgentEvent, ConversationMeta } from '@shared/agent'
 import { setSpawnBackend } from './agent/spawn'
 import { setSchedulerBackend } from './agent/scheduler'
@@ -945,6 +951,41 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       ...(canSetKey() ? { setKey: (id: string, key: string) => setProviderKey(id, key) } : {}),
       isMac: process.platform === 'darwin',
       settingsPath: () => join(getUserDataDir(), 'settings.json'),
+      // /status: what only the host knows. The network state is this chat's own
+      // grants, read from the same in-memory store the loop seeds each turn from.
+      statusFacts: async (conversationId) => {
+        const managedPath = resolveManagedPolicyPath()
+        const managed = existsSync(managedPath)
+          ? { path: managedPath, rules: (await loadManagedPolicy(managedPath)).permissionRules.length }
+          : null
+        const o = conversationId ? overrideForConversation(conversationId) : null
+        return {
+          installMethod: currentInstallMethod(),
+          sandbox: { backend: activeBackendId(), enforced: isSandboxed() },
+          egressMode: resolveEgressMode(getSettings().sandboxEgress),
+          network: o
+            ? {
+                shellGranted: o.shellNetworkGranted,
+                shellDecided: o.shellNetworkDecided,
+                hosts: o.networkHosts.size,
+                shellHosts: o.egressHosts.size
+              }
+            : null,
+          managed
+        }
+      },
+      // /feedback: the desktop's Help > Report an Issue text. The doctor probe runs
+      // against the profile folder, not the project, so no project path reaches it,
+      // and the redacter runs over it anyway before the user sees it.
+      issueReport: {
+        body: () =>
+          redactSecrets(
+            issueReportBody(gatherDoctorFacts(getUserDataDir(), { version, update: null })),
+            collectSecrets()
+          ),
+        url: (body) => (body === null ? ISSUES_URL : issueReportUrl(ISSUES_URL, body)),
+        open: (url) => openWithSystemHandler(url)
+      },
       io,
       highlightHtml: (lang, codeStr) => (hljs ? highlightToHtml(hljs, lang, codeStr) : null),
       persist: {

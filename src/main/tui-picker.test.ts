@@ -584,3 +584,19 @@ describe('action keys without a filter', () => {
     expect(step.state.notice).toBe('nothing selected')
   })
 })
+
+describe('initialCursor', () => {
+  const options = [
+    { label: 'a', value: 'a' },
+    { label: 'b', value: 'b' },
+    { label: 'c', value: 'c' }
+  ]
+  it('starts on the given row, clamped to the rows', () => {
+    expect(initialPickerState({ title: '', options, initialCursor: 2 }).cursor).toBe(2)
+    expect(initialPickerState({ title: '', options, initialCursor: 9 }).cursor).toBe(2)
+    expect(initialPickerState({ title: '', options, initialCursor: -3 }).cursor).toBe(0)
+    expect(initialPickerState({ title: '', options, initialCursor: Number.NaN }).cursor).toBe(0)
+    expect(initialPickerState({ title: '', options: [], initialCursor: 1 }).cursor).toBe(0)
+    expect(initialPickerState({ title: '', options }).cursor).toBe(0)
+  })
+})

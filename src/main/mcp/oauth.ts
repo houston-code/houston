@@ -524,7 +524,7 @@ export function urlOpenCommand(
 }
 
 /** Default browser opener: the platform's URL handler, detached, best-effort. */
-function openWithSystemHandler(url: string): boolean {
+export function openWithSystemHandler(url: string): boolean {
   const command = urlOpenCommand(url)
   if (!command) return false
   try {

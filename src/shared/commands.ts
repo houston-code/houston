@@ -155,6 +155,7 @@ export const COMMAND_ALIASES: Readonly<Record<string, string>> = {
   proposed: 'proposals',
   bashes: 'tasks',
   paste: 'image',
+  bug: 'feedback',
   q: 'quit'
 }
 
@@ -329,6 +330,21 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     name: 'doctor', group: 'Setup',
     description: 'Check your setup: model, sandbox, tools, MCP',
     clients: ['gui', 'tui']
+  },
+  {
+    name: 'config', group: 'Terminal', args: '[key[=value]]',
+    description: 'Pick and change a terminal setting, or show or set one (/config --help lists them)',
+    clients: ['tui']
+  },
+  {
+    name: 'status', group: 'Terminal',
+    description: 'Version, model, approval, sandbox, network, MCP, settings sources and cost on one screen',
+    clients: ['tui']
+  },
+  {
+    name: 'feedback', group: 'Terminal',
+    description: 'Report an issue: see what the report holds, then open it or print its link (also /bug)',
+    clients: ['tui']
   },
   {
     name: 'vim', group: 'Terminal', args: '[on|off]',
@@ -511,6 +527,9 @@ export function builtinCommands(client: CommandClient): Command[] {
  */
 const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   vim: 'the app\'s composer has no vim mode',
+  config: 'in the app, every setting is in Settings',
+  status: 'in the app, Settings > About shows the version, and /doctor checks the setup',
+  feedback: 'in the app, use Help > Report an Issue',
   'add-dir': 'in the app, add folders the agent may use under Settings, Workspace, Additional folders',
   'reduce-motion': 'the app follows your system\'s reduce motion setting',
   notify: 'in the app, notifications and sounds are under Settings > General > Notifications',

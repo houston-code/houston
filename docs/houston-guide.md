@@ -762,7 +762,7 @@ safe subset in place. In the desktop app:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/add-dir`, `/vim`, `/notify`, `/screen-reader`,
+**Terminal-only commands.** `/config`, `/status`, `/feedback`, `/add-dir`, `/vim`, `/notify`, `/screen-reader`,
 `/reduce-motion`, `/verbose`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
 `/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/permissions`, and
 `/exit`. Typed in the
@@ -804,6 +804,42 @@ the model.
   exchanges, so you can see where you left off, and says how its last turn ended when it
   didn't finish (an error, a Stop, or a limit it hit).
 - Leaving prints the `houston --resume <id>` command that reopens the chat.
+
+**Terminal settings (/config).** `/config` opens a list of the settings the terminal
+understands, each with its value: `theme`, `vim`, `verbose`, `thoughts`, `notify`,
+`reduce-motion`, `screen-reader`, the defaults new chats start with (`model`, `effort`,
+`approval`), `desktop-notifications`, `background-wake`, and `memory`. Enter changes the
+highlighted one to its next value (for `model`, it opens the model list) and saves it;
+Esc closes the list. From the prompt:
+
+- `/config <key>` shows one setting, what it does, and the values it takes
+- `/config <key>=<value>` (or `/config <key> <value>`) sets it; an unknown key or value
+  says so and changes nothing (`on`/`off` also take `true`/`false` and `yes`/`no`)
+- `/config --help` lists every key with its value now
+
+A value set here works exactly as its own command would (`/config theme=light` is
+`/theme light`) and is saved to the same settings file the desktop app reads. The
+defaults (`model`, `effort`, `approval`) apply to new chats and the next launch; `/model`,
+`/reasoning` and `/approval` change the chat you're in. API keys are never listed or set
+here; `/login` handles them. `/settings` still prints the settings summary.
+
+**Session status (/status).** `/status` shows on one screen: the Houston version and
+how it was installed, the model and thinking effort, the approval mode, the shell
+sandbox and whether it confines, whether this chat's shell commands can reach the
+network (and how many hosts you allowed this chat), how many MCP servers are connected
+or failed, the settings in effect (your settings file, this folder's
+`.houston/settings.json` and whether it is trusted, and an administrator's managed
+policy if one is installed), and what this session has cost so far. Each item is a
+plain `label: value` line, so it reads the same in screen-reader mode.
+
+**Reporting an issue (/feedback).** `/feedback` (or `/bug`) is the desktop app's Help >
+Report an Issue. It first shows exactly the text the new issue starts with: your Houston
+version, platform, Node version, and a summary of the `/doctor` checks, with no logs,
+file paths, or keys (server and provider names you chose are counted, not named, and
+the secret redacter runs over it). Then you choose: open the new-issue page in your
+browser with that text filled in, print its link, or cancel. Nothing is sent until you
+submit the issue on GitHub. To share the chat too, `/export` it, read the file over, and
+attach it yourself.
 
 ### Terminal themes
 
