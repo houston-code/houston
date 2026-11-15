@@ -195,7 +195,8 @@ import {
   reportChildToParent,
   takeChildReports,
   saveSideChat,
-  computeUsageReport
+  computeUsageReport,
+  computeScorecard
 } from './conversations'
 
 /** Resume-picker rows, each marked with the desktop app's unread state for it. */
@@ -1127,6 +1128,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       secretRedactor: () => createSecretRedactor(collectSecrets()),
       // /usage: the desktop usage view's report, summed locally from the saved chats.
       usageReport: () => computeUsageReport(),
+      // /scorecard: the desktop's loop scorecard, aggregated locally from the saved chats.
+      scorecard: () => computeScorecard(),
       clipboardImage: () => {
         const img = readClipboardImage()
         if (!img) return { error: `no image on the clipboard (${noClipboardHint(process.platform)})` }

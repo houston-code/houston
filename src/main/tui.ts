@@ -162,6 +162,9 @@ import {
   type StatusLinePayload
 } from './tui-statusline'
 import type { UsageReport } from '@shared/usageReport'
+import type { Scorecard } from '@shared/scorecard'
+import { renderScorecard } from './tui-scorecard'
+import { FALLBACK_USAGE, fallbackChange, parseFallbackArgs, renderFallbacks, type FallbackOp } from './tui-fallback'
 import {
   chatSubagents,
   parseTasksArgs,
@@ -2561,6 +2564,10 @@ export type SlashResult =
   | { kind: 'usage' }
   /** Show the custom status line's setup and the JSON its command reads (/statusline). */
   | { kind: 'statusline' }
+  /** How each model has behaved across the saved chats (/scorecard). */
+  | { kind: 'scorecard' }
+  /** List or edit the fallback models (/model fallback [add|remove|up|down]). */
+  | { kind: 'model-fallback'; op: FallbackOp }
   /** List (and open) the background sessions the agent spawned (/spawned). */
   | { kind: 'spawned' }
   /** This chat's background shells and subagents: list, show one, or stop one (/tasks). */
@@ -2795,6 +2802,8 @@ export function parseSlashCommand(
       return { kind: 'usage' }
     case 'statusline':
       return { kind: 'statusline' }
+    case 'scorecard':
+      return { kind: 'scorecard' }
     case 'copy': {
       // `/copy` is the last reply; a number counts back from there.
       const a = arg.trim()
@@ -2859,6 +2868,8 @@ export function parseSlashCommand(
     case 'compact':
       return arg.trim() ? { kind: 'compact', focus: arg.trim() } : { kind: 'compact' }
     case 'model': {
+      const fb = /^fallbacks?(?:\s+([\s\S]*))?$/i.exec(arg.trim())
+      if (fb) return { kind: 'model-fallback', op: parseFallbackArgs(fb[1] ?? '') }
       const { rest, asDefault } = splitDefaultFlag(arg)
       // Bare /model: pick from a list (the desktop's model picker), or list them
       // when the terminal can't show a picker.
@@ -2907,6 +2918,7 @@ export const HELP_TEXT = [
   '  /help                 show this help',
   '  /model [id]           pick this chat\'s model from a list, or switch to one by id (--default: new chats too)',
   "  /model refresh [p]    fetch a provider's model list again (default: this chat's provider)",
+  '  /model fallback [op]  models to try when the chat\'s model can\'t serve a turn: add <model>, remove/up/down <n>',
   '  /login                set or replace a provider API key, or add a host',
   "  /login edit <p>       change a provider's base URL, region, endpoint or custom headers",
   '  /login remove <p>     remove an added provider · /login forget-key <p>: forget its stored key',
@@ -2938,6 +2950,7 @@ export const HELP_TEXT = [
   '  /cost                 show session token + cost totals, by model and by subagent',
   '  /usage                spend and tokens per day (last 7) and per project, from the chats on this computer',
   '  /statusline           the custom status line: its command, and the JSON that command reads',
+  '  /scorecard            how each model has behaved across your chats: steps, tools, clean finishes, cost',
   '  /context              what fills the context now, part by part',
   '  /skills /agents       list workspace skills / custom agents',
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
@@ -4413,6 +4426,8 @@ export interface TuiDeps {
    * for `/usage` (the desktop usage view's report). Absent ⇒ the command says so.
    */
   usageReport?: () => UsageReport
+  /** The loop scorecard over the chats saved on this computer, for `/scorecard`. Absent ⇒ unavailable. */
+  scorecard?: () => Scorecard
   /**
    * Open `initial` text in the user's `$VISUAL`/`$EDITOR` and return the edited
    * result (null if no editor is configured or the edit was aborted). Used by the
@@ -7202,6 +7217,43 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'copy') {
         await runCopyCommand(result, messages, deps, paint)
+        continue
+      }
+      if (result.kind === 'scorecard') {
+        if (!deps.scorecard) {
+          deps.io.out(paint('· the scorecard is unavailable here\n', 'dim'))
+          continue
+        }
+        try {
+          deps.io.out(`${renderScorecard(deps.scorecard(), paint)}\n`)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't build the scorecard: ${(e as Error).message}\n`, 'yellow'))
+        }
+        continue
+      }
+      if (result.kind === 'model-fallback') {
+        const op = result.op
+        if (op.op === 'usage') {
+          deps.io.out(paint(`· ${FALLBACK_USAGE}\n`, 'dim'))
+          continue
+        }
+        if (op.op === 'list') {
+          deps.io.out(`${renderFallbacks(deps.getSettings(), paint)}\n`)
+          continue
+        }
+        if (!deps.updateSettings) {
+          deps.io.out(paint('· changing settings is unavailable here\n', 'dim'))
+          continue
+        }
+        // Read now (another process may have saved since) and written as a patch.
+        const current = deps.getSettings()
+        const change = fallbackChange(op, current, (typed) => resolveModelArg(typed, current))
+        if ('error' in change) {
+          deps.io.out(paint(`${change.error}\n`, 'yellow'))
+          continue
+        }
+        deps.updateSettings({ fallbackModels: change.list.length ? change.list : undefined })
+        deps.io.out(paint(`${change.message}\n`, 'dim'))
         continue
       }
       if (result.kind === 'loop') {

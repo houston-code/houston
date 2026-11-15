@@ -5,6 +5,7 @@ import type { SectionComponent } from './context'
 import {
   AddProviderSection,
   ContextWindowSection,
+  FallbackModelsSection,
   LoopControlSection,
   NetworkProxySection,
   ProvidersSection,
@@ -93,6 +94,12 @@ export const PAGES: SettingsPage[] = [
         id: 'add-provider',
         Component: AddProviderSection,
         keywords: ['new provider', 'custom endpoint', 'local model', 'self-hosted', 'ollama', 'openai compatible', 'host']
+      },
+      {
+        id: 'fallback-models',
+        Component: FallbackModelsSection,
+        keywords: ['fallback', 'fallback models', 'backup model', 'failover', 'overloaded', 'rate limit'],
+        values: (s) => (s.fallbackModels ?? []).flatMap((f) => [f.providerId, f.model])
       },
       {
         id: 'network-proxy',

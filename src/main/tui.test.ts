@@ -3801,6 +3801,12 @@ describe('runTui', () => {
   it('/usage prints the usage report, or says it is unavailable', async () => {
     const { d } = deps([])
     expect(parseSlashCommand('/usage', settings())).toEqual({ kind: 'usage' })
+    expect(parseSlashCommand('/scorecard', settings())).toEqual({ kind: 'scorecard' })
+    expect(parseSlashCommand('/model fallback', settings())).toEqual({ kind: 'model-fallback', op: { op: 'list' } })
+    expect(parseSlashCommand('/model fallback remove 2', settings())).toEqual({
+      kind: 'model-fallback',
+      op: { op: 'remove', index: 1 }
+    })
     const t1 = fakeIo(['/usage', null])
     d.io = t1.io
     await runTui(opts, d)
@@ -3818,6 +3824,21 @@ describe('runTui', () => {
     await runTui(opts, d)
     expect(t2.text()).toContain('No spend recorded yet.')
     expect(t2.text()).not.toContain('Unknown command')
+  })
+
+  it('/scorecard prints the loop scorecard, and /model fallback add writes the chain as a patch', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => void saved.push(p)
+    d.scorecard = () => ({ models: [], totalRuns: 0, totalCost: 0 })
+    const t = fakeIo(['/scorecard', '/model fallback add nope', '/model fallback', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('no runs yet')
+    expect(t.text()).toContain('no model "nope"')
+    expect(t.text()).toContain('no fallback models')
+    expect(saved).toEqual([])
+    expect(t.text()).not.toContain('Unknown command')
   })
 
   it('/share copies the invite over OSC 52 and prints it', async () => {

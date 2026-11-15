@@ -31,6 +31,8 @@ import { HeadersField, ModelsField, NumberField, SettingsSection } from '../fiel
 import { VerifySuggestion } from './verifySuggestion'
 import { SmallModelField } from './smallModelField'
 import type { SettingsCtx } from '../context'
+import { usableModels } from './schedules'
+import { addFallback, fallbackRows, moveFallback, removeFallback } from '@shared/fallbackModels'
 
 /** Configured providers: endpoint/region fields, the API key, and the model list. */
 export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
@@ -879,6 +881,106 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           </>
         )
       })()}
+    </SettingsSection>
+  )
+}
+
+/**
+ * The fallback chain: models tried in order when the chat's model can't serve a turn
+ * (overloaded past the retries, too long for its window, or not served). The terminal
+ * edits the same list with `/model fallback`.
+ */
+export function FallbackModelsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
+  const { settings, setSettings } = ctx
+  const rows = fallbackRows(settings)
+  const listed = new Set(rows.map((r) => JSON.stringify([r.providerId, r.model])))
+  const options = usableModels(settings.providers).filter((m) => !listed.has(JSON.stringify([m.providerId, m.model])))
+  const [pick, setPick] = useState('')
+  // The picker opens on demand: its options are every ready model's name, which
+  // would otherwise make this section match any settings search for a model id.
+  const [adding, setAdding] = useState(false)
+  const setList = (next: AppSettings['fallbackModels']): void =>
+    setSettings((s) => ({ ...s, fallbackModels: next && next.length ? next : undefined }))
+  const add = (): void => {
+    const m = options.find((o) => JSON.stringify([o.providerId, o.model]) === pick)
+    if (!m) return
+    const next = addFallback(settings.fallbackModels, { providerId: m.providerId, model: m.model })
+    if (!('error' in next)) setList(next)
+    setPick('')
+    setAdding(false)
+  }
+  return (
+    <SettingsSection
+      title="Fallback models"
+      desc="Models to try, in order, when the chat's model can't serve a turn: the provider is still overloaded or rate-limiting after retries, the conversation no longer fits its context window, or it doesn't serve the model. Whatever had appeared of the failed reply is discarded first. Leave the list empty to have a failing model end the turn."
+    >
+      {rows.length > 0 && (
+        <ol className="fallback-list">
+          {rows.map((r, i) => (
+            <li className="rule" key={`${r.providerId}/${r.model}`}>
+              <span className="rule__path" title={`${r.providerId}/${r.model}`}>
+                {i + 1}. {r.label}
+                {r.skipped && <span className="settings-dim"> (skipped: {r.skipped})</span>}
+              </span>
+              <button
+                type="button"
+                className="btn btn--sm"
+                disabled={i === 0}
+                aria-label={`Move ${r.label} up`}
+                onClick={() => setList(moveFallback(settings.fallbackModels, i, -1))}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="btn btn--sm"
+                disabled={i === rows.length - 1}
+                aria-label={`Move ${r.label} down`}
+                onClick={() => setList(moveFallback(settings.fallbackModels, i, 1))}
+              >
+                ↓
+              </button>
+              <button
+                type="button"
+                className="btn btn--sm btn--danger"
+                aria-label={`Remove ${r.label}`}
+                onClick={() => setList(removeFallback(settings.fallbackModels, i))}
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+      {!adding ? (
+        <button type="button" className="btn btn--sm" disabled={options.length === 0} onClick={() => setAdding(true)}>
+          {options.length ? '+ Add fallback model' : 'No other models are ready'}
+        </button>
+      ) : (
+      <div className="field__row">
+        <select aria-label="Fallback model to add" value={pick} onChange={(e) => setPick(e.target.value)}>
+          <option value="">Choose a model…</option>
+          {options.map((o) => (
+            <option key={`${o.providerId}/${o.model}`} value={JSON.stringify([o.providerId, o.model])}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="btn btn--sm" disabled={!pick} onClick={add}>
+          Add
+        </button>
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={() => {
+            setPick('')
+            setAdding(false)
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+      )}
     </SettingsSection>
   )
 }
