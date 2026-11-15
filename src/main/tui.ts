@@ -117,6 +117,7 @@ import { SHARE_MESSAGE } from '@shared/share'
 import { MarkdownStream, renderMarkdownAnsi } from './markdown-ansi'
 import { describeToolCall } from '@shared/toolLabel'
 import { approvalAskReasons } from '@shared/approvalReasons'
+import { capAnswer, capPlanDecision, QUESTION_DISMISSED_ANSWER } from '@shared/answerCaps'
 import { renderPreviewView } from './tui-diff'
 import {
   chatToJson,
@@ -1775,13 +1776,14 @@ export function resolveQuestionAnswer(
 // plan_ready event and the run would hang on the pending decision.
 
 /** A decision action offered on a presented plan. */
-export type PlanAction = 'accept' | 'accept-ask' | 'edit' | 'suggest' | 'reject'
+export type PlanAction = 'accept' | 'accept-ask' | 'edit' | 'edit-ask' | 'suggest' | 'reject'
 
 /** The plan-review actions, in display order, with their single-key shortcuts. */
 export const PLAN_ACTIONS: { key: string; action: PlanAction; label: string; description: string }[] = [
   { key: 'a', action: 'accept', label: 'Accept & run', description: 'apply edits automatically' },
   { key: 'k', action: 'accept-ask', label: 'Accept, ask per edit', description: 'approve each change' },
   { key: 'e', action: 'edit', label: 'Edit the plan, then run', description: 'open it in your editor' },
+  { key: 'd', action: 'edit-ask', label: 'Edit the plan, ask per edit', description: 'open it in your editor; approve each change' },
   { key: 's', action: 'suggest', label: 'Suggest changes', description: 'send a note; keep planning' },
   { key: 'r', action: 'reject', label: 'Reject', description: 'discard; keep planning' }
 ]
@@ -1850,7 +1852,8 @@ function planToMarkdown(plan: PlanPayload): string {
 
 /**
  * Turn a chosen action into a PlanDecision, collecting an editor edit / note as needed.
- * Null means nothing was decided (the edit didn't happen), so the caller asks again.
+ * Null means nothing was decided (no editor, an edit that didn't happen, an emptied
+ * plan, an empty note): the caller asks for an action again rather than guessing one.
  */
 export async function planDecisionFor(
   action: PlanAction,
@@ -1864,7 +1867,9 @@ export async function planDecisionFor(
       return accept('auto-edit')
     case 'accept-ask':
       return accept('ask')
-    case 'edit': {
+    case 'edit':
+    case 'edit-ask': {
+      const mode: PlanAcceptMode = action === 'edit' ? 'auto-edit' : 'ask'
       // Only a real edit accepts. An editor that quit with an error (Vim's :cq), or none
       // at all, used to accept the plan as presented, which is what the user chose
       // "edit" to avoid; an emptied plan did too.
@@ -1873,7 +1878,7 @@ export async function planDecisionFor(
         return null
       }
       const edited = await deps.editText(planToMarkdown(plan))
-      if (edited && edited.trim()) return { kind: 'accept', mode: 'auto-edit', editedBody: edited }
+      if (edited && edited.trim()) return { kind: 'accept', mode, editedBody: edited }
       deps.io.out(
         paint(
           edited === null
@@ -1886,8 +1891,10 @@ export async function planDecisionFor(
     }
     case 'suggest': {
       const note = (await deps.io.readLine('Suggest changes: ', { discardPending: true })) ?? ''
-      // An empty note is a non-decision; treat it as reject rather than an empty suggest.
-      return note.trim() ? { kind: 'suggest', note: note.trim() } : { kind: 'reject' }
+      if (note.trim()) return { kind: 'suggest', note: note.trim() }
+      // An empty note decides nothing: ask again rather than rejecting the plan.
+      deps.io.out(paint('· no note given; pick an action\n', 'dim'))
+      return null
     }
     case 'reject':
       return { kind: 'reject' }
@@ -6777,14 +6784,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               // The key that left the picker is the answer's first character.
               if (r.kind === 'type' && r.seed !== undefined) seed = r.seed
             }
-            if (answer === null) {
+            // An empty answer is not sent: ask again. Ctrl-D (no input at all) dismisses
+            // the question, said to the agent in words rather than as ''.
+            while (answer === null || !answer.trim()) {
               // A seeded prompt is one the user is already typing at, so nothing is dropped.
               const ans =
                 typedAnswer ??
                 (await deps.io.readLine('> ', seed === undefined ? { discardPending: true } : { initial: seed }))
-              answer = resolveQuestionAnswer(ans ?? '', e.options, e.multiSelect ?? false)
+              typedAnswer = undefined
+              seed = undefined
+              if (ans === null) {
+                answer = QUESTION_DISMISSED_ANSWER
+                break
+              }
+              answer = resolveQuestionAnswer(ans, e.options, e.multiSelect ?? false)
+              if (!answer) deps.io.out(paint('· type an answer (or an option number)\n', 'dim'))
             }
-            deps.resolveQuestion(e.runId, e.callId, answer)
+            // The same cap the desktop applies at its IPC boundary.
+            deps.resolveQuestion(e.runId, e.callId, capAnswer(answer))
           })
           break
         case 'elicitation':
@@ -6925,7 +6942,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               `${renderPlan(e.plan, paint, { actions: !deps.io.select, width: columns(), highlight })}\n`
             )
             if (screenReader) deps.io.out('waiting for your decision on the plan\n')
-            // Asked until something is decided: an edit that didn't happen asks again.
+            // Asked until something is decided: an edit with no editor, one that didn't
+            // happen or emptied the plan, or an empty suggestion, comes back here instead
+            // of accepting or rejecting on the user's behalf. Typed EOF rejects, so this ends.
             let decision: PlanDecision | null = null
             for (let asked = 0; decision === null; asked++) {
               let action: PlanAction | null = null
@@ -6949,10 +6968,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               } else if (asked > 0) deps.io.out(`${renderPlanActions(paint)}\n`)
               if (action === null) {
                 const ans = typedAction ?? (await deps.io.readLine('> ', { discardPending: true }))
-                action = parsePlanAction(ans ?? '')
+                if (ans === null) {
+                  decision = { kind: 'reject' }
+                  break
+                }
+                action = parsePlanAction(ans)
               }
               decision = await planDecisionFor(action, e.plan, deps, paint)
             }
+            // The same caps the desktop applies at its IPC boundary.
+            decision = capPlanDecision(decision)
             // Accepting flips the local policy so the composer + status line reflect
             // that Plan mode is off for the rest of the session (the loop flips the
             // run's own policy independently when the tool result is applied).

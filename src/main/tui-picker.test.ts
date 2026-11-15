@@ -15,6 +15,7 @@ import {
   type PickerKey,
   renderNumberedPicker,
   parseNumberedPick,
+  NOTHING_TICKED_NOTICE,
   type PickerSpec,
   type PickerState
 } from './tui-picker'
@@ -147,9 +148,14 @@ describe('reducePicker (multi-select)', () => {
     ])
     expect(outcome).toEqual({ kind: 'commit', value: 'A, C' })
   })
-  it('commits the cursor option when nothing is checked', () => {
-    const { outcome } = drive(initialPickerState(multi), [{ type: 'down' }, { type: 'enter' }])
-    expect(outcome).toEqual({ kind: 'commit', value: 'B' })
+  it('does not send the highlighted option when nothing is ticked, and says how to tick', () => {
+    const { s, outcome } = drive(initialPickerState(multi), [{ type: 'down' }, { type: 'enter' }])
+    expect(outcome).toBeUndefined()
+    expect(s.notice).toBe(NOTHING_TICKED_NOTICE)
+    expect(renderPicker(s, makePainter(false)).join('\n')).toContain('press space to tick')
+    // Ticking clears the notice, and Enter then sends what was ticked.
+    const next = drive(s, [{ type: 'space' }, { type: 'enter' }])
+    expect(next.outcome).toEqual({ kind: 'commit', value: 'B' })
   })
   it('space toggles off again', () => {
     const { s } = drive(initialPickerState(multi), [{ type: 'space' }, { type: 'space' }])
