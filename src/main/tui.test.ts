@@ -11400,6 +11400,16 @@ describe('/config, /status and /feedback', () => {
     expect(t.text()).not.toContain(ESC)
   })
 
+  it('/config focus=on runs the /focus switch and saves it', async () => {
+    const { d, saved } = liveDeps()
+    const t = fakeIo(['/config focus=on', '/config focus', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([{ tuiFocus: true }])
+    expect(t.text()).toContain('· focus: only your messages')
+    expect(t.text()).toContain('focus: on')
+  })
+
   it('/config with no picker prints the list', async () => {
     const { d } = liveDeps()
     const t = fakeIo(['/config', null])

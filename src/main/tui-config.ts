@@ -20,6 +20,7 @@ export type ConfigKeyName =
   | 'theme'
   | 'vim'
   | 'verbose'
+  | 'focus'
   | 'thoughts'
   | 'notify'
   | 'reduce-motion'
@@ -36,6 +37,7 @@ export type ConfigKeyName =
 export interface ConfigLive {
   theme: string
   verbose: boolean
+  focus: boolean
   reasoningDisplay: 'show' | 'summary' | 'hide'
   notifyMode: NotifyMode
   reduceMotion: boolean
@@ -83,6 +85,13 @@ export const CONFIG_KEYS: readonly ConfigKeySpec[] = [
     description: "show each tool's full output as it runs",
     values: () => ON_OFF,
     current: (_s, live) => onOff(live.verbose)
+  },
+  {
+    key: 'focus',
+    aliases: ['tuiFocus'],
+    description: 'only your messages, one line per tool call, and the final reply',
+    values: () => ON_OFF,
+    current: (_s, live) => onOff(live.focus)
   },
   {
     key: 'thoughts',
