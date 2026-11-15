@@ -3,6 +3,7 @@ import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from './comm
 import {
   agentTurn,
   commandTurn,
+  mcpPromptTurn,
   invocationText,
   reviewCommentsTurn,
   sanitizeInvocation,
@@ -69,6 +70,40 @@ describe('commandTurn', () => {
   it('sends /review the shared review prompt', () => {
     const cmd = BUILTIN_TEMPLATE_COMMANDS.find((c) => c.name === 'review')!
     expect(commandTurn(cmd, '', '/review')?.text).toBe(REVIEW_TEMPLATE)
+  })
+
+  it('reads /review <what> as the review target, labelled on the chip', () => {
+    const cmd = BUILTIN_TEMPLATE_COMMANDS.find((c) => c.name === 'review')!
+    const base = commandTurn(cmd, 'main', '/review main')!
+    expect(base.text).toContain('review_changes tool with base "main..."')
+    expect(base.text).not.toContain('\n\nmain')
+    expect(base.invokedAs).toEqual({ kind: 'command', label: '/review', detail: 'Changes since main', typed: '/review main' })
+    expect(commandTurn(cmd, '#42', '/review #42')!.invokedAs.detail).toBe('Pull request #42')
+    expect(commandTurn(cmd, 'src/', '/review src/')!.invokedAs.detail).toBe('Uncommitted changes in src/')
+  })
+
+  it("leaves a workspace's own /review alone: its arguments go to its template", () => {
+    const mine: Command = { name: 'review', description: 'Mine', template: 'Check $ARGUMENTS.', source: 'project' }
+    expect(commandTurn({ ...mine, template: REVIEW_TEMPLATE }, 'main', '/review main')!.text).toBe(`${REVIEW_TEMPLATE}\n\nmain`)
+  })
+})
+
+describe('mcpPromptTurn', () => {
+  it("labels the server's prompt with the command and the server, never as typed text", () => {
+    const cmd: Command = {
+      name: 'mcp__docs__summarize',
+      description: 'Summarize a topic',
+      mcpPrompt: { server: 'docs', prompt: 'summarize', arguments: [] }
+    }
+    expect(mcpPromptTurn(cmd, 'user: do it', ' /mcp__docs__summarize x ')).toEqual({
+      text: 'user: do it',
+      invokedAs: {
+        kind: 'command',
+        label: '/mcp__docs__summarize',
+        detail: 'MCP prompt from docs: Summarize a topic',
+        typed: '/mcp__docs__summarize x'
+      }
+    })
   })
 })
 

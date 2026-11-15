@@ -865,7 +865,7 @@ describe('parseSlashCommand', () => {
       invokedAs: {
         kind: 'command',
         label: '/review',
-        detail: 'Adversarial review of your uncommitted changes',
+        detail: 'Adversarial review of your uncommitted changes, a branch, a pull request, or a path',
         typed: '/review'
       }
     })
@@ -3551,7 +3551,7 @@ describe('runTui', () => {
         invokedAs: {
           kind: 'command',
           label: '/review',
-          detail: 'Adversarial review of your uncommitted changes',
+          detail: 'Adversarial review of your uncommitted changes, a branch, a pull request, or a path',
           typed: '/review'
         }
       }
@@ -11621,5 +11621,215 @@ describe('runTui: how a run reads', () => {
     await runTui(opts, d)
     // About 4 characters a token while streaming, then the provider's own count.
     expect(tokens).toEqual([100, 120])
+  })
+})
+
+describe('/loop', () => {
+  type Info = Parameters<NonNullable<TuiDeps['schedules']>['create']>[0] & { id: string; nextRunAt: number | null; createdAt: number }
+  function fakeSchedules(seed: Info[] = []) {
+    const list: Info[] = [...seed]
+    const created: Info[] = []
+    const store: NonNullable<TuiDeps['schedules']> = {
+      create: (input) => {
+        if (input.spec === 'every 1m') throw new Error('Interval "every 1m" is too short: the minimum is 5 minutes.')
+        const info = { ...input, id: `s${list.length + 1}`, nextRunAt: 1_000_000, createdAt: list.length + 10 }
+        list.push(info)
+        created.push(info)
+        return info
+      },
+      list: () => list.map((s) => ({ ...s })),
+      cancel: (id) => {
+        const i = list.findIndex((s) => s.id === id)
+        if (i < 0) return false
+        list.splice(i, 1)
+        return true
+      },
+      setPaused: () => null,
+      runNow: async () => {}
+    }
+    return { store, list, created }
+  }
+  const seeded = (id: string, name: string, createdAt: number): Info => ({
+    id,
+    name,
+    createdAt,
+    spec: 'every 10m',
+    prompt: name,
+    workspace: '/proj/app',
+    providerId: 'anthropic',
+    model: 'claude',
+    approvalPolicy: 'ask',
+    nextRunAt: null
+  })
+
+  it('parses', () => {
+    expect(parseSlashCommand('/loop 10m check CI', settings())).toEqual({ kind: 'loop', arg: '10m check CI' })
+  })
+
+  it('/loop schedules a run in this folder on this chat\'s model, mode and effort, without a turn', async () => {
+    const { d, rec } = deps([])
+    const s = fakeSchedules()
+    d.schedules = s.store
+    const t = fakeIo(['/approval full-auto', '/loop 10m check CI', null])
+    d.io = t.io
+    await runTui({ ...opts, effort: 'high' }, d)
+    expect(rec.runs).toHaveLength(0)
+    expect(s.created).toEqual([
+      expect.objectContaining({
+        name: 'check CI',
+        spec: 'every 10m',
+        prompt: 'check CI',
+        workspace: '/proj',
+        providerId: 'anthropic',
+        model: 'claude',
+        approvalPolicy: 'full-auto',
+        reasoningEffort: 'high'
+      })
+    ])
+    expect(t.text()).toContain('scheduled "check CI": every 10m')
+  })
+
+  it("/loop says what is wrong with the interval in the scheduler's words, and needs a prompt", async () => {
+    const { d } = deps([])
+    const s = fakeSchedules()
+    d.schedules = s.store
+    const t = fakeIo(['/loop every 1m x', '/loop', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(s.created).toHaveLength(0)
+    expect(t.text()).toContain('the minimum is 5 minutes')
+    expect(t.text()).toContain('Usage: /loop [interval] <prompt>')
+  })
+
+  it('creates a run that /schedule lists and can delete', async () => {
+    const { d } = deps([])
+    const s = fakeSchedules([seeded('a', 'first', 1)])
+    d.schedules = s.store
+    const t = fakeIo(['/loop 10m check CI', '/schedule', '/schedule delete 2', 'y', '/schedule', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text).toContain('/schedule lists them, and /schedule pause <n> or /schedule delete <n> stops one')
+    expect(text).toContain('check CI')
+    expect(s.list.map((x) => x.name)).toEqual(['first'])
+  })
+
+  it('strips escapes from what the scheduler says', async () => {
+    const { d } = deps([])
+    const s = fakeSchedules()
+    s.store.create = () => {
+      throw new Error('bad\u001b]0;pwned\u0007 spec')
+    }
+    d.schedules = s.store
+    const t = fakeIo(['/loop 10m x', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).not.toContain('\u001b]0;')
+    expect(t.text()).toContain('bad]0;pwned spec')
+  })
+
+  it('prints plain lines in screen-reader mode', async () => {
+    const { d } = deps([])
+    d.schedules = fakeSchedules([seeded('a', 'first', 1)]).store
+    const t = fakeIo(['/loop 10m check CI', null])
+    d.io = t.io
+    await runTui({ ...opts, color: true, screenReader: true }, d)
+    const text = t.text()
+    expect(text).toContain('scheduled "check CI"')
+    // No cursor movement or erasing, only the plain lines.
+    expect(text).not.toMatch(new RegExp(`${String.fromCharCode(27)}\\[\\d*[ABCDGJK]`))
+  })
+
+  it('says scheduled runs are unavailable where no store is wired', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/loop 10m x', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('scheduled runs are unavailable here')
+  })
+})
+
+describe('MCP prompts as slash commands', () => {
+  const promptCmd: Command = {
+    name: 'mcp__docs__summarize',
+    description: 'Summarize a topic',
+    args: '<topic>',
+    mcpPrompt: { server: 'docs', prompt: 'summarize', arguments: [{ name: 'topic', required: true }] }
+  }
+
+  it('fetches the prompt with the arguments and runs it as a tainted, labelled turn', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fetched: unknown[] = []
+    d.mcpPrompts = {
+      commands: async () => [promptCmd],
+      fetch: async (server, prompt, args) => {
+        fetched.push([server, prompt, args])
+        return 'user: Summarize the release notes.'
+      }
+    }
+    const t = fakeIo(['/mcp__docs__summarize the release notes', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(fetched).toEqual([['docs', 'summarize', { topic: 'the release notes' }]])
+    expect(rec.runs).toHaveLength(1)
+    const sent = rec.runs[0].messages.at(-1)!
+    expect(sent).toMatchObject({
+      role: 'user',
+      content: 'user: Summarize the release notes.',
+      taintSource: 'mcp__docs__summarize',
+      invokedAs: { kind: 'command', label: '/mcp__docs__summarize', typed: '/mcp__docs__summarize the release notes' }
+    })
+    // The echo names the command; the server's text stays out of the scrollback.
+    expect(t.text()).toContain('/mcp__docs__summarize: MCP prompt from docs')
+    expect(t.text()).not.toContain('Summarize the release notes.')
+  })
+
+  it('runs no turn when an argument is missing or the fetch fails', async () => {
+    const { d, rec } = deps([])
+    d.mcpPrompts = {
+      commands: async () => [promptCmd],
+      fetch: async () => {
+        throw new Error('MCP server "docs" is not connected.')
+      }
+    }
+    const t = fakeIo(['/mcp__docs__summarize', '/mcp__docs__summarize x', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(0)
+    expect(t.text()).toContain('Missing topic. Usage: /mcp__docs__summarize <topic>')
+    expect(t.text()).toContain('is not connected')
+  })
+
+  it('an unknown prompt is an unknown command, never sent to the model', async () => {
+    const { d, rec } = deps([])
+    d.mcpPrompts = { commands: async () => [], fetch: async () => 'x' }
+    const t = fakeIo(['/mcp__docs__nope', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(0)
+    expect(parseSlashCommand('/mcp__docs__summarize a b', settings(), [promptCmd])).toEqual({
+      kind: 'mcp-prompt',
+      command: promptCmd,
+      args: 'a b'
+    })
+  })
+})
+
+describe('namespaced custom commands and /review targets', () => {
+  it('runs a namespaced command typed in any case', () => {
+    const commit: Command = { name: 'git:commit', description: 'Commit', template: 'Commit $ARGUMENTS', source: 'project' }
+    expect(parseSlashCommand('/Git:COMMIT now', settings(), [commit])).toMatchObject({ invokedAs: { label: '/git:commit' } })
+  })
+  it('runs /git:commit from a custom command, and /review <base> as a targeted review', async () => {
+    const commit: Command = { name: 'git:commit', description: 'Commit', template: 'Commit $ARGUMENTS', source: 'project' }
+    expect(parseSlashCommand('/git:commit now', settings(), [commit])).toMatchObject({
+      kind: 'prompt',
+      text: 'Commit now',
+      invokedAs: { label: '/git:commit' }
+    })
+    const review = parseSlashCommand('/review main', settings(), BUILTIN_TEMPLATE_COMMANDS)
+    expect(review).toMatchObject({ kind: 'prompt', invokedAs: { label: '/review', detail: 'Changes since main' } })
+    expect(review.kind === 'prompt' && review.text).toContain('base "main..."')
+    expect(parseSlashCommand('/review', settings(), BUILTIN_TEMPLATE_COMMANDS)).toMatchObject({ kind: 'prompt', text: REVIEW_TEMPLATE })
   })
 })

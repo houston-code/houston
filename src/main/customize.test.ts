@@ -155,6 +155,23 @@ describe('setItemEnabled', () => {
     })
     expect(readFileSync(outside, 'utf8')).toBe('secret')
   })
+
+  it('lists, switches off and trashes a namespaced command, and never one behind a linked folder', async () => {
+    put(ws, '.houston/commands/git/commit.md', '---\ndescription: Commit\n---\nCommit it')
+    const outsideDir = join(home, 'outside')
+    put(home, 'outside/leak.md', 'secret')
+    symlinkSync(outsideDir, join(ws, '.houston/commands/linked'), 'dir')
+    const items = (await customizeOverview(deps())).items.filter((i) => i.kind === 'command' && i.scope === 'project')
+    expect(items.map((i) => [i.id, i.file])).toEqual([['command:project:git:commit', '.houston/commands/git/commit.md']])
+    expect(await setItemEnabled('command:project:git:commit', false, deps())).toEqual({ ok: true })
+    expect(await loadCommands(ws, home)).toEqual([])
+    // A namespace part that isn't a plain word, or a link out of the project, is refused.
+    expect((await setItemEnabled('command:project:git:../x', false, deps())).ok).toBe(false)
+    expect((await setItemEnabled('command:project:linked:leak', false, deps())).ok).toBe(false)
+    expect(readFileSync(join(outsideDir, 'leak.md'), 'utf8')).toBe('secret')
+    expect(await deleteItem('command:project:git:commit', deps())).toEqual({ ok: true })
+    expect(existsSync(join(ws, '.houston/commands/git/commit.md'))).toBe(false)
+  })
 })
 
 describe('createItem', () => {

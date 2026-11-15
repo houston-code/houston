@@ -22,6 +22,12 @@ describe('command grants', () => {
     expect(takeCommandGrant(token, '/ws', 1000 + GRANT_TTL_MS)).toBeNull()
   })
 
+  it("carries an MCP prompt's taint source to the send, once", () => {
+    const token = putCommandGrant({ workspace: '/ws', taintSource: 'mcp__docs__summarize' })
+    expect(takeCommandGrant(token, '/ws')).toEqual({ workspace: '/ws', taintSource: 'mcp__docs__summarize' })
+    expect(takeCommandGrant(token, '/ws')).toBeNull()
+  })
+
   it('ignores a token that is not one', () => {
     expect(takeCommandGrant(undefined, '/ws')).toBeNull()
     expect(takeCommandGrant('', '/ws')).toBeNull()

@@ -119,14 +119,30 @@ describe('prompt visibility guard', () => {
     // The prompt sources: the review template, the /agent dispatch wording (also
     // what a custom command's `agent` frontmatter sends), and the /<skill-name>
     // template, which reaches a turn only as a command template through commandTurn.
-    // tui.ts only re-exports agentInvocationPrompt for older importers.
+    // tui.ts only re-exports agentInvocationPrompt for older importers. In commands.ts
+    // the review template is also what reviewPrompt returns for a bare /review, and
+    // commandTurn (promptInvocation.ts) recognizes it to read /review's argument as the
+    // review target, sending reviewPrompt's text instead.
     expect(
       occurrences(['main', 'renderer/src', 'shared'], /\b(REVIEW_TEMPLATE|agentInvocationPrompt|skillCommandTemplate)\b/)
     ).toEqual({
-      'shared/commands.ts': 3,
-      'shared/promptInvocation.ts': 3,
+      'shared/commands.ts': 6,
+      'shared/promptInvocation.ts': 5,
       'main/agent/skills.ts': 2,
       'main/tui.ts': 2
+    })
+    // A connected MCP server's prompt reaches a turn only through mcpPromptTurn, built in
+    // prepareMcpPromptRun, which every client (terminal, ACP, the desktop's main-process
+    // prepare) calls; the turn's message carries the server as its taintSource.
+    expect(occurrences(['main', 'renderer/src', 'shared'], /\bmcpPromptTurn\(/)).toEqual({
+      'shared/promptInvocation.ts': 1,
+      'main/agent/mcpPromptCommands.ts': 1
+    })
+    expect(occurrences(['main', 'renderer/src', 'shared'], /\bprepareMcpPromptRun\(/)).toEqual({
+      'main/agent/mcpPromptCommands.ts': 1,
+      'main/tui.ts': 1,
+      'main/acp.ts': 1,
+      'main/ipc.ts': 1
     })
     // A ship action's prompt is read only by shipTurn; the renderer's other
     // `.prompt` is a tool argument shown to the user: propose_session's brief on its

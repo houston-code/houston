@@ -36,6 +36,7 @@ import { QUESTION_DISMISSED_ANSWER } from '@shared/answerCaps'
 import { agentTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
 import { builtinCommands, mergeCommands, parseSlashCommand, resolveCommand, type Command } from '@shared/commands'
 import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
+import { prepareMcpPromptRun, type McpPromptFetch } from './agent/mcpPromptCommands'
 import type { ShellCapture } from './userShell'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { modelDisplayName } from '@shared/models'
@@ -282,8 +283,14 @@ export interface AcpDeps {
      */
     remove?: (id: string) => boolean
   }
-  /** The workspace's own slash commands (`.houston/commands`), offered next to the built-ins. */
-  commands?: (cwd: string) => Promise<Command[]>
+  /**
+   * The workspace's own slash commands (`.houston/commands`, skills, and the connected
+   * MCP servers' prompts, the session's own `mcpServers` among them), offered next to
+   * the built-ins.
+   */
+  commands?: (cwd: string, mcpServers: McpServerConfig[]) => Promise<Command[]>
+  /** Fetch an MCP server's prompt for `/mcp__<server>__<prompt>`, from this session's own servers only. */
+  mcpPrompt?: (cwd: string, mcpServers: McpServerConfig[]) => McpPromptFetch
   /** The workspace's skills and agents, for `/skills` and `/agents`. */
   skills?: (cwd: string) => Promise<{ name: string; description: string }[]>
   /** Run a command template's `` !`command` `` piece (tests inject it); the user's shell otherwise. */
@@ -1342,9 +1349,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     if (title && title !== s.title) sendTitle(s, title, Date.now())
   }
 
-  const loadCustomCommands = async (cwd: string): Promise<Command[]> => {
+  const loadCustomCommands = async (cwd: string, mcpServers: McpServerConfig[] = []): Promise<Command[]> => {
     try {
-      return (await deps.commands?.(cwd)) ?? []
+      return (await deps.commands?.(cwd, mcpServers)) ?? []
     } catch (e) {
       log(`acp: could not load the workspace commands: ${String(e)}`)
       return []
@@ -1353,13 +1360,20 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
 
   /**
    * Tell the editor which slash commands the session has. Sent after the response
-   * that created or loaded the session, so the editor already knows its id.
+   * that created or loaded the session, so the editor already knows its id, and again
+   * after a turn when the list changed (an MCP server that connected with the turn
+   * brings its prompts).
    */
-  const announce = (s: Session): void => {
+  const announced = new Map<string, string>()
+  const announce = (s: Session, onlyIfChanged = false): void => {
     setImmediate(() => {
-      void loadCustomCommands(s.cwd).then((custom) => {
+      void loadCustomCommands(s.cwd, s.mcpServers).then((custom) => {
         if (!sessions.has(s.id)) return
-        update(s.id, { sessionUpdate: 'available_commands_update', availableCommands: acpAvailableCommands(acpCommands(custom)) })
+        const availableCommands = acpAvailableCommands(acpCommands(custom))
+        const key = JSON.stringify(availableCommands)
+        if (onlyIfChanged && announced.get(s.id) === key) return
+        announced.set(s.id, key)
+        update(s.id, { sessionUpdate: 'available_commands_update', availableCommands })
       })
     })
   }
@@ -1448,6 +1462,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     s.closed = true
     s.messages = null
     sessions.delete(s.id)
+    announced.delete(s.id)
   }
 
   const closeSession = (params: unknown): unknown => {
@@ -1483,11 +1498,13 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     s: Session,
     line: string
   ): Promise<
-    { kind: 'turn'; turn: InvokedTurn; run?: PreparedCommandRun } | { kind: 'reply'; text: string } | null
+    | { kind: 'turn'; turn: InvokedTurn; run?: PreparedCommandRun; taintSource?: string }
+    | { kind: 'reply'; text: string }
+    | null
   > => {
     const parsed = parseSlashCommand(line)
     if (!parsed || !/^[\w:-]+$/.test(parsed.name)) return null
-    const commands = acpCommands(await loadCustomCommands(s.cwd))
+    const commands = acpCommands(await loadCustomCommands(s.cwd, s.mcpServers))
     const cmd = resolveCommand(commands, parsed.name)
     if (!cmd) return null
     const arg = parsed.args
@@ -1565,6 +1582,14 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         return turn ? { kind: 'turn', turn } : { kind: 'reply', text: 'Use /agent <name> <task>. /agents lists them.' }
       }
       default: {
+        // A connected MCP server's prompt: fetched with the editor user's arguments from
+        // this session's own servers, and sent as a turn tainted by that server.
+        if (cmd.mcpPrompt) {
+          if (!deps.mcpPrompt) return { kind: 'reply', text: 'MCP prompts are not available here.' }
+          const ran = await prepareMcpPromptRun(cmd, arg, line, deps.mcpPrompt(s.cwd, s.mcpServers))
+          if (!ran.ok) return { kind: 'reply', text: ran.error }
+          return { kind: 'turn', turn: ran.turn, taintSource: ran.taintSource }
+        }
         // A template command: first-party (`/review`, `/init`), the workspace's own, or
         // a skill's `/<skill-name>`, with whatever its frontmatter asks of this one turn.
         // No confirmContext: an editor's prompt has no way to show the exact commands
@@ -1665,7 +1690,13 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     touch(s)
     const messages: ChatMessage[] = [
       ...prior,
-      { role: 'user', content: text, ...(invokedAs ? { invokedAs } : {}), ...(images.length ? { images } : {}) }
+      {
+        role: 'user',
+        content: text,
+        ...(invokedAs ? { invokedAs } : {}),
+        ...(images.length ? { images } : {}),
+        ...(command?.taintSource ? { taintSource: command.taintSource } : {})
+      }
     ]
     s.messages = messages
     // The new turn is not in the store until the run saves it.
@@ -1711,6 +1742,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       touch(s)
     }
     refreshTitle(s)
+    announce(s, true)
     // The turn's token totals ride the response (`PromptResponse.usage`), so a client
     // that scores or bills runs gets them without summing `usage_update`s itself.
     const usage = acpPromptUsage(turn.state.tokens)

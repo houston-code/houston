@@ -446,8 +446,10 @@ and cost as usage.
 - **Slash commands** the editor can offer: `/review`, `/init`, `/compact`,
   `/agent <name> <task>`, `/plan`, `/ask`, `/auto`, `/full`, `/approval [mode]`,
   `/model [name]`, `/reasoning [level]`, `/skills`, `/agents` and `/help`, plus the
-  workspace's own `.houston/commands` and `/<skill-name>` for each skill. A prompt that starts with another `/word` is
-  sent as written.
+  workspace's own `.houston/commands`, `/<skill-name>` for each skill, and
+  `/mcp__<server>__<prompt>` for each prompt of the session's connected MCP servers (the
+  list is sent again after a turn that connected one). A prompt that starts with another
+  `/word` is sent as written.
 - **Titles**: the chat's title is shown to the editor when a session opens and once
   a turn gives it one.
 - **Approvals** appear as the editor's permission prompt: Allow (this call), Always
@@ -794,7 +796,7 @@ completes mid-message, after a space (Tab fills in the name); a command still ru
 only when the message starts with it.
 
 In the desktop app, a bare `/` lists every command under headings (Chat, Modes,
-Review and undo, Extend, Setup, then your own commands, then Skills). Typing more finds commands by any
+Review and undo, Extend, Setup, then your own commands, then Skills, then MCP prompts). Typing more finds commands by any
 part of the name, an alias, a word of the description, or the letters in order:
 `/wind` finds `/rewind`, `/think` finds `/reasoning`, `/sandbox` finds `/doctor`.
 Commands that take something after the name show it beside the name, such as
@@ -813,7 +815,8 @@ Names are case-insensitive: `/NEW` is `/new`.
 | `/retry` | run your last message again after a turn that failed |
 | `/plan`, `/ask`, `/auto`, `/full` | switch the approval mode: plan, ask every time, auto-approve edits, full auto |
 | `/approval` | show the current approval mode |
-| `/review` | run an adversarial review of your uncommitted changes and fix what it confirms |
+| `/review [base-branch \| pr# \| path]` | run an adversarial review of your uncommitted changes and fix what it confirms; or of everything since this branch split from a base branch (`/review main`), a pull request (`/review #12`), or only some paths (`/review src/`) |
+| `/loop [interval] <prompt>` | run a prompt on a schedule in this chat's folder (`/loop 10m check CI`) |
 | `/init` | write or improve `AGENTS.md`, the project's instructions file |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
 | `/rewind` | go back to an earlier message: the conversation, the code, or both. `/rewind <n> [both\|conversation\|code]` goes to message n (numbered as in the list), and `/rewind undo` reverses the last rewind |
@@ -987,6 +990,10 @@ Any Markdown file at `.houston/commands/<name>.md` becomes a `/name` command.
 
 - **Where:** in the project, or in `~/.houston/commands` for a command you want
   everywhere. A project's command wins if both define the same name.
+- **Namespaces:** a subfolder groups commands: `.houston/commands/git/commit.md` is
+  `/git:commit`, and folders nest up to three levels (`a/b/c.md` is `/a:b:c`). The menus
+  show the full name. A built-in command wins a name clash, then a custom command, then
+  a skill.
 - **Arguments:** the file body is a prompt template. `$ARGUMENTS` is replaced with
   everything typed after the command name, and `$1`, `$2`, … with the individual
   words. So `/deploy staging v2` can fill a template that says
@@ -3125,6 +3132,13 @@ default lowers every schedule's next run. A schedule made from a chat in one of
 Houston's worktrees runs in the main checkout instead, since that worktree goes away
 with its chat.
 
+You can schedule one yourself with `/loop [interval] <prompt>`: `/loop 10m check CI`
+runs "check CI" every 10 minutes as a background session in this chat's folder, on this
+chat's model and approval mode. The interval is `10m`, `2h` or `1d`, or any form below
+except `once` (`/loop daily at 09:00 summarize new issues`); without one it runs every
+10 minutes. The run it makes is an ordinary scheduled run: the terminal's `/schedule`
+(below) and the desktop's Settings > Scheduled runs list it, pause it, or delete it.
+
 ### Schedule formats
 
 All times are local.
@@ -3220,7 +3234,17 @@ refuses a profile moved with `HOUSTON_DATA_DIR`, which a login entry there can't
 ### Reviewing changes
 
 `review_changes` (or `/review`) reviews uncommitted changes for correctness, security,
-and quality.
+and quality. `/review` takes what to review:
+
+- `/review main` reviews everything since this branch split from `main`, committed and
+  uncommitted (`review_changes` with base `main...`).
+- `/review #12` (or `12`, or the pull request's URL) reads that pull request with
+  `gh_pr_view`. When its branch is checked out here, it is reviewed against its base
+  branch and confirmed issues are fixed; otherwise the findings are reported without
+  changing files.
+- `/review src/api` (or `./src`, `src/`) limits the review to those paths. A word that
+  could be a branch or a path is reviewed as a branch when one by that name exists, and
+  as a path otherwise; words after the first are always paths (`/review main src/`).
 
 1. An independent read-only reviewer runs per dimension, each in a fresh context.
 2. A skeptical verifier re-checks every candidate against the real code and drops
@@ -3591,6 +3615,24 @@ discover and fetch them: `mcp_list_resources` / `mcp_read_resource` and
   prompt names the server.
 - Listings are fenced as untrusted text, since each server writes its own names
   and descriptions.
+
+You can run a server's prompt yourself too: each prompt of the chat's connected servers
+is a slash command, `/mcp__<server>__<prompt>`, listed in the command menu under MCP
+prompts in both clients and in an editor over ACP. A server shows up there once it has
+connected (after the chat's first turn, or `/mcp reconnect`).
+
+- **Arguments** follow the prompt's declared ones, shown beside the name
+  (`<required> [optional]`): words fill them in order, and the last takes any words
+  left over, so `/mcp__docs__summarize the release notes` passes the whole phrase.
+  `name=value` sets one by name; quote a value with spaces (`tone="very formal"`). A
+  missing required argument says what the command takes.
+- **Names** are cleaned: anything in a prompt's name other than letters, digits, `_`
+  and `-` becomes `_`.
+- The prompt the server returns is sent as your turn, shown as the command you ran.
+  Because the text is the server's, the chat then counts as having read outside text:
+  later memory writes and session launches ask first, as after any MCP call.
+- Only the chat's own servers are offered: yours, and a trusted folder's project
+  servers.
 
 Houston also:
 

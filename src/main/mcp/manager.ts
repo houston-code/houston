@@ -6,7 +6,7 @@ import { parseElicitationFields, type McpImageOptions } from '@shared/mcp'
 import { builtinToolNames, type ToolContext, type ToolDef } from '../agent/tools'
 import { presentUntrusted, presentUntrustedInline, untrustedPreamble } from '../agent/untrusted'
 import { getMcpOAuth, getSecretHeaders, setMcpOAuth } from '../agentHost'
-import { McpClient, McpUnauthorizedError, type McpConnection } from './client'
+import { McpClient, McpUnauthorizedError, type McpConnection, type McpPromptInfo } from './client'
 import { McpHttpClient } from './http-client'
 import { McpSseClient } from './sse-client'
 import { canonicalResourceUri, refreshMcpOAuth, tokensNeedRefresh } from './oauth'
@@ -929,6 +929,39 @@ function promptMetaTools(mine: ReadonlyMap<string, string>, runConfigs: readonly
       }
     }
   ]
+}
+
+/**
+ * The prompts of each connected server in `ids`, for the clients' `/mcp__<server>__<prompt>`
+ * commands: a chat offers only its own servers' prompts (the user's, and a trusted
+ * folder's project servers), never those of a server another chat has open. Read from
+ * the live connections, so a server lists nothing until it has connected (its first
+ * turn, or `/mcp reconnect`). Sorted by server id.
+ */
+export function listMcpPrompts(ids: ReadonlySet<string>): { server: string; prompts: McpPromptInfo[] }[] {
+  return [...connections]
+    .filter(([id, conn]) => ids.has(id) && !conn.client.isClosed && conn.client.prompts.length > 0)
+    .sort(([a], [b]) => byCodeUnit(a, b))
+    .map(([server, conn]) => ({ server, prompts: conn.client.prompts }))
+}
+
+/**
+ * Fetch one prompt for a slash command the user ran, with their arguments filled in.
+ * Refused for a server outside `ids` (the chat's own servers) or one not connected.
+ * The text is the server's own authored template (see mcp_get_prompt), capped like
+ * any MCP output.
+ */
+export async function getMcpPromptText(
+  ids: ReadonlySet<string>,
+  server: string,
+  name: string,
+  args: Record<string, string>,
+  signal?: AbortSignal
+): Promise<string> {
+  if (!ids.has(server)) throw new Error(`MCP server "${server}" is not one of this chat's servers.`)
+  const live = connections.get(server)
+  if (!live || live.client.isClosed) throw new Error(`MCP server "${server}" is not connected.`)
+  return capMcpOutput(await live.client.getPrompt(name, args, signal))
 }
 
 /** Close every MCP connection (wired on app shutdown). */

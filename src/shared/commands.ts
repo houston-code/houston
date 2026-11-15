@@ -42,6 +42,29 @@ export interface Command {
    * this one turn, in permission-rule syntax (`read_file`, `run_shell(git status*)`).
    */
   allowedTools?: string
+  /**
+   * `/mcp__<server>__<prompt>`: runs a prompt template an MCP server exposes. Set by
+   * the main process from the connected servers; the clients fetch the prompt through
+   * it when the command runs.
+   */
+  mcpPrompt?: McpPromptRef
+}
+
+/** One argument an MCP prompt declares (`prompts/list`). */
+export interface McpPromptArgSpec {
+  name: string
+  description?: string
+  required?: boolean
+}
+
+/** Which server's prompt a `/mcp__<server>__<prompt>` command runs, and what it takes. */
+export interface McpPromptRef {
+  /** The MCP server id (as configured, or `proj-`/`run-` prefixed). */
+  server: string
+  /** The prompt's own name on the server, sent back on `prompts/get`. */
+  prompt: string
+  /** Its declared arguments, in the server's order. */
+  arguments: McpPromptArgSpec[]
 }
 
 /** Menu headings, in the order the menu shows them. Custom commands come last. */
@@ -51,6 +74,8 @@ export type CommandGroup = (typeof COMMAND_GROUPS)[number]
 export const CUSTOM_COMMAND_GROUP = 'Custom'
 /** Heading for the skills, each runnable as `/<skill-name>`. */
 export const SKILL_COMMAND_GROUP = 'Skills'
+/** Heading for the connected MCP servers' prompts, each runnable as `/mcp__<server>__<prompt>`. */
+export const MCP_PROMPT_COMMAND_GROUP = 'MCP prompts'
 
 /** Parse a leading slash command from composer text: "/name the rest" → {name, args}. */
 export function parseSlashCommand(text: string): { name: string; args: string } | null {
@@ -83,12 +108,12 @@ export function expandTemplate(template: string, args: string): string {
 
 /** The heading a command is listed under. */
 export function commandGroup(cmd: Command): string {
-  return cmd.group ?? (cmd.skill ? SKILL_COMMAND_GROUP : CUSTOM_COMMAND_GROUP)
+  return cmd.group ?? (cmd.skill ? SKILL_COMMAND_GROUP : cmd.mcpPrompt ? MCP_PROMPT_COMMAND_GROUP : CUSTOM_COMMAND_GROUP)
 }
 
 /** The commands ordered by menu heading (stable within one), for an unfiltered menu. */
 export function groupCommands(commands: Command[]): Command[] {
-  const order: string[] = [...COMMAND_GROUPS, CUSTOM_COMMAND_GROUP, SKILL_COMMAND_GROUP]
+  const order: string[] = [...COMMAND_GROUPS, CUSTOM_COMMAND_GROUP, SKILL_COMMAND_GROUP, MCP_PROMPT_COMMAND_GROUP]
   return commands
     .map((c, i) => ({ c, i, g: order.indexOf(commandGroup(c)) }))
     .sort((a, b) => a.g - b.g || a.i - b.i)
@@ -254,6 +279,8 @@ export function mergeWithBuiltins(builtin: Command[], custom: Command[]): Comman
  * away, prepared by the main process.
  */
 export function commandHasRunOptions(cmd: Command): boolean {
+  // An MCP prompt is fetched from its server by the main process.
+  if (cmd.mcpPrompt) return true
   if (cmd.model || cmd.effort || cmd.agent || cmd.allowedTools) return true
   // Only a workspace's or the user's own command; the first-party templates have none.
   return cmd.source !== undefined && cmd.template !== undefined && hasContext(cmd.template)
@@ -265,6 +292,89 @@ export function commandHasRunOptions(cmd: Command): boolean {
  */
 export const REVIEW_TEMPLATE =
   'Review my current uncommitted changes for correctness, security, and quality. Use the review_changes tool to run the adversarial review (a separate reviewer per dimension, then a verification pass), then fix any confirmed issues and summarize what you found.'
+
+/**
+ * What `/review [base-branch | pr# | path ...]` reviews.
+ *
+ *  - nothing: the uncommitted changes (the plain {@link REVIEW_TEMPLATE});
+ *  - `#12`, `12` or a pull request URL: that pull request;
+ *  - a first word that can only be a path (`.`, `./src`, `src/`, a glob): the
+ *    uncommitted changes in the paths given;
+ *  - any other first word: a base branch, reviewing everything since this branch
+ *    split from it. A word like `src/api` could be either, so the prompt says to
+ *    treat it as a path when it names no branch, tag or commit.
+ *
+ * Words after the first are paths the review is limited to.
+ */
+export type ReviewTarget =
+  | { kind: 'uncommitted'; paths: string[] }
+  | { kind: 'base'; base: string; paths: string[] }
+  | { kind: 'pr'; number: number; paths: string[] }
+
+const PR_ARG = /^(?:#?(\d{1,9})|https?:\/\/[^\s/]+\/[^\s/]+\/[^\s/]+\/pull\/(\d{1,9})(?:[/?#]\S*)?)$/
+
+/** Whether a word can only be a path, never a branch name. */
+function pathOnly(word: string): boolean {
+  return word === '.' || word.startsWith('./') || word.endsWith('/') || word.includes('*')
+}
+
+/** Parse what follows `/review`. Pure: nothing is checked against the repository. */
+export function parseReviewArgs(args: string): ReviewTarget {
+  const words = args.split(/\s+/).filter(Boolean)
+  if (!words.length) return { kind: 'uncommitted', paths: [] }
+  const [first, ...rest] = words
+  const pr = PR_ARG.exec(first)
+  if (pr) return { kind: 'pr', number: Number(pr[1] ?? pr[2]), paths: rest }
+  if (pathOnly(first)) return { kind: 'uncommitted', paths: words }
+  return { kind: 'base', base: first, paths: rest }
+}
+
+/** A value written into the prompt, quoted so the model passes it exactly as typed. */
+const quoted = (s: string): string => JSON.stringify(s)
+const quotedList = (paths: string[]): string => `[${paths.map(quoted).join(', ')}]`
+
+const REVIEW_STEPS =
+  'to run the adversarial review (a separate reviewer per dimension, then a verification pass), then fix any confirmed issues and summarize what you found.'
+
+/** The prompt `/review` sends for `target`. No target is exactly {@link REVIEW_TEMPLATE}. */
+export function reviewPrompt(target: ReviewTarget): string {
+  const scope = target.paths.length ? ` and paths ${quotedList(target.paths)}` : ''
+  switch (target.kind) {
+    case 'uncommitted':
+      if (!target.paths.length) return REVIEW_TEMPLATE
+      return `Review my current uncommitted changes in ${target.paths.join(', ')} for correctness, security, and quality. Use the review_changes tool with paths ${quotedList(target.paths)} ${REVIEW_STEPS}`
+    case 'base': {
+      const b = target.base
+      return (
+        `Review the changes on this branch since it split from ${b}, committed and uncommitted, for correctness, security, and quality. ` +
+        `Use the review_changes tool with base ${quoted(`${b}...`)} (the three dots review from where this branch split from ${b})${scope} ${REVIEW_STEPS} ` +
+        `If ${quoted(b)} names no branch, tag or commit in this repository, it is a path: review my uncommitted changes in it instead (review_changes with paths ${quotedList([b, ...target.paths])}).`
+      )
+    }
+    case 'pr': {
+      const n = target.number
+      const focus = target.paths.length ? ` Limit the review to ${target.paths.join(', ')}.` : ''
+      return (
+        `Review pull request #${n} for correctness, security, and quality. Read it with gh_pr_view (number ${n}, diff true).${focus} ` +
+        `If its head branch is the branch checked out here, use the review_changes tool with base set to its base branch followed by three dots (for example "origin/main...")${scope} ${REVIEW_STEPS} ` +
+        "Otherwise review the pull request's diff yourself, checking each finding against the code, and report the confirmed findings without changing any files."
+      )
+    }
+  }
+}
+
+/** The short line the `/review` chip shows for `target`. */
+export function reviewTargetLabel(target: ReviewTarget): string {
+  const within = target.paths.length ? ` in ${target.paths.join(', ')}` : ''
+  switch (target.kind) {
+    case 'uncommitted':
+      return `Uncommitted changes${within}`
+    case 'base':
+      return `Changes since ${target.base}${within}`
+    case 'pr':
+      return `Pull request #${target.number}${within}`
+  }
+}
 
 /**
  * The first-party `/init` command's prompt: write (or improve) the project's
@@ -472,6 +582,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['gui', 'tui']
   },
   {
+    name: 'loop', group: 'Chat', args: '[interval] <prompt>',
+    description: 'Run a prompt on a schedule in this folder (/loop 10m check CI)',
+    clients: ['gui', 'tui']
+  },
+  {
     name: 'fork', group: 'Chat', args: '[n]',
     description: 'Branch the current session into a copy, or from before message n', clients: ['gui', 'tui']
   },
@@ -554,8 +669,8 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     template: INIT_TEMPLATE
   },
   {
-    name: 'review', group: 'Review and undo',
-    description: 'Adversarial review of your uncommitted changes',
+    name: 'review', group: 'Review and undo', args: '[base-branch | pr# | path]',
+    description: 'Adversarial review of your uncommitted changes, a branch, a pull request, or a path',
     clients: ['gui', 'tui'],
     // Runs immediately on submit rather than expanding into the composer.
     autoRun: true,
