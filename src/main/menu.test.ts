@@ -35,10 +35,22 @@ describe('menu close routing', () => {
   })
 
   it('tracks the reported terminal focus state', () => {
-    setTerminalFocused(true)
-    expect(isTerminalFocused()).toBe(true)
-    setTerminalFocused(false)
-    expect(isTerminalFocused()).toBe(false)
+    const sender = { id: 7, once: () => {} }
+    setTerminalFocused(true, sender)
+    expect(isTerminalFocused(7)).toBe(true)
+    setTerminalFocused(false, sender)
+    expect(isTerminalFocused(7)).toBe(false)
+  })
+
+  it("keeps each window's terminal focus apart", () => {
+    const one = { id: 1, once: () => {} }
+    const two = { id: 2, once: () => {} }
+    setTerminalFocused(true, one)
+    // Window 2's blur report arriving after window 1's focus report changes nothing for 1.
+    setTerminalFocused(false, two)
+    expect(resolveCloseAction(isTerminalFocused(1))).toBe('close-tab')
+    expect(resolveCloseAction(isTerminalFocused(2))).toBe('close-window')
+    setTerminalFocused(false, one)
   })
 })
 

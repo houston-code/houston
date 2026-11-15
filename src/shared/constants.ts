@@ -67,6 +67,8 @@ export const IPC = {
   updateInstall: 'update:install',
   /** Renderer → main: cancel the background download (the banner's close button). */
   updateCancelDownload: 'update:cancelDownload',
+  /** Renderer → main: what the update banner shows now (a window that opened or reloaded late). */
+  updateState: 'update:state',
   /** Main → renderer: the native menu's "Settings…" item was chosen — open the modal. */
   menuOpenSettings: 'menu:openSettings',
   /** Renderer → main: its listeners are attached, so held houston:// links can be delivered. */

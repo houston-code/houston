@@ -662,6 +662,34 @@ describe('window IPC', () => {
     // The new window's renderer starts on a new chat, not the remembered last chat.
     expect(handler(IPC.chatLaunch)({ sender: { id: 300, once: () => {} } })).toBeNull()
   })
+
+  it("reopens a reloaded window on its own chat, and remembers only the focused window's", () => {
+    const win = (id: number) => ({
+      id,
+      isDestroyed: () => false,
+      isFocused: () => false,
+      on: () => {},
+      webContents: { id, send: () => {}, isDestroyed: () => false }
+    })
+    registerAppWindow(win(401) as never)
+    registerAppWindow(win(402) as never)
+    const a = { id: 401, once: () => {} }
+    const b = { id: 402, once: () => {} }
+    const viewing = (sender: object, id: string, focused: boolean): unknown =>
+      h.rawOn.get(IPC.chatViewing)!(h.fromApp({ sender }), id, focused)
+    const x = createConversation({ workspace: tmpdir(), providerId: 'p', model: 'm' }).id
+    const y = createConversation({ workspace: tmpdir(), providerId: 'p', model: 'm' }).id
+    handler(IPC.chatLaunch)({ sender: a })
+    handler(IPC.chatLaunch)({ sender: b })
+    // B shows Y in the background; A, focused, shows X and reports last.
+    viewing(b, y, false)
+    viewing(a, x, true)
+    // B's page reloads (crash recovery): it comes back on Y, not on A's X.
+    expect(handler(IPC.chatLaunch)({ sender: b })).toBe(y)
+    // A late blur report from B doesn't replace the chat the focused window shows.
+    viewing(b, y, false)
+    expect(handler(IPC.chatLaunch)({ sender: { id: 403, once: () => {} } })).toBe(x)
+  })
 })
 
 /**

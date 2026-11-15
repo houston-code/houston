@@ -877,6 +877,58 @@ describe('cancelDownload (the banner close button)', () => {
   })
 })
 
+describe('banner state for windows that open or reload later', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  it('reports the announced update and, once verified, the staged download', async () => {
+    availableWithDownload()
+    const { checkForUpdates, getUpdateState } = await load()
+    expect(getUpdateState()).toEqual({ available: null, downloaded: null, failed: null })
+    await checkForUpdates()
+    expect(getUpdateState().available).toMatchObject({ status: 'available', latestVersion: '0.3.0' })
+    expect(getUpdateState().downloaded).toBeNull()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('update-downloaded')
+    expect(getUpdateState().downloaded).toEqual({ version: '0.3.0' })
+  })
+
+  it('reports a refused download as the manual route', async () => {
+    availableWithDownload()
+    const { checkForUpdates, getUpdateState } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('error', new Error('code signature mismatch'))
+    expect(getUpdateState().failed).toMatchObject({ version: '0.3.0' })
+    expect(getUpdateState().downloaded).toBeNull()
+  })
+
+  it('keeps the download while another window still shows the banner', async () => {
+    const download = availableWithDownload()
+    const { checkForUpdates, dismissUpdate, getUpdateState } = await load()
+    await checkForUpdates()
+    // Window 1 closes the banner; window 2 still shows the progress.
+    expect(dismissUpdate(1, [1, 2])).toBe(false)
+    expect(download.token.cancelled).toBe(false)
+    // Window 1 reloading stays dismissed; a new window shows it.
+    expect(getUpdateState(1).available).toBeNull()
+    expect(getUpdateState(3).available).not.toBeNull()
+    // Window 2 closes it too: nothing shows it now, so the download stops.
+    expect(dismissUpdate(2, [1, 2])).toBe(true)
+    expect(download.token.cancelled).toBe(true)
+  })
+
+  it('shows the banner again in a dismissed window once the update is announced again', async () => {
+    availableWithDownload()
+    const { checkForUpdates, dismissUpdate, getUpdateState } = await load()
+    await checkForUpdates()
+    dismissUpdate(1, [1, 2])
+    await checkForUpdates()
+    expect(getUpdateState(1).available).not.toBeNull()
+  })
+})
+
 describe('check scheduling', () => {
   it('shares one in-flight check between concurrent callers', async () => {
     let calls = 0

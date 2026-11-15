@@ -130,4 +130,55 @@ describe('per-window menu state', () => {
     a.destroy()
     expect(lastItem('File', /^Export Chat$/)?.enabled).toBe(false)
   })
+
+  it("clears a closed window's state without reading the destroyed renderer", async () => {
+    const m = await load()
+    const a = fakeWindow(1)
+    h.focused = a.win
+    m.buildAppMenu()
+    // Like Electron's WebContents: its properties throw once it is destroyed.
+    let gone = false
+    const sender = {
+      get id(): number {
+        if (gone) throw new Error('Object has been destroyed')
+        return 1
+      },
+      once: a.webContents.once
+    }
+    m.setMenuState({ hasConversation: true }, sender)
+    m.setTerminalFocused(true, sender)
+    expect(lastItem('File', /^Export Chat$/)?.enabled).toBe(true)
+    gone = true
+    h.focused = null
+    expect(() => a.destroy()).not.toThrow()
+    expect(lastItem('File', /^Export Chat$/)?.enabled).toBe(false)
+    expect(m.isTerminalFocused(1)).toBe(false)
+  })
+})
+
+describe('Close (Cmd/Ctrl+W) across windows', () => {
+  it("closes the focused window's terminal tab by that window's own focus report", async () => {
+    const m = await load()
+    const sent: string[] = []
+    let closed = 0
+    const winOf = (id: number) => ({
+      id,
+      webContents: { id, send: (ch: string) => sent.push(`${id}:${ch}`) },
+      close: () => closed++,
+      isDestroyed: () => false
+    })
+    const file = m.appMenuTemplate(false).find((x) => x.label === 'File')
+    const close = (file?.submenu as Array<{ label?: string; click?: () => void }>).find((i) => i.label === 'Close')
+    m.setTerminalFocused(true, { id: 1, once: () => {} })
+    // Window 2's page reports its terminal blurred after window 1's report (a reload, or
+    // a late blur from the window being left).
+    m.setTerminalFocused(false, { id: 2, once: () => {} })
+    h.focused = winOf(1)
+    close?.click?.()
+    expect(closed).toBe(0)
+    expect(sent).toEqual(['1:terminal:closeActive'])
+    h.focused = winOf(2)
+    close?.click?.()
+    expect(closed).toBe(1)
+  })
 })

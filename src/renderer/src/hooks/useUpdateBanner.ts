@@ -59,7 +59,24 @@ export function useUpdateBanner(): UpdateBannerState {
       setDownloaded(null)
       setProgress(null)
     })
+    // The broadcasts above are one-off: a window that opened or reloaded after them asks
+    // for what the banner shows now. A broadcast that arrives first is no newer than
+    // this answer, which main computed after it, so only empty fields are left alone.
+    let live = true
+    void window.api
+      .getUpdateState?.()
+      .then((s) => {
+        if (!live || dismissed.current || !s) return
+        if (s.available) setUpdate(s.available)
+        if (s.downloaded) {
+          setDownloaded(s.downloaded)
+          setProgress(null)
+        }
+        if (s.failed) setFailed(s.failed)
+      })
+      .catch(() => {})
     return () => {
+      live = false
       unsubAvailable()
       unsubProgress()
       unsubDownloaded()

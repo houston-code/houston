@@ -68,6 +68,7 @@ import type {
   UpdateDownloaded,
   UpdateDownloadProgress,
   UpdateInstallFailed,
+  UpdateState,
   WhatsNew
 } from '@shared/update'
 import type { VerifySuggestion } from '@shared/types'
@@ -788,7 +789,9 @@ const api = {
   /** Install a downloaded update now (quit, apply, relaunch). */
   installUpdate: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateInstall),
   /** Cancel the background update download; resolves false if there was none to cancel. */
-  cancelUpdateDownload: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateCancelDownload)
+  cancelUpdateDownload: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateCancelDownload),
+  /** What the update banner shows now, for a window that opened or reloaded after it was announced. */
+  getUpdateState: (): Promise<UpdateState> => ipcRenderer.invoke(IPC.updateState)
 }
 
 export type CoderApi = typeof api

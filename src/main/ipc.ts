@@ -46,7 +46,7 @@ import { SHELL_ESCAPE_MAX_CHARS } from '@shared/shellEscape'
 import type { RecordShellResult } from '@shared/shellEscape'
 import { MAX_ATTACHMENT_FILES, type ClipboardContent, type PickedFile } from '@shared/composerContext'
 import { readPickedFile } from './pickedFiles'
-import { cancelDownload, checkForUpdates, installUpdate, takePendingWhatsNew } from './updater'
+import { checkForUpdates, dismissUpdate, getUpdateState, installUpdate, takePendingWhatsNew } from './updater'
 import {
   getSettings,
   saveSettings,
@@ -809,8 +809,13 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.updateWhatsNew, () => takePendingWhatsNew())
   // "Restart to install" — apply a downloaded update now instead of on next quit.
   handle(IPC.updateInstall, () => installUpdate())
-  // Closing the banner mid-download stops it, so nothing installs on the next quit.
-  handle(IPC.updateCancelDownload, () => cancelDownload())
+  // Closing the banner mid-download stops it, so nothing installs on the next quit,
+  // once no other window still shows it.
+  handle(IPC.updateCancelDownload, (event) =>
+    dismissUpdate(event.sender.id, chatWindows().filter((w) => !w.isDestroyed()).map((w) => w.webContents.id))
+  )
+  // A window that opens or reloads after the update was announced shows it too.
+  handle(IPC.updateState, (event) => getUpdateState(event.sender.id))
 
   // Share Houston: the sidebar button anchors the macOS share menu at the point it
   // passes (window-relative CSS px); a non-finite point falls back to the cursor.
@@ -2116,10 +2121,17 @@ export function registerIpc(ready?: Promise<unknown>): void {
   const lastChat = new LastChatStore(join(getUserDataDir(), 'last-chat.json'))
   const launchedIds = new Set<number>()
   handle(IPC.chatLaunch, (event): string | null => {
-    launchedIds.add(event.sender.id)
+    const senderId = event.sender.id
+    // A window whose page has asked before is reloading (Cmd+R, or crash recovery):
+    // it reopens the chat it was showing, not whichever chat another window showed.
+    if (launchedIds.has(senderId)) {
+      const shown = chatShownBy(senderId)
+      return shown && conversationExists(shown) ? shown : null
+    }
+    launchedIds.add(senderId)
     // A window opened for a particular chat (or a new one) starts there; the launch
     // window reopens the last chat.
-    const requested = takeLaunchRequest(event.sender.id)
+    const requested = takeLaunchRequest(senderId)
     if (requested) {
       const id = requested.conversationId
       return id && conversationExists(id) ? id : null
@@ -2149,7 +2161,11 @@ export function registerIpc(ready?: Promise<unknown>): void {
     const viewing = typeof conversationId === 'string' ? conversationId : null
     chat.setViewing(id, viewing, focused === true)
     setWindowShowing(id, viewing)
-    if (launchedIds.has(id) && (viewing === null || conversationExists(viewing))) lastChat.set(viewing)
+    // Only the focused window's view is the one to reopen: a blur report from the
+    // window being left can reach main after the focus report from the one taking over.
+    if (focused === true && launchedIds.has(id) && (viewing === null || conversationExists(viewing))) {
+      lastChat.set(viewing)
+    }
   })
   // "Mark unread from here" names a reply by its position among the transcript's
   // replies (the renderer has no message log); it's resolved to a log index here.
@@ -2288,7 +2304,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.terminalKill, (_event, id: string): boolean => killTerminal(id))
   // Fire-and-forget focus signal so the ⌘W menu handler knows whether to close
   // the active terminal tab or the window.
-  on(IPC.terminalFocusChanged, (_event, focused: boolean) => setTerminalFocused(focused))
+  on(IPC.terminalFocusChanged, (event, focused: unknown) => setTerminalFocused(focused === true, event.sender))
   on(IPC.menuState, (event, state: MenuState) => setMenuState(state, event.sender))
 
   // ---- Live preview dock (started dev servers) ----

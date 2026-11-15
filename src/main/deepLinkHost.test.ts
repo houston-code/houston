@@ -116,6 +116,45 @@ describe('deep link host', () => {
     expect(h.sent).toHaveLength(2)
     expect(h.sent[1].channel).toBe(IPC.menuOpenSettings)
   })
+
+  it('keeps delivering to a listening window when another one reloads and closes', async () => {
+    const { wireDeepLinks } = await load()
+    const a = fakeWindow(1)
+    const b = fakeWindow(2)
+    h.appWindows = [a, b]
+    h.target = b
+    const router = wireDeepLinks({ started: Promise.resolve(), createWindow: () => {} })
+    ready(a)
+    ready(b)
+    await flush()
+    // B starts reloading, then closes before its new page says ready.
+    b.webContents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
+    b.webContents.emit('destroyed')
+    h.appWindows = [a]
+    h.target = a
+    await router.handle('houston://settings')
+    expect(h.sent.map((s) => s.win)).toEqual([1])
+  })
+
+  it('sends to a listening window rather than the target while the target reloads', async () => {
+    const { wireDeepLinks } = await load()
+    const a = fakeWindow(1)
+    const b = fakeWindow(2)
+    h.appWindows = [a, b]
+    h.target = b
+    const router = wireDeepLinks({ started: Promise.resolve(), createWindow: () => {} })
+    ready(a)
+    ready(b)
+    await flush()
+    b.webContents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
+    await router.handle('houston://settings')
+    expect(h.sent.map((s) => s.win)).toEqual([1])
+    // Once B's new page is listening, it gets links again.
+    ready(b)
+    await flush()
+    await router.handle('houston://settings')
+    expect(h.sent.map((s) => s.win)).toEqual([1, 2])
+  })
 })
 
 describe('deepLinkReady sender check', () => {
