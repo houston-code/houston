@@ -144,3 +144,85 @@ describe('useAutosave', () => {
   })
 })
 
+describe('useAutosave against a store that keeps entries in its own form', () => {
+  // Like main's store: every MCP server gains a sign-in flag, header and env values
+  // come back masked, and an empty headers/env map is dropped.
+  const masked = (m?: Record<string, string>): Record<string, string> | undefined =>
+    m && Object.keys(m).length ? Object.fromEntries(Object.keys(m).map((k) => [k, ''])) : undefined
+  function fakeStore(initial: AppSettings): { stored: () => AppSettings } {
+    let stored = initial
+    const normalize = (s: AppSettings): AppSettings => ({
+      ...s,
+      providers: s.providers.map((p) => ({ ...p, headers: masked(p.headers) })),
+      mcpServers: s.mcpServers?.map((sv) => ({ ...sv, hasOAuth: false, headers: masked(sv.headers), env: masked(sv.env) }))
+    })
+    window.api = {
+      getSettings: vi.fn(async () => stored),
+      saveSettings: vi.fn(async (s: AppSettings) => {
+        stored = normalize(s)
+        return stored
+      })
+    } as unknown as typeof window.api
+    return { stored: () => stored }
+  }
+  function mount(initial: AppSettings) {
+    return renderHook(
+      (p: { settings: AppSettings }) =>
+        useAutosave({
+          settings: p.settings,
+          setSettings: vi.fn(),
+          initial,
+          containerRef: { current: null },
+          onSaved: vi.fn(),
+          delayMs: 60_000
+        }),
+      { initialProps: { settings: initial } }
+    )
+  }
+  const server = { id: 'github', command: 'npx', args: ['-y', 'gh'], enabled: false, env: { GITHUB_TOKEN: 'tok' } }
+
+  it('keeps one copy of a server added and then switched on', async () => {
+    const store = fakeStore(base)
+    const { result, rerender } = mount(base)
+    rerender({ settings: { ...base, mcpServers: [server] } })
+    await act(() => result.current.flush())
+    rerender({ settings: { ...base, mcpServers: [{ ...server, enabled: true }] } })
+    await act(() => result.current.flush())
+    expect(store.stored().mcpServers).toHaveLength(1)
+    expect(store.stored().mcpServers?.[0]).toMatchObject({ id: 'github', enabled: true })
+  })
+
+  it('removes a server that was just added', async () => {
+    const store = fakeStore(base)
+    const { result, rerender } = mount(base)
+    rerender({ settings: { ...base, mcpServers: [{ ...server, enabled: true }] } })
+    await act(() => result.current.flush())
+    rerender({ settings: { ...base, mcpServers: [] } })
+    await act(() => result.current.flush())
+    expect(store.stored().mcpServers).toEqual([])
+  })
+
+  it('keeps one copy of a provider edited after its empty headers box was left', async () => {
+    const custom = { ...provider, id: 'ollama', kind: 'openai-compatible' as const, builtIn: true, baseUrl: 'http://a' }
+    const opened = { ...base, providers: [custom] }
+    const store = fakeStore(opened)
+    const { result, rerender } = mount(opened)
+    rerender({ settings: { ...opened, providers: [{ ...custom, headers: {} }] } })
+    await act(() => result.current.flush())
+    rerender({ settings: { ...opened, providers: [{ ...custom, headers: {}, baseUrl: 'http://b' }] } })
+    await act(() => result.current.flush())
+    expect(store.stored().providers).toHaveLength(1)
+    expect(store.stored().providers[0].baseUrl).toBe('http://b')
+  })
+
+  it('does not save, or offer Undo for, a change to the derived sign-in flag', async () => {
+    const opened = { ...base, mcpServers: [{ ...server, hasOAuth: false }] }
+    fakeStore(opened)
+    const { result, rerender } = mount(opened)
+    rerender({ settings: { ...opened, mcpServers: [{ ...server, hasOAuth: true }] } })
+    await act(() => result.current.flush())
+    expect(window.api.saveSettings).not.toHaveBeenCalled()
+    expect(result.current.undo).toBeNull()
+  })
+})
+

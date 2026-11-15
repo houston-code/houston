@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
 import type { AppSettings, ProviderConfig } from '@shared/types'
 import { SettingsModal } from './SettingsModal'
 
@@ -1400,6 +1401,25 @@ describe('SettingsModal', () => {
       expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).systemPromptExtra).toBe('pending edit')
     })
 
+    it("saves an MCP server's arguments still being typed when Escape closes Settings", async () => {
+      const api = installApi()
+      stored = makeSettings({ mcpServers: [{ id: 'fs', command: 'npx', args: ['-y'], enabled: true }] })
+      const initial = stored
+      // Like the app: closing unmounts Settings in the same update.
+      function Host(): JSX.Element | null {
+        const [open, setOpen] = useState(true)
+        return open ? <SettingsModal initial={initial} initialTab="mcp" onClose={() => setOpen(false)} onSaved={vi.fn()} /> : null
+      }
+      render(<Host />)
+      const args = screen.getByRole('textbox', { name: 'Server fs arguments' })
+      act(() => args.focus())
+      fireEvent.change(args, { target: { value: '-y\n/work' } })
+      fireEvent.keyDown(args, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).mcpServers?.[0].args).toEqual(['-y', '/work'])
+    })
+
     it('shows a failed save in the footer', async () => {
       installApi({ saveSettings: vi.fn(() => Promise.reject(new Error('disk full'))) })
       renderModal({ formatOnSave: false })
@@ -1845,12 +1865,18 @@ describe('SettingsModal', () => {
     const api = installApi({ mcpOAuthLogin })
     renderModal({ mcpServers: [remote] })
     fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
+    // An edit still pending when Sign in is pressed.
+    fireEvent.change(screen.getByRole('textbox', { name: 'Server linear URL' }), {
+      target: { value: 'https://mcp.example.com/v2' }
+    })
 
     fireEvent.click(screen.getByRole('button', { name: 'Sign in (OAuth)' }))
 
     // The flow reads the persisted URL, so the working copy is saved first.
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     await waitFor(() => expect(mcpOAuthLogin).toHaveBeenCalledWith('linear'))
+    expect(api.saveSettings).toHaveBeenCalled()
+    expect(api.saveSettings.mock.invocationCallOrder[0]).toBeLessThan(mcpOAuthLogin.mock.invocationCallOrder[0])
+    expect((api.saveSettings.mock.calls[0][0] as AppSettings).mcpServers?.[0].url).toBe('https://mcp.example.com/v2')
     // The fresh hasOAuth flag flips the affordance to signed-in + Sign out.
     await waitFor(() => expect(screen.getByText('Signed in with OAuth')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()

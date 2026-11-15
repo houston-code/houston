@@ -11,6 +11,7 @@ import {
   SHORTCUTS,
   type Keyish
 } from './shortcuts'
+import { resolveShortcuts } from './keybindingOverrides'
 
 const ev = (key: string, mod = false, extra: Partial<Keyish> = {}): Keyish => ({
   key,
@@ -50,6 +51,13 @@ describe('matchShortcut', () => {
     expect(matchShortcut({ key: '`', metaKey: false, ctrlKey: true })).toBe('toggle-terminal')
     // ⌘` is not the terminal toggle — the binding is Control-specific.
     expect(matchShortcut({ key: '`', metaKey: true, ctrlKey: false })).toBeNull()
+  })
+
+  it('lets a raw-Control binding win over a command-key shortcut on the same key', () => {
+    const defs = resolveShortcuts({ 'toggle-terminal': 'ctrl+b' })
+    expect(matchShortcut({ key: 'b', metaKey: false, ctrlKey: true }, defs)).toBe('toggle-terminal')
+    // ⌘B still reaches the sidebar toggle.
+    expect(matchShortcut({ key: 'b', metaKey: true, ctrlKey: false }, defs)).toBe('toggle-sidebar')
   })
 
   it('maps Escape to escape (no modifier needed)', () => {

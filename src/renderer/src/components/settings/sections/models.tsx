@@ -486,37 +486,23 @@ export function ContextWindowSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
       {mode === 'percent' && (
         <label className="field">
           <span>Compact at this percentage of the context window (1 to 100).</span>
-          <input
-            type="number"
+          <NumberField
             min={1}
             max={100}
             step={5}
             value={settings.compactionThresholdPercent ?? DEFAULT_COMPACTION_PERCENT}
-            onChange={(e) => {
-              const n = Math.floor(Number(e.target.value))
-              setSettings((s) => ({
-                ...s,
-                compactionThresholdPercent: Math.min(100, Math.max(1, Number.isFinite(n) ? n : 1))
-              }))
-            }}
+            onChange={(n) => setSettings((s) => ({ ...s, compactionThresholdPercent: n }))}
           />
         </label>
       )}
       {mode === 'tokens' && (
         <label className="field">
           <span>Compact when the conversation grows past this many tokens.</span>
-          <input
-            type="number"
+          <NumberField
             min={1000}
             step={1000}
             value={settings.compactionThreshold ?? DEFAULT_COMPACTION_TOKENS}
-            onChange={(e) => {
-              const n = Math.floor(Number(e.target.value))
-              setSettings((s) => ({
-                ...s,
-                compactionThreshold: Math.max(1000, Number.isFinite(n) ? n : 1000)
-              }))
-            }}
+            onChange={(n) => setSettings((s) => ({ ...s, compactionThreshold: n }))}
           />
         </label>
       )}

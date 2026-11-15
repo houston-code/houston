@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { useApplyAccent, useApplyAppearance, useApplyTheme } from '../hooks/useApplyTheme'
@@ -186,6 +187,11 @@ export function SettingsModal({
   const closing = useRef(false)
   const requestClose = async (): Promise<void> => {
     if (closing.current) return
+    // A field that commits when it loses focus (an MCP server's id or arguments, a
+    // number box) gets no blur when Settings unmounts under it (Esc), so blur it here
+    // and let its edit render into the settings the close saves.
+    const active = document.activeElement
+    if (active instanceof HTMLElement && bodyRef.current?.contains(active)) flushSync(() => active.blur())
     const keyIds = new Set([...settings.providers.map((p) => p.id), ...SEARCH_PROVIDERS.map((p) => p.keyId)])
     const unsaved = Object.keys(keyInputs).filter((id) => keyInputs[id]?.trim() && keyIds.has(id))
     if (unsaved.length > 0) {

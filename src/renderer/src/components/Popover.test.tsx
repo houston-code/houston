@@ -101,6 +101,45 @@ describe('Popover', () => {
   })
 })
 
+describe('Popover opened at a point (a right-click menu)', () => {
+  /** A message inside a scrolling transcript, with a menu opened on it at a point. */
+  function renderAtPoint(onClose: () => void) {
+    const scroller = document.createElement('div')
+    const message = document.createElement('div')
+    const text = document.createElement('p')
+    message.appendChild(text)
+    scroller.appendChild(message)
+    document.body.appendChild(scroller)
+    const ref: RefObject<HTMLDivElement> = { current: message }
+    const view = render(
+      <Popover anchorRef={ref} at={{ x: 10, y: 10 }} onClose={onClose}>
+        <button className="menu__item">Copy</button>
+      </Popover>
+    )
+    return { ...view, scroller, text }
+  }
+
+  it('closes on a click anywhere on the element it was opened on', () => {
+    const onClose = vi.fn()
+    const { text, scroller } = renderAtPoint(onClose)
+    fireEvent.mouseDown(text)
+    expect(onClose).toHaveBeenCalledTimes(1)
+    scroller.remove()
+  })
+
+  it('stays open while the view under it scrolls on its own, and closes when the user scrolls', () => {
+    const onClose = vi.fn()
+    const { scroller, getByText } = renderAtPoint(onClose)
+    fireEvent.scroll(scroller, {})
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.wheel(getByText('Copy'))
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.wheel(scroller)
+    expect(onClose).toHaveBeenCalledTimes(1)
+    scroller.remove()
+  })
+})
+
 describe('Popover placement', () => {
   /** A rect for jsdom, which lays nothing out. */
   const rect = (left: number, top: number, width: number, height: number): DOMRect =>

@@ -78,11 +78,14 @@ function ItemRow({
     if (confirming) confirmRef.current?.focus()
   }, [confirming])
 
-  const act = async (fn: () => Promise<{ ok: boolean; error?: string }>, reload = true): Promise<void> => {
+  /** Runs `fn`, reporting a failure; resolves to whether it succeeded. */
+  const act = async (fn: () => Promise<{ ok: boolean; error?: string }>, reload = true): Promise<boolean> => {
     setBusy(true)
     onError(null)
+    let ok = false
     try {
       const res = await fn()
+      ok = res.ok
       if (!res.ok) onError(res.error ?? 'Something went wrong.')
       if (reload) await onChanged()
     } catch (e) {
@@ -90,6 +93,7 @@ function ItemRow({
     } finally {
       setBusy(false)
     }
+    return ok
   }
 
   const label = item.kind === 'command' ? `/${item.name}` : item.name
@@ -105,7 +109,11 @@ function ItemRow({
             onChange={(e) => {
               const enabled = e.target.checked
               setOn(enabled)
-              void act(() => window.api.customizeSetEnabled(workspace, item.id, enabled))
+              // A failed switch leaves the file as it was, and the reload then reports
+              // the same state, so put the box back here.
+              void act(() => window.api.customizeSetEnabled(workspace, item.id, enabled)).then((ok) => {
+                if (!ok) setOn(item.enabled)
+              })
             }}
           />
         </label>
