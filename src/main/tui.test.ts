@@ -636,6 +636,7 @@ describe('parseSlashCommand', () => {
 
   it('routes /settings, /hooks and /mcp to the settings surface', () => {
     expect(parseSlashCommand('/settings', s)).toEqual({ kind: 'settings' })
+    expect(parseSlashCommand('/settings agent behavior', s)).toEqual({ kind: 'settings', page: 'agent behavior' })
     expect(parseSlashCommand('/hooks', s)).toEqual({ kind: 'hooks', action: { op: 'list' } })
     expect(parseSlashCommand('/hooks add', s)).toEqual({ kind: 'hooks', action: { op: 'add' } })
     expect(parseSlashCommand('/hooks remove 2', s)).toEqual({ kind: 'hooks', action: { op: 'remove', index: 2 } })
@@ -854,6 +855,17 @@ describe('parseSlashCommand', () => {
   it('substitutes $ARGUMENTS in a custom template', () => {
     const custom: Command[] = [{ name: 'fix', description: 'Fix', template: 'Fix the $ARGUMENTS bug' }]
     expect(parseSlashCommand('/fix login', s, custom)).toMatchObject({ kind: 'prompt', text: 'Fix the login bug' })
+  })
+
+  it('reads command names case-insensitively, as the desktop app does', () => {
+    expect(parseSlashCommand('/NEW', s)).toEqual({ kind: 'clear' })
+    expect(parseSlashCommand('/Diff last 2', s)).toEqual({ kind: 'changes', last: 2 })
+    expect(parseSlashCommand('/Skills', s)).toEqual({ kind: 'capability', which: 'skills' })
+    expect(parseSlashCommand('/AUTO', s)).toEqual({ kind: 'set-approval', policy: 'auto-edit' })
+    const custom: Command[] = [{ name: 'fix', description: 'Fix', template: 'Fix the $ARGUMENTS bug' }]
+    expect(parseSlashCommand('/FIX login', s, custom)).toMatchObject({ kind: 'prompt', text: 'Fix the login bug' })
+    // An unknown name is reported as typed.
+    expect(parseSlashCommand('/Frob', s)).toEqual({ kind: 'unknown', name: 'Frob' })
   })
 
   it('marks unknown commands', () => {
@@ -3601,6 +3613,22 @@ describe('runTui', () => {
     expect(t.text()).toContain('/ship')
   })
 
+  it("leaves out a custom command named like a built-in or an alias: it never runs in either client", async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.commands = async () => [
+      { name: 'ship', description: 'Ship the release', template: 'go' },
+      { name: 'vim', description: 'My vim', template: 'vim stuff' },
+      { name: 'q', description: 'My q', template: 'q stuff' }
+    ]
+    const t = fakeIo(['/help', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const custom = t.text().slice(t.text().indexOf('Custom commands (.houston/commands)'))
+    expect(custom).toContain('/ship')
+    expect(custom).not.toContain('My vim')
+    expect(custom).not.toContain('My q')
+  })
+
   it('/compact summarizes earlier messages and adopts the compacted log', async () => {
     const compacted: ChatMessage[] = [
       { role: 'user', content: '[summary]' },
@@ -3723,15 +3751,18 @@ describe('runTui', () => {
 
   // ---- Settings surface: /settings, /hooks, /mcp ----
 
-  it('/settings prints the file path, the desktop-panel note, and that changes apply next message', async () => {
+  it('/settings prints the file path, the commands that edit settings here, and that changes apply next message', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     d.settingsPath = () => '/profile/settings.json'
-    const t = fakeIo(['/settings', null])
+    const t = fakeIo(['/settings', '/settings permissions', '/SETTINGS nope', null])
     d.io = t.io
     await runTui(opts, d)
     const out = t.text()
     expect(out).toContain('/profile/settings.json')
-    expect(out).toContain('desktop app has the full settings panel')
+    expect(out).toContain('set or replace a provider API key')
+    // A page shows the commands that cover it, and an unknown one lists the pages.
+    expect(out).toContain('/permissions [remove n]')
+    expect(out).toContain('no settings page "nope"')
     // The commands it lists (/hooks, /mcp, /trust) are re-read by the loop each
     // turn, so they apply on the next message — the overview must not claim restart.
     expect(out).toContain('apply on your next message')
@@ -8025,6 +8056,24 @@ describe('/proposals and /btw', () => {
     await runTui(opts, d)
     expect(calls.asked).toEqual([])
     expect(t.text()).toContain('send a message first')
+    expect(t.text()).toContain('usage: /btw <question>')
+  })
+
+  it('bare /btw shows the latest side answers, then asks for the question', async () => {
+    const { d, t, calls } = wired(['hello', '/btw', 'and the refresh token?', null])
+    d.sideChat!.recent = () => [{ id: 's1', question: 'why PKCE?', answer: 'Because the client is public.', at: 1 }]
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('› why PKCE?')
+    expect(out.indexOf('why PKCE?')).toBeLessThan(out.lastIndexOf('Because the client is public.'))
+    expect(t.reads.some((r) => r.prompt.includes('Side question'))).toBe(true)
+    expect(calls.asked).toEqual(['conv-1|and the refresh token?'])
+  })
+
+  it('bare /btw with nothing typed asks nothing', async () => {
+    const { d, t, calls } = wired(['hello', '/btw', '', null])
+    await runTui(opts, d)
+    expect(calls.asked).toEqual([])
     expect(t.text()).toContain('usage: /btw <question>')
   })
 

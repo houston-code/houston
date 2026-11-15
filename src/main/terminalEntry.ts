@@ -41,7 +41,7 @@ import { ISSUES_URL, issueReportBody, issueReportUrl } from '@shared/issueReport
 import { overrideForConversation } from './agent/overrides'
 import { loadManagedPolicy, resolveManagedPolicyPath } from './agent/managedPolicy'
 import { redactSecrets } from './agent/redact'
-import type { AgentEvent, ConversationMeta } from '@shared/agent'
+import type { AgentEvent, ConversationMeta, SideChatTurn } from '@shared/agent'
 import { setSpawnBackend } from './agent/spawn'
 import { setSchedulerBackend } from './agent/scheduler'
 import { createSpawnBackend } from './spawnSession'
@@ -58,7 +58,7 @@ import {
   type SessionWorktree
 } from './sessionWorktree'
 import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
-import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
+import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps, sideChatView } from './sideChat'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { runUserShell } from './userShell'
@@ -137,7 +137,7 @@ import {
   COMMANDS,
   type CommandSpec
 } from './tui-complete'
-import { mergeCommands } from '@shared/commands'
+import { mergeWithBuiltins } from '@shared/commands'
 import { runOutcome, runOutcomePhrase } from '@shared/runEnd'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
 import { highlightToHtml, type HljsLike } from './syntax'
@@ -531,11 +531,13 @@ export function terminalSideChat(): {
   ask: (input: Parameters<typeof askSideChat>[0]) => ReturnType<typeof askSideChat>
   clear: (conversationId: string) => void
   cancel: (conversationId: string) => void
+  recent: (conversationId: string) => SideChatTurn[]
 } {
   return {
     ask: (input) => askSideChat(input, hostSideChatDeps()),
     clear: (conversationId) => clearSideChat(conversationId, { saveSideChat }),
-    cancel: (conversationId) => cancelSideChat(conversationId)
+    cancel: (conversationId) => cancelSideChat(conversationId),
+    recent: (conversationId) => sideChatView(conversationId, { getConversation }).turns
   }
 }
 
@@ -677,7 +679,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // the menu lists it rather than the built-in it replaces.
       const own = new Set(custom.map((c) => c.name.toLowerCase()))
       const builtins = COMMANDS.filter((c) => !(YIELDS_TO_CUSTOM.has(c.name) && own.has(c.name)))
-      menuCommands = mergeCommands(builtins, custom).map((c) => ({
+      menuCommands = mergeWithBuiltins(builtins, custom).map((c) => ({
         name: c.name,
         description: c.description,
         ...(c.args ? { args: c.args } : {})

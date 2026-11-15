@@ -22,11 +22,9 @@ import { stripControlChars, terminalText } from './tui-wrap'
  * only goes to a network remote.
  */
 
-/**
- * Built-in names that yield to a project's or user's own command of the same name
- * (`.houston/commands/commit.md`), which keeps running as before.
- */
-export const YIELDS_TO_CUSTOM: ReadonlySet<string> = new Set(['commit', 'push', 'ship', 'pr'])
+// Built-in names that yield to a custom command of the same name (shared, so the
+// reserved-name check in both clients agrees).
+export { YIELDS_TO_CUSTOM } from '@shared/commands'
 
 export type GitOp = { op: 'commit'; message: string } | { op: 'push' } | { op: 'ship' } | { op: 'pr' }
 

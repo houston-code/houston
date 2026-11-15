@@ -217,6 +217,35 @@ export function mergeCommands(builtin: Command[], custom: Command[]): Command[] 
 }
 
 /**
+ * Built-in names that yield to a project's or user's own command of the same name
+ * (`.houston/commands/commit.md`), which keeps running as before: these built-ins
+ * arrived after such commands were common.
+ */
+export const YIELDS_TO_CUSTOM: ReadonlySet<string> = new Set(['commit', 'push', 'ship', 'pr'])
+
+/**
+ * Whether `name` is taken by a built-in in any client, or by one of its aliases. A
+ * custom command can't have such a name: the terminal handles every built-in name
+ * before it looks at custom ones, so a custom `/vim` or `/diff` could run in one
+ * client and never in the other. The names in YIELDS_TO_CUSTOM are not taken: a
+ * custom command of that name runs in place of the built-in.
+ */
+export function isReservedCommandName(name: string): boolean {
+  const n = name.toLowerCase()
+  if (YIELDS_TO_CUSTOM.has(n)) return false
+  return Object.hasOwn(COMMAND_ALIASES, n) || BUILTIN_COMMAND_CATALOG.some((c) => c.name === n)
+}
+
+/**
+ * A client's built-ins plus the custom commands, dropping every custom command whose
+ * name a built-in (in any client) or an alias takes, so a name resolves to the same
+ * command in the desktop app and the terminal.
+ */
+export function mergeWithBuiltins(builtin: Command[], custom: Command[]): Command[] {
+  return mergeCommands(builtin, custom.filter((c) => !isReservedCommandName(c.name)))
+}
+
+/**
  * Whether a custom command needs the main process to run it: a frontmatter option
  * that changes how its turn runs (model, effort, agent, allowed-tools), or a
  * template that pulls in `@file` or `` !`command` `` context. The desktop composer
@@ -464,7 +493,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   {
     name: 'mcp', group: 'Extend',
-    description: 'List MCP servers (add, edit, remove, enable, disable, reconnect, login, logout, registry, catalog)',
+    description: 'List MCP servers (add, edit, remove, enable, disable, reconnect, tools, login, logout, registry search, catalog)',
     clients: ['gui', 'tui'],
     gui: { description: 'Manage MCP servers in Settings' }
   },
