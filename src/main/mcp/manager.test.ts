@@ -52,6 +52,7 @@ import {
   _setMcpSseClientFactory,
   disconnectAllMcp,
   getMcpStatuses,
+  connectedMcpResources,
   getMcpPromptText,
   getMcpToolDefs,
   listMcpPrompts,
@@ -780,6 +781,19 @@ describe("mcp manager: resources and prompts stay with their run's servers", () 
     expect(seen).toEqual([])
     expect(await getMcpPromptText([server('web')], 'web', 'web-review', { topic: 'a' })).toBe('user: prompt of web')
     expect(seen).toEqual(['web prompts/get'])
+  })
+
+  it("lists only a chat's own servers' resources for @ completion, never a same-id server elsewhere", async () => {
+    useFactory(catalogSpawn([]))
+    const mine = cfg({ id: 'proj-db', name: 'proj-db', command: 'mine-db' })
+    const theirs = cfg({ id: 'proj-db', name: 'proj-db', command: 'their-db' })
+    await getMcpToolDefs([theirs], 'their-run')
+    expect(connectedMcpResources([mine])).toEqual([])
+    await getMcpToolDefs([mine, server('web')], 'my-run')
+    expect(connectedMcpResources([mine, server('web'), server('not-connected')])).toEqual([
+      { server: 'proj-db', uri: 'db://mine-db/rows', name: 'Rows' },
+      { server: 'web', uri: 'db://web/rows', name: 'Rows' }
+    ])
   })
 
   it("never offers or fetches another folder's server that shares the chat's server id", async () => {

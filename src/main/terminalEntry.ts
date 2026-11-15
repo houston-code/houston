@@ -804,20 +804,21 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // The MCP servers this folder's chats use: the user's own, plus a trusted folder's
   // project servers under their `proj-` ids, exactly as a run merges them. An
   // untrusted folder's servers are never offered or expanded.
-  const chatMcpServerIds = async (): Promise<string[]> => {
+  const chatMcpServers = async (): Promise<McpServerConfig[]> => {
     const s = getSettings()
     const trusted = await workspaceTrusted(tui.cwd, s.trustedFolders).catch(() => false)
     const servers = trusted
       ? mergeProjectMcpServers(s.mcpServers, (await loadProjectConfig(tui.cwd)).elevated.mcpServers)
       : (s.mcpServers ?? [])
-    return servers.filter((c) => c.enabled).map((c) => c.id)
+    return servers.filter((c) => c.enabled)
   }
+  const chatMcpServerIds = async (): Promise<string[]> => (await chatMcpServers()).map((c) => c.id)
   // Typing `@` lists matching files under the composer, as `/` lists commands, and
   // agents (`@agent-`), line ranges (`@path#`) and MCP resources (`@server:`) too.
   const mentionFinder = makeMentionFinder({
     files: (q) => findFiles(tui.cwd, q),
     agents: async () => (await loadAgents(tui.cwd)).map((a) => ({ name: a.name, description: a.description })),
-    resources: async () => connectedMcpResources(await chatMcpServerIds())
+    resources: async () => connectedMcpResources(await chatMcpServers())
   })
   const mentionMenu = makeMentionMenuView(mentionFinder, paint as never)
 

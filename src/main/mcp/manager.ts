@@ -54,16 +54,17 @@ export function getMcpStatuses(): McpServerStatus[] {
 }
 
 /**
- * The resources the connected servers among `serverIds` list right now, for the
- * terminal's `@server:uri` completion. Only the servers named (the user's own), so
- * another chat's connection is never offered; nothing is read or fetched. The uris
- * and names are server-written text: callers strip them before showing them.
+ * The resources the connected servers among a chat's own `configs` list right now, for
+ * the terminal's `@server:uri` completion. Each config is matched to its own connection
+ * (see {@link listMcpPrompts}), so another chat's connection is never offered, even
+ * under the same id; nothing is read or fetched. The uris and names are server-written
+ * text: callers strip them before showing them.
  */
-export function connectedMcpResources(serverIds: readonly string[]): { server: string; uri: string; name?: string }[] {
+export function connectedMcpResources(configs: readonly McpServerConfig[]): { server: string; uri: string; name?: string }[] {
   const out: { server: string; uri: string; name?: string }[] = []
-  for (const id of [...serverIds].sort(byCodeUnit)) {
-    const conn = connections.get(id)
-    if (!conn || conn.client.isClosed) continue
+  const own = ownConnections(chatConnections(configs)).sort(([a], [b]) => byCodeUnit(a, b))
+  for (const [id, conn] of own) {
+    if (conn.client.isClosed) continue
     for (const r of conn.client.resources) {
       if (typeof r.uri !== 'string' || !r.uri) continue
       out.push({ server: id, uri: r.uri, ...(r.name ? { name: r.name } : {}) })
