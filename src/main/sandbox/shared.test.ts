@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { join, sep, isAbsolute } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import {
   augmentPath,
@@ -768,6 +768,48 @@ describe('spawnWithBackend — offline fail-fast env', () => {
     expect(await retriesSeen(true, false)).toBe('0')
     expect(await retriesSeen(true, true)).toBe('unset')
     expect(await retriesSeen(false, false)).toBe('unset')
+  })
+})
+
+describe('spawnWithBackend: cancel', () => {
+  it.skipIf(process.platform === 'win32')('sends SIGTERM first when the run is aborted, so the command can shut down', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spawn-abort-'))
+    const marker = join(dir, 'stopped')
+    const backend: SandboxBackend = {
+      id: 'none',
+      sandboxed: false,
+      confinesNetwork: false,
+      supportsSession: true,
+      shellSyntax: 'posix',
+      buildLaunch: () => ({
+        file: process.execPath,
+        args: [
+          '-e',
+          `process.on("SIGTERM", () => { require("fs").writeFileSync(${JSON.stringify(marker)}, "ok"); process.exit(0) });` +
+            'console.log("up"); setInterval(() => {}, 1000)'
+        ],
+        detached: true,
+        windowsHide: true,
+        supportsSession: true
+      })
+    }
+    const ac = new AbortController()
+    try {
+      const { child } = spawnWithBackend(backend, {
+        command: 'noop',
+        cwd: process.cwd(),
+        workspace: process.cwd(),
+        allowNetwork: true,
+        signal: ac.signal
+      })
+      await new Promise<void>((resolve) => child.stdout!.once('data', () => resolve()))
+      const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
+      ac.abort()
+      await closed
+      expect(existsSync(marker)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

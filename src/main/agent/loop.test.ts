@@ -58,6 +58,7 @@ import { resetOllamaContextCache } from '../providers/ollama'
 import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
+import { spillNote } from './shellSpill'
 import { idleTimeoutFetch } from '../providers/idle-fetch'
 import { promptCacheKeyFor } from '../providers/caching'
 import { startFlakySseServer, type Hiccup } from '../test/flaky-sse-server'
@@ -9655,6 +9656,59 @@ describe('egress hardening', () => {
         deniedByRule: false
       })
       resetRecentDenials()
+    })
+
+    it("reads the run's own spilled output back unasked, and only reads", async () => {
+      // Outside the temp folders (which count as scratch anyway) and outside the
+      // workspace, like the real app data folder; with a space, like macOS's.
+      const cacheDir = join(process.cwd(), 'node_modules', '.cache')
+      mkdirSync(cacheDir, { recursive: true })
+      const userData = mkdtempSync(join(cacheDir, 'houston spill-'))
+      setUserDataDir(userData)
+      let spilled = ''
+      const tool: ToolDef = {
+        ...probeRunShell(),
+        execute: async (a, ctx) => {
+          const command = String((a as { command?: string }).command ?? '')
+          shellNetPerCall.push({ command, sawNetwork: ctx.allowNetwork })
+          if (command !== 'make') return `ran ${command}`
+          const r = await ctx.spillShellOutput!('line\n'.repeat(50))
+          const note = spillNote(r!)
+          spilled = /saved to (.+); read/.exec(note)![1]!
+          return `...\n${note}`
+        }
+      }
+      h.probeTools = [tool]
+      const calls: Array<(path: string) => string> = [
+        () => 'make',
+        (p) => `sed -n '10,20p' ${p}`,
+        (p) => `grep -n line ${p} | head -5`,
+        (p) => `sed -i 's/line/x/' ${p}`,
+        (p) => `cat ${p.replace(/shell-1\.log'?$/, "../../elsewhere/x'")}`
+      ]
+      let turn = 0
+      const provider: Provider = {
+        async *streamChat() {
+          const i = turn++
+          const make = calls[i]
+          if (!make) {
+            yield { type: 'done', stopReason: 'end_turn' }
+            return
+          }
+          yield runShellCall(`x${i + 1}`, make(spilled))
+          yield { type: 'done', stopReason: 'tool_use' }
+        }
+      }
+      try {
+        const r = await run({ policy: 'full-auto', provider, onApproval: (_id, decide) => decide('deny') })
+        expect(spilled).toContain('shell-1.log')
+        // The two reads run unasked; a write to the file, or a path that climbs out of
+        // the run's folder, still asks.
+        expect(approvalCallIds(r)).toEqual(['x4', 'x5'])
+      } finally {
+        resetUserDataDir()
+        rmSync(userData, { recursive: true, force: true })
+      }
     })
 
     it('an explicit allow rule lets a known destructive command through', async () => {

@@ -8,7 +8,9 @@ import {
   killShell,
   normalizeNotifyOn,
   readShellOutput,
-  registerShell
+  registerShell,
+  shellTail,
+  shellWaitState
 } from './shells'
 import {
   WAKE_DEBOUNCE_MS,
@@ -149,6 +151,44 @@ describe('notify_on watching', () => {
     expect(takeBackgroundEvents('conv-10')).toEqual([])
     killShell(id)
     await onClose(child)
+  })
+
+  it('matches CRLF lines and keeps them in the exit report, the tail, and wait_for', async () => {
+    const child = node('process.stdout.write("Server error: boom\\r\\nlistening\\r\\n"); process.exit(3)')
+    const id = registerShell('node srv', child, 'conv-crlf', '/ws/crlf', { notifyOn: ['error'] })
+    await onClose(child)
+    const events = takeBackgroundEvents('conv-crlf')
+    const match = events.find((e): e is Match => e.kind === 'shell_match')
+    expect(match?.lines).toEqual(['Server error: boom'])
+    const exit = events.find((e): e is Exit => e.kind === 'shell_exit')
+    expect(exit?.tail).toBe('Server error: boom\nlistening')
+    expect(shellTail(id)).toEqual(['Server error: boom', 'listening'])
+    expect(shellWaitState(id, 'conv-crlf', '/ws/crlf')?.tail).toEqual(['Server error: boom', 'listening'])
+  })
+
+  it('still keeps only the last redraw of a progress line that ends in CRLF', async () => {
+    const child = node('process.stdout.write("10%\\r50%\\r100% error\\r\\n"); process.exit(0)')
+    const id = registerShell('node bar', child, 'conv-bar', undefined, { notifyOn: ['error'] })
+    await onClose(child)
+    const match = takeBackgroundEvents('conv-bar').find((e): e is Match => e.kind === 'shell_match')
+    expect(match?.lines).toEqual(['100% error'])
+    expect(shellTail(id)).toEqual(['100% error'])
+  })
+
+  it("does not wake the chat for a watched line printed while the user's Stop shuts the shell down", async () => {
+    const start = vi.fn(() => true)
+    setWakeHost({ enabled: () => true, start })
+    const child = node(
+      'process.on("SIGTERM", () => { console.log("npm error signal SIGTERM"); process.exit(1) }); console.log("up"); setInterval(() => {}, 1000)'
+    )
+    const id = registerShell('npm run dev', child, 'conv-stop', undefined, { notifyOn: ['error'] })
+    await new Promise<void>((resolve) => child.stdout!.once('data', () => resolve()))
+    killShell(id, { by: 'user' })
+    await onClose(child)
+    await new Promise((r) => setTimeout(r, WAKE_DEBOUNCE_MS + 200))
+    expect(start).not.toHaveBeenCalled()
+    // Still reported, just without waking anyone.
+    expect(takeBackgroundEvents('conv-stop').some((e) => e.kind === 'shell_match')).toBe(true)
   })
 
   it('normalizes the phrases', () => {

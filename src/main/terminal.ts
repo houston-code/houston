@@ -80,10 +80,16 @@ function defaultShell(): string {
  * The arguments that make `shell` run one command and exit. POSIX shells take it
  * after `-i -c` (interactive, so the rc file that sets up PATH is read); Windows
  * shells each have their own flag.
+ *
+ * cmd.exe gets one ready-made command line rather than an argv: node-pty quotes an
+ * argv the C runtime way (`"` becomes `\"`), which `cmd /s /c` does not undo, so a
+ * typed `git commit -m "fix bug"` would reach git as `-m`, `"fix`, `bug"`. A string
+ * is passed through as written; `/s` then strips just the outer pair of quotes, as
+ * Node's own `shell: true` relies on.
  */
-export function commandArgs(shell: string, command: string): string[] {
+export function commandArgs(shell: string, command: string): string[] | string {
   const name = shell.split(/[\\/]/).pop()?.toLowerCase() ?? ''
-  if (name === 'cmd.exe' || name === 'cmd') return ['/d', '/s', '/c', command]
+  if (name === 'cmd.exe' || name === 'cmd') return `/d /s /c "${command}"`
   if (name.startsWith('powershell') || name.startsWith('pwsh')) return ['-NoLogo', '-Command', command]
   return ['-i', '-c', command]
 }

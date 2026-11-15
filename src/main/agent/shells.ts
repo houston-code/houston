@@ -144,6 +144,12 @@ function addPreviewUrls(shell: Shell, found: FoundUrl[]): boolean {
   return changed
 }
 
+/**
+ * How long after a background shell's process exits its output pipes may stay open
+ * before the shell is marked exited anyway (a daemon it started can hold them forever).
+ */
+const EXIT_DRAIN_MS = 500
+
 /** Keep at most this many trailing bytes per stream (rolling window). */
 const MAX_BUF = 2_000_000
 
@@ -155,6 +161,12 @@ const MAX_BUF = 2_000_000
 export const MAX_EXITED_SHELLS = 30
 
 const shells = new Map<string, Shell>()
+
+/**
+ * Shells dropped from the registry (their chat was deleted) whose graceful stop is still
+ * under way: kept in the ledger, and SIGKILLed by {@link killAllShells}, until it ends.
+ */
+const stopping = new Set<Shell>()
 
 /**
  * Forget the oldest finished shells beyond {@link MAX_EXITED_SHELLS}. Only a shell
@@ -195,7 +207,7 @@ function notifyShellsChanged(): void {
  */
 function persistLedger(): void {
   const entries: LedgerEntry[] = []
-  for (const s of shells.values()) {
+  for (const s of [...shells.values(), ...stopping]) {
     const pid = s.child.pid
     if (pid === undefined) continue
     if (s.running || hasLeftover(s)) entries.push({ pgid: pid, startedAt: s.startedAt })
@@ -333,7 +345,16 @@ export function registerShell(
     if (!shell.stoppedBy && opts.signal?.aborted) shell.stoppedBy = 'cancel'
     reportExit(shell)
   }
-  child.on('close', (code) => {
+  // 'close' waits for every holder of the output pipes, so a daemon the command
+  // started in its own session (which inherits stdout) would hold it off forever: the
+  // shell would stay "running" and keep one of the chat's slots. Once the process
+  // itself exits, give the pipes a moment to drain, then finish without them.
+  let closed = false
+  let drainTimer: ReturnType<typeof setTimeout> | undefined
+  const onClosed = (code: number | null): void => {
+    if (closed) return
+    closed = true
+    if (drainTimer) clearTimeout(drainTimer)
     shell.running = false
     shell.exitCode = code
     shell.exitedAt = Date.now()
@@ -341,7 +362,13 @@ export function registerShell(
     persistLedger()
     notifyShellsChanged()
     watchLeftovers()
+  }
+  child.on('exit', (code) => {
+    if (closed || drainTimer) return
+    drainTimer = setTimeout(() => onClosed(code), EXIT_DRAIN_MS)
+    drainTimer.unref?.()
   })
+  child.on('close', (code) => onClosed(code))
   child.on('error', () => {
     shell.running = false
     shell.exitedAt = Date.now()
@@ -502,13 +529,17 @@ const LEFTOVER_SETTLE_MS = 300
  * signal is still reaped. Windows has no graceful group signal (the tree kill there is
  * always forceful), so the first signal already ends it and nothing is escalated.
  */
-function stopGracefully(s: Shell, graceMs: number): void {
+function stopGracefully(s: Shell, graceMs: number, onDone?: () => void): void {
   signalProcessTree(s.child, 'SIGTERM')
-  if (process.platform === 'win32' || s.stopTimer) return
+  if (process.platform === 'win32' || s.stopTimer) {
+    onDone?.()
+    return
+  }
   s.stopTimer = setTimeout(() => {
     s.stopTimer = undefined
     // hasLeftover latches an empty group, so a recycled group id is never signalled.
     if (s.running || hasLeftover(s)) killProcessTree(s.child)
+    onDone?.()
     persistLedger()
     setTimeout(notifyShellsChanged, LEFTOVER_SETTLE_MS).unref?.()
   }, graceMs)
@@ -564,7 +595,10 @@ export function killShellsFor(conversationId: string): number {
     // The chat is being deleted: nobody is left to tell.
     s.stoppedBy ??= 'app'
     if (s.running || hasLeftover(s)) {
-      killProcessTree(s.child)
+      // Gracefully, as a Stop would: `docker compose up` only stops its containers on
+      // SIGTERM. The entry leaves the list now; the SIGKILL escalation still runs.
+      stopping.add(s)
+      stopGracefully(s, KILL_GRACE_MS, () => stopping.delete(s))
       signalled++
     }
     shells.delete(id)
@@ -685,6 +719,16 @@ export function listShells(): BackgroundShellInfo[] {
 }
 
 /**
+ * The text a line shows once printed. A progress bar redraws its line with \r, so only
+ * its last redraw counts; the \r of a CRLF line ending is not a redraw (dropped first,
+ * or every Windows-style line would come out empty).
+ */
+function lastRedraw(raw: string): string {
+  const body = raw.endsWith('\r') ? raw.slice(0, -1) : raw
+  return body.slice(body.lastIndexOf('\r') + 1)
+}
+
+/**
  * Check each complete line of `text` against the shell's watch phrases, reporting the
  * matches to the agent's chat. Returns the unfinished remainder to carry to the next
  * chunk (bounded, so a stream with no newlines can't grow it).
@@ -695,8 +739,7 @@ function watchLines(shell: Shell, text: string): string {
   const rest = parts.pop() ?? ''
   const matched: { pattern: string; line: string }[] = []
   for (const raw of parts) {
-    // A progress bar redraws with \r; only its last redraw is the line.
-    const line = stripAnsi(raw.slice(raw.lastIndexOf('\r') + 1)).slice(0, MAX_WATCH_LINE)
+    const line = stripAnsi(lastRedraw(raw)).slice(0, MAX_WATCH_LINE)
     const lower = line.toLowerCase()
     const at = shell.notifyOn.findIndex((p) => lower.includes(p))
     if (at < 0) continue
@@ -719,7 +762,9 @@ function watchLines(shell: Shell, text: string): string {
         dropped: lines.length - Math.min(lines.length, MAX_MATCH_LINES),
         at: Date.now()
       },
-      { wake: true }
+      // A shell someone already stopped (the user's Stop, a cancelled turn) prints its
+      // shutdown on the way out; that is reported but, like its exit, never wakes the chat.
+      { wake: !shell.stoppedBy }
     )
   }
   return rest.length > MAX_WATCH_LINE ? rest.slice(-MAX_WATCH_LINE) : rest
@@ -752,7 +797,7 @@ function reportExit(shell: Shell): void {
 function tailOf(shell: Shell): string[] {
   return maskForUi(stripAnsi(shell.recent))
     .split('\n')
-    .map((l) => l.slice(l.lastIndexOf('\r') + 1).trimEnd())
+    .map((l) => lastRedraw(l).trimEnd())
     .filter((l) => l.length > 0)
     .slice(-EXIT_TAIL_LINES)
 }
@@ -773,7 +818,7 @@ export function shellTail(id: string, maxLines = TAIL_MAX_LINES): string[] | und
   const lines = maskForUi(stripAnsi(s.recent))
     // A progress bar redraws its line with \r; keep only the last redraw.
     .split('\n')
-    .map((l) => l.slice(l.lastIndexOf('\r') + 1).trimEnd())
+    .map((l) => lastRedraw(l).trimEnd())
     .filter((l) => l.length > 0)
   return lines.slice(-n)
 }
@@ -857,8 +902,8 @@ function stillRunning(pids: number[]): Set<number> {
  */
 export function killAllShells(opts: { graceMs?: number } = {}): void {
   const graceMs = opts.graceMs ?? QUIT_GRACE_MS
-  const live = [...shells.values()].filter((s) => s.running || hasLeftover(s))
-  for (const s of shells.values()) {
+  const live = [...shells.values(), ...stopping].filter((s) => s.running || hasLeftover(s))
+  for (const s of [...shells.values(), ...stopping]) {
     s.stoppedBy ??= 'app'
     if (s.stopTimer) clearTimeout(s.stopTimer)
     s.stopTimer = undefined
@@ -878,6 +923,7 @@ export function killAllShells(opts: { graceMs?: number } = {}): void {
     for (const s of live) killProcessTree(s.child)
   }
   shells.clear()
+  stopping.clear()
   if (leftoverWatch) {
     clearInterval(leftoverWatch)
     leftoverWatch = null
