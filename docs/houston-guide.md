@@ -782,8 +782,15 @@ the model.
   (uncommitted or unmerged work is kept); anything else cancels. A worktree with no
   changes and no unmerged commits goes with the chat, and one another chat still uses
   always stays.
-- `/permissions` lists your saved permission rules, numbered; `/permissions remove <n>`
-  deletes one. Rules in a project's `.houston/settings.json` are edited in that file.
+- `/permissions` lists every rule that applies, in the order they are checked: the
+  administrator's policy and this project's guardrails (read-only, labeled), then your
+  own rules, numbered, each with when it was added and last used and the same warnings
+  Settings shows (a rule that can never apply, or one that approves everything), then
+  the project's allow rules and whether its trust lets them apply.
+  `/permissions remove <n>` deletes one of yours. `/permissions add allow|ask|deny <tool>
+  <pattern> [--exact]` adds one at the end of your list, checked the same way the rules
+  editor checks it; an allow that approves every call asks first. Rules in a project's
+  `.houston/settings.json` are edited in that file.
 - `/resume [search]` (or `/sessions`) opens a picker of this folder's saved chats,
   newest first, marked unread or failed as in the desktop sidebar. Under the list it
   previews the highlighted chat: its title, when it was last updated, how many messages
@@ -2353,7 +2360,8 @@ the same way, and counts toward the same decision.
 **Reviewing decisions.** Settings > *Permissions* > *Trusted folders* lists every
 folder you answered for (trusted or never), with a Forget button. In the terminal,
 `/trust` shows the current folder's state, and `/trust forget` clears the decision and
-asks again on the spot. Forgetting is how you reverse a "Never" or retire a stale
+asks again on the spot. `/trust list` numbers every folder you decided on, and
+`/trust forget <n>` clears one of them (it asks again the next time it's open). Forgetting is how you reverse a "Never" or retire a stale
 "Trust".
 
 ### Managed policy

@@ -15,6 +15,7 @@ import {
   type Hook,
   type McpServerConfig,
   type ModelOption,
+  type PermissionPolicyView,
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
@@ -118,7 +119,6 @@ import {
   chatToMarkdown,
   defaultExportName,
   parseExportArgs,
-  renderPermissionRules,
   renderRecap,
   sessionPreviewLines,
   type ExportFormat
@@ -173,6 +173,13 @@ import {
 import { ComposerBuffer } from './tui-composer'
 import { renderTranscript, sanitizeLines, transcriptPlain, type PagerSource } from './tui-pager'
 import { parseMemoryAction, runMemoryCommand, type MemoryAction, type MemoryCommandState } from './tui-memory'
+import {
+  forgetTrustAt,
+  parsePermissionsArgs,
+  renderTrustList,
+  runPermissionsCommand,
+  type PermissionsOp
+} from './tui-permissions'
 import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
@@ -1858,7 +1865,7 @@ export type SlashResult =
   /** Delete this chat, after a confirmation (/delete). */
   | { kind: 'delete' }
   /** List the saved permission rules, or remove the n-th (/permissions [remove n]). */
-  | { kind: 'permissions'; remove?: number; bad?: boolean }
+  | { kind: 'permissions'; op: PermissionsOp }
   | { kind: 'capability'; which: 'skills' | 'agents' }
   | { kind: 'set-theme'; theme: ThemeName }
   | { kind: 'image'; path: string }
@@ -1926,7 +1933,7 @@ export type SlashResult =
   /** List or edit MCP servers (/mcp [add|remove|enable|disable|reconnect|tools|login|logout …]). */
   | { kind: 'mcp'; action: SettingsAction }
   /** Show or change this folder's project-config trust (/trust, /trust forget). */
-  | { kind: 'trust'; op: 'status' | 'forget' | 'usage' }
+  | { kind: 'trust'; op: 'status' | 'forget' | 'list' | 'usage'; index?: number }
   /** Review saved memories (/memory [show|edit|pin|unpin|forget <n>|undo|on|off|folder]). */
   | { kind: 'memory'; action: MemoryAction }
   /** Set or replace a provider API key, or add a host (/login, /providers). */
@@ -2008,12 +2015,8 @@ export function parseSlashCommand(
       return { kind: 'rename', title: arg.trim() }
     case 'delete':
       return { kind: 'delete' }
-    case 'permissions': {
-      const a = arg.trim()
-      if (!a) return { kind: 'permissions' }
-      const m = /^(?:remove|rm|delete)\s+(\d+)$/i.exec(a)
-      return m ? { kind: 'permissions', remove: Number(m[1]) } : { kind: 'permissions', bad: true }
-    }
+    case 'permissions':
+      return { kind: 'permissions', op: parsePermissionsArgs(arg) }
     case 'skills':
     case 'agents':
       return { kind: 'capability', which: name }
@@ -2115,6 +2118,9 @@ export function parseSlashCommand(
       const a = arg.trim().toLowerCase()
       if (!a) return { kind: 'trust', op: 'status' }
       if (a === 'forget') return { kind: 'trust', op: 'forget' }
+      if (a === 'list' || a === 'ls') return { kind: 'trust', op: 'list' }
+      const n = /^forget\s+(\d+)$/.exec(a)
+      if (n && Number(n[1]) >= 1) return { kind: 'trust', op: 'forget', index: Number(n[1]) }
       return { kind: 'trust', op: 'usage' }
     }
     case 'login':
@@ -2215,7 +2221,8 @@ export const HELP_TEXT = [
   '  /rename <title>       give this chat a title',
   '  /export [md|json] [path]  write this chat to a file (Markdown by default)',
   '  /delete               delete this chat (asks first)',
-  '  /permissions [remove n]  list the saved permission rules, or remove one',
+  '  /permissions [remove n]  all rules that apply, with warnings; or remove one',
+  '  /permissions add …    add a rule of your own: allow|ask|deny <tool> <pattern> [--exact]',
   '  /cost                 show session token + cost totals',
   '  /usage                spend and tokens per day (last 7) and per project, from the chats on this computer',
   '  /context              what fills the context now, part by part',
@@ -2245,6 +2252,7 @@ export const HELP_TEXT = [
   "  /mcp reconnect <n>    restart a server's connection now (/mcp reconnect all: every one)",
   '  /mcp search <query>   search the MCP Registry; /mcp add-from-registry <name> reviews one to add',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
+  '  /trust list           every folder you trusted or refused; /trust forget <n> clears one',
   `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
   '  /image [path]         attach an image from your clipboard, or a file',
   '  /cwd                  show the working directory',
@@ -3445,6 +3453,14 @@ export interface TuiDeps {
    * the driver falls back to printing the missing-key error.
    */
   setKey?: (id: string, key: string) => { shadowedByEnv: string | null }
+  /**
+   * The administrator's and this folder's permission rules (with the folder's trust),
+   * read as the desktop's Settings > Permissions reads them. Absent ⇒ /permissions
+   * shows only the user's own rules.
+   */
+  permissionPolicy?: () => Promise<PermissionPolicyView>
+  /** When each permission rule last decided a call, keyed by permissionRuleKey. */
+  ruleUsage?: () => Record<string, number>
   /** Whether the host is macOS — filters the provider catalog (e.g. oMLX). Defaults to the current platform. */
   isMac?: boolean
   /** Absolute path to settings.json, shown by /settings, /hooks, and /mcp. */
@@ -3817,14 +3833,28 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
  * a "never" (or retire a stale "trust") without hand-editing settings.json.
  */
 export async function runTrustCommand(
-  op: 'status' | 'forget' | 'usage',
+  op: 'status' | 'forget' | 'list' | 'usage',
   cwd: string,
   deps: TuiDeps,
-  paint: Painter
+  paint: Painter,
+  index?: number
 ): Promise<void> {
   if (op === 'usage') {
-    deps.io.out(paint('usage: /trust   ·   /trust forget\n', 'yellow'))
+    deps.io.out(paint('usage: /trust   ·   /trust forget   ·   /trust list   ·   /trust forget <n>\n', 'yellow'))
     return
+  }
+  // Every folder's decision, as Settings > Trusted folders lists them.
+  if (op === 'list') return void deps.io.out(`${renderTrustList(deps.getSettings(), paint)}\n`)
+  if (op === 'forget' && index !== undefined) {
+    return forgetTrustAt(
+      index,
+      {
+        getSettings: deps.getSettings,
+        ...(deps.updateSettings ? { updateSettings: deps.updateSettings } : {}),
+        out: (t) => deps.io.out(t)
+      },
+      paint
+    )
   }
   const cfg = await loadProjectConfig(cwd)
   if (!cfg.elevatedHash) {
@@ -3853,7 +3883,7 @@ export async function runTrustCommand(
             : 'undecided: its extra permissions are off'
     deps.io.out(
       `· this folder is ${label}\n  it defines ${summarizeElevated(cfg.elevated)}\n` +
-        paint('  /trust forget clears the decision and asks again\n', 'dim')
+        paint('  /trust forget clears the decision and asks again; /trust list shows every folder\n', 'dim')
     )
     return
   }
@@ -5071,28 +5101,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'permissions') {
-        const rules = deps.getSettings().permissionRules ?? []
-        if (result.bad) {
-          deps.io.out(paint('· usage: /permissions, or /permissions remove <n>\n', 'dim'))
-          continue
-        }
-        if (result.remove === undefined) {
-          deps.io.out(`${renderPermissionRules(rules, paint, nowFn())}\n`)
-          continue
-        }
-        const rule = rules[result.remove - 1]
-        if (!rule) {
-          deps.io.out(paint(`· no rule ${result.remove}; /permissions lists them\n`, 'yellow'))
-          continue
-        }
-        if (!deps.updateSettings) {
-          deps.io.out(paint('· editing settings is unavailable here\n', 'dim'))
-          continue
-        }
-        const drop = result.remove - 1
-        deps.updateSettings({ permissionRules: rules.filter((_, i) => i !== drop) })
-        deps.io.out(
-          paint(`· removed: ${rule.action} ${rule.tool || '*'} ${rule.match}${rule.exact ? ' (exact)' : ''}\n`, 'dim')
+        await runPermissionsCommand(
+          result.op,
+          {
+            getSettings: deps.getSettings,
+            ...(deps.updateSettings ? { updateSettings: deps.updateSettings } : {}),
+            readLine: deps.io.readLine,
+            ...(deps.permissionPolicy ? { policy: deps.permissionPolicy } : {}),
+            ...(deps.ruleUsage ? { ruleUsage: deps.ruleUsage } : {}),
+            now: nowFn,
+            out: (t) => deps.io.out(t)
+          },
+          paint
         )
         continue
       }
@@ -5504,7 +5524,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'trust') {
-        await runTrustCommand(result.op, opts.cwd, deps, paint)
+        await runTrustCommand(result.op, opts.cwd, deps, paint, result.index)
         continue
       }
       if (result.kind === 'memory') {

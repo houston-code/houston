@@ -82,6 +82,34 @@ export function lintPermissionRules(rules: PermissionRule[]): Map<number, RuleIs
   return out
 }
 
+/**
+ * One line of copy per lint issue, naming rules by their 1-based position. Shared by
+ * the desktop's rules editor and the terminal's /permissions so both say the same.
+ */
+export function ruleIssueText(issue: RuleIssue, rule: PermissionRule, rules: PermissionRule[]): string {
+  switch (issue.kind) {
+    case 'empty':
+      return 'Matches nothing until it has a pattern.'
+    case 'shadowed': {
+      const by = rules[issue.by]
+      const named = `rule ${issue.by + 1} (${by.action} ${by.tool || '*'} ${by.match})`
+      if (!issue.conflicting) return `Redundant: rule ${issue.by + 1} already covers this.`
+      return by.action === 'deny'
+        ? `Never applies: ${named} matches it, and a deny always wins.`
+        : `Never applies: ${named} matches first.`
+    }
+    case 'broad-allow':
+      return rule.tool === '*' || !rule.tool
+        ? 'Approves every tool call without asking.'
+        : `Approves every ${rule.tool} call without asking.`
+  }
+}
+
+/** Whether an issue is a warning (it changes what happens) rather than a tidy-up hint. */
+export function isRuleWarning(issue: RuleIssue): boolean {
+  return issue.kind === 'broad-allow' || (issue.kind === 'shadowed' && issue.conflicting) || issue.kind === 'empty'
+}
+
 /** Move the rule at `from` to `to` (both indices into the current list). */
 export function moveRule(rules: PermissionRule[], from: number, to: number): PermissionRule[] {
   if (from === to || from < 0 || from >= rules.length || to < 0 || to >= rules.length) return rules

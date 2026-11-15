@@ -8,7 +8,13 @@ import {
   type PermissionRule,
   type PermissionTestResult
 } from '@shared/types'
-import { lintPermissionRules, moveRule, type RuleIssue } from '@shared/permissionLint'
+import {
+  isRuleWarning as isWarning,
+  lintPermissionRules,
+  moveRule,
+  ruleIssueText as issueText,
+  type RuleIssue
+} from '@shared/permissionLint'
 import { carryRuleMeta, diffRules, parseRulesText, rulesToText } from '@shared/permissionRulesText'
 import { SettingsSection } from '../fields'
 import { ReadOnlyPlugins, ReadOnlyRules, TrustBadge } from './project'
@@ -16,30 +22,6 @@ import { groupPermissionRules, ruleMatchesFilter, TOOL_NAMES } from '../permissi
 import { ruleMetaText, testVerdictText } from '../ruleMeta'
 import type { SettingsCtx } from '../context'
 
-/** One line of copy per lint issue, naming rules by their 1-based position. */
-function issueText(issue: RuleIssue, rule: PermissionRule, rules: PermissionRule[]): string {
-  switch (issue.kind) {
-    case 'empty':
-      return 'Matches nothing until it has a pattern.'
-    case 'shadowed': {
-      const by = rules[issue.by]
-      const named = `rule ${issue.by + 1} (${by.action} ${by.tool || '*'} ${by.match})`
-      if (!issue.conflicting) return `Redundant: rule ${issue.by + 1} already covers this.`
-      return by.action === 'deny'
-        ? `Never applies: ${named} matches it, and a deny always wins.`
-        : `Never applies: ${named} matches first.`
-    }
-    case 'broad-allow':
-      return rule.tool === '*' || !rule.tool
-        ? 'Approves every tool call without asking.'
-        : `Approves every ${rule.tool} call without asking.`
-  }
-}
-
-/** Whether an issue is a warning (it changes what happens) rather than a tidy-up hint. */
-function isWarning(issue: RuleIssue): boolean {
-  return issue.kind === 'broad-allow' || (issue.kind === 'shadowed' && issue.conflicting) || issue.kind === 'empty'
-}
 
 /** Ordering controls for a row in the ordered view; absent in the grouped view. */
 interface RowOrder {
