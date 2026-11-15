@@ -183,8 +183,25 @@ const h = vi.hoisted(() => ({
   shells: null as BackgroundShellInfo[] | null,
   // Route getMcpToolDefs to the real MCP manager (with a fake server behind its client
   // factory) instead of handing back `mcpDefs`, for the tests that need a live connection.
-  realMcp: false
+  realMcp: false,
+  // Makes the store's last-error write throw: 'clear' for the run-start clear, 'set'
+  // for the record a failed run leaves. Null (the default) writes as usual.
+  errorWriteFails: null as null | 'clear' | 'set'
 }))
+
+// The real conversation store, with a switch to make its last-error write fail.
+vi.mock('../conversations', async (importActual) => {
+  const actual = await importActual<typeof import('../conversations')>()
+  return {
+    ...actual,
+    setConversationError: (...args: Parameters<typeof actual.setConversationError>) => {
+      if (h.errorWriteFails && (args[1] === null) === (h.errorWriteFails === 'clear')) {
+        throw new Error('EBUSY: resource busy or locked')
+      }
+      return actual.setConversationError(...args)
+    }
+  }
+})
 
 vi.mock('../agentHost', () => ({
   getSettings: () => h.settings,
@@ -443,6 +460,7 @@ beforeEach(() => {
   h.gitContext = ''
   delete h.settings.fallbackModels
   delete h.settings.doneEvidenceNote
+  h.errorWriteFails = null
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
@@ -3840,6 +3858,28 @@ describe('context management inside a long turn', () => {
     expectValidWindow(last)
   })
 
+  it('names the branch in the pinned block an early eviction builds', async () => {
+    // The early path rebuilds the pinned workspace state like the others, so it must
+    // read the branch first rather than pin an empty or stale one.
+    execFileSync('git', ['init', '-q'], { cwd: ws })
+    execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/feature/x'], { cwd: ws })
+    delete h.settings.compactionThreshold
+    h.probeTools = [bigReadFile(120_000)]
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-opus-4-8' })
+    const t = longTurn(7)
+    const r = await run({
+      provider: t.provider,
+      userText: REQUEST,
+      policy: 'full-auto',
+      conversationId: conv.id,
+      model: 'claude-opus-4-8'
+    })
+    expect(types(r)).not.toContain('compaction')
+    expect(getConversation(conv.id)!.compaction!.evictBefore).toBeGreaterThan(0)
+    expect(t.sends.at(-1)![0].content).toContain('- Git branch: feature/x')
+    expect(getConversation(conv.id)!.compaction!.workspaceState?.branch).toBe('feature/x')
+  })
+
   it('leaves the window whole below an explicit threshold', async () => {
     // An explicit threshold governs eviction too: nothing is stubbed under it.
     h.settings.compactionThreshold = 800_000
@@ -3987,6 +4027,52 @@ describe('one run per conversation', () => {
     )
     expect(events.some((e) => e.type === 'text')).toBe(true)
     expect(events.at(-1)).toMatchObject({ type: 'done' })
+  })
+
+  it('frees the conversation slot when the stored-error write fails on a failed run', async () => {
+    const conversationId = 'conv-error-write-fails'
+    h.errorWriteFails = 'set'
+    h.provider = scripted([[{ type: 'error', message: 'invalid request body', status: 400 }]])
+    const events: AgentEvent[] = []
+    await expect(
+      startRun(
+        {
+          runId: 'run-error-write-1',
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'go' }]
+        },
+        (e) => events.push(e)
+      )
+    ).resolves.toBeUndefined()
+    expect(events.at(-1)).toMatchObject({ type: 'error' })
+    expect(activeRunForConversation(conversationId)).toBeNull()
+  })
+
+  it('frees the conversation slot when clearing the stored error fails at the start', async () => {
+    const conversationId = 'conv-error-clear-fails'
+    h.errorWriteFails = 'clear'
+    h.provider = scripted([[{ type: 'text', text: 'hi' }, { type: 'done', stopReason: 'end_turn' }]])
+    const events: AgentEvent[] = []
+    await expect(
+      startRun(
+        {
+          runId: 'run-error-clear-1',
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'go' }]
+        },
+        (e) => events.push(e)
+      )
+    ).resolves.toBeUndefined()
+    expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+    expect(activeRunForConversation(conversationId)).toBeNull()
   })
 
   it('frees the conversation slot even when every save fails', async () => {
@@ -13380,6 +13466,32 @@ describe('background news delivery', () => {
     expect(r.events.some((e) => e.type === 'tool_approval')).toBe(false)
   })
 
+  it('holds waking after a run that stopped at a limit, until the user speaks', async () => {
+    setWakeHost({ enabled: () => true, start: () => true })
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    const looping: Provider = {
+      async *streamChat() {
+        yield { type: 'tool_call', call: { id: `c${Math.random()}`, name: 'read_file', arguments: { path: 'a.txt' } } }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const saved = { ...h.settings }
+    Object.assign(h.settings, { maxIterations: 2, stallDetection: false })
+    try {
+      const r = await run({ conversationId: 'conv-bg-limit', provider: looping, policy: 'full-auto' })
+      expect(r.events.find((e) => e.type === 'limit')).toMatchObject({ reason: 'max-steps' })
+    } finally {
+      delete h.settings.maxIterations
+      delete h.settings.stallDetection
+      Object.assign(h.settings, saved)
+    }
+    // The limit notice told the user to send a message: background news waits for it.
+    expect(wakeBlocker('conv-bg-limit')).toBe('held')
+    h.provider = scripted([[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]])
+    await run({ conversationId: 'conv-bg-limit' })
+    expect(wakeBlocker('conv-bg-limit')).toBeNull()
+  })
+
   it('counts wake turns toward the streak and holds waking after a failed turn', async () => {
     setWakeHost({ enabled: () => true, start: () => true })
     for (let i = 0; i < MAX_CONSECUTIVE_WAKES; i++) {
@@ -13649,6 +13761,185 @@ describe('background subagents', () => {
     expect(toolText(r, 'r0')).toMatch(/can't resume one/)
     expect(['a1', 'a2', 'a3', 'a4'].every((id) => toolText(r, id).startsWith('Started background agent'))).toBe(true)
     expect(toolText(r, 'a5')).toMatch(/^4 background agents are already working/)
+  }, 30_000)
+
+  /** A subagent request that ends only when aborted, after `lingerMs` (a slow wind-down). */
+  const untilAborted = (req: ChatRequest, lingerMs = 0): Promise<ProviderStreamEvent[]> =>
+    new Promise<ProviderStreamEvent[]>((_resolve, reject) => {
+      const fail = (): void => {
+        setTimeout(() => reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })), lingerMs)
+      }
+      if (req.signal?.aborted) fail()
+      else req.signal?.addEventListener('abort', fail, { once: true })
+    })
+
+  it('settles a working agent before the run ends on an error, after saving the run-end record', async () => {
+    const { provider } = routed(
+      (_req, n) =>
+        n === 0
+          ? call('d1', 'dispatch_agent', { description: 'Slow', prompt: 'slow', background: true })
+          : [{ type: 'error', message: 'invalid request body', status: 400 }],
+      (req) => untilAborted(req, 300)
+    )
+    h.provider = provider
+    const events: AgentEvent[] = []
+    let endRecordSavedAt = -1
+    await startRun(
+      { runId: 'run-bg-error', workspace: ws, providerId: 'anthropic', model: 'claude-test', approvalPolicy: 'full-auto', messages: [{ role: 'user', content: 'go' }] },
+      (e) => events.push(e),
+      (msgs) => {
+        if (endRecordSavedAt < 0 && msgs.at(-1)?.runEnds?.some((r) => r.reason === 'error')) endRecordSavedAt = events.length
+      }
+    )
+    const endAt = events.findIndex((e) => e.type === 'subagent_end' && e.parentCallId === 'd1')
+    const errorAt = events.findIndex((e) => e.type === 'error')
+    // The agent's last events reach the clients before the event that ends the run...
+    expect(endAt).toBeGreaterThanOrEqual(0)
+    expect(errorAt).toBeGreaterThan(endAt)
+    expect(events.at(-1)).toMatchObject({ type: 'error' })
+    // ...and the run's own record was on disk before the agent's slow wind-down.
+    expect(endRecordSavedAt).toBeGreaterThanOrEqual(0)
+    expect(endRecordSavedAt).toBeLessThanOrEqual(endAt)
+  }, 30_000)
+
+  it('releases a background agent waiting on an approval when the run ends on an error', async () => {
+    h.probeTools = [
+      {
+        kind: 'network',
+        summarize: () => 'fetch',
+        schema: {
+          name: 'web_fetch',
+          description: 'probe fetch',
+          parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'], additionalProperties: false }
+        },
+        execute: async () => 'fetched'
+      }
+    ]
+    let asked: () => void = () => {}
+    const approvalUp = new Promise<void>((r) => (asked = r))
+    const { provider } = routed(
+      async (_req, n) => {
+        if (n === 0) return call('d1', 'dispatch_agent', { description: 'Fetch', prompt: 'fetch it', background: true })
+        // Fail only once the agent's card is up, with nobody answering it.
+        await approvalUp
+        return [{ type: 'error', message: 'invalid request body', status: 400 }]
+      },
+      (_req, n) => (n === 0 ? call('f1', 'web_fetch', { url: 'https://example.com' }) : say('fetched it'))
+    )
+    h.provider = provider
+    const events: AgentEvent[] = []
+    const conversationId = 'conv-bg-approval-error'
+    await startRun(
+      { runId: 'run-bg-approval-error', conversationId, workspace: ws, providerId: 'anthropic', model: 'claude-test', approvalPolicy: 'ask', messages: [{ role: 'user', content: 'go' }] },
+      (e) => {
+        events.push(e)
+        if (e.type === 'tool_approval') asked()
+      }
+    )
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(true)
+    const end = events.find((e) => e.type === 'subagent_end' && e.parentCallId === 'd1')
+    expect(end?.type === 'subagent_end' ? end.update.status : undefined).toMatch(/^(aborted|done)$/)
+    expect(events.at(-1)).toMatchObject({ type: 'error' })
+    expect(pendingPromptsForConversation(conversationId)).toEqual([])
+    expect(activeRunForConversation(conversationId)).toBeNull()
+  }, 30_000)
+
+  it('keeps the replay buffer when an agent finishes mid-stream, with no holes after a retry', async () => {
+    const conversationId = 'conv-bg-replay'
+    let release: () => void = () => {}
+    const released = new Promise<void>((r) => (release = r))
+    let settled: () => void = () => {}
+    const agentDone = new Promise<void>((r) => (settled = r))
+    let midStream: AgentEvent[] = []
+    let afterDiscard: AgentEvent[] = []
+    let main = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        if (/You are an? (research|implementation) subagent/.test(req.system ?? '')) {
+          await released
+          yield { type: 'text', text: 'Agent report.' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        const n = main++
+        if (n === 0) {
+          yield { type: 'tool_call', call: { id: 'd1', name: 'dispatch_agent', arguments: { description: 'Scan', prompt: 'scan', background: true } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        if (n === 1) {
+          yield { type: 'text', text: 'part one ' }
+          release()
+          await agentDone
+          // Let the agent's record save run.
+          await new Promise((r) => setTimeout(r, 20))
+          midStream = liveTranscriptForConversation(conversationId)
+          // A retryable drop: the partial reply is discarded and redone.
+          yield { type: 'error', message: 'overloaded', status: 529 }
+          return
+        }
+        if (n === 2) afterDiscard = liveTranscriptForConversation(conversationId)
+        yield { type: 'text', text: 'all done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    h.provider = provider
+    await startRun(
+      { runId: 'run-bg-replay', conversationId, workspace: ws, providerId: 'anthropic', model: 'claude-test', approvalPolicy: 'full-auto', messages: [{ role: 'user', content: 'go' }] },
+      (e) => {
+        if (e.type === 'subagent_end') settled()
+      },
+      () => {}
+    )
+    // The streaming reply is still in the buffer a re-opened window replays.
+    expect(midStream.some((e) => e.type === 'text' && e.delta === 'part one ')).toBe(true)
+    // And trimming the discarded attempt never leaves an empty slot.
+    expect(afterDiscard.every((e) => e !== undefined && typeof e.type === 'string')).toBe(true)
+    expect(afterDiscard.some((e) => e.type === 'text' && e.delta === 'part one ')).toBe(false)
+  }, 30_000)
+
+  it('waits for a writable agent before verifying, so the check sees its edits', async () => {
+    let release: () => void = () => {}
+    const released = new Promise<void>((r) => (release = r))
+    const sawFile: boolean[] = []
+    h.verifyRunner = async () => {
+      sawFile.push(existsSync(join(ws, 'out.txt')))
+      return { passed: true, output: '', aborted: false }
+    }
+    const { provider } = routed(
+      (_req, n) => {
+        if (n === 0) return call('d1', 'dispatch_writable_agent', { description: 'Write', prompt: 'write out.txt', background: true })
+        if (n === 1) {
+          setTimeout(release, 50)
+          return say('It is working on it.')
+        }
+        return say('Done.')
+      },
+      async (_req, n) => {
+        if (n === 0) {
+          await released
+          return call('w1', 'write_file', { path: 'out.txt', content: 'from bg' })
+        }
+        return say('wrote it')
+      }
+    )
+    const saved = { ...h.settings }
+    Object.assign(h.settings, { verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1 })
+    let r: RunResult
+    try {
+      r = await run({ provider, policy: 'full-auto' })
+    } finally {
+      for (const k of ['verifyOnStop', 'verifyCommand', 'verifyMaxPasses']) delete h.settings[k]
+      Object.assign(h.settings, saved)
+    }
+    // One verify pass, run after the agent's edit landed, not over a half-done tree.
+    expect(sawFile).toEqual([true])
+    expect(r.events.filter((e) => e.type === 'verification')).toHaveLength(1)
+    expect(r.events.findIndex((e) => e.type === 'verification')).toBeGreaterThan(
+      r.events.findIndex((e) => e.type === 'subagent_end' && e.parentCallId === 'd1')
+    )
+    // The reply the turn stopped on while waiting was sent back with the report.
+    expect(r.events.some((e) => e.type === 'reply_sent_back')).toBe(true)
   }, 30_000)
 
   it('keeps the writable dispatch approval: a background writable agent still asks first', async () => {

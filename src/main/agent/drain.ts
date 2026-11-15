@@ -8,6 +8,7 @@ import { listQueue, removeFromQueue, settleSteers, takeQueue } from './queue'
 import { getConversation, setMessages, takeChildReports } from '../conversations'
 import { getSettings } from '../agentHost'
 import { activeRunForConversation } from './loop'
+import { rewindInProgress } from './rewindLock'
 import { clearChildReportFlag, takeBackgroundEvents, wakeNote } from './backgroundEvents'
 
 /** How the run orchestrator talks back to the renderer (provided by the IPC layer). */
@@ -117,6 +118,11 @@ export async function runAndDrain(
 
 /** Dispatch a conversation's queued messages as one combined follow-up turn. */
 export function drainQueue(io: DrainIO, conversationId: string, owner?: number): void {
+  // Another run already holds the chat (one the user started while this run's
+  // SessionEnd hooks ran, or a wake turn), or a rewind is replacing its log: leave the
+  // queue alone. Writing it into the log now would race that run's own saves, and the
+  // run would refuse to start anyway. The live run's natural end drains it.
+  if (activeRunForConversation(conversationId) || rewindInProgress(conversationId)) return
   const taken = takeQueue(conversationId)
   if (!taken) return
   const { text, images, invokedAs } = combineQueued(taken.items)
@@ -176,7 +182,9 @@ export function drainQueue(io: DrainIO, conversationId: string, owner?: number):
  * started: not when the chat is running, gone, or the news was already taken.
  */
 export function startWakeTurn(io: DrainIO, conversationId: string): boolean {
-  if (activeRunForConversation(conversationId)) return false
+  // Mid-rewind the log is about to be replaced: the news waits (the rewind's end asks
+  // for a wake again) rather than being taken into a turn that can't start.
+  if (activeRunForConversation(conversationId) || rewindInProgress(conversationId)) return false
   const conv = getConversation(conversationId)
   if (!conv) return false
   clearChildReportFlag(conversationId)

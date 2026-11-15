@@ -887,6 +887,9 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       next[at] = { ...user, turn: addRound(user.turn, e.model, round) }
       return next
     }
+    case 'reply_sent_back':
+      // The reply stays; the model's next one starts its own bubble.
+      return finalizeStreaming(items)
     case 'turn_start':
     case 'run_info':
     case 'steers_returned':

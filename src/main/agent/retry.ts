@@ -308,7 +308,8 @@ export function isNetworkError(err: unknown): boolean {
  * provider has been reached in this run, gets {@link NETWORK_OUTAGE_BUDGET_MS} of wall
  * clock instead, measured from the first network failure of the current streak. Any
  * other failure in between ends the streak, so a provider that comes back overloaded
- * is held to the attempt count again.
+ * is held to the attempt count again, and so does an attempt that streamed output
+ * ({@link progressed}).
  *
  * `reachable` reports whether the provider has answered in this run: a completed call,
  * or any output streamed before a drop. It's what separates a network that went away
@@ -341,6 +342,15 @@ export class RetryBudget {
     }
     this.outageSince = undefined
     return retry <= (this.opts.maxRetries ?? MAX_PROVIDER_RETRIES)
+  }
+
+  /**
+   * The attempt in flight streamed output: the network was back, so the outage (if
+   * any) is over. A later network failure starts a new one with its own budget,
+   * instead of being charged the time spent streaming since the first.
+   */
+  progressed(): void {
+    this.outageSince = undefined
   }
 
   /**

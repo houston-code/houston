@@ -521,6 +521,11 @@ const EMPTY_RECEIPT: TurnReceipt = { v: 1, checks: [], otherCommands: 0, filesCh
 
 interface RunState {
   abort: AbortController
+  /**
+   * Set once the run's main loop is over (its `finally` began). Nobody answers a card
+   * raised after that, so a background agent still winding down gets the Stop answer.
+   */
+  ending?: boolean
   /** When the run started (epoch ms), for the clients' elapsed-time display. */
   startedAt: number
   /**
@@ -862,6 +867,16 @@ class ObservedMap<K, V> extends Map<K, V> {
 export function cancelRun(runId: string): void {
   const run = runs.get(runId)
   if (!run) return
+  releasePrompts(run)
+  run.abort.abort()
+}
+
+/**
+ * Answer everything the run is waiting on (approvals as denied, questions as stopped,
+ * plans as rejected, elicitations as cancelled), as Stop does. Also how a run that
+ * ended releases a background agent still parked on one of its cards.
+ */
+function releasePrompts(run: RunState): void {
   for (const resolve of run.approvals.values())
     resolve({ decision: 'deny', note: APPROVAL_INTERRUPTED_NOTE })
   run.approvals.clear()
@@ -878,7 +893,6 @@ export function cancelRun(runId: string): void {
   for (const resolve of run.elicitations.values()) resolve({ action: 'cancel' })
   run.elicitations.clear()
   run.pendingElicitations.clear()
-  run.abort.abort()
 }
 
 /**
@@ -1153,7 +1167,8 @@ function waitForApproval(run: RunState, callId: string): Promise<ApprovalResolut
   // A stopped run has already resolved (and cleared) every pending approval, so one
   // registered after the Stop would wait for an answer nobody gives: the run would never
   // end. Resolve it the way cancelRun resolves the ones it found.
-  if (run.abort.signal.aborted) return Promise.resolve({ decision: 'deny', note: APPROVAL_INTERRUPTED_NOTE })
+  // A run that has ended answers its background agents' cards the same way.
+  if (run.abort.signal.aborted || run.ending) return Promise.resolve({ decision: 'deny', note: APPROVAL_INTERRUPTED_NOTE })
   return new Promise((resolve) => run.approvals.set(callId, resolve))
 }
 
@@ -1481,7 +1496,13 @@ export async function startRun(
     // marker now, so a reload mid-run doesn't show a stale one. The `finally` sets it
     // again if this run fails. Here rather than in one client, so every client's runs
     // keep it.
-    setConversationError(conversationId, null)
+    // A failed write must not leave the run registered with no event sent (the chat
+    // would stay "running" until a restart): the marker is bookkeeping, so log it.
+    try {
+      setConversationError(conversationId, null)
+    } catch (err) {
+      log.warn(`run ${runId}: could not clear the stored error: ${err instanceof Error ? err.message : String(err)}`)
+    }
     // For waking idle chats on background news (backgroundEvents.ts): a turn the
     // user started resets the automatic-turn streak; a wake turn adds to it.
     noteRunStarted(conversationId, req.wake === true)
@@ -1515,6 +1536,11 @@ export async function startRun(
   let notifyHooks: ((e: BlockingEvent) => void) | undefined
   let endHooks: ((reason: string) => Promise<void>) | undefined
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
+  // The run's ending event, held back while background agents still wind down: they
+  // are stopped and settled in the `finally`, and their last events (`subagent_end`,
+  // their `usage`) must reach the clients before the event that ends the run, after
+  // which a client stops listening to it. Sent by the `finally` once they settle.
+  let heldTerminal: AgentEvent[] | undefined
   const emit = (e: DistributiveOmitRunId<AgentEvent>): void => {
     if ((e.type === 'done' || e.type === 'error') && beforeEnd) {
       const finish = beforeEnd
@@ -1534,6 +1560,10 @@ export async function startRun(
       limited ??= e.reason
     }
     const full = { ...(e as object), runId } as AgentEvent
+    if ((full.type === 'done' || full.type === 'error') && (heldTerminal || backgroundAgents.workingCount > 0)) {
+      ;(heldTerminal ??= []).push(full)
+      return
+    }
     // Buffer what streams this round so a renderer that re-opens the conversation
     // mid-turn can replay it (the disk log lags a streaming round). Cleared at each
     // `persist` below, so the buffer only ever holds events not yet on disk. A live
@@ -1838,7 +1868,14 @@ export async function startRun(
       async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n'),
       memory ? () => memoryIndexOrEmpty(memory) : undefined
     )
-    if (freshSnapshot && conversationId) setPromptSnapshot(conversationId, promptSnapshot)
+    if (freshSnapshot && conversationId) {
+      try {
+        setPromptSnapshot(conversationId, promptSnapshot)
+      } catch (err) {
+        // Only a cache: the next run builds it again.
+        log.warn(`run ${runId}: could not save the prompt snapshot: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     const memoryOffered = memory !== undefined && !!promptSnapshot.memory?.trim()
     // Backend-dependent tools appear only when the host wired their backend at
     // startup: view_localhost screenshots via an offscreen browser only the Electron
@@ -2497,7 +2534,7 @@ export async function startRun(
       new Promise<string>((resolve) => {
         // After Stop, cancelRun has already answered every pending question; a new one
         // would block forever, so answer it the same way.
-        if (abort.signal.aborted) return resolve(QUESTION_STOPPED_ANSWER)
+        if (abort.signal.aborted || run.ending) return resolve(QUESTION_STOPPED_ANSWER)
         run.questions.set(callId, resolve)
         run.pendingQuestions.set(callId, {
           question: q.question,
@@ -3153,7 +3190,15 @@ export async function startRun(
       const records = subagentRecorder.take(callId)
       if (!records) return
       msg.subagents = records
-      persist(messages)
+      // Not `persist`: this runs whenever the agent finishes, mid-round included, and
+      // persist would empty the replay buffer of events not on disk yet. Skipped once
+      // the run is over, so a late agent can't write this run's log over a newer one.
+      if (runs.get(runId) !== run) return
+      try {
+        onMessages?.(messages)
+      } catch (err) {
+        log.warn(`run ${runId}: could not save the conversation: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
 
     // Full auto runs shell commands offline until the user allows network for the chat.
@@ -3340,7 +3385,7 @@ export async function startRun(
       elicitMcp: (req) =>
         new Promise<ElicitationResult>((resolve) => {
           // A stopped run cancels, as cancelRun does for one already pending.
-          if (abort.signal.aborted) return resolve({ action: 'cancel' })
+          if (abort.signal.aborted || run.ending) return resolve({ action: 'cancel' })
           const elicitId = `${callId}:e${++run.elicitSeq}`
           run.elicitations.set(elicitId, resolve)
           run.pendingElicitations.set(elicitId, { callId, ...req })
@@ -4033,12 +4078,18 @@ export async function startRun(
     // The cheap step under context pressure: no model call, and nothing is lost that
     // recall_history or a re-run can't bring back. Returns whether the window changed.
     // `minGain` (estimated tokens) refuses an advance that would free less than that.
-    const advanceEviction = (minGain = 0): boolean => {
+    // The boundary an advance would move to, or null when it would not advance.
+    const evictionAdvanceTo = (minGain = 0): number | null => {
       const boundary = evictionBoundary(messages)
-      if (boundary <= evictBefore) return false
+      if (boundary <= evictBefore) return null
       const from = Math.max(cut, evictBefore)
-      if (!hasEvictableToolResults(messages, from, boundary)) return false
-      if (minGain > 0 && evictableTokens(messages, from, boundary) < minGain) return false
+      if (!hasEvictableToolResults(messages, from, boundary)) return null
+      if (minGain > 0 && evictableTokens(messages, from, boundary) < minGain) return null
+      return boundary
+    }
+    const advanceEviction = (minGain = 0): boolean => {
+      const boundary = evictionAdvanceTo(minGain)
+      if (boundary === null) return false
       evictBefore = boundary
       lastInputTokens = 0
       workspaceState = captureWorkspaceState()
@@ -4393,7 +4444,13 @@ export async function startRun(
           Math.max(estimateTokens(system, buildWindow()) + toolTokens, lastInputTokens)
         const size = windowSize()
         if (size <= threshold && size > evictionTrigger) {
-          advanceEviction(Math.floor(evictionTrigger * EARLY_EVICTION_MIN_GAIN_FRACTION))
+          const minGain = Math.floor(evictionTrigger * EARLY_EVICTION_MIN_GAIN_FRACTION)
+          // The advance rebuilds the pinned block, which names the branch: read it
+          // first, as the other advances do, but only when the advance will happen.
+          if (evictionAdvanceTo(minGain) !== null) {
+            await refreshBranch()
+            advanceEviction(minGain)
+          }
         } else if (size > threshold) {
           // What the threshold leaves the messages once the system prompt and tool
           // schemas (resent with every request) are paid for. Both targets below are
@@ -4521,6 +4578,10 @@ export async function startRun(
             signal: abort.signal
           })) {
             if (ev.type !== 'error') providerReached = true
+            // Output means the network is back: a later drop is a new outage.
+            if (!emitted && (ev.type === 'text' || ev.type === 'reasoning' || ev.type === 'tool_call')) {
+              retries.progressed()
+            }
             if (ev.type === 'text') {
               emitted = true
               assistantText += ev.text
@@ -4660,7 +4721,9 @@ export async function startRun(
             // A renderer that re-opens the conversation from here on needs neither
             // the partial nor its retraction, so the replay buffer forgets both and
             // holds at most one attempt of a reasoning phase that keeps dropping.
-            run.transcript.length = attemptMark
+            // Clamped: a save since the attempt began (a background agent's record)
+            // may have emptied the buffer, and growing it would leave holes.
+            run.transcript.length = Math.min(run.transcript.length, attemptMark)
           }
           // Not transient, or this model is out of attempts.
           if (!retries.allows(e, attempt + 1)) {
@@ -4842,6 +4905,28 @@ export async function startRun(
           return
         }
 
+        // Background agents whose reports the model hasn't had: wait for the ones still
+        // working (Stop ends the wait), then loop once more with their reports, so the
+        // turn never ends on work nobody reported. First, before the Stop hooks, the
+        // verify gate and the done-evidence note: those judge the turn's finished work,
+        // and a writable agent may still be changing it.
+        if (backgroundAgents.hasUndelivered()) {
+          if (backgroundAgents.workingCount > 0) {
+            const n = backgroundAgents.workingCount
+            emit({ type: 'notice', message: `Waiting for ${n} background agent${n === 1 ? '' : 's'} to finish` })
+            await backgroundAgents.waitAll(abort.signal)
+            if (abort.signal.aborted) {
+              await backgroundAgents.settle()
+              emit({ type: 'done', stopReason: 'aborted' })
+              return
+            }
+          }
+          if (deliverBackgroundAgents()) {
+            emit({ type: 'reply_sent_back' })
+            continue
+          }
+        }
+
         // Stop hooks run when the agent would naturally end its turn. A blocking
         // hook forces another turn — its reason is fed back as a user message —
         // bounded by MAX_STOP_CONTINUATIONS so a hook can't spin forever. Runs
@@ -4868,6 +4953,7 @@ export async function startRun(
               )
             )
             persist(messages)
+            emit({ type: 'reply_sent_back' })
             continue
           }
         }
@@ -5005,6 +5091,7 @@ export async function startRun(
               if (edits.length) testEditsNoted = true
               messages.push(systemNoteMessage(note))
               persist(messages)
+              emit({ type: 'reply_sent_back' })
               continue
             }
           }
@@ -5012,6 +5099,7 @@ export async function startRun(
             testEditsNoted = true
             messages.push(systemNoteMessage(testEditsNote(edits)))
             persist(messages)
+            emit({ type: 'reply_sent_back' })
             continue
           }
         }
@@ -5031,6 +5119,7 @@ export async function startRun(
           unattendedStopContinuations++
           messages.push(systemNoteMessage(UNATTENDED_STOP_NOTE))
           persist(messages)
+          emit({ type: 'reply_sent_back' })
           continue
         }
 
@@ -5045,23 +5134,6 @@ export async function startRun(
         // always a no-tool end_turn turn, and "wait, do X instead" while the agent
         // writes its answer is exactly when someone steers.
         if (run.steering.length) continue
-
-        // Background agents whose reports the model hasn't had: wait for the ones still
-        // working (Stop ends the wait), then loop once more with their reports, so the
-        // turn never ends on work nobody reported.
-        if (backgroundAgents.hasUndelivered()) {
-          if (backgroundAgents.workingCount > 0) {
-            const n = backgroundAgents.workingCount
-            emit({ type: 'notice', message: `Waiting for ${n} background agent${n === 1 ? '' : 's'} to finish` })
-            await backgroundAgents.waitAll(abort.signal)
-            if (abort.signal.aborted) {
-              await backgroundAgents.settle()
-              emit({ type: 'done', stopReason: 'aborted' })
-              return
-            }
-          }
-          if (deliverBackgroundAgents()) continue
-        }
 
         emit({ type: 'done', stopReason })
         return
@@ -6023,13 +6095,14 @@ export async function startRun(
       fail('unexpected', { message: scrubError(`The turn stopped on an unexpected error: ${detail}`) })
     }
   } finally {
-    // A background agent never outlives its run: stop any still working (an error or a
-    // Stop elsewhere ended the turn), letting each record end before the run is gone.
-    await backgroundAgents.settle()
-    // This run's MCP servers no longer count as in use (see liveRuns in mcp/manager).
-    releaseMcpRun(runId)
-    // The browser_session page lives exactly as long as the run.
-    browserSession?.close()
+    // A background agent never outlives its run: stop any still working (an error, a
+    // limit, or a Stop elsewhere ended the turn), and answer any card one is parked on,
+    // since nobody will once the run is gone. They settle below, after the run's own
+    // records are on disk: a terminal client closing gives the run only a short grace.
+    run.ending = true
+    backgroundAgents.stop()
+    const agentsWorking = backgroundAgents.workingCount > 0
+    if (agentsWorking) releasePrompts(run)
     // A turn stopped mid-tool — the user hit Stop, or an exception unwound after
     // the assistant `tool_use` was persisted but before its result — would leave a
     // dangling tool call that makes the conversation un-continuable. Pair any
@@ -6061,14 +6134,35 @@ export async function startRun(
     // snapshot was saved before it ran): put it on disk before the run counts as over,
     // whether it finished, failed, or was stopped. Never rejects.
     await saveRunCheckpoint(runId)
-    if (conversationId && ended && ended.cls !== 'aborted' && ended.message) {
-      setConversationError(conversationId, { message: ended.message, ...(ended.cause ? { cause: ended.cause } : {}) })
+    // Let each stopped agent's record end before the run is gone (its record is saved
+    // on its dispatch result as it settles), then send the run's ending event.
+    if (agentsWorking) {
+      await backgroundAgents.settle()
+      // A writable agent's last edits belong to this turn's redo too.
+      await saveRunCheckpoint(runId)
     }
+    if (heldTerminal) {
+      const held = heldTerminal
+      heldTerminal = undefined
+      for (const ev of held) {
+        run.transcript.push(ev)
+        send(ev)
+      }
+    }
+    // This run's MCP servers no longer count as in use (see liveRuns in mcp/manager).
+    releaseMcpRun(runId)
+    // The browser_session page lives exactly as long as the run.
+    browserSession?.close()
     // Steers accepted but never read: the run ended (Stop, an error, a step limit, a
     // stall stop) before the next iteration boundary could take them. steerRun told
     // the caller they were in, so it fell back to nothing; hand them back so they
     // go out as a follow-up instead of vanishing with the run.
     try {
+      // A failure is kept as the conversation's last error. In here, so a failed
+      // write can't keep the slots below from being freed.
+      if (conversationId && ended && ended.cls !== 'aborted' && ended.message) {
+        setConversationError(conversationId, { message: ended.message, ...(ended.cause ? { cause: ended.cause } : {}) })
+      }
       if (run.steering.length) emit({ type: 'steers_returned', texts: run.steering.splice(0).map((s) => s.text) })
       // A plan accepted on the run's last step is told in its tool result; save that,
       // so the next turn doesn't repeat it.
@@ -6087,7 +6181,9 @@ export async function startRun(
       if (conversationId && runsByConversation.get(conversationId) === runId) {
         runsByConversation.delete(conversationId)
         notifyActiveRunsChanged()
-        noteRunEnded(conversationId, !ended ? 'natural' : ended.cls === 'aborted' ? 'aborted' : 'error')
+        // A run stopped at a limit (the cost cap, a stall, the step cap) asked the user
+        // to decide what comes next, so background news doesn't restart it either.
+        noteRunEnded(conversationId, !ended ? (limited ? 'limit' : 'natural') : ended.cls === 'aborted' ? 'aborted' : 'error')
       }
     }
     // SessionEnd, once the run's slots are free: a slow hook never keeps the chat

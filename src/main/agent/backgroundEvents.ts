@@ -262,7 +262,7 @@ const timers = new Map<string, ReturnType<typeof setTimeout>>()
 const running = new Set<string>()
 /** Automatic turns in a row per chat since the user last sent something. */
 const streaks = new Map<string, number>()
-/** Chats whose last turn the user stopped or which failed: no waking until the user speaks. */
+/** Chats whose last turn the user stopped, failed, or hit a limit: no waking until the user speaks. */
 const held = new Set<string>()
 
 /** Install (or with null, remove) the host that wakes idle chats. */
@@ -326,11 +326,11 @@ export function noteRunStarted(conversationId: string, automated: boolean): void
 }
 
 /**
- * The loop's report that the chat's run ended. A stop or a failure holds waking until
- * the user speaks again; a natural end wakes for anything that arrived after the
- * run's last chance to deliver it.
+ * The loop's report that the chat's run ended. A stop, a failure, or a limit (the run
+ * told the user to decide how to go on) holds waking until the user speaks again; a
+ * natural end wakes for anything that arrived after the run's last chance to deliver it.
  */
-export function noteRunEnded(conversationId: string, outcome: 'natural' | 'aborted' | 'error'): void {
+export function noteRunEnded(conversationId: string, outcome: 'natural' | 'aborted' | 'error' | 'limit'): void {
   running.delete(conversationId)
   if (outcome !== 'natural') {
     held.add(conversationId)

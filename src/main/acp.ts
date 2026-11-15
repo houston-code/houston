@@ -1918,10 +1918,20 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     // A blocking handler never throws past here, and always resolves its prompt.
     const block = (p: Promise<void>): void => void track(p.catch((err) => log(`acp: ${String(err)}`)))
 
+    // Whether reply text has streamed since the last tool call or send-back, so a reply
+    // sent back for another round is kept apart from the next one.
+    let replyOpen = false
     const send = (e: AgentEvent): void => {
+      if (e.type === 'text') replyOpen = true
+      else if (e.type === 'tool_start') replyOpen = false
       switch (e.type) {
         case 'text':
           up({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: e.delta } })
+          break
+        case 'reply_sent_back':
+          // ACP streams one message per turn: start the next reply on its own paragraph.
+          if (replyOpen) up({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '\n\n' } })
+          replyOpen = false
           break
         case 'reasoning':
           up({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: e.delta } })

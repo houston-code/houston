@@ -1576,6 +1576,16 @@ export type AgentEvent =
       reasoningChars: number
     }
   | {
+      // The loop sent a finished reply back to the model for another round: a Stop
+      // hook asked it to keep working, Houston's evidence or test-edit note, the
+      // unattended send-back of a reply that stopped on a question, or reports from
+      // background agents. The reply before this is no longer the turn's last word. It
+      // stays on screen; a client that keeps the turn's final answer (headless, ACP)
+      // starts it over, and the next reply starts a new block.
+      runId: string
+      type: 'reply_sent_back'
+    }
+  | {
       // The turn gave up on one model and moved to the next entry in the user's
       // fallback chain (see `AppSettings.fallbackModels`). Anything the failing
       // model had streamed is retracted first (`turn_discarded`), so the hop always

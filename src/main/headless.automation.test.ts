@@ -499,6 +499,7 @@ describe('the checked-in --json schema', () => {
     compaction: { runId: 'r', type: 'compaction', summarized: 4 },
     retry: { runId: 'r', type: 'retry', attempt: 1, max: 3, message: 'overloaded' },
     turn_discarded: { runId: 'r', type: 'turn_discarded', attempt: 1, reason: 'reset', textChars: 0, reasoningChars: 0 },
+    reply_sent_back: { runId: 'r', type: 'reply_sent_back' },
     model_fallback: { runId: 'r', type: 'model_fallback', from: 'A', to: 'B', reason: 'down' },
     limit: { runId: 'r', type: 'limit', reason: 'max-steps' },
     receipt: { runId: 'r', type: 'receipt', receipt: { v: 1, checks: [], otherCommands: 0, filesChanged: [] } } as unknown as Extract<

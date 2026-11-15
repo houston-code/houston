@@ -412,6 +412,25 @@ describe('ACP server: protocol flow', () => {
     await h.end()
   })
 
+  it('starts a reply the loop sent back on its own paragraph, not glued to the next one', async () => {
+    const h = harness({
+      run: async (req, send) => {
+        send({ runId: req.runId, type: 'text', delta: 'Want me to add tests?' })
+        send({ runId: req.runId, type: 'reply_sent_back' })
+        send({ runId: req.runId, type: 'text', delta: 'Nothing more is needed.' })
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('explain it') })
+    const chunks = h
+      .updates(sessionId)
+      .filter((u) => u.sessionUpdate === 'agent_message_chunk')
+      .map((u) => u.content.text)
+    expect(chunks.join('')).toBe('Want me to add tests?\n\nNothing more is needed.')
+    await h.end()
+  })
+
   it('shows an edit as a full before/after diff, but never reads through a symlink out of the folder', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'houston-acp-out-'))
     writeFileSync(join(outside, 'secret.txt'), 'top secret\n')
