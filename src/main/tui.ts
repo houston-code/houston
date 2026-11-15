@@ -127,6 +127,7 @@ import {
   sessionPreviewLines,
   type ExportFormat
 } from './tui-sessions'
+import { markdownLinks, type MarkdownLinks } from './tui-links'
 import { htmlToAnsi } from './syntax'
 import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
 import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
@@ -4042,6 +4043,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let screenReader = opts.screenReader === true
   let theme: ThemeName = resolveTheme(settings.tuiTheme ?? '') ?? opts.detectedTheme ?? 'default'
   const makeSessionPainter = (): Painter => makePainter(opts.color && !screenReader, theme)
+  // What reply links point at: built once, so file lookups are cached for the session.
+  let sessionLinks: MarkdownLinks | null = null
+  const replyLinks = (): MarkdownLinks => (sessionLinks ??= markdownLinks(opts.cwd))
   let paint = makeSessionPainter()
   // Reduced motion: the spinner stays still. Resolved at launch (env + setting).
   // Applied before anything reads or prints: the trust prompt and first-run setup
@@ -6364,7 +6368,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           return html ? htmlToAnsi(html, paint) : code
         }
       : undefined
-    const md = new MarkdownStream({ paint, width: columns(), highlight })
+    // Links and workspace file paths in the reply become clickable where the terminal
+    // shows hyperlinks: a colour TTY, and not screen-reader mode (plain lines only).
+    const md = new MarkdownStream({
+      paint,
+      width: columns(),
+      highlight,
+      ...(opts.color && !screenReader ? { links: replyLinks() } : {})
+    })
     // Whether the model round now streaming has put any text or reasoning on screen.
     // A discarded round can only be struck out once printed (line mode can't erase),
     // so this decides whether there is anything above to disown.

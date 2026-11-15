@@ -12,6 +12,18 @@ const ESC = String.fromCharCode(27)
 // Matches a CSI SGR (color/style) sequence — the only escapes the renderer emits.
 const SGR = new RegExp(`${ESC}\\[[0-9;]*m`, 'g')
 
+// What takes no columns on screen in Houston's own output: SGR colour codes and the
+// OSC 8 hyperlink escapes around a link's text (see osc8Link).
+const ZERO_WIDTH = new RegExp(`${ESC}\\[[0-9;]*m|${ESC}\\]8;[^${ESC}\\x07]*(?:${ESC}\\\\|\\x07)`, 'g')
+
+// An OSC 8 sequence, capturing its URL (empty for the one that ends a link).
+const OSC8_OPEN = new RegExp(`${ESC}\\]8;[^;${ESC}\\x07]*;([^${ESC}\\x07]*)`, 'g')
+
+/** Our own output's visible text: SGR codes and hyperlink escapes removed. */
+function stripZeroWidth(s: string): string {
+  return s.replace(ZERO_WIDTH, '')
+}
+
 /** Strip SGR color codes, leaving the visible text. */
 export function stripAnsi(s: string): string {
   return s.replace(SGR, '')
@@ -217,7 +229,7 @@ const SINGLE_WIDTH =
 
 /** Visible column width of a string, by grapheme cluster, ignoring SGR escapes. */
 export function visibleWidth(s: string): number {
-  return plainWidth(stripAnsi(s))
+  return plainWidth(stripZeroWidth(s))
 }
 
 /** Visible column width of text with no escapes in it. */
@@ -253,7 +265,7 @@ function spaceJoins(left: string, right: string): boolean {
 function units(s: string): Array<{ text: string; width: number }> {
   const out: Array<{ text: string; width: number }> = []
   let last = 0
-  for (const m of s.matchAll(SGR)) {
+  for (const m of s.matchAll(ZERO_WIDTH)) {
     for (const g of graphemes(s.slice(last, m.index))) out.push({ text: g, width: clusterWidth(g) })
     out.push({ text: m[0], width: 0 })
     last = m.index + m[0].length
@@ -278,7 +290,10 @@ export function truncateVisible(s: string, max: number, ellipsis = '…'): strin
     shown += u.width
   }
   const hadColor = out.includes(`${ESC}[`)
-  return `${out}${ellipsis}${hadColor ? `${ESC}[0m` : ''}`
+  // A cut inside a hyperlink's text ends the link too, so it doesn't run on past the cut.
+  const osc = [...out.matchAll(OSC8_OPEN)].at(-1)
+  const openLink = osc !== undefined && osc[1] !== ''
+  return `${out}${ellipsis}${hadColor ? `${ESC}[0m` : ''}${openLink ? `${ESC}]8;;${ESC}\\` : ''}`
 }
 
 /**
@@ -376,7 +391,7 @@ function wrapLine(line: string, width: number): string {
     cur = ''
   }
   for (const word of words) {
-    const text = stripAnsi(word)
+    const text = stripZeroWidth(word)
     const wordWidth = plainWidth(text)
     if (wordWidth > width) {
       // A single word longer than the line — hard-split it.
