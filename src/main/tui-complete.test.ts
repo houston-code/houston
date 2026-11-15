@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mentionQuery, commandQuery, inlineCommandQuery, completeInput, makeCompleter, COMMANDS, commandMenu, renderCommandMenu, renderMentionMenu, makeMentionMenu, MENU_LIMIT, type CommandSpec } from './tui-complete'
+import { mentionQuery, commandQuery, inlineCommandQuery, completeInput, makeCompleter, COMMANDS, commandMenu, renderCommandMenu, renderMentionMenu, makeMentionMenu, makeMentionMenuView, commandMenuView, markMenuRow, MENU_LIMIT, type CommandSpec } from './tui-complete'
 
 describe('mentionQuery', () => {
   it('extracts an @token at the end of the line', () => {
@@ -157,7 +157,7 @@ describe('the @ mention dropdown', () => {
   const plain = (x: string): string => x
 
   it('renders matching paths, capped, with the Tab hint', () => {
-    expect(renderMentionMenu(['src/a.ts', 'src/'], plain)).toEqual(['  @src/a.ts', '  @src/', '  Tab completes'])
+    expect(renderMentionMenu(['src/a.ts', 'src/'], plain)).toEqual(['  @src/a.ts', '  @src/', '  Up/Down to choose, Tab completes'])
     const many = Array.from({ length: MENU_LIMIT + 3 }, (_, i) => `f${i}`)
     const rows = renderMentionMenu(many, plain)
     expect(rows).toContain('  … 3 more')
@@ -179,7 +179,7 @@ describe('the @ mention dropdown', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(redraws).toBe(1)
-    expect(menu('look at @gre', redraw)).toEqual(['  @src/gre.ts', '  Tab completes'])
+    expect(menu('look at @gre', redraw)).toEqual(['  @src/gre.ts', '  Up/Down to choose, Tab completes'])
     expect(asked).toEqual(['gre'])
   })
 
@@ -212,7 +212,7 @@ describe('the @ mention dropdown', () => {
     resolvers.ab(['new.ts'])
     await Promise.resolve()
     await Promise.resolve()
-    expect(menu('@ab', () => {})).toEqual(['  @new.ts', '  Tab completes'])
+    expect(menu('@ab', () => {})).toEqual(['  @new.ts', '  Up/Down to choose, Tab completes'])
   })
 
   it('keeps the menu as it was when the lookup fails', async () => {
@@ -265,5 +265,44 @@ describe('/ completion mid-message', () => {
     const rows = renderCommandMenu([{ name: 'x', description: 'hi\x1b]52;c;ZXZpbA==\x07', args: '\x1b[31m<a>' }], (s: string) => s)
     expect(rows.join('')).not.toContain('\x1b')
     expect(rows.join('')).not.toContain('\x07')
+  })
+})
+
+describe('the menu as pickable options', () => {
+  const plain = (x: string): string => x
+  const cmds: CommandSpec[] = [
+    { name: 'help', description: 'list' },
+    { name: 'history', description: 'past' },
+    { name: 'model', description: 'pick' }
+  ]
+
+  it('offers each shown command in place of the typed word', () => {
+    const v = commandMenuView('/h', cmds, plain)!
+    expect(v.options).toEqual([
+      { replace: '/h', insert: '/help ' },
+      { replace: '/h', insert: '/history ' }
+    ])
+    expect(v.rows).toHaveLength(2)
+    // Mid-message, only the `/word` at the end is replaced.
+    expect(commandMenuView('then run /mo', cmds, plain)!.options).toEqual([{ replace: '/mo', insert: '/model ' }])
+    expect(commandMenuView('plain text', cmds, plain)).toBeNull()
+  })
+
+  it('points at the highlighted row only', () => {
+    const v = commandMenuView('/h', cmds, plain)!
+    const rows = markMenuRow(v, 1, plain)
+    expect(rows[0]).toBe(v.rows[0])
+    expect(rows[1].startsWith('› /history')).toBe(true)
+    expect(markMenuRow(v, null, plain)).toBe(v.rows)
+  })
+
+  it('offers files only once they match the mention being typed', async () => {
+    let resolve: (f: string[]) => void = () => {}
+    const view = makeMentionMenuView(() => new Promise((r) => (resolve = r)), plain)
+    expect(view('see @gr', () => {})!.options).toEqual([])
+    resolve(['src/greet.ts'])
+    await new Promise((r) => setTimeout(r, 0))
+    expect(view('see @gr', () => {})!.options).toEqual([{ replace: '@gr', insert: '@src/greet.ts ' }])
+    expect(view('no mention', () => {})).toBeNull()
   })
 })

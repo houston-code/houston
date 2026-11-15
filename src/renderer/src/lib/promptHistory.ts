@@ -53,17 +53,5 @@ export function historyDown(length: number, index: number): number {
   return Math.min(length, index + 1)
 }
 
-/**
- * Sent prompts matching `query` (case-insensitive; every space-separated word must
- * appear), newest first, at most `limit`. An empty query lists the newest ones.
- */
-export function searchPromptHistory(history: string[], query: string, limit = 30): string[] {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
-  const out: string[] = []
-  for (let i = history.length - 1; i >= 0 && out.length < limit; i--) {
-    const entry = history[i]
-    const hay = entry.toLowerCase()
-    if (words.every((w) => hay.includes(w))) out.push(entry)
-  }
-  return out
-}
+// Shared with the terminal's Ctrl-R, so both clients find the same prompts.
+export { searchPromptHistory } from '@shared/promptHistorySearch'

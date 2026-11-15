@@ -18,6 +18,7 @@ import type {
 } from '@shared/agent'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import type { PagerSource } from './tui-pager'
+import { MAX_ATTACHMENTS } from '@shared/images'
 import type { DeletePlan } from './deleteChat'
 import type { DraftRecord, DraftStore } from './tui-drafts'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
@@ -995,6 +996,13 @@ describe('composerPrompt', () => {
   it('reflects the live policy', () => {
     expect(composerPrompt('auto-edit', makePainter(false))).toContain('auto-edit')
   })
+
+  it('says how many images the next message carries', () => {
+    expect(composerPrompt('ask', makePainter(false), false, 2)).toBe('[2 images] ask › ')
+    expect(composerPrompt('ask', makePainter(false), false, 1)).toContain('[1 image]')
+    expect(composerPrompt('ask', makePainter(false), true, 1)).toBe('you (1 image): ')
+    expect(composerPrompt('ask', makePainter(false))).not.toContain('image')
+  })
 })
 
 describe('renderPreviewDiff', () => {
@@ -1356,6 +1364,13 @@ describe('status line & progress', () => {
     expect(line).toContain('$0.500')
     expect(line).toContain('50%') // 500k of a 1M window
     expect(line).toMatch(/[▓░]/)
+  })
+
+  it('shows the reasoning level, unless the model cannot reason', () => {
+    const base = { providerId: 'p', model: 'm', policy: 'ask' as const, cwd: '/p', cost: { inputTokens: 0, outputTokens: 0, cost: 0 }, contextTokens: 0 }
+    expect(renderStatusLine({ ...base, effort: 'high', modelReasons: true }, 120, paint)).toContain('reasoning high')
+    expect(renderStatusLine({ ...base, effort: 'high', modelReasons: false }, 120, paint)).not.toContain('reasoning')
+    expect(renderStatusLine(base, 120, paint)).not.toContain('reasoning')
   })
 
   it('omits the context bar until a turn has run', () => {
@@ -2746,6 +2761,52 @@ describe('runTui', () => {
     const msg = rec.runs[0].messages.at(-1)!
     expect(msg.content).toBe('what is this?')
     expect(msg.images).toEqual([{ mediaType: 'image/png', data: 'b64:shot.png' }])
+  })
+
+  it('/image clear drops what is staged', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.loadImage = (p) => ({ image: { mediaType: 'image/png', data: `b64:${p}` } })
+    const t = fakeIo(['/image a.png', '/image b.png', '/image clear', '/image clear', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('dropped 2 staged images')
+    expect(t.text()).toContain('no images staged')
+    expect(rec.runs[0].messages.at(-1)!.images).toBeUndefined()
+  })
+
+  it('stages at most the shared attachment cap', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.loadImage = (p) => ({ image: { mediaType: 'image/png', data: `b64:${p}` } })
+    const t = fakeIo([...Array.from({ length: MAX_ATTACHMENTS + 1 }, (_, i) => `/image ${i}.png`), null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain(`already have ${MAX_ATTACHMENTS} images staged`)
+  })
+
+  it('attaches nothing on a model that cannot see images, and says so', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      selected: { providerId: 'anthropic', model: 'claude-2' }
+    })
+    d.loadImage = (p) => ({ image: { mediaType: 'image/png', data: `b64:${p}` } })
+    const t = fakeIo(['/image shot.png', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain("claude-2 can't see images")
+    expect(rec.runs[0].messages.at(-1)!.images).toBeUndefined()
+  })
+
+  it('drops images staged before a switch to a model that cannot see them', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      providers: [
+        { id: 'anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }, { id: 'claude-2' }], defaultModel: 'claude' }
+      ]
+    } as unknown as Partial<AppSettings>)
+    d.loadImage = (p) => ({ image: { mediaType: 'image/png', data: `b64:${p}` } })
+    const t = fakeIo(['/image shot.png', '/model claude-2', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain("dropped 1 staged image: claude-2 can't see images")
+    expect(rec.runs.at(-1)!.messages.at(-1)!.images).toBeUndefined()
   })
 
   it('/image surfaces a load error and stages nothing', async () => {

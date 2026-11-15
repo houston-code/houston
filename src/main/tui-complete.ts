@@ -167,8 +167,50 @@ export function renderMentionMenu(
   const shown = files.slice(0, MENU_LIMIT)
   const rows = shown.map((f) => `  ${paint(`@${f}`, 'cyan')}`)
   if (files.length > shown.length) rows.push(paint(`  … ${files.length - shown.length} more`, 'dim'))
-  rows.push(paint('  Tab completes', 'dim'))
+  rows.push(paint('  Up/Down to choose, Tab completes', 'dim'))
   return rows
+}
+
+/** One row of the live menu that can be picked: the token before the cursor it replaces, and with what. */
+export interface MenuOption {
+  replace: string
+  insert: string
+}
+
+/**
+ * The live menu under the composer: its rows, and what its first rows insert when
+ * picked. `options[i]` is drawn as `rows[i]`; any rows after them are notes
+ * ("… 3 more", a key hint).
+ */
+export interface MenuView {
+  rows: string[]
+  options: MenuOption[]
+}
+
+/** The command menu for the text before the cursor, as rows and pickable options. */
+export function commandMenuView(
+  before: string,
+  commands: CommandSpec[],
+  paint: (s: string, ...styles: string[]) => string
+): MenuView | null {
+  const matches = commandMenu(before, commands)
+  if (!matches) return null
+  // The whole line is the command word, or (mid-message) the `/word` at its end.
+  const replace = commandQuery(before) !== null ? before : `/${inlineCommandQuery(before) ?? ''}`
+  return {
+    rows: renderCommandMenu(matches, paint),
+    options: matches.slice(0, MENU_LIMIT).map((c) => ({ replace, insert: `/${c.name} ` }))
+  }
+}
+
+/** The menu's rows with option `selected` pointed at, as the pickers draw a highlight. */
+export function markMenuRow(
+  view: MenuView,
+  selected: number | null,
+  paint: (s: string, ...styles: string[]) => string
+): string[] {
+  if (selected === null || selected >= view.options.length) return view.rows
+  return view.rows.map((r, i) => (i === selected ? `${paint('›', 'cyan')} ${r.replace(/^ {2}/, '')}` : r))
 }
 
 /**
@@ -177,12 +219,13 @@ export function renderMentionMenu(
  * the last rows (or none) and `redraw` repaints once the files are in. Only the newest
  * query's answer is kept; a slow lookup for an older one is dropped. The rows are
  * painted on each call, with the caller's painter when it passes one, so a theme
- * change applies to a menu already open.
+ * change applies to a menu already open. Rows still showing an older query's files
+ * can't be picked: they would replace the token with a path it no longer matches.
  */
-export function makeMentionMenu(
+export function makeMentionMenuView(
   finder: FileFinder,
   paint: (s: string, ...styles: string[]) => string
-): (line: string, redraw: () => void, paintNow?: (s: string, ...styles: string[]) => string) => string[] | null {
+): (line: string, redraw: () => void, paintNow?: (s: string, ...styles: string[]) => string) => MenuView | null {
   let shown: { query: string; files: string[] } | null = null
   let wanted: string | null = null
   return (line, redraw, paintNow = paint) => {
@@ -191,7 +234,12 @@ export function makeMentionMenu(
       wanted = null
       return null
     }
-    if (shown?.query === q) return renderMentionMenu(shown.files, paintNow)
+    if (shown?.query === q) {
+      return {
+        rows: renderMentionMenu(shown.files, paintNow),
+        options: shown.files.slice(0, MENU_LIMIT).map((f) => ({ replace: `@${q}`, insert: `@${f} ` }))
+      }
+    }
     if (wanted !== q) {
       wanted = q
       finder(q)
@@ -204,6 +252,15 @@ export function makeMentionMenu(
           /* no files to offer: the menu stays as it was, Tab still works */
         })
     }
-    return shown ? renderMentionMenu(shown.files, paintNow) : []
+    return { rows: shown ? renderMentionMenu(shown.files, paintNow) : [], options: [] }
   }
+}
+
+/** {@link makeMentionMenuView}, rows only. */
+export function makeMentionMenu(
+  finder: FileFinder,
+  paint: (s: string, ...styles: string[]) => string
+): (line: string, redraw: () => void, paintNow?: (s: string, ...styles: string[]) => string) => string[] | null {
+  const view = makeMentionMenuView(finder, paint)
+  return (line, redraw, paintNow) => view(line, redraw, paintNow)?.rows ?? null
 }

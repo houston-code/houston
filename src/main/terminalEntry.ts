@@ -138,9 +138,8 @@ import { createTerminalIo, resolveColor } from './tui-io'
 import { resolveAccessibility } from './tui-a11y'
 import {
   makeCompleter,
-  commandMenu,
-  renderCommandMenu,
-  makeMentionMenu,
+  commandMenuView,
+  makeMentionMenuView,
   COMMANDS,
   type CommandSpec
 } from './tui-complete'
@@ -709,15 +708,13 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // (and hands the adapter again on /theme), so nothing is drawn in the wrong one.
   const paint = makePainter(tui.color, resolveTheme(getSettings().tuiTheme ?? '') ?? tui.detectedTheme ?? 'default')
   // Typing `@` lists matching files under the composer, as `/` lists commands.
-  const mentionMenu = makeMentionMenu((q) => findFiles(tui.cwd, q), paint as never)
+  const mentionMenu = makeMentionMenuView((q) => findFiles(tui.cwd, q), paint as never)
 
   const terminalIo = createTerminalIo({
     // Painted with the composer's painter, so the menus follow /theme.
-    menuFor: (line, redraw, menuPaint) => {
-      const matches = commandMenu(line, menuCommands)
-      if (matches) return renderCommandMenu(matches, menuPaint as never)
-      return mentionMenu(line, redraw, menuPaint as never) ?? []
-    },
+    menuFor: (line, redraw, menuPaint) =>
+      commandMenuView(line, menuCommands, menuPaint as never) ??
+      mentionMenu(line, redraw, menuPaint as never) ?? { rows: [], options: [] },
     paint,
     // Read live: an entry submitted this session must be recallable on the next
     // composer read, not just the ones loaded at launch.

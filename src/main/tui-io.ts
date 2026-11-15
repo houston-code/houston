@@ -51,6 +51,7 @@ import {
 } from './tui-editor'
 import type { EditorKey } from './tui-keys'
 import { midRunRows, oneLine, waitingAnnouncement, type WaitingInput } from './tui-midrun'
+import { markMenuRow, type MenuView } from './tui-complete'
 import {
   initialVimState,
   reduceVim,
@@ -186,7 +187,7 @@ export interface TerminalIoDeps {
    * cheap and synchronous; work that isn't (a file lookup) calls `redraw` when it
    * has rows to show. `paint` is the composer's current painter (the session's theme).
    */
-  menuFor?: (line: string, redraw: () => void, paint: Painter) => string[]
+  menuFor?: (line: string, redraw: () => void, paint: Painter) => string[] | MenuView
   /**
    * Which key set the composer answers to, read fresh on each read so `/vim` takes
    * effect on the next prompt rather than the next launch. Absent = emacs.
@@ -1415,10 +1416,64 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // Reserve the last column: writing exactly `columns` cells makes some
       // terminals wrap and insert a phantom row, which would desync the redraw.
       const width = (): number => Math.max(8, columnsNow() - 1)
+      // The live menu (commands for `/`, files for `@`), read from the text before the
+      // cursor. Up/Down move a highlight through it while it is open, Enter or Tab
+      // inserts the highlighted pick, and Esc closes it until the text changes.
+      let menuSel: number | null = null
+      let menuKey = ''
+      let menuClosedAt: string | null = null
+      const beforeCursor = (): string => [...(state.lines[state.row] ?? '')].slice(0, state.col).join('')
+      const currentMenu = (): MenuView => {
+        const before = beforeCursor()
+        if (state.search || before === menuClosedAt) return { rows: [], options: [] }
+        menuClosedAt = null
+        const got = deps.menuFor?.(before, redrawMenu, paint) ?? []
+        const menu = Array.isArray(got) ? { rows: got, options: [] } : got
+        // A different token (or new matches) starts the highlight over.
+        const key = `${before}\u0000${menu.options.map((o) => o.insert).join('\u0000')}`
+        if (key !== menuKey) {
+          menuKey = key
+          menuSel = null
+        }
+        return menu
+      }
+      const menuRows = (): string[] => {
+        const menu = currentMenu()
+        return markMenuRow(menu, menuSel, paint as never)
+      }
+      /** Insert the highlighted pick in place of the token before the cursor. */
+      const pickMenu = (menu: MenuView, i: number): void => {
+        const opt = menu.options[i]
+        let next = state
+        for (let n = [...opt.replace].length; n > 0; n--) next = reduceEditor(next, { type: 'backspace' }).state
+        state = reduceEditor(next, { type: 'char', value: opt.insert }).state
+        menuSel = null
+      }
+      /** A key the open menu takes (true), or one that goes to the editor (false). */
+      const menuKeyTaken = (key: EditorKey): boolean => {
+        if (vimOn && vim.mode === 'normal') return false
+        if (key.type !== 'up' && key.type !== 'down' && key.type !== 'enter' && key.type !== 'tab' && key.type !== 'escape') {
+          return false
+        }
+        const menu = currentMenu()
+        if (!menu.rows.length) return false
+        if (key.type === 'escape') {
+          menuClosedAt = beforeCursor()
+          menuSel = null
+          return true
+        }
+        const n = menu.options.length
+        if (!n) return false
+        if (key.type === 'down') menuSel = menuSel === null ? 0 : (menuSel + 1) % n
+        else if (key.type === 'up') menuSel = menuSel === null ? n - 1 : (menuSel - 1 + n) % n
+        else if (menuSel === null) return false // Enter sends, Tab completes, as before
+        else pickMenu(menu, menuSel)
+        return true
+      }
       const view = (withMenu = true): ReturnType<typeof renderEditor> => {
         // The line under the cursor drives the menu: typing `/` shows what you can
         // run, without having to already know its name.
-        const menu = withMenu ? (deps.menuFor?.(state.lines[state.row] ?? '', redrawMenu, paint) ?? []) : []
+        const menu = withMenu ? menuRows() : []
         // The `ultrathink` keyword in the draft: say what it will do to this turn, and
         // colour the word where it will raise the turn's reasoning. The hint only where
         // it fits on one row: a wrapped row would desync the redraw region.
@@ -1630,7 +1685,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           let next = state
           for (let i = 0; i < back; i++) next = reduceEditor(next, { type: 'backspace' }).state
           state = reduceEditor(next, { type: 'char', value: insert }).state
-        } else if (hits.length > 1 && !(deps.menuFor?.(state.lines[state.row] ?? '', redrawMenu, paint) ?? []).length) {
+        } else if (hits.length > 1 && !currentMenu().rows.length) {
           // Ambiguous and nothing more to insert: show the candidates above the
           // composer, unless the live menu under it already lists them (a slash
           // command). Printing them there too left a copy in the scrollback on
@@ -1708,6 +1763,13 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               noteAbove(r.notes)
               continue
             }
+          }
+          // The open menu takes its keys first; an Esc that closed it is not half of
+          // a double press.
+          if (menuKeyTaken(key)) {
+            lastEsc = { at: -Infinity, normal: false }
+            draw()
+            continue
           }
           // The decoder has no clock, so a double Esc is recognized here.
           let k: EditorKey = key

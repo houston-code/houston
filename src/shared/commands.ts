@@ -531,7 +531,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['gui', 'tui'],
     gui: { description: 'Switch the app theme (system, dark, light), or open Appearance settings', args: '[system|dark|light]' }
   },
-  { name: 'image', group: 'Terminal', args: '[path]', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
+  { name: 'image', group: 'Terminal', args: '[path|clear]', description: 'Attach an image: from your clipboard, or /image <path>; /image clear drops them', clients: ['tui'] },
   { name: 'cwd', group: 'Setup', description: 'Show the working directory', clients: ['gui', 'tui'] },
   { name: 'share', group: 'Chat', description: 'Copy an invite to Houston to share with a friend', clients: ['gui', 'tui'] },
   { name: 'help', group: 'Setup', description: 'List the available slash commands', clients: ['gui', 'tui'] },

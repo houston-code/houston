@@ -45,6 +45,15 @@ describe('decodeInput — text', () => {
   })
 })
 
+describe('decodeInput: expand-paste key', () => {
+  it('decodes Alt-P and Ctrl-X Ctrl-P', () => {
+    expect(feed('\x1bp')).toEqual([{ type: 'expand-paste' }])
+    expect(feed('\x18\x10')).toEqual([{ type: 'expand-paste' }])
+    // Ctrl-P on its own is still Up.
+    expect(feed('\x10')).toEqual([{ type: 'up' }])
+  })
+})
+
 describe('decodeInput — bracketed paste', () => {
   it('delivers a bracketed paste as ONE key, newlines and all', () => {
     const keys = feed(`${PASTE_START}line one\nline two\nline three${PASTE_END}`)

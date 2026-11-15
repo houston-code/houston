@@ -7,6 +7,8 @@ import {
   setEditorText,
   blobToken,
   findHistoryMatch,
+  findNewerHistoryMatch,
+  searchPosition,
   parseImagePaths,
   PASTE_COLLAPSE_LINES,
   type EditorState,
@@ -235,6 +237,61 @@ describe('reduceEditor — reverse search (Ctrl-R)', () => {
     expect(findHistoryMatch(hist, 'git', 1)).toBe(0)
     expect(findHistoryMatch(hist, 'zzz', 2)).toBeNull()
     expect(findHistoryMatch(hist, '', 2)).toBeNull()
+  })
+})
+
+describe('reduceEditor: reverse search matches like the desktop app', () => {
+  const hist = ['Fix the LOGIN bug', 'add tests for login', 'fix lint', 'deploy the login fix']
+
+  it('ignores case and needs every word, in any order', () => {
+    expect(findHistoryMatch(hist, 'login fix', hist.length - 1)).toBe(3)
+    expect(findHistoryMatch(hist, 'login fix', 2)).toBe(0)
+    expect(findHistoryMatch(hist, 'LINT', 3)).toBe(2)
+    expect(findHistoryMatch(hist, '  ', 3)).toBeNull()
+    expect(findNewerHistoryMatch(hist, 'login', 1)).toBe(1)
+    expect(findNewerHistoryMatch(hist, 'login', 4)).toBeNull()
+  })
+
+  it('steps older with Ctrl-R or Up, and newer with Ctrl-S or Down', () => {
+    const start = run([{ type: 'search' }, type('login')], initialEditorState(hist)).state
+    expect(start.search?.index).toBe(3)
+    const older = run([{ type: 'up' }, { type: 'search' }], start).state
+    expect(older.search?.index).toBe(0)
+    const newer = run([{ type: 'down' }], older).state
+    expect(newer.search?.index).toBe(1)
+    expect(run([{ type: 'stash' }, { type: 'stash' }], newer).state.search?.index).toBe(3)
+    // Past either end it stays on the last match it found.
+    expect(run([{ type: 'down' }], start).state.search?.index).toBe(3)
+    // Still searching: the keys stepped rather than accepting the match.
+    expect(older.search).not.toBeNull()
+  })
+
+  it('says which match of how many is shown', () => {
+    const { state } = run([{ type: 'search' }, type('login'), { type: 'search' }], initialEditorState(hist))
+    expect(searchPosition(hist, state.search!)).toEqual({ at: 2, of: 3 })
+    const v = renderEditor(state, { prompt: '> ', width: 60, paint })
+    expect(v.rows[0]).toContain("(reverse-i-search)`login' 2/3: ")
+  })
+})
+
+describe('reduceEditor: expanding collapsed pastes', () => {
+  const body = Array.from({ length: PASTE_COLLAPSE_LINES + 3 }, (_, i) => `line ${i}`).join('\n')
+
+  it('puts the pasted text back in the draft, and undo folds it again', () => {
+    const pasted = run([type('see: '), { type: 'paste', value: body }]).state
+    expect(pasted.blobs).toHaveLength(1)
+    const expanded = run([{ type: 'expand-paste' }], pasted).state
+    expect(expanded.blobs).toEqual([])
+    expect(expanded.lines.join('\n')).toBe(`see: ${body}`)
+    expect(editorText(expanded)).toBe(editorText(pasted)) // sends exactly the same
+    const undone = run([{ type: 'undo' }], expanded).state
+    expect(undone.lines).toEqual(pasted.lines)
+    expect(undone.blobs).toEqual(pasted.blobs)
+  })
+
+  it('does nothing when no paste is collapsed', () => {
+    const s = run([type('plain')]).state
+    expect(run([{ type: 'expand-paste' }], s).state).toBe(s)
   })
 })
 
