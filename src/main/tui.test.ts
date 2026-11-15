@@ -1687,17 +1687,19 @@ describe('runTui', () => {
   it('prints one end-of-turn cost summary, not a line per model round', async () => {
     const { d } = deps([
       { runId: 'x', type: 'text', delta: 'working' },
-      { runId: 'x', type: 'usage', inputTokens: 30000, outputTokens: 100, cost: 0.16 },
-      { runId: 'x', type: 'usage', inputTokens: 40000, outputTokens: 200, cost: 0.21 },
+      { runId: 'x', type: 'usage', inputTokens: 30000, outputTokens: 100, cost: 0.16, model: 'model-a' },
+      { runId: 'x', type: 'usage', inputTokens: 40000, outputTokens: 200, cost: 0.21, model: 'model-b' },
+      { runId: 'x', type: 'usage', inputTokens: 0, outputTokens: 0, cost: 0, model: 'model-a' },
       { runId: 'x', type: 'done', stopReason: 'end_turn' }
     ])
     const t = fakeIo(['do it', null])
     d.io = t.io
     await runTui(opts, d)
     const out = t.text()
-    // One combined summary for the whole turn (30k+40k in, 100+200 out, $0.37),
-    // carrying the running session total (same, as it's the only turn).
-    expect(out).toContain('· turn 70,000+300 tok · $0.370')
+    // One combined summary for the whole turn (30k+40k in, 100+200 out, $0.37), naming
+    // each model the turn ran on once, and carrying the running session total (same,
+    // as it's the only turn).
+    expect(out).toContain('· turn model-a, model-b · 70,000+300 tok · $0.370')
     expect(out).toContain('(session 70,000+300 tok · $0.370)')
     // The old per-round lines (raw, unseparated counts) are gone.
     expect(out).not.toContain('30000+100')
@@ -10360,5 +10362,124 @@ describe('/config, /status and /feedback', () => {
     await runTui(opts, d)
     expect(t.text()).toContain('/config')
     expect(t.text()).toContain('/status')
+  })
+})
+
+describe('runTui: how a run reads', () => {
+  it('explains a failed turn with the shared help and the commands to try', async () => {
+    const { d } = deps([{ runId: 'x', type: 'error', message: '401 invalid x-api-key', cause: 'auth' }])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('Error: 401 invalid x-api-key')
+    expect(out).toContain('The provider did not accept the API key, or none is set. Check the key in the provider settings, then retry.')
+    expect(out).toContain('next: /login, /doctor, /retry')
+  })
+
+  it('says a run stopped from elsewhere was stopped, once', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'done', stopReason: 'aborted' },
+      { runId: 'x', type: 'done', stopReason: 'aborted' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text().match(/· Stopped\./g)).toHaveLength(1)
+  })
+
+  it('says when a tool returned images, and ends a review with its severity tally', async () => {
+    const finding = (id: string, severity: 'high' | 'low', status: 'confirmed' | 'rejected'): AgentEvent =>
+      ({
+        runId: 'x',
+        type: 'review_finding',
+        parentCallId: 'r1',
+        finding: { id, severity, status, title: `t-${id}`, location: 'a.ts:1' }
+      }) as AgentEvent
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'v1', name: 'view_localhost', args: { url: 'http://localhost:3000' } },
+      {
+        runId: 'x',
+        type: 'tool_result',
+        callId: 'v1',
+        name: 'view_localhost',
+        ok: true,
+        output: 'Screenshot taken',
+        images: [{ mediaType: 'image/png', data: 'AAAA' }]
+      },
+      { runId: 'x', type: 'tool_start', callId: 'r1', name: 'review_changes', args: {} },
+      finding('f1', 'high', 'confirmed'),
+      finding('f2', 'low', 'confirmed'),
+      finding('f3', 'low', 'rejected'),
+      { runId: 'x', type: 'tool_result', callId: 'r1', name: 'review_changes', ok: true, output: 'Review done' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('1 image returned (not shown in the terminal)')
+    expect(out).toContain('↳ review: 1 high · 1 low (1 dropped as a false positive)')
+  })
+
+  it('folds consecutive reads into one line and hides list_dir', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'a', name: 'read_file', args: { path: 'src/a.ts' } },
+      { runId: 'x', type: 'tool_result', callId: 'a', name: 'read_file', ok: true, output: 'A' },
+      { runId: 'x', type: 'tool_start', callId: 'l', name: 'list_dir', args: { path: 'src' } },
+      { runId: 'x', type: 'tool_result', callId: 'l', name: 'list_dir', ok: true, output: 'a.ts\nb.ts' },
+      { runId: 'x', type: 'tool_start', callId: 'b', name: 'read_file', args: { path: 'src/b.ts' } },
+      { runId: 'x', type: 'tool_result', callId: 'b', name: 'read_file', ok: true, output: 'B' },
+      { runId: 'x', type: 'text', delta: 'Both read.\n\n' },
+      // A lone read prints as it always did.
+      { runId: 'x', type: 'tool_start', callId: 'c', name: 'read_file', args: { path: 'src/c.ts' } },
+      { runId: 'x', type: 'tool_result', callId: 'c', name: 'read_file', ok: true, output: 'C first line' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('· Read 2 files  src/a.ts, src/b.ts')
+    expect(out.indexOf('Read 2 files')).toBeLessThan(out.indexOf('Both read.'))
+    expect(out).not.toContain('List')
+    expect(out).not.toContain('a.ts\nb.ts')
+    expect(out).toContain('· Read  src/c.ts')
+    expect(out).toContain('↳ C first line')
+    expect(out.indexOf('Both read.')).toBeLessThan(out.indexOf('Read  src/c.ts'))
+  })
+
+  it('shows every read and list_dir under /verbose', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'a', name: 'read_file', args: { path: 'src/a.ts' } },
+      { runId: 'x', type: 'tool_result', callId: 'a', name: 'read_file', ok: true, output: 'A' },
+      { runId: 'x', type: 'tool_start', callId: 'b', name: 'read_file', args: { path: 'src/b.ts' } },
+      { runId: 'x', type: 'tool_result', callId: 'b', name: 'read_file', ok: true, output: 'B' },
+      { runId: 'x', type: 'tool_start', callId: 'l', name: 'list_dir', args: { path: 'src' } },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['/verbose', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).not.toContain('Read 2 files')
+    expect(out).toContain('· Read  src/a.ts')
+    expect(out).toContain('· Read  src/b.ts')
+    expect(out).toMatch(/· List/)
+  })
+
+  it('counts the turn’s output tokens on the spinner as they stream', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'text', delta: 'x'.repeat(400) },
+      { runId: 'x', type: 'usage', inputTokens: 10, outputTokens: 120, cost: 0 },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    const tokens: number[] = []
+    t.io.setSpinnerTokens = (n) => tokens.push(n)
+    d.io = t.io
+    await runTui(opts, d)
+    // About 4 characters a token while streaming, then the provider's own count.
+    expect(tokens).toEqual([100, 120])
   })
 })

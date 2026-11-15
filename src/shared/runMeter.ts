@@ -1,9 +1,10 @@
-import type { AgentEvent } from '@shared/agent'
-import { formatElapsed } from '@shared/elapsed'
-import { formatTokens } from '@shared/usage'
+import type { AgentEvent } from './agent'
+import { formatElapsed } from './elapsed'
+import { formatTokens } from './usage'
 
 /**
- * The running turn's clock and output-token count, for the status bar.
+ * The running turn's clock and output-token count, for the desktop's status bar and
+ * the terminal's spinner line.
  *
  * Providers report a round's tokens only once the round ends (the `usage` event), so
  * a long reply would sit at 0 until it finished. While a round streams, its output

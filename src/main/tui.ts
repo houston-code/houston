@@ -129,6 +129,8 @@ import {
   type ExportFormat
 } from './tui-sessions'
 import { markdownLinks, type MarkdownLinks } from './tui-links'
+import { ReadFold, ReviewTally, isHiddenTool, readFoldLine, renderTurnError, toolImagesLine, turnModelsLabel } from './tui-runview'
+import { meterOnEvent, meterTokens, startMeter } from '@shared/runMeter'
 import { htmlToAnsi } from './syntax'
 import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
 import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
@@ -1189,11 +1191,14 @@ export function spinnerFrame(
    * redrawn, so all of this costs no extra screen space and cannot tear the
    * transcript.
    */
-  opts: { draft?: string; queued?: number; mode?: string; status?: string; glyph?: string } = {}
+  opts: { draft?: string; queued?: number; mode?: string; status?: string; glyph?: string; tokens?: number } = {}
 ): string {
   const i = ((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length
+  // The turn's output so far (the shared run meter's estimate), as the desktop's
+  // status bar shows it beside the clock.
+  const tokens = opts.tokens && opts.tokens > 0 ? ` · ${formatTokens(opts.tokens)} ${opts.tokens === 1 ? 'token' : 'tokens'}` : ''
   // A fixed glyph (reduced motion) replaces the animation frames entirely.
-  const head = `${paint(opts.glyph ?? SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(formatElapsed(elapsedSec * 1000), 'dim')}`
+  const head = `${paint(opts.glyph ?? SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(`${formatElapsed(elapsedSec * 1000)}${tokens}`, 'dim')}`
   // The approval mode, kept visible WHILE the turn runs: the composer's status line
   // is gone exactly when "how much is running without asking?" matters most.
   const mode = opts.mode ? paint(`  [${opts.mode}]`, 'dim') : ''
@@ -3398,6 +3403,8 @@ export interface TuiIo {
    */
   startSpinner?: (label: string) => void
   setSpinnerLabel?: (label: string) => void
+  /** The turn's output tokens so far (reported plus the open round's estimate). */
+  setSpinnerTokens?: (tokens: number) => void
   stopSpinner?: () => void
   /**
    * Switch the accessibility modes the adapter owns. `reduceMotion` keeps the spinner
@@ -6413,6 +6420,36 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
     // Review findings print once per status change (line mode can't update in place).
     const printFinding = createFindingPrinter()
+    // ...and are tallied by severity under the review's result, as the desktop's row is.
+    const reviewTally = new ReviewTally()
+    // Consecutive file reads, printed as one line once something else happens.
+    const readFold = new ReadFold({
+      single: (args, output) => {
+        const start = renderToolStart('read_file', args, paint, { sentence: screenReader })
+        const result = output === undefined ? '' : renderToolResult('read_file', true, output, paint, { width: columns() })
+        return result ? `\n${start}\n${result}` : `\n${start}`
+      },
+      many: (targets) => `\n${readFoldLine(targets, paint, { width: columns(), sentence: screenReader })}`
+    })
+    const flushReads = (): void => {
+      const s = readFold.flush()
+      if (s) deps.io.out(`${s}\n`)
+    }
+    // The models this turn's rounds were billed to, for the line that ends it.
+    const turnModels: string[] = []
+    // The turn's output tokens so far (reported, plus the open round's estimate), for
+    // the spinner, as the desktop's status bar counts them.
+    let meter = startMeter(nowFn())
+    // A stop that didn't come from this keyboard (a hook, another client) is said once.
+    let stopSaid = false
+    // Events that leave held-back reads held: more reads, a hidden tool's lines, and
+    // bookkeeping that prints nothing.
+    const foldsIntoReads = (e: AgentEvent): boolean => {
+      if (e.type === 'usage' || e.type === 'run_info' || e.type === 'steers_returned') return true
+      if (e.type === 'tool_start') return (e.name === 'read_file' && !verbose) || isHiddenTool(e.name, verbose)
+      if (e.type === 'tool_result') return (e.ok && readFold.holds(e.callId)) || isHiddenTool(e.name, verbose)
+      return false
+    }
     // A subagent's start, finished steps and end (reviewers' steps only under /verbose).
     const subagentLines = new SubagentTermLines({
       get verbose() {
@@ -6487,6 +6524,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
     flushStreamedText = () => {
       flushReasoning()
+      flushReads()
       flushMd()
     }
     // Liveness while the agent works (relabelled per event; erased on any output).
@@ -6511,6 +6549,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (e.type === 'done' && sig?.alert && notifyMode !== 'off') {
         deps.io.remindIfIdle?.(idleReminderSpec(workspaceName), notifyMode)
       }
+      // The live output-token count beside the spinner's clock.
+      const nextMeter = meterOnEvent(meter, e, e.type === 'usage' ? e.outputTokens : 0)
+      if (nextMeter !== meter) {
+        meter = nextMeter
+        deps.io.setSpinnerTokens?.(meterTokens(meter))
+      }
+      // Held-back reads print before anything that isn't another read (or a hidden
+      // tool, or bookkeeping), so the transcript keeps its order.
+      if (!foldsIntoReads(e)) flushReads()
       // Anything but more reasoning ends the thought in progress: the rest of its
       // last line first (shown in full), then its summary line (summary mode).
       if (e.type !== 'reasoning') {
@@ -6605,6 +6652,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // A question or a plan prints itself as the prompt that follows; a "· ask_user"
           // line in front of it is only the wire name.
           if (e.name === ASK_USER_TOOL || e.name === PRESENT_PLAN_TOOL) break
+          // Navigation noise gets no line, as it gets no row in the desktop app.
+          if (isHiddenTool(e.name, verbose)) break
+          if (e.name === 'read_file' && !verbose) {
+            readFold.start(e.callId, e.args)
+            break
+          }
           if (e.kind === 'write' && e.preview?.length) writePreviews.set(e.callId, e.preview)
           deps.io.out(`\n${renderToolStart(e.name, e.args, paint, { sentence: screenReader })}\n`)
           break
@@ -6619,6 +6672,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // The list was just drawn from the call's args; its result is only the
           // model-facing summary of what we already showed.
           if (todoCalls.delete(e.callId) && e.ok) {
+            toolArgs.delete(e.callId)
+            break
+          }
+          if (isHiddenTool(e.name, verbose)) {
+            toolArgs.delete(e.callId)
+            break
+          }
+          // A held-back read that landed stays held; one that failed was already
+          // printed (with the reads before it) by the flush above, and fails below.
+          if (e.ok && readFold.holds(e.callId)) {
+            readFold.finish(e.callId, e.output)
             toolArgs.delete(e.callId)
             break
           }
@@ -6647,6 +6711,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           const rendered = renderToolResult(e.name, e.ok, e.output, paint, { verbose, width: columns() })
           const line = tag ? tagResultLines(rendered, tag, paint) : rendered
           if (line) deps.io.out(`${line}\n`)
+          // Images the desktop shows under the row (a screenshot): at least say so.
+          const images = toolImagesLine(e.images?.length ?? 0, paint)
+          if (images) deps.io.out(`${images}\n`)
+          // A finished review ends with its severity tally.
+          const tally = e.name === 'review_changes' ? reviewTally.take(e.callId, paint) : null
+          if (tally) deps.io.out(`${tally}\n`)
           toolArgs.delete(e.callId)
           const preview = writePreviews.get(e.callId)
           writePreviews.delete(e.callId)
@@ -6682,6 +6752,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`    ${subagentGlyph(e.status)} ${terminalText(e.label, { lines: false })}\n`, 'dim'))
           break
         case 'review_finding': {
+          reviewTally.add(e.parentCallId, e.finding)
           const line = printFinding(e.parentCallId, e.finding)
           if (line) {
             const s = e.finding.status
@@ -6930,6 +7001,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           })
           break
         case 'usage':
+          if (e.model) turnModels.push(e.model)
           modelCosts = addModelUsage(modelCosts, e)
           sessionCost.inputTokens += e.inputTokens
           sessionCost.outputTokens += e.outputTokens
@@ -6958,7 +7030,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               paint(`\n· tried ${retryStreak} more time${retryStreak === 1 ? '' : 's'}, then stopped\n`, 'yellow')
             )
           }
-          deps.io.out(paint(`\nError: ${terminalText(e.message)}\n`, 'red'))
+          deps.io.out(`\n${renderTurnError(e.message, e.cause, paint)}\n`)
           break
         case 'limit':
           deps.io.out(paint(`\n· ${limitNoticeText(e.reason)}\n`, 'yellow'))
@@ -6976,10 +7048,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`\n${runtimeMissingLine(e)}\n`, 'yellow'))
           break
         case 'done':
+          // Stopped from somewhere other than this keyboard (a hook, another client):
+          // Ctrl-C already printed "interrupted", anything else would end in silence.
+          if (e.stopReason === 'aborted' && interruptedQueued === null && !stopSaid) {
+            stopSaid = true
+            deps.io.out(paint(`\n· ${runEndNoticeText({ reason: 'aborted', at: new Date(nowFn()).toISOString() })}\n`, 'yellow'))
+          }
           // One compact cost summary for the whole turn (this turn + running
           // session), instead of a line per model round. Only when the turn
-          // actually spent tokens; otherwise just a blank separator.
+          // actually spent tokens; otherwise just a blank separator. It names the
+          // model(s) the turn ran on, as the desktop's turn footer does.
           if (turnInputTokens || turnOutputTokens) {
+            const turnModelsShown = turnModelsLabel(turnModels.length ? turnModels : [req.model ?? ''])
             const turnTally: SessionCost = {
               inputTokens: turnInputTokens,
               outputTokens: turnOutputTokens,
@@ -6988,7 +7068,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             }
             deps.io.out(
               paint(
-                `\n· turn ${formatSessionCost(turnTally)}  (session ${formatSessionCost(sessionCost)})\n`,
+                `\n· turn ${turnModelsShown ? `${turnModelsShown} · ` : ''}${formatSessionCost(turnTally)}  (session ${formatSessionCost(sessionCost)})\n`,
                 'dim'
               )
             )
@@ -7102,9 +7182,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       persistMessages(m)
     })
     // A run that ended mid-thought (no event after it) still gets the rest of its
-    // last line and its summary line.
+    // last line and its summary line, and reads still held back get theirs.
     flushReasoning()
     endThought(false)
+    flushReads()
     flushStreamedText = () => {}
     deps.io.stopSpinner?.()
     // Drain any approval/question prompts still in flight before the next composer read.
