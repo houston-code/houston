@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { Provider, ReviewFinding, ReviewSeverity, TokenUsage } from '@shared/agent'
 import { runSubAgent, type SubAgentOptions } from './subagent'
-import { gitDiff, isSafeGitRef, type GitExec, type WorkspaceDiff } from './git'
+import { gitDiff, gitMergeBase, isSafeGitRef, type GitExec, type WorkspaceDiff } from './git'
 
 /**
  * Adversarial, multi-agent review of a change. The motivation
@@ -969,14 +969,26 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
   if (badPath !== undefined) {
     return `Invalid review path "${badPath}". Use project-relative paths inside the workspace (no absolute paths or "..").`
   }
-  const d = await gitDiff(opts.workspace, base, paths, opts.gitExec)
+  // `main...` reviews everything since this branch split from main: the diff from
+  // their merge base to the working tree, so committed and uncommitted work both count.
+  let diffBase = base
+  if (base.endsWith('...')) {
+    const ref = base.slice(0, -3)
+    const mergeBase = ref ? await gitMergeBase(opts.workspace, ref, opts.gitExec) : null
+    if (!mergeBase) {
+      return `Cannot find where this branch split from "${ref}": it names no branch, tag or commit here, or shares no history with HEAD. Pass an existing branch, or omit base to review uncommitted changes.`
+    }
+    diffBase = mergeBase
+  }
+  const d = await gitDiff(opts.workspace, diffBase, paths, opts.gitExec)
   if (!d.isRepo) {
     return 'Cannot review: this project is not a git repository, so there is no diff to review. Commit your work in a git repo to use review_changes, or ask me to review specific files directly.'
   }
   const chunks = chunkReviewInput(d)
   if (chunks.length === 0) {
-    const against = base !== 'HEAD' ? ` against ${base}` : ''
     const scope = paths.length ? ` in ${paths.join(', ')}` : ''
+    if (diffBase !== base) return `No changes to review${scope} since this branch split from ${base.slice(0, -3)}.`
+    const against = base !== 'HEAD' ? ` against ${base}` : ''
     return `No uncommitted changes to review${scope}${against}.`
   }
   const history = opts.history

@@ -158,7 +158,9 @@ import { cancelCompaction, compactConversationNow } from './agent/compact'
 import { normalizeCompactFocus } from './agent/compaction'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
-import { loadCommands, loadSlashCommands } from './agent/commands'
+import { loadCommands } from './agent/commands'
+import { prepareMcpPromptRun } from './agent/mcpPromptCommands'
+import { loadWorkspaceSlashCommands, workspaceMcpPromptCommands, workspaceMcpPromptFetch } from './agent/mcpPromptWorkspace'
 import { loadSkills } from './agent/skills'
 import { prepareCommandRun, workspaceTrusted } from './agent/commandRun'
 import { describeContextConsent } from './agent/commandContext'
@@ -1097,7 +1099,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.commandsList, async (_event, workspace: string) => {
     if (!workspace) return []
     try {
-      return await loadSlashCommands(realpathSync(workspace))
+      return await loadWorkspaceSlashCommands(realpathSync(workspace), getSettings())
     } catch {
       return []
     }
@@ -1118,9 +1120,24 @@ export function registerIpc(ready?: Promise<unknown>): void {
       } catch {
         return { ok: false, error: "This chat's folder no longer exists." }
       }
+      const settings = getSettings()
+      // A connected MCP server's prompt (`/mcp__<server>__<prompt>`): fetched here, from
+      // this folder's own servers only; its taint rides main's grant, not the renderer's word.
+      if (name.startsWith('mcp__')) {
+        const promptCmd = resolveCommand(await workspaceMcpPromptCommands(root, settings).catch(() => []), name)
+        if (!promptCmd) return { ok: false, error: `/${name} isn't offered by a connected MCP server any more.` }
+        const ran = await prepareMcpPromptRun(
+          promptCmd,
+          typeof args === 'string' ? args : '',
+          typeof typed === 'string' ? typed : `/${name}`,
+          workspaceMcpPromptFetch(root, settings)
+        )
+        if (!ran.ok) return ran
+        const grant = putCommandGrant({ workspace: root, taintSource: ran.taintSource })
+        return { ok: true, turn: { ...ran.turn, grant }, notes: [] }
+      }
       const cmd = resolveCommand(await loadCommands(root).catch(() => []), name)
       if (!cmd) return { ok: false, error: `No command /${name} in this folder any more.` }
-      const settings = getSettings()
       const prepared = await prepareCommandRun(
         cmd,
         typeof args === 'string' ? args : '',
@@ -1733,6 +1750,19 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return
     }
 
+    // A custom command's per-turn model, effort and pre-approved tools, and an MCP
+    // prompt's taint, from main's own record (the chat keeps the settings recorded below).
+    let grant: ReturnType<typeof takeCommandGrant> = null
+    if (req.commandGrant) {
+      let root = conv.workspace
+      try {
+        root = realpathSync(conv.workspace)
+      } catch {
+        // A folder that's gone matches no grant.
+      }
+      grant = takeCommandGrant(req.commandGrant, root)
+    }
+
     const images = sanitizeAttachments(resolveStoredImages(req.images))
     const invokedAs = sanitizeInvocation(req.invokedAs)
     const userMessage: ChatMessage = {
@@ -1740,6 +1770,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       content: req.userText,
       ...(images.length ? { images } : {}),
       ...(invokedAs ? { invokedAs } : {}),
+      ...(grant?.taintSource ? { taintSource: grant.taintSource } : {}),
       // When it was sent, for the transcript's timestamp.
       at: new Date().toISOString()
     }
@@ -1763,19 +1794,6 @@ export function registerIpc(ready?: Promise<unknown>): void {
       rememberModel({ providerId: req.providerId, model: req.model })
     } catch (e) {
       log.warn(`could not record the recent model: ${(e as Error).message}`)
-    }
-
-    // A custom command's per-turn model, effort and pre-approved tools, from main's
-    // own record (the chat keeps the settings recorded above).
-    let grant: ReturnType<typeof takeCommandGrant> = null
-    if (req.commandGrant) {
-      let root = conv.workspace
-      try {
-        root = realpathSync(conv.workspace)
-      } catch {
-        // A folder that's gone matches no grant.
-      }
-      grant = takeCommandGrant(req.commandGrant, root)
     }
 
     void runAndDrain(

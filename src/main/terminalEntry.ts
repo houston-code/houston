@@ -64,6 +64,7 @@ import { loadSkills } from './agent/skills'
 import { runUserShell } from './userShell'
 import { loadAgents } from './agent/agents'
 import { loadSlashCommands } from './agent/commands'
+import { loadWorkspaceSlashCommands, workspaceMcpPromptCommands, workspaceMcpPromptFetch } from './agent/mcpPromptWorkspace'
 import { deleteChat, planChatDelete, stopAndDeleteConversation } from './deleteChat'
 import { compactConversationNow, summarizeConversationPart } from './agent/compact'
 import {
@@ -689,6 +690,28 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       })
   }
   loadMenuCommands(tui.cwd)
+  // The connected MCP servers' prompts (/mcp__<server>__<prompt>): a server connects
+  // with a turn, so they are read again (at most every few seconds) while `/mcp` is
+  // being typed, and the menu redraws when they change.
+  let mcpMenu: CommandSpec[] = []
+  let mcpMenuAt = -Infinity
+  const refreshMcpMenu = (redraw: () => void): void => {
+    if (Date.now() - mcpMenuAt < 3000) return
+    mcpMenuAt = Date.now()
+    void workspaceMcpPromptCommands(tui.cwd, getSettings())
+      .then((cmds) => {
+        const next = cmds.map((c) => ({ name: c.name, description: c.description, ...(c.args ? { args: c.args } : {}) }))
+        if (JSON.stringify(next) === JSON.stringify(mcpMenu)) return
+        mcpMenu = next
+        redraw()
+      })
+      .catch(() => {})
+  }
+  const allMenuCommands = (): CommandSpec[] => {
+    if (!mcpMenu.length) return menuCommands
+    const taken = new Set(menuCommands.map((c) => c.name.toLowerCase()))
+    return [...menuCommands, ...mcpMenu.filter((c) => !taken.has(c.name.toLowerCase()))]
+  }
 
   // A light terminal with no saved theme starts on the light theme. Asked before the
   // composer starts reading the keyboard, so the terminal's reply never lands in it.
@@ -705,7 +728,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   const terminalIo = createTerminalIo({
     // Painted with the composer's painter, so the menus follow /theme.
     menuFor: (line, redraw, menuPaint) => {
-      const matches = commandMenu(line, menuCommands)
+      if (line.startsWith('/mcp')) refreshMcpMenu(redraw)
+      const matches = commandMenu(line, allMenuCommands())
       if (matches) return renderCommandMenu(matches, menuPaint as never)
       return mentionMenu(line, redraw, menuPaint as never) ?? []
     },
@@ -722,7 +746,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     // Read live, like the menu: the workspace's commands load after startup.
     completer: makeCompleter(
       (q) => findFiles(tui.cwd, q),
-      () => menuCommands,
+      allMenuCommands,
       // `/cd` and `/add-dir` complete folder names, a link to a folder included.
       (partial) =>
         folderCompletions(partial, tui.cwd, homedir(), async (dir) =>
@@ -912,6 +936,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       onCwdChange: (cwd) => {
         menuCommands = [...COMMANDS]
         loadMenuCommands(cwd)
+        // The MCP prompts are the new folder's servers': read them again on next use.
+        mcpMenu = []
+        mcpMenuAt = -Infinity
         histFile = historyFileFor(cwd)
         history = parseHistory(safeRead(histFile))
       },
@@ -953,6 +980,13 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       },
       // Custom slash commands from the workspace's .houston/commands (for /<name>).
       commands: () => loadSlashCommands(tui.cwd),
+      // /loop and /schedule, over the same store schedule_run uses.
+      schedules: sessions.scheduler,
+      // The connected MCP servers' prompts, as /mcp__<server>__<prompt>.
+      mcpPrompts: {
+        commands: () => workspaceMcpPromptCommands(tui.cwd, getSettings()),
+        fetch: (server, prompt, args) => workspaceMcpPromptFetch(tui.cwd, getSettings())(server, prompt, args)
+      },
       // On-demand context compaction for the /compact command.
       compact: (id, providerId, model, opts) => compactConversationNow(id, providerId, model, opts),
       // The rewind picker's "Summarize from here" / "Summarize up to here".
@@ -1505,7 +1539,8 @@ export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOpti
           }
         },
         // The workspace's own slash commands, skills and agents, read fresh each time.
-        commands: (cwd) => loadSlashCommands(cwd),
+        commands: (cwd, mcpServers) => loadWorkspaceSlashCommands(cwd, getSettings(), mcpServers),
+        mcpPrompt: (cwd, mcpServers) => workspaceMcpPromptFetch(cwd, getSettings(), mcpServers),
         skills: async (cwd) => (await loadSkills(cwd)).map((k) => ({ name: k.name, description: k.description })),
         agents: async (cwd) => (await loadAgents(cwd)).map((a) => ({ name: a.name, description: a.description })),
         compact: (id, providerId, model, focus) =>

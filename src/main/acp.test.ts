@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { AppSettings, ApprovalPolicy } from '@shared/types'
 import { limitNoticeText } from '@shared/runEnd'
-import { REVIEW_TEMPLATE, mergeCommands } from '@shared/commands'
+import { REVIEW_TEMPLATE, mergeCommands, type Command } from '@shared/commands'
 import { skillCommandTemplate, skillCommands, type Skill } from './agent/skills'
 import {
   BLOCKING_EVENT_TYPES,
@@ -973,6 +973,45 @@ describe('ACP server: slash commands, config options and session info', () => {
     await h.end()
   })
 
+  it("offers the session's MCP prompts and runs one as a tainted invoked turn from its own servers", async () => {
+    const prompt: Command = {
+      name: 'mcp__docs__summarize',
+      description: 'Summarize a topic',
+      args: '<topic>',
+      mcpPrompt: { server: 'docs', prompt: 'summarize', arguments: [{ name: 'topic', required: true }] }
+    }
+    const asked: unknown[] = []
+    const h = harness({
+      run: done,
+      deps: {
+        commands: async () => [prompt],
+        mcpPrompt: (cwd, servers) => async (server, name, args) => {
+          asked.push([cwd, servers.map((s) => s.id), server, name, args])
+          return 'user: Summarize it.'
+        }
+      }
+    })
+    const sessionId = await ready(h)
+    expect((await commandsOf(h, sessionId)).find((c) => c.name === 'mcp__docs__summarize')).toEqual({
+      name: 'mcp__docs__summarize',
+      description: 'Summarize a topic',
+      input: { hint: '<topic>' }
+    })
+    await h.call('session/prompt', { sessionId, prompt: text('/mcp__docs__summarize the notes') })
+    expect(asked).toEqual([[expect.any(String), [], 'docs', 'summarize', { topic: 'the notes' }]])
+    expect(h.loop.requests[0].messages.at(-1)).toEqual({
+      role: 'user',
+      content: 'user: Summarize it.',
+      taintSource: 'mcp__docs__summarize',
+      invokedAs: expect.objectContaining({ kind: 'command', label: '/mcp__docs__summarize', typed: '/mcp__docs__summarize the notes' })
+    })
+    // A missing argument is answered here; nothing runs.
+    await h.call('session/prompt', { sessionId, prompt: text('/mcp__docs__summarize') })
+    expect(h.loop.requests).toHaveLength(1)
+    expect(replies(h, sessionId).at(-1)).toContain('Missing topic')
+    await h.end()
+  })
+
   it('offers the skills after the commands and runs one as an invoked turn', async () => {
     const skill = (name: string, description: string, extra: Partial<Skill> = {}): Skill => ({
       name,
@@ -1240,7 +1279,7 @@ describe('ACP server: slash commands, config options and session info', () => {
     await h.call('session/prompt', { sessionId, prompt: text('/agents') })
     expect(replies(h, sessionId).at(-1)).toMatch(/No agents in this workspace/)
     await h.call('session/prompt', { sessionId, prompt: text('/help') })
-    expect(replies(h, sessionId).at(-1)).toContain('- /review: ')
+    expect(replies(h, sessionId).at(-1)).toContain('- /review [base-branch | pr# | path]: ')
     expect(h.loop.requests).toHaveLength(0)
     await h.end()
   })
@@ -1571,7 +1610,8 @@ describe('ACP command helpers', () => {
     expect(cmds.map((c) => c.name)).toContain('ship')
     for (const name of ACP_COMMAND_NAMES) expect(cmds.map((c) => c.name)).toContain(name)
     const wire = acpAvailableCommands(cmds)
-    expect(wire.find((c) => c.name === 'review')).toEqual({ name: 'review', description: expect.any(String) })
+    expect(wire.find((c) => c.name === 'init')).toEqual({ name: 'init', description: expect.any(String) })
+    expect(wire.find((c) => c.name === 'review')?.input).toEqual({ hint: '[base-branch | pr# | path]' })
     expect(wire.find((c) => c.name === 'agent')?.input).toEqual({ hint: '<name> <task>' })
   })
 })

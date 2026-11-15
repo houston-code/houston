@@ -100,6 +100,15 @@ describe('desktopCommandAction', () => {
     expect(desktopCommandAction('resume', 'auth')).toEqual({ kind: 'resume', query: 'auth' })
   })
 
+  it('schedules /loop and reads /schedule, sharing the parser with the terminal', () => {
+    expect(desktopCommandAction('loop', '10m check CI')).toEqual({ kind: 'loop', spec: 'every 10m', task: 'check CI' })
+    expect(desktopCommandAction('loop', 'check CI')).toEqual({ kind: 'loop', spec: 'every 10m', task: 'check CI' })
+    expect(desktopCommandAction('loop', '')).toMatchObject({ kind: 'loop-error' })
+    expect(desktopCommandAction('schedule', '')).toEqual({ kind: 'schedule', op: { op: 'list' } })
+    expect(desktopCommandAction('schedule', 'cancel 2')).toEqual({ kind: 'schedule', op: { op: 'cancel', index: 2 } })
+    expect(desktopCommandAction('schedule', 'what')).toEqual({ kind: 'schedule', op: { op: 'usage' } })
+  })
+
   it('has an action for every shared command the app does not handle elsewhere', () => {
     // App handles these directly (chat lifecycle, listings, policy words, templates).
     const handledInApp = new Set(['new', 'clear', 'compact', 'plan', 'ask', 'auto', 'full', 'doctor', 'usage', 'help', 'skills', 'agents', 'agent', 'review', 'init'])

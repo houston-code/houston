@@ -24,6 +24,10 @@ describe('commandQuery', () => {
     // Custom command names: digits, hyphens, underscores, capitals.
     expect(commandQuery('/fix-')).toBe('fix-')
     expect(commandQuery('/Deploy_2')).toBe('Deploy_2')
+    // A namespaced command (.houston/commands/git/commit.md) keeps its menu open.
+    expect(commandQuery('/git:com')).toBe('git:com')
+    expect(inlineCommandQuery('then run /git:c')).toBe('git:c')
+    expect(completeInput('/git:c', [], [{ name: 'git:commit', description: 'x' }])).toEqual([['/git:commit '], '/git:c'])
     expect(commandQuery('hello')).toBeNull()
   })
 })

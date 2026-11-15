@@ -3919,7 +3919,7 @@ const reviewChanges: ToolDef = {
         base: {
           type: 'string',
           description:
-            'Optional git ref to diff against (e.g. "main" or a commit SHA). Default: HEAD (all uncommitted changes).'
+            'Optional git ref to diff against (e.g. "main" or a commit SHA). End it with three dots ("main...") to review everything since this branch split from it, committed and uncommitted. Default: HEAD (all uncommitted changes).'
         },
         paths: {
           type: 'array',

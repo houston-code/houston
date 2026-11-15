@@ -52,7 +52,9 @@ import {
   _setMcpSseClientFactory,
   disconnectAllMcp,
   getMcpStatuses,
+  getMcpPromptText,
   getMcpToolDefs,
+  listMcpPrompts,
   mcpUnavailableNotice,
   reconnectMcpServers
 } from './manager'
@@ -691,6 +693,23 @@ describe("mcp manager: resources and prompts stay with their run's servers", () 
       'secret rows of web'
     )
     expect(await tool(mine, 'mcp_get_prompt').execute({ server: 'web', name: 'web-review' }, noCtx)).toBe('user: prompt of web')
+  })
+
+  it("offers the user only a chat's own servers' prompts, and fetches only from those", async () => {
+    const seen: string[] = []
+    useFactory(catalogSpawn(seen))
+    await getMcpToolDefs([server('proj-db')], 'trusted-run')
+    await getMcpToolDefs([server('web')], 'untrusted-run')
+    expect(listMcpPrompts(new Set(['web', 'not-connected']))).toEqual([
+      { server: 'web', prompts: [{ name: 'web-review', description: 'plain' }] }
+    ])
+    expect(listMcpPrompts(new Set(['web', 'proj-db'])).map((s) => s.server)).toEqual(['proj-db', 'web'])
+    seen.length = 0
+    await expect(getMcpPromptText(new Set(['web']), 'proj-db', 'proj-db-review', {})).rejects.toThrow(/not one of this chat's servers/)
+    await expect(getMcpPromptText(new Set(['gone']), 'gone', 'x', {})).rejects.toThrow(/not connected/)
+    expect(seen).toEqual([])
+    expect(await getMcpPromptText(new Set(['web']), 'web', 'web-review', { topic: 'a' })).toBe('user: prompt of web')
+    expect(seen).toEqual(['web prompts/get'])
   })
 
   it('names the server in the approval summary', async () => {

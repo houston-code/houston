@@ -27,8 +27,9 @@ export function mentionQuery(line: string): string | null {
 /** The `/<query>` command token when the whole line is a single command word. */
 export function commandQuery(line: string): string | null {
   // Custom `.houston/commands` names may hold digits, `-`, `_`, and capitals; a
-  // lowercase-only pattern dropped the menu as soon as one was typed (`/fix-`).
-  const m = /^\/([\w?-]*)$/.exec(line)
+  // lowercase-only pattern dropped the menu as soon as one was typed (`/fix-`). A
+  // namespaced command (`.houston/commands/git/commit.md`) is `/git:commit`.
+  const m = /^\/([\w?:-]*)$/.exec(line)
   return m ? m[1] : null
 }
 
@@ -39,7 +40,7 @@ export function commandQuery(line: string): string | null {
  * without retyping it. Null at the start of the line (that is {@link commandQuery}).
  */
 export function inlineCommandQuery(line: string): string | null {
-  const m = /\s\/([\w-]*)$/.exec(line)
+  const m = /\s\/([\w:-]*)$/.exec(line)
   return m ? m[1] : null
 }
 

@@ -199,6 +199,7 @@ import type { TurnErrorAction } from '@shared/turnError'
 import { CommandPalette } from './components/CommandPalette'
 import { FindBar } from './components/FindBar'
 import { desktopCommandAction, type DesktopCommandAction, type SettingsSection } from './lib/desktopCommands'
+import { SCHEDULE_USAGE, loopScheduleName, numberedSchedules, scheduleListLines, scheduleWhen } from '@shared/loopCommand'
 import { pageForWords } from './components/settings/pageIds'
 import type { WhatsNew } from '@shared/update'
 import { describeRule, ruleActionOf, savedRulesText, waitForSavedRules, withoutRules } from './lib/ruleToast'
@@ -1025,12 +1026,15 @@ export default function App(): JSX.Element {
   // The branch's pull request for the composer chip; gh is asked only for a GitHub remote.
   const prStatus = usePrStatus(workspace, workingTreeStats.ship?.remote?.host === 'github', chat.running)
 
-  // Load the workspace's custom slash commands (alongside the built-ins).
+  // Load the workspace's custom slash commands (alongside the built-ins). Read again
+  // when a turn ends: the connected MCP servers' prompts (`/mcp__<server>__<prompt>`)
+  // appear once a turn has connected them.
   useEffect(() => {
     if (!workspace) {
       setCommands(BUILTIN_COMMANDS)
       return
     }
+    if (chat.running) return
     let cancelled = false
     void window.api.listCommands(workspace).then((custom) => {
       if (!cancelled) setCommands(mergeCommands(BUILTIN_COMMANDS, custom))
@@ -1038,7 +1042,7 @@ export default function App(): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [workspace])
+  }, [workspace, chat.running])
 
   // Resolves true once the chat is in view, false when it no longer exists or a later
   // navigation overtook this one (clicking A then B quickly: B wins even if A's reads
@@ -2970,6 +2974,68 @@ export default function App(): JSX.Element {
             )
           }
           return
+        case 'loop-error':
+          chat.notify(action.error, 'error')
+          return
+        case 'loop': {
+          // A background session in this chat's folder, on this chat's model and
+          // approval mode, at each occurrence: the scheduler schedule_run uses.
+          if (!workspace || !settings?.selected) {
+            chat.notify(workspace ? 'Choose a model first.' : 'Open a folder first to schedule a run.', 'error')
+            return
+          }
+          void window.api
+            .createSchedule({
+              name: loopScheduleName(action.task),
+              spec: action.spec,
+              prompt: action.task,
+              workspace,
+              providerId: settings.selected.providerId,
+              model: settings.selected.model,
+              approvalPolicy: settings.approvalPolicy ?? 'ask'
+            })
+            .then((res) => {
+              if (!res.ok) chat.notify(res.error, 'error')
+              else {
+                const s = res.schedule
+                const next = s?.nextRunAt != null ? `, next at ${scheduleWhen(s.nextRunAt, Date.now())}` : ''
+                chat.notify(
+                  `Scheduled "${s?.name ?? loopScheduleName(action.task)}": ${s?.spec ?? action.spec}${next}. Each run is a background session in this folder. /schedule lists them.`
+                )
+              }
+            })
+            .catch((e: unknown) => chat.notify(`Couldn't schedule it: ${(e as Error).message}`, 'error'))
+          return
+        }
+        case 'schedule': {
+          const op = action.op
+          if (op.op === 'usage') {
+            chat.notify(SCHEDULE_USAGE)
+            return
+          }
+          void window.api
+            .listSchedules()
+            .then(async (all) => {
+              const list = numberedSchedules(all)
+              if (op.op === 'cancel') {
+                const target = list[op.index - 1]
+                if (!target) {
+                  chat.notify(`No scheduled run ${op.index}. /schedule lists them.`, 'error')
+                  return
+                }
+                const res = await window.api.deleteSchedule(target.id)
+                chat.notify(res.ok ? `Cancelled scheduled run ${op.index}, "${target.name}".` : res.error, res.ok ? undefined : 'error')
+                return
+              }
+              if (!list.length) {
+                chat.notify('No scheduled runs. Start one with /loop [interval] <prompt>.')
+                return
+              }
+              chat.notify(`Scheduled runs: ${scheduleListLines(list, Date.now()).join(' · ')}. Cancel one with /schedule cancel <n>, or manage them in Settings, Scheduled runs.`)
+            })
+            .catch((e: unknown) => chat.notify(`Couldn't read the scheduled runs: ${(e as Error).message}`, 'error'))
+          return
+        }
         case 'reasoning':
           if (action.effort) {
             const effort = action.effort

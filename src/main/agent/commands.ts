@@ -75,27 +75,65 @@ function firstLine(s: string): string {
   return line.slice(0, 80)
 }
 
-/** Read one directory of `*.md` command files. Missing directory ⇒ no commands. */
-async function loadFrom(dir: string, source: 'project' | 'user'): Promise<Command[]> {
+/**
+ * How deep a command folder may nest: `.houston/commands/git/commit.md` is
+ * `/git:commit`, and `a/b/c.md` is `/a:b:c`. Deeper files are ignored.
+ */
+export const MAX_COMMAND_NAMESPACE_DEPTH = 3
+/** Separates a namespace folder from the command name: `/git:commit`. */
+export const COMMAND_NAMESPACE_SEPARATOR = ':'
+
+/** One `*.md` file under a commands directory, with the name it is invoked by. */
+export interface CommandFile {
+  name: string
+  path: string
+}
+
+/**
+ * Every command file under `dir`, in a stable order: each folder's own files first
+ * (sorted), then its subfolders (sorted), at most {@link MAX_COMMANDS}. A folder
+ * becomes a namespace: `git/commit.md` is `git:commit`. Symlinked folders are not
+ * followed (a `Dirent` for one is neither a file nor a directory), so a repository
+ * can't point the walk outside its own tree, and folder and file names must be
+ * plain words, so a name can't hold a space, a dot or the separator itself.
+ */
+export function listCommandFiles(dir: string): Promise<CommandFile[]> {
+  return commandFiles(dir)
+}
+
+async function commandFiles(dir: string, prefix: string[] = [], out: CommandFile[] = []): Promise<CommandFile[]> {
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
   } catch {
-    return [] // no commands dir — fine
+    return out // no commands dir — fine
   }
   // Sort BEFORE the MAX_COMMANDS cap so which commands survive truncation is
   // deterministic across platforms (fs.readdir order isn't), matching plugins.ts.
   entries.sort((a, b) => a.name.localeCompare(b.name))
-
-  const commands: Command[] = []
   for (const e of entries) {
-    if (commands.length >= MAX_COMMANDS) break
+    if (out.length >= MAX_COMMANDS) return out
     if (!e.isFile() || !e.name.endsWith('.md')) continue
-    const name = e.name.slice(0, -'.md'.length)
-    if (!/^[\w-]+$/.test(name)) continue // sane, mention-safe command names only
+    const base = e.name.slice(0, -'.md'.length)
+    if (!/^[\w-]+$/.test(base)) continue // sane, mention-safe command names only
+    out.push({ name: [...prefix, base].join(COMMAND_NAMESPACE_SEPARATOR), path: join(dir, e.name) })
+  }
+  if (prefix.length + 1 >= MAX_COMMAND_NAMESPACE_DEPTH) return out
+  for (const e of entries) {
+    if (out.length >= MAX_COMMANDS) return out
+    if (!e.isDirectory() || !/^[\w-]+$/.test(e.name)) continue
+    await commandFiles(join(dir, e.name), [...prefix, e.name], out)
+  }
+  return out
+}
+
+/** Read one directory of `*.md` command files (and its namespace folders). Missing directory ⇒ no commands. */
+async function loadFrom(dir: string, source: 'project' | 'user'): Promise<Command[]> {
+  const commands: Command[] = []
+  for (const { name, path } of await commandFiles(dir)) {
     let raw: string
     try {
-      raw = (await fs.readFile(join(dir, e.name), 'utf8')).trim()
+      raw = (await fs.readFile(path, 'utf8')).trim()
     } catch {
       continue
     }
