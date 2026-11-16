@@ -211,7 +211,10 @@ how to author a task. The invariants to preserve when changing this code:
   the one driver tasks and probes share; the probes and their graders import nothing that
   reaches the loop. The eval's `agentHost` mock answers `getKey` for the live provider's
   id only: other secrets go through the same call (web_search asks for a search key), and
-  a key returned for every id would be sent to the search provider.
+  a key returned for every id would be sent to the search provider. It replaces the whole
+  module, so it must define every name the engine imports from `agentHost`: a missing one
+  is no compile error, only a throw where a run first calls it. The scripted suite reads
+  those imports from source (`evals/hostImports.ts`) and fails naming any the mock lacks.
 
 ## Benchmark kits
 
