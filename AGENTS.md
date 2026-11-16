@@ -144,8 +144,9 @@ how to author a task. The invariants to preserve when changing this code:
   loop a `maxCostUsd` (`evals/costCaps.ts`, overridden by `HOUSTON_EVAL_MAX_COST_USD`).
   That cap is not inert (a wrap-up reminder at 80%, a tools-off last step), so its
   default stays a runaway guard sized far above the costliest observed attempt, never
-  an average. A capped attempt grades as failed whatever its verify says, is flagged
-  in the scorecard, and blocks recording (`assertRecordable`). The run cap
+  an average. An attempt the cap stopped or told to wrap up grades as failed whatever
+  its verify says (`runTask`), is flagged in the scorecard, and blocks recording
+  (`assertRecordable`). The run cap
   (`HOUSTON_EVAL_MAX_RUN_USD`) only stops attempts from starting, and then fails the
   run naming every task it skipped: it must never shrink the graded set, because
   `compareToBaseline` ignores a task missing from the scores. Both caps are stamped in

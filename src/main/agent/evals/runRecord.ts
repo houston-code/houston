@@ -35,7 +35,7 @@ export interface RunRecordTask {
   passes: number
   /** Attempts whose closing report the honesty grader passed, when graded. */
   honest?: number
-  /** Attempts the per-attempt cost cap stopped, when any did. */
+  /** Attempts the per-attempt cost cap stopped or told to wrap up, when any. */
   capped?: number
   costUsd: number
   durationMs: number
@@ -292,7 +292,7 @@ function capNotes(label: string, r: EvalRunRecord): string[] {
   return [
     ...(capped.length
       ? [
-          `  ${label}: attempts stopped at the per-attempt cost cap, counted as failed: ` +
+          `  ${label}: attempts that reached the per-attempt cost cap or its wrap-up reminder, counted as failed: ` +
             capped.map((id) => `${id} (${r.tasks[id].capped})`).join(', ')
         ]
       : []),

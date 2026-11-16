@@ -59,8 +59,9 @@ export interface TaskReport {
    */
   erroredAttempts?: number
   /**
-   * Attempts the per-attempt cost cap stopped, each counted as failed. Flagged on the
-   * row, and a baseline is not recorded from a run that has any (see assertRecordable).
+   * Attempts the per-attempt cost cap stopped or told to wrap up, each counted as failed.
+   * Flagged on the row, and a baseline is not recorded from a run that has any (see
+   * assertRecordable).
    */
   cappedAttempts?: number
   /** The slowest tool call across every attempt, not just the sample. */
@@ -259,8 +260,8 @@ export function formatReport(header: ReportHeader, reports: TaskReport[]): strin
     ...(honestyLine ? [honestyLine] : []),
     ...(cappedAttempts
       ? [
-          `  ${cappedAttempts} attempt(s) stopped at the per-attempt cost cap` +
-            `${header.caps ? ` (${formatCap(header.caps.attemptUsd)})` : ''}, each counted as failed`
+          `  ${cappedAttempts} attempt(s) reached the per-attempt cost cap` +
+            `${header.caps ? ` (${formatCap(header.caps.attemptUsd)})` : ''} or its wrap-up reminder, each counted as failed`
         ]
       : []),
     ...runCapStopped(header),

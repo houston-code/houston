@@ -127,7 +127,7 @@ describe('assertRecordable', () => {
       { taskId: 'c', attempts: 3 }
     ]
     expect(() => assertRecordable(scores, [], capped)).toThrow(
-      /4 attempt\(s\) across 2 task\(s\) were stopped by the per-attempt cost cap/
+      /4 attempt\(s\) across 2 task\(s\) reached the per-attempt cost cap or its wrap-up reminder/
     )
     expect(() => assertRecordable(scores, [], capped)).toThrow(/Tasks: b, c/)
     expect(() => assertRecordable(scores, [], capped)).toThrow(/HOUSTON_EVAL_MAX_COST_USD/)

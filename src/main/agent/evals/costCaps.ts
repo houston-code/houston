@@ -158,16 +158,58 @@ export function runCapError(spend: RunSpend): string {
 }
 
 /**
+ * A task's attempts as its test grades them: every one, or a throw (runCapTaskError) when
+ * the run cap kept any from starting. Graded on fewer attempts than its baseline, the pass
+ * rate would mean nothing, and left out quietly the task would pass the gate (a task
+ * missing from the scores is never compared). `ran` sees the attempts that did run either
+ * way, so their prompt hashes still reach the run's stamp.
+ */
+export async function runTaskAttempts<R extends { costUsd: number }>(
+  taskId: string,
+  attempts: number,
+  spend: RunSpend,
+  attempt: () => Promise<R>,
+  ran?: (results: R[]) => void
+): Promise<R[]> {
+  const { results, complete } = await runAttempts(taskId, attempts, spend, attempt)
+  ran?.(results)
+  if (!complete) throw new Error(runCapTaskError(taskId, results.length, attempts, spend))
+  return results
+}
+
+/**
+ * The end of a run, once its scorecard and run record are written: fails the run when the
+ * cap kept any task from finishing, naming all of them (runCapError), and only otherwise
+ * goes on to `record`, the baseline step. Each skipped task's own test has already failed;
+ * this fails the run as a whole, before a recording could write a baseline without them
+ * (the gate reads a task missing from a baseline as unrecorded, not failed).
+ */
+export function finishRun(spend: RunSpend, record: () => void): void {
+  if (spend.skipped.length) throw new Error(runCapError(spend))
+  record()
+}
+
+/**
  * Whether the caps can hold for `model`. A model with no known price costs 0 to the loop,
  * which means "unknown", so neither cap can stop it. Returns a warning to print when only
- * the default per-attempt cap is affected, and throws when a run cap was asked for: a
- * spend limit someone set must not pass as enforced when it can't be.
+ * the default per-attempt cap is affected, and throws when either cap was set explicitly
+ * (`attemptCapSet` for HOUSTON_EVAL_MAX_COST_USD, a `runUsd` for HOUSTON_EVAL_MAX_RUN_USD):
+ * a spend limit someone set must not pass as enforced when it can't be.
  */
-export function capsEnforceable(model: string, priced: boolean, caps: CostCaps): string | undefined {
+export function capsEnforceable(
+  model: string,
+  priced: boolean,
+  caps: CostCaps,
+  { attemptCapSet = false }: { attemptCapSet?: boolean } = {}
+): string | undefined {
   if (priced) return undefined
   const why = `Houston has no price for ${model}, so its cost reads as 0 and the eval cost caps can't be enforced for it.`
-  if (caps.runUsd !== undefined) {
-    throw new Error(`${why} Unset HOUSTON_EVAL_MAX_RUN_USD, or add the model's price to src/shared/model-facts.ts.`)
+  const set = [
+    ...(attemptCapSet ? ['HOUSTON_EVAL_MAX_COST_USD'] : []),
+    ...(caps.runUsd !== undefined ? ['HOUSTON_EVAL_MAX_RUN_USD'] : [])
+  ]
+  if (set.length) {
+    throw new Error(`${why} Unset ${set.join(' and ')}, or add the model's price to src/shared/model-facts.ts.`)
   }
   return `${why} Watch the run's spend with the provider.`
 }

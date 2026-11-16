@@ -250,7 +250,7 @@ describe('cost caps in the scorecard', () => {
     ])
     expect(out).toMatch(/semver-ranges .*COST-CAPPED 1\/3/)
     expect(out).toContain('stopped at the per-attempt cost cap: spent $20.40 against $20.00')
-    expect(out).toContain('1 attempt(s) stopped at the per-attempt cost cap ($20), each counted as failed')
+    expect(out).toContain('1 attempt(s) reached the per-attempt cost cap ($20) or its wrap-up reminder, each counted as failed')
   })
 
   // The solved count covers only the tasks that ran, so the stop must be unmissable.

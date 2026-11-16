@@ -163,6 +163,16 @@ describe('resolveEvalConfig', () => {
       expect(resolveEvalConfig(live(), providers).maxCostUsd).toBe(DEFAULT_ATTEMPT_MAX_COST_USD)
     })
 
+    // capsEnforceable refuses a cap someone set on an unpriced model, and only warns
+    // about the default, so the config must tell the two apart even at the same amount.
+    it('says whether the per-attempt cap was set or defaulted', () => {
+      expect('maxCostUsdSet' in resolveEvalConfig(live(), providers)).toBe(false)
+      expect('maxCostUsdSet' in resolveEvalConfig(live({ HOUSTON_EVAL_MAX_COST_USD: '' }), providers)).toBe(false)
+      const atDefault = resolveEvalConfig(live({ HOUSTON_EVAL_MAX_COST_USD: String(DEFAULT_ATTEMPT_MAX_COST_USD) }), providers)
+      expect(atDefault).toMatchObject({ maxCostUsd: DEFAULT_ATTEMPT_MAX_COST_USD, maxCostUsdSet: true })
+      expect(resolveEvalConfig({ HOUSTON_EVAL_MAX_COST_USD: '5' }, providers)).toMatchObject({ maxCostUsdSet: true })
+    })
+
     it('has no run cap unless one is set', () => {
       expect('maxRunUsd' in resolveEvalConfig(live(), providers)).toBe(false)
     })

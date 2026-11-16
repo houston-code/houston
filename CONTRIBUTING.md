@@ -207,9 +207,11 @@ wrap up at 80% of it, and at the cap its last step runs with tools off. That is 
 the default is a runaway guard sized far above any normal attempt rather than near
 an average one (`evals/costCaps.ts` records the sizing: the costliest Haiku attempt
 seen cost about $0.26, and Opus attempts are inferred to peak around $8). An attempt
-the cap stops counts as failed, the scorecard flags it (`COST-CAPPED 1/3`), and a
-recording that contains one is refused, since it would freeze a 0 for a task the
-model may well solve. Models priced above Opus need a higher cap.
+the cap stops, or tells to wrap up, counts as failed (even one that then finishes
+under the cap, since the cap changed how it ended), the scorecard flags it
+(`COST-CAPPED 1/3`), and a recording that contains one is refused, since it would
+freeze a 0 for a task the model may well solve. Models priced above Opus need a
+higher cap.
 
 `HOUSTON_EVAL_MAX_RUN_USD` caps a whole run. Once the attempts so far have spent it,
 no further attempt starts, and the run fails, naming every task it didn't finish. It
@@ -218,7 +220,8 @@ the scores, so a skipped task would otherwise pass unnoticed. The attempt that
 crosses the cap still runs to its end, so a run can overshoot by up to one attempt,
 which that attempt's own cap bounds. A model Houston has no price for reports a cost
 of 0, so neither cap can stop it: the run warns about that, and refuses to start at
-all when `HOUSTON_EVAL_MAX_RUN_USD` is set.
+all when `HOUSTON_EVAL_MAX_COST_USD` or `HOUSTON_EVAL_MAX_RUN_USD` is set, since a
+limit someone set must not pass as enforced.
 
 A baseline where **every** task scored 0 is refused, both when recording it and
 when loading it. Nothing passing is almost always a misconfiguration (an empty or
@@ -268,9 +271,9 @@ HOUSTON_EVAL_A=a.json HOUSTON_EVAL_B=b.json npm run eval:compare
 Each side is an ordinary live run, so its model needs a recorded baseline. The run
 record names the model, prompt hash, commit (with `-dirty` for uncommitted edits),
 host and cost caps, and the comparison lists whichever of those differ. It also names
-the attempts a cost cap stopped and the tasks a run cap kept from running, which are
-left out of the comparison rather than scored. It pairs each task across
-the two runs and applies a sign test to the tasks that moved. Only tasks that moved
+the attempts a cost cap stopped or told to wrap up, and the tasks a run cap kept from
+running, which are left out of the comparison rather than scored. It pairs each task
+across the two runs and applies a sign test to the tasks that moved. Only tasks that moved
 count, so even across 29 tasks a significant result needs several of them to move the
 same way. That is the real resolving power of a suite this size, so "no significant
 difference" is an honest answer rather than a bug. Raising `HOUSTON_EVAL_ATTEMPTS` on

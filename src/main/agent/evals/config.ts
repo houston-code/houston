@@ -57,6 +57,11 @@ export interface EvalConfig {
    * `maxCostUsd`. Always set: {@link DEFAULT_ATTEMPT_MAX_COST_USD} when the var is unset.
    */
   maxCostUsd: number
+  /**
+   * True when HOUSTON_EVAL_MAX_COST_USD set `maxCostUsd`, rather than the default: a cap
+   * someone set must not pass as enforced when it can't be (see capsEnforceable).
+   */
+  maxCostUsdSet?: boolean
   /** Per-run cost cap in USD (HOUSTON_EVAL_MAX_RUN_USD). Absent means none. */
   maxRunUsd?: number
 }
@@ -129,10 +134,12 @@ export function resolveEvalConfig(env: Env, providers: ProviderConfig[]): EvalCo
   }
   // Both drivers run under the caps: the scripted one never comes near them, and a cap
   // that only the live driver passed would leave its path untested on every PR.
-  const maxCostUsd = resolveUsd(env, 'HOUSTON_EVAL_MAX_COST_USD') ?? DEFAULT_ATTEMPT_MAX_COST_USD
+  const attemptUsd = resolveUsd(env, 'HOUSTON_EVAL_MAX_COST_USD')
+  const maxCostUsd = attemptUsd ?? DEFAULT_ATTEMPT_MAX_COST_USD
   const maxRunUsd = resolveUsd(env, 'HOUSTON_EVAL_MAX_RUN_USD')
   const common = {
     maxCostUsd,
+    ...(attemptUsd !== undefined ? { maxCostUsdSet: true } : {}),
     ...(out ? { out } : {}),
     ...(tasks ? { tasks } : {}),
     ...(hashOut ? { hashOut } : {}),

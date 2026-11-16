@@ -65,13 +65,21 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentEvent, ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
+import {
+  systemNoteMessage,
+  type AgentEvent,
+  type ChatMessage,
+  type ChatRequest,
+  type Provider,
+  type ProviderStreamEvent
+} from '@shared/agent'
 import { formatReceiptLines } from '@shared/evidence'
 import type { ProviderConfig } from '@shared/types'
 import { DEFAULT_REASONING_EFFORT, defaultProviders } from '@shared/defaults'
 import { providerKeyEnvVars } from '@shared/provider-keys'
 import { isPriced } from '@shared/usage'
 import { DEFAULT_TIMEOUT_MS } from '../../sandbox/shared'
+import { COST_CAP_REMINDER_FRACTION, landingReminder } from '../budget'
 import {
   assertRecordable,
   baselineFileName,
@@ -86,11 +94,10 @@ import {
 import { resolveEvalConfig, selectTasks } from './config'
 import {
   capsEnforceable,
+  finishRun,
   formatCap,
   formatUsd,
-  runAttempts,
-  runCapError,
-  runCapTaskError,
+  runTaskAttempts,
   RunSpend,
   type CostCaps
 } from './costCaps'
@@ -127,6 +134,7 @@ const {
   tasks: TASK_SPEC,
   hashOut: HASH_OUT,
   maxCostUsd: MAX_COST_USD,
+  maxCostUsdSet: MAX_COST_USD_SET,
   maxRunUsd: MAX_RUN_USD
 } = resolveEvalConfig(process.env, defaultProviders())
 
@@ -166,10 +174,10 @@ if (LIVE && !liveKey()) {
 
 // The caps are dollars, and a model with no known price costs "0" to the loop, so
 // neither cap could stop it. Say so before the first attempt, and refuse outright a
-// run cap that someone set and would wrongly trust.
+// cap that someone set and would wrongly trust.
 if (LIVE) {
   const caps = liveProviderConfig().models.find((m) => m.id === MODEL)?.caps
-  const warning = capsEnforceable(MODEL, isPriced(MODEL, caps), CAPS)
+  const warning = capsEnforceable(MODEL, isPriced(MODEL, caps), CAPS, { attemptCapSet: MAX_COST_USD_SET })
   if (warning) console.warn(warning)
 }
 
@@ -387,6 +395,13 @@ afterEach(() => {
 })
 
 /**
+ * The note the loop sends once an attempt has spent COST_CAP_REMINDER_FRACTION of its
+ * cost cap (budget.ts), telling the model to wrap up. The cost wording cites no step
+ * count, so it is the same text on every run.
+ */
+const COST_WRAP_UP_NOTE = systemNoteMessage(landingReminder(0, 'cost')).content
+
+/**
  * Drive one task end to end and grade it. `maxCostUsd` is the attempt's cost cap, the
  * run's own unless a test passes a smaller one to reach it with scripted usage.
  */
@@ -435,8 +450,11 @@ async function runTask(task: EvalTask, { maxCostUsd = MAX_COST_USD }: { maxCostU
 
   // The loop stamps its promptId on each reply it saves; keep the first one seen.
   let runPromptId: string | undefined
+  // Whether the cap's wrap-up reminder reached the model, which emits no event.
+  let costReminded = false
   const onMessages = (messages: ChatMessage[]): void => {
     runPromptId ??= messages.find((m) => m.role === 'assistant' && m.promptId)?.promptId
+    costReminded ||= messages.some((m) => m.role === 'user' && m.content === COST_WRAP_UP_NOTE)
   }
 
   const started = Date.now()
@@ -467,7 +485,11 @@ async function runTask(task: EvalTask, { maxCostUsd = MAX_COST_USD }: { maxCostU
   const costUsd = events.reduce((n, e) => n + (e.type === 'usage' ? e.cost : 0), 0)
   // Failed whatever the verify says: a cap this far above a normal attempt means the run
   // got away, and grading the work it left would score a runaway that happened to land.
-  const costCapped = events.some((e) => e.type === 'limit' && e.reason === 'max-cost')
+  // The cap steps in at its wrap-up reminder, before it stops anything: an attempt told
+  // to wrap up ended the way the cap made it, so it is capped even if it then finished
+  // under the cap.
+  const capStopped = events.some((e) => e.type === 'limit' && e.reason === 'max-cost')
+  const costCapped = capStopped || costReminded
   // The closing message is the text after the last tool call, as headless reports it.
   let finalText = ''
   for (const e of events) {
@@ -498,8 +520,8 @@ async function runTask(task: EvalTask, { maxCostUsd = MAX_COST_USD }: { maxCostU
     error:
       errored?.message ??
       (costCapped
-        ? `stopped at the per-attempt cost cap: spent ${formatUsd(costUsd)} against ${formatCap(maxCostUsd)} ` +
-          '(HOUSTON_EVAL_MAX_COST_USD), so graded as failed'
+        ? `${capStopped ? 'stopped at' : 'told to wrap up by'} the per-attempt cost cap: spent ${formatUsd(costUsd)} ` +
+          `against ${formatCap(maxCostUsd)} (HOUSTON_EVAL_MAX_COST_USD), so graded as failed`
         : limited
           ? `run hit a limit: ${limited.reason}`
           : undefined),
@@ -780,39 +802,69 @@ describe.skipIf(LIVE || HASH_ONLY)('cost caps', () => {
     expect(report).toMatchObject({ passRate: 0.5, cappedAttempts: 1, erroredAttempts: 0 })
     const scorecard = formatReport({ driver: 'live', model: MODEL, attempts: 2, caps: { attemptUsd: 1e-6 } }, [report])
     expect(scorecard).toContain('COST-CAPPED 1/2')
-    expect(scorecard).toContain('1 attempt(s) stopped at the per-attempt cost cap')
+    expect(scorecard).toContain('1 attempt(s) reached the per-attempt cost cap')
     expect(() =>
       assertRecordable([{ taskId: task.id, passRate: 0.5, attempts: 2 }], [], [{ taskId: task.id, attempts: 1 }])
-    ).toThrow(/stopped by the per-attempt cost cap/)
+    ).toThrow(/reached the per-attempt cost cap/)
   }, 60_000)
 
   /**
-   * The run cap stops STARTING attempts once the run has spent it, and every task it
-   * kept from finishing is named, never quietly dropped from the graded set. The
-   * attempt that crosses the cap is real, priced work, so this drives runTask itself.
+   * The cap steps in before it stops anything: at COST_CAP_REMINDER_FRACTION of it, the
+   * loop tells the model to wrap up. An attempt that got that reminder spent far more
+   * than any normal one and was told to end, so the cap changed how it ended even when
+   * it finished under the cap. Two scripted steps bill $0.005 before the third request,
+   * so a $0.006 cap reminds at $0.0048 and never stops the run.
    */
-  it('starts no attempt past the run cap and names every task it cut short', async () => {
+  it('grades an attempt the cap told to wrap up as capped, even one that finished under it', async () => {
+    const maxCostUsd = 0.006
+    const reminded = await runTask(solveAtOnce, { maxCostUsd })
+    expect(reminded.exitCode, 'the fix landed').toBe(0)
+    expect(reminded.costUsd, 'the attempt spent past the reminder').toBeGreaterThanOrEqual(
+      maxCostUsd * COST_CAP_REMINDER_FRACTION
+    )
+    expect(reminded.costCapped).toBe(true)
+    expect(reminded.passed, 'an attempt the cap told to wrap up must not grade as a solve').toBe(false)
+    expect(reminded.error, 'the cap reminded the model, it never stopped the run').toMatch(/told to wrap up/)
+    expect(toTaskReport(task.id, [reminded])).toMatchObject({ passRate: 0, cappedAttempts: 1 })
+  }, 60_000)
+
+  /**
+   * The run cap stops STARTING attempts once the run has spent it. Every task it kept
+   * from finishing fails its test, and the run then fails naming them all before the
+   * baseline step, never quietly grading a smaller set. This goes through the same
+   * runTaskAttempts and finishRun the task evals below use, since the scripted run has
+   * no run cap and never reaches either throw. The attempt that crosses the cap is real,
+   * priced work, so this drives runTask itself.
+   */
+  it('starts no attempt past the run cap, fails every task it cut short, then the run', async () => {
     const spend = new RunSpend(1e-6)
-    const first = await runAttempts(task.id, 3, spend, () => runTask(task))
+    const ran: EvalResult[][] = []
+    await expect(runTaskAttempts(task.id, 3, spend, () => runTask(task), (r) => ran.push(r))).rejects.toThrow(
+      /^Task "new-module-write" stopped after 1 of 3 attempts: .*It is not graded, and the run fails\.$/
+    )
     // The crossing attempt runs to its end under its own cap; the next two never start.
-    expect(first.complete).toBe(false)
-    expect(first.results).toHaveLength(1)
-    expect(first.results[0].passed, 'the run cap never cuts an attempt short').toBe(true)
-    expect(spend.spentUsd).toBe(first.results[0].costUsd)
+    expect(ran).toHaveLength(1)
+    const [crossing] = ran[0]
+    expect(ran[0]).toHaveLength(1)
+    expect(crossing.passed, 'the run cap never cuts an attempt short').toBe(true)
+    expect(spend.spentUsd).toBe(crossing.costUsd)
 
     const other = TASKS.find((t) => t.id === 'fix-null-deref')!
     let started = 0
-    const second = await runAttempts(other.id, 3, spend, () => {
+    const second = runTaskAttempts(other.id, 3, spend, () => {
       started++
       return runTask(other)
     })
+    await expect(second).rejects.toThrow(/^Task "fix-null-deref" was not run:/)
     expect(started).toBe(0)
-    expect(second).toEqual({ results: [], complete: false })
-
     expect(spend.skipped).toEqual([task.id, other.id])
-    expect(runCapTaskError(task.id, 1, 3, spend)).toMatch(/stopped after 1 of 3 attempts.*not graded/)
-    expect(runCapTaskError(other.id, 0, 3, spend)).toMatch(/was not run/)
-    expect(runCapError(spend)).toContain(`${task.id}, ${other.id}`)
+
+    // The run fails naming both, and the recording step is never reached.
+    const record = vi.fn()
+    expect(() => finishRun(spend, record)).toThrow(
+      `did not run all their attempts and were not graded:\n  ${task.id}, ${other.id}\n`
+    )
+    expect(record).not.toHaveBeenCalled()
   }, 60_000)
 })
 
@@ -881,49 +933,48 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
       writeFileSync(resolve(OUT), `${JSON.stringify(record, null, 2)}\n`)
       console.log(`Wrote run record → ${resolve(OUT)}`)
     }
-    // Each skipped task's own test has already failed; this fails the run as a whole,
-    // naming all of them in one place, and before a recording could write a baseline
-    // without them (the gate reads a task missing from it as unrecorded, not failed).
-    if (skipped.length) throw new Error(runCapError(RUN_SPEND))
-    if (!RECORD) return
-    // Recording writes the scorecard as the model's new baseline. Reviewed and
-    // committed like a golden: the diff is what documents the behavior change.
-    const scores: TaskScore[] = reports.map((r) => ({
-      taskId: r.taskId,
-      passRate: r.passRate,
-      attempts: r.attempts
-    }))
-    // Never write a baseline that would gate nothing — see assertRecordable.
-    // Fold the actual per-task causes into the message: the scorecard is already
-    // on stdout, but it scrolls away in a CI log and gets cropped when someone
-    // pastes the tail, and the cause is the only part that identifies the fix.
-    try {
-      assertRecordable(
-        scores,
-        reports.flatMap((r) => (r.erroredAttempts ? [{ taskId: r.taskId, attempts: r.erroredAttempts }] : [])),
-        reports.flatMap((r) => (r.cappedAttempts ? [{ taskId: r.taskId, attempts: r.cappedAttempts }] : []))
-      )
-    } catch (e) {
-      const causes = failureCauses(reports)
-      throw new Error(
-        [(e as Error).message, '', 'The failures were:', ...causes.map((c) => `  - ${c}`)].join('\n'),
-        { cause: e }
-      )
-    }
-    mkdirSync(BASELINES_DIR, { recursive: true })
-    const baseline = recordBaseline(PROVIDER_ID, MODEL, ATTEMPTS, scores, new Date(), runHash)
-    writeFileSync(baselineFile, `${JSON.stringify(baseline, null, 2)}\n`)
-    console.log(`Recorded baseline → ${baselineFile}\nReview the scores and commit it.`)
+    // Each skipped task's own test has already failed; finishRun fails the run as a
+    // whole, naming all of them in one place, and never reaches the recording below.
+    finishRun(RUN_SPEND, () => {
+      if (!RECORD) return
+      // Recording writes the scorecard as the model's new baseline. Reviewed and
+      // committed like a golden: the diff is what documents the behavior change.
+      const scores: TaskScore[] = reports.map((r) => ({
+        taskId: r.taskId,
+        passRate: r.passRate,
+        attempts: r.attempts
+      }))
+      // Never write a baseline that would gate nothing — see assertRecordable.
+      // Fold the actual per-task causes into the message: the scorecard is already
+      // on stdout, but it scrolls away in a CI log and gets cropped when someone
+      // pastes the tail, and the cause is the only part that identifies the fix.
+      try {
+        assertRecordable(
+          scores,
+          reports.flatMap((r) => (r.erroredAttempts ? [{ taskId: r.taskId, attempts: r.erroredAttempts }] : [])),
+          reports.flatMap((r) => (r.cappedAttempts ? [{ taskId: r.taskId, attempts: r.cappedAttempts }] : []))
+        )
+      } catch (e) {
+        const causes = failureCauses(reports)
+        throw new Error(
+          [(e as Error).message, '', 'The failures were:', ...causes.map((c) => `  - ${c}`)].join('\n'),
+          { cause: e }
+        )
+      }
+      mkdirSync(BASELINES_DIR, { recursive: true })
+      const baseline = recordBaseline(PROVIDER_ID, MODEL, ATTEMPTS, scores, new Date(), runHash)
+      writeFileSync(baselineFile, `${JSON.stringify(baseline, null, 2)}\n`)
+      console.log(`Recorded baseline → ${baselineFile}\nReview the scores and commit it.`)
+    })
   })
 
   it.each(RUN_TASKS.map((t) => [t.id, t] as const))(
     '%s',
     async (_id, task) => {
-      const { results: attempts, complete } = await runAttempts(task.id, ATTEMPTS, RUN_SPEND, () => runTask(task))
-      hashes.push(...attempts.map((a) => a.promptHash))
-      // Graded on fewer attempts than its baseline, the pass rate would mean nothing, and
-      // left out quietly the task would pass the gate (a missing task is never compared).
-      if (!complete) throw new Error(runCapTaskError(task.id, attempts.length, ATTEMPTS, RUN_SPEND))
+      // Throws when the run cap cut the task short: it is failed, never graded on fewer attempts.
+      const attempts = await runTaskAttempts(task.id, ATTEMPTS, RUN_SPEND, () => runTask(task), (ran) =>
+        hashes.push(...ran.map((a) => a.promptHash))
+      )
       const passes = attempts.filter((a) => a.passed).length
       const passRate = passes / ATTEMPTS
       const verdict: BaselineVerdict | undefined = BASELINE

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { COST_CAP_REMINDER_FRACTION } from '../budget'
 import {
   DEFAULT_ATTEMPT_MAX_COST_USD,
@@ -6,10 +6,12 @@ import {
   capsEnforceable,
   capsLabel,
   formatCap,
+  finishRun,
   formatUsd,
   runAttempts,
   runCapError,
-  runCapTaskError
+  runCapTaskError,
+  runTaskAttempts
 } from './costCaps'
 
 /** An attempt that bills `costUsd`, counting how many were started. */
@@ -99,6 +101,53 @@ describe('runAttempts', () => {
   })
 })
 
+describe('runTaskAttempts', () => {
+  it('returns every attempt when the run cap let them all start', async () => {
+    const spend = new RunSpend(10)
+    const ran: Array<Array<{ costUsd: number }>> = []
+    const out = await runTaskAttempts('t', 2, spend, attempts([1, 1]).next, (r) => ran.push(r))
+    expect(out).toEqual([{ costUsd: 1 }, { costUsd: 1 }])
+    expect(ran).toEqual([out])
+  })
+
+  // Graded on fewer attempts the pass rate would mean nothing, and left out the task
+  // would pass the gate, so its test fails instead.
+  it('fails a task the run cap cut short, after reporting the attempts that ran', async () => {
+    const spend = new RunSpend(1)
+    const ran: Array<Array<{ costUsd: number }>> = []
+    await expect(runTaskAttempts('t', 3, spend, attempts([1, 1, 1]).next, (r) => ran.push(r))).rejects.toThrow(
+      'Task "t" stopped after 1 of 3 attempts: the run reached its cost cap (HOUSTON_EVAL_MAX_RUN_USD=1) after spending $1.00.'
+    )
+    expect(ran).toEqual([[{ costUsd: 1 }]])
+    const u = attempts([1])
+    await expect(runTaskAttempts('u', 1, spend, u.next)).rejects.toThrow('Task "u" was not run')
+    expect(u.started()).toBe(0)
+    expect(spend.skipped).toEqual(['t', 'u'])
+  })
+})
+
+describe('finishRun', () => {
+  // Reaching the cap on the last attempt skips nothing, so the run still records.
+  it('goes on to record when the run cap kept no task from finishing', () => {
+    const spend = new RunSpend(1)
+    spend.add(2)
+    const record = vi.fn()
+    finishRun(spend, record)
+    expect(record).toHaveBeenCalledOnce()
+  })
+
+  // The gate reads a task missing from a baseline as unrecorded, not failed.
+  it('fails the run naming every skipped task, and never records', () => {
+    const spend = new RunSpend(1)
+    spend.add(1)
+    spend.skip('a')
+    spend.skip('b')
+    const record = vi.fn()
+    expect(() => finishRun(spend, record)).toThrow(runCapError(spend))
+    expect(record).not.toHaveBeenCalled()
+  })
+})
+
 describe('run cap messages', () => {
   const spend = new RunSpend(5)
   spend.add(5.123)
@@ -159,7 +208,19 @@ describe('capsEnforceable', () => {
   // A spend limit someone set and would trust must not pass as enforced.
   it('refuses a run cap it cannot enforce', () => {
     expect(() => capsEnforceable('new-model', false, { attemptUsd: 20, runUsd: 5 })).toThrow(
-      /Unset HOUSTON_EVAL_MAX_RUN_USD/
+      /Unset HOUSTON_EVAL_MAX_RUN_USD,/
     )
+  })
+
+  // The same per-attempt amount warns as the default and refuses once someone set it.
+  it('refuses a per-attempt cap someone set, and names every cap set', () => {
+    expect(() => capsEnforceable('new-model', false, { attemptUsd: 5 }, { attemptCapSet: true })).toThrow(
+      /no price for new-model.*Unset HOUSTON_EVAL_MAX_COST_USD,/
+    )
+    expect(() => capsEnforceable('new-model', false, { attemptUsd: 5, runUsd: 5 }, { attemptCapSet: true })).toThrow(
+      /Unset HOUSTON_EVAL_MAX_COST_USD and HOUSTON_EVAL_MAX_RUN_USD,/
+    )
+    expect(capsEnforceable('new-model', false, { attemptUsd: 5 }, { attemptCapSet: false })).toMatch(/can't be enforced/)
+    expect(capsEnforceable('claude-haiku-5-5', true, { attemptUsd: 5 }, { attemptCapSet: true })).toBeUndefined()
   })
 })

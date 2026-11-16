@@ -265,7 +265,9 @@ describe('formatComparison', () => {
     expect(out).toContain('caps ?')
     expect(out).toContain('caps $20/attempt, $1/run')
     expect(out).toContain('differs: caps')
-    expect(out).toContain('B: attempts stopped at the per-attempt cost cap, counted as failed: fix (2)')
+    expect(out).toContain(
+      'B: attempts that reached the per-attempt cost cap or its wrap-up reminder, counted as failed: fix (2)'
+    )
     expect(out).toContain('B STOPPED at its run cost cap; not run, so not compared: slow')
     expect(out).not.toMatch(/^ {2}A: attempts stopped/m)
   })

@@ -171,10 +171,11 @@ export interface EvalResult {
    */
   runErrored?: boolean
   /**
-   * True when the per-attempt cost cap stopped the run (a `max-cost` limit). Such an
-   * attempt is graded as failed whatever the verify says: the cap sits far above any
-   * normal attempt, so reaching it means the run got away, and its last step ran with
-   * tools off (see costCaps.ts).
+   * True when the per-attempt cost cap stepped in: it stopped the run (a `max-cost`
+   * limit), or its wrap-up reminder reached the model. Such an attempt is graded as
+   * failed whatever the verify says: even the reminder sits far above any normal
+   * attempt, so reaching it means the run got away, and from there the cap shaped how it
+   * ended (see costCaps.ts).
    */
   costCapped?: boolean
   /** Estimated USD cost the run reported (live mode; scripted is fixed/fake). */

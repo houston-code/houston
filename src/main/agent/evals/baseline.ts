@@ -119,9 +119,10 @@ export function regressions(verdicts: BaselineVerdict[]): Extract<BaselineVerdic
  * tasks were written as 0 beside twenty real scores.
  *
  * `capped` is the same problem from the other side: attempts the per-attempt cost
- * cap stopped (costCaps.ts). The cap sits far above any normal attempt, so one that
- * reached it ran away, and its tools-off last step can't finish the work. Frozen as a
- * failure, it would record a 0 for a task the model can solve.
+ * cap stopped or told to wrap up (costCaps.ts). Even its reminder sits far above any
+ * normal attempt, so one that reached it ran away, and was told to end, or ended on a
+ * tools-off last step. Frozen as a failure, it would record a 0 for a task the model
+ * can solve.
  */
 export function assertRecordable(
   scores: TaskScore[],
@@ -150,7 +151,7 @@ export function assertRecordable(
     const attempts = capped.reduce((n, e) => n + e.attempts, 0)
     throw new Error(
       [
-        `Refusing to record a baseline: ${attempts} attempt(s) across ${capped.length} task(s) were stopped by the per-attempt cost cap.`,
+        `Refusing to record a baseline: ${attempts} attempt(s) across ${capped.length} task(s) reached the per-attempt cost cap or its wrap-up reminder.`,
         `Tasks: ${capped.map((e) => e.taskId).join(', ')}`,
         '',
         'The cap is a runaway guard set far above a normal attempt, so a capped attempt is',
