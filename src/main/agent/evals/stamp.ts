@@ -60,17 +60,36 @@ export function promptHash(req: Pick<ChatRequest, 'system' | 'tools'>, workspace
   return createHash('sha256').update(material).digest('hex').slice(0, 12)
 }
 
+/** How one eval run starts, as the gate sees it: its first request's hash and the loop's promptId. */
+export interface GateStart {
+  /** The run's first request's {@link promptHash}. */
+  firstRequestHash: string
+  /** The loop's `promptId` for the run. */
+  runPromptId: string
+}
+
 /**
  * What eval-ab.yml compares across a pull request to decide whether a live A/B can
- * show anything: the first request's {@link promptHash} folded with the loop's
- * `promptId`. Each misses something the other sees. The first request carries the
- * full system prompt but names deferred tools (memory_save, wait_for and the rest)
- * only by a catalog line, so a change to one of their schemas leaves its hash alone;
- * `promptId` covers every built-in schema but leaves out the parts of the prompt the
- * project supplies, built-in skills' index lines among them.
+ * show anything: for every way the runs it scores start, the first request's
+ * {@link promptHash} folded with the loop's `promptId`. Each half misses something the
+ * other sees. The first request carries the full system prompt but names deferred tools
+ * (memory_save, wait_for and the rest) only by a catalog line, so a change to one of
+ * their schemas leaves its hash alone; `promptId` covers every built-in schema but
+ * leaves out the parts of the prompt the project supplies, built-in skills' index lines
+ * among them.
+ *
+ * More than one start, because runs are told different things: a probe that starts in
+ * Plan mode gets the Plan-mode section and present_plan's schema, which no full-auto run
+ * carries. The starts are a set: order doesn't count and a repeat collapses, so another
+ * run that starts like an existing one leaves the gate alone, and only a new way of
+ * starting, or a change to one, moves it.
  */
-export function abGateHash(firstRequestHash: string, runPromptId: string): string {
-  return createHash('sha256').update(`${firstRequestHash}\0${runPromptId}`).digest('hex').slice(0, 12)
+export function abGateHash(starts: readonly GateStart[]): string {
+  // A gate over nothing would be the same constant on both sides, read as "unchanged".
+  if (starts.length === 0) throw new Error('abGateHash needs at least one run start to hash.')
+  // JSON escapes a newline, so no start's text can pass for a line break between two.
+  const pairs = [...new Set(starts.map((s) => JSON.stringify([s.firstRequestHash, s.runPromptId])))].sort()
+  return createHash('sha256').update(pairs.join('\n')).digest('hex').slice(0, 12)
 }
 
 /**

@@ -65,20 +65,51 @@ describe('promptHash', () => {
 })
 
 describe('abGateHash', () => {
+  const start = (firstRequestHash: string, runPromptId: string) => ({ firstRequestHash, runPromptId })
+  const fullAuto = start('aaaaaaaaaaaa', 'bbbbbbbbbbbb')
+  const plan = start('cccccccccccc', 'dddddddddddd')
+
   it('is a 12-hex digest', () => {
-    expect(abGateHash('aaaaaaaaaaaa', 'bbbbbbbbbbbb')).toMatch(/^[0-9a-f]{12}$/)
+    expect(abGateHash([fullAuto])).toMatch(/^[0-9a-f]{12}$/)
   })
 
   // Either half moving means the model is told something different, and must reach the A/B.
   it('changes when either half changes', () => {
-    const base = abGateHash('aaaaaaaaaaaa', 'bbbbbbbbbbbb')
-    expect(abGateHash('aaaaaaaaaaac', 'bbbbbbbbbbbb')).not.toBe(base)
-    expect(abGateHash('aaaaaaaaaaaa', 'bbbbbbbbbbbc')).not.toBe(base)
-    expect(abGateHash('aaaaaaaaaaaa', 'bbbbbbbbbbbb')).toBe(base)
+    const base = abGateHash([fullAuto])
+    expect(abGateHash([start('aaaaaaaaaaac', 'bbbbbbbbbbbb')])).not.toBe(base)
+    expect(abGateHash([start('aaaaaaaaaaaa', 'bbbbbbbbbbbc')])).not.toBe(base)
+    expect(abGateHash([start('aaaaaaaaaaaa', 'bbbbbbbbbbbb')])).toBe(base)
   })
 
   it('keeps the halves apart, so moving text between them still changes it', () => {
-    expect(abGateHash('ab', 'c')).not.toBe(abGateHash('a', 'bc'))
+    expect(abGateHash([start('ab', 'c')])).not.toBe(abGateHash([start('a', 'bc')]))
+  })
+
+  // A Plan-mode probe is told a different prompt: a change to it alone must move the gate.
+  it('changes when any one start changes, not only the first', () => {
+    const base = abGateHash([fullAuto, plan])
+    expect(abGateHash([fullAuto, start('cccccccccccd', 'dddddddddddd')])).not.toBe(base)
+    expect(abGateHash([fullAuto, start('cccccccccccc', 'ddddddddddde')])).not.toBe(base)
+    expect(abGateHash([fullAuto])).not.toBe(base)
+  })
+
+  // Reordering the probes, or adding one that starts like another, tells the model nothing new.
+  it('ignores the order of the starts and collapses repeats', () => {
+    const base = abGateHash([fullAuto, plan])
+    expect(abGateHash([plan, fullAuto])).toBe(base)
+    expect(abGateHash([fullAuto, plan, fullAuto, plan])).toBe(base)
+  })
+
+  it('keeps the starts apart, so one start can never spell two', () => {
+    const two = abGateHash([start('a', 'b'), start('c', 'd')])
+    expect(abGateHash([start('a', 'b\nc\0d')])).not.toBe(two)
+    expect(abGateHash([start('a', 'bc\0d')])).not.toBe(two)
+    expect(abGateHash([start('a', 'b","c","d')])).not.toBe(two)
+  })
+
+  // The same constant on both sides would read as "unchanged" and skip every A/B.
+  it('refuses to hash no start at all', () => {
+    expect(() => abGateHash([])).toThrow(/at least one run start/)
   })
 })
 

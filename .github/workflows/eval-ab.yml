@@ -33,12 +33,15 @@ name: Prompt A/B (live)
 #      houston-guide skill, so editing it leaves the eval prompt as it was. Anything
 #      outside these paths that does reach the prompt needs the label.
 #   2. The hash jobs then compute, on each side, the gate hash for what claude-haiku-5-5
-#      would be told (HOUSTON_EVAL_HASH_OUT; abGateHash in src/main/agent/evals/stamp.ts:
-#      the first request's system prompt and tools, plus the loop's promptId, which also
-#      covers the deferred tools' schemas). It needs no key and makes no model call. The
-#      live A/B runs only when the two differ. Most golden changes never reach it:
-#      desktop-only and CLI-only lines, or lines another OS gets. Text the model reads
-#      later in a run, such as a tool's result or error messages, is not part of it.
+#      would be told (HOUSTON_EVAL_HASH_OUT; abGateHash in src/main/agent/evals/stamp.ts).
+#      It is taken from the start of a task and of every probe: each run's first request
+#      (system prompt and tools) plus the loop's promptId, which also covers the deferred
+#      tools' schemas. A probe that starts in Plan mode is told the Plan-mode section and
+#      offered present_plan, so a change to either counts too. It needs no key and makes
+#      no model call. The live A/B runs only when the two differ. Most golden changes
+#      never reach it: desktop-only and CLI-only lines, or lines another OS gets. Text the
+#      model reads later in a run, such as a tool's result or error messages, or the note
+#      a switch into Plan mode mid-run sends, is not part of it.
 # The label skips both checks. A base commit from before hash-only mode existed has no
 # hash to compare, so its pull request is A/B'd as before. Every eval run also has its own
 # run cap (HOUSTON_EVAL_MAX_RUN_USD, from the env below), which the driver enforces between
@@ -56,11 +59,11 @@ name: Prompt A/B (live)
 # branches in this repository (GitHub withholds secrets from forks, and the plan job
 # skips them so they don't fail at the key check). The key is step-scoped in the `ab`
 # job, which holds a read-only token. The hash jobs run the pull request's code with no
-# secret at all, and the payload job only reads the base's config.ts. The job that runs
-# the comparison holds no secret, and the job that comments runs none of the pull
-# request's code. As in eval-live.yml, the eval driver auto-approves every tool call, so
-# a live model really can run shell commands here; the ephemeral runner and the
-# read-only token contain it. Do not add a publish credential.
+# secret at all, and the payload job only reads the base's config.ts and the pull
+# request's labels. The job that runs the comparison holds no secret, and the job that
+# comments runs none of the pull request's code. As in eval-live.yml, the eval driver
+# auto-approves every tool call, so a live model really can run shell commands here; the
+# ephemeral runner and the read-only token contain it. Do not add a publish credential.
 #
 # CONCURRENCY. No workflow-level group. One would cancel a running A/B the moment any
 # later event created a run, including adding an unrelated label such as full-ci, before
@@ -68,7 +71,7 @@ name: Prompt A/B (live)
 # per pull request (and side), so only a newer run doing the same work replaces it. None
 # of them shares a group with eval-live.yml (`eval-live-...`): these cancel in progress,
 # and an A/B joining one of its groups would kill the weekly scored run. The payload job
-# needs none: it reads one file, and the ab job's groups do the replacing.
+# needs none: it reads one file and the labels, and the ab job's groups do the replacing.
 
 on:
   pull_request:
@@ -302,7 +305,8 @@ jobs:
   # What each side scores, decided once so both run the same suites: the behavior probes,
   # then the harder tasks too when the label is set, or the harder tasks alone when the
   # base predates the probes. The suites are HOUSTON_EVAL_TASKS keywords, in the order the
-  # comment shows them. Checks out the base and reads one file, running none of its code.
+  # comment shows them. Checks out the base and reads one file, running none of its code,
+  # and reads the pull request's labels.
   #
   # Every job from here on states its own condition with !cancelled(). Without one, a job
   # inherits a skip from anywhere above it, and the label path skips the hash jobs: the
@@ -314,6 +318,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       suites: ${{ steps.pick.outputs.suites }}
       fallback: ${{ steps.pick.outputs.fallback }}
@@ -331,11 +336,22 @@ jobs:
       # sides instead, so the two still run the same thing.
       - id: pick
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
           LABELLED: ${{ needs.plan.outputs.labelled }}
         run: |
           set -euo pipefail
           if grep -qF "PROBES_SUBSET = 'probes'" src/main/agent/evals/config.ts 2>/dev/null; then
             echo "fallback=false" >> "$GITHUB_OUTPUT"
+            # Read the label as it is now, not as the plan job saw it. A run that started
+            # without the label and hashed reaches here minutes later, and its ab legs then
+            # replace those of the run the label started (they share its groups): that run
+            # skipped the hashing, so its legs started first. Scoring what plan saw would
+            # drop the harder tasks the label asked for.
+            if [ "$LABELLED" != "true" ]; then
+              LABELLED="$(gh api "repos/$REPO/pulls/$PR" --jq '[.labels[].name] | index("eval-ab") != null')"
+            fi
             if [ "$LABELLED" = "true" ]; then
               echo "Both sides score the behavior probes, then the harder tasks the eval-ab label adds."
               echo "suites=probes hard" >> "$GITHUB_OUTPUT"

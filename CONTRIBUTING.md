@@ -370,7 +370,9 @@ that touches the agent, sandbox or shared sources (tests aside) or the agent gol
 gets a gate hash computed on both sides, and the live run starts only when the two
 differ. The gate hash folds the first request's system prompt and tools (the eval prompt
 hash) together with the loop's `promptId`, which also covers the deferred tools' schemas.
-It needs no key and makes no model call, so you can check a change the same way locally:
+It is taken at the start of a task and of every probe, so a probe that starts in Plan mode
+adds the Plan-mode section of the prompt and `present_plan`'s schema. It needs no key and
+makes no model call, so you can check a change the same way locally:
 
 ```bash
 HOUSTON_EVAL_MODEL=claude-haiku-5-5 HOUSTON_EVAL_HASH_OUT=hash.txt npm run eval
@@ -379,7 +381,8 @@ HOUSTON_EVAL_MODEL=claude-haiku-5-5 HOUSTON_EVAL_HASH_OUT=hash.txt npm run eval
 The hash covers the lines for the host's OS, so compare hashes from the same kind of
 machine. The product guide is not part of it: the model reads `docs/houston-guide.md`
 only on demand, through the houston-guide skill. Neither is text the model reads later
-in a run, such as a tool's results or error messages. To run the A/B on any pull request
+in a run, such as a tool's results or error messages, or the note a switch into Plan mode
+mid-run sends. To run the A/B on any pull request
 regardless, with the harder tasks as well, add the `eval-ab` label; to run it again after
 a push, remove the label and add it back.
 

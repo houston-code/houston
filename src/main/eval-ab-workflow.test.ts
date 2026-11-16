@@ -371,13 +371,19 @@ describe('prompt A/B workflow', () => {
     const keyword = "PROBES_SUBSET = 'probes'"
 
     it('is decided once, from the base, by a job that holds no secret and runs none of its code', () => {
-      expect(payload.permissions).toEqual({ contents: 'read' })
+      // Read access to the pull request, for its labels, and nothing more.
+      expect(payload.permissions).toEqual({ contents: 'read', 'pull-requests': 'read' })
       expect(JSON.stringify(payload)).not.toContain('secrets.')
       expect(payload.outputs).toEqual({
         suites: '${{ steps.pick.outputs.suites }}',
         fallback: '${{ steps.pick.outputs.fallback }}'
       })
-      expect(pick.env).toEqual({ LABELLED: '${{ needs.plan.outputs.labelled }}' })
+      expect(pick.env).toEqual({
+        GH_TOKEN: '${{ github.token }}',
+        REPO: '${{ github.repository }}',
+        PR: '${{ github.event.pull_request.number }}',
+        LABELLED: '${{ needs.plan.outputs.labelled }}'
+      })
       for (const step of payload.steps) {
         expect(String(step.uses ?? '')).not.toMatch(/^\.\//)
         expect(String(step.run ?? '')).not.toMatch(/\bnpm\b|\bnode\b/)
@@ -390,6 +396,14 @@ describe('prompt A/B workflow', () => {
       })
     })
 
+    // The payload re-reads the label the way plan reads it, so the two can't disagree on
+    // what counts as labelled.
+    it('reads the label with the same check the plan job uses', () => {
+      const check = `gh api "repos/$REPO/pulls/$PR" --jq '[.labels[].name] | index("eval-ab") != null'`
+      expect(decide.run).toContain(check)
+      expect(pick.run).toContain(check)
+    })
+
     // The check greps the base's config for this line: renaming the constant or changing how
     // it is written would read every base as too old, and quietly score the harder tasks
     // instead of the probes on every pull request.
@@ -400,10 +414,17 @@ describe('prompt A/B workflow', () => {
     })
 
     describe.skipIf(process.platform === 'win32')("the payload job's script", () => {
-      const pickWith = (labelled: string, files: Record<string, string>) => {
-        const r = runStep(pick.run, { LABELLED: labelled }, { files })
+      // A stub gh: logs what it was asked, and answers the label check with STUB_LABELLED.
+      const gh = 'echo "$*" >> "$RUNNER_TEMP/gh.log"\nprintf \'%s\\n\' "${STUB_LABELLED:-false}"'
+      const pickWith = (labelled: string, files: Record<string, string>, env: Record<string, string> = {}) => {
+        const r = runStep(pick.run, { REPO: 'o/r', PR: '7', LABELLED: labelled, ...env }, {
+          files,
+          stubs: { gh },
+          collect: ['gh.log']
+        })
         expect(r.status, r.log).toBe(0)
-        return { ...r.out, log: r.log }
+        const asked = (r.collected['gh.log'] ?? '').split('\n').filter(Boolean)
+        return { ...r.out, log: r.log, asked }
       }
       // The real file with the probes keyword taken out: a base from before the probes.
       const preProbes = realConfig.replace(`export const ${keyword}\n`, '')
@@ -413,13 +434,37 @@ describe('prompt A/B workflow', () => {
         expect(pickWith('true', { [config]: realConfig })).toMatchObject({ suites: 'probes hard', fallback: 'false' })
       })
 
+      // A run that started unlabelled hashes for minutes, and the run the label started
+      // skips that, so its legs start first and this run's then replace them (they share
+      // the per-side groups): scoring what plan saw would drop the harder tasks.
+      it('reads the label as it is now, so a run that hashed before the label was added scores the harder tasks too', () => {
+        const later = pickWith('false', { [config]: realConfig }, { STUB_LABELLED: 'true' })
+        expect(later).toMatchObject({ suites: 'probes hard', fallback: 'false' })
+        expect(later.asked).toEqual(['api repos/o/r/pulls/7 --jq [.labels[].name] | index("eval-ab") != null'])
+        expect(pickWith('false', { [config]: realConfig }, { STUB_LABELLED: 'false' })).toMatchObject({ suites: 'probes' })
+        // A run the label started has nothing to look up.
+        expect(pickWith('true', { [config]: realConfig }, { STUB_LABELLED: 'false' })).toMatchObject({
+          suites: 'probes hard',
+          asked: []
+        })
+      })
+
+      it('fails rather than guess when it cannot read the label', () => {
+        const r = runStep(pick.run, { REPO: 'o/r', PR: '7', LABELLED: 'false' }, {
+          files: { [config]: realConfig },
+          stubs: { gh: 'exit 1' }
+        })
+        expect(r.status).toBe(1)
+        expect(r.out.suites).toBeUndefined()
+      })
+
       // Its eval run would stop at an unregistered id and write no run record, failing its
       // side; and probes on one side only would compare nothing.
       it('falls back to the harder tasks on both sides when the base does not know the probes', () => {
         expect(preProbes).not.toBe(realConfig)
         for (const labelled of ['false', 'true']) {
-          const r = pickWith(labelled, { [config]: preProbes })
-          expect(r, labelled).toMatchObject({ suites: 'hard', fallback: 'true' })
+          const r = pickWith(labelled, { [config]: preProbes }, { STUB_LABELLED: 'true' })
+          expect(r, labelled).toMatchObject({ suites: 'hard', fallback: 'true', asked: [] })
           expect(r.log).toContain('predates the behavior probes')
           expect(pickWith(labelled, {}), labelled).toMatchObject({ suites: 'hard', fallback: 'true' })
         }
@@ -502,13 +547,38 @@ describe('prompt A/B workflow', () => {
     })
   })
 
+  // Both sides' artifacts, merged into one directory, so each record lands at
+  // eval-ab/<side>-<suite>.json, where the compare script looks. Unmerged, each would sit
+  // under its artifact's own folder; one artifact's name or another path would leave a
+  // side out. Either way eval:compare finds no record and nothing is posted.
+  it("downloads both sides' records into the directory the compare script reads", () => {
+    const download = compare.steps.find((s: any) => String(s.uses ?? '').startsWith('actions/download-artifact@'))
+    expect(download.with).toEqual({ pattern: 'eval-ab-*', 'merge-multiple': true, path: '${{ runner.temp }}/eval-ab' })
+    expect(compare.steps.indexOf(download)).toBeLessThan(compare.steps.indexOf(compareStep))
+    // The pattern takes in each side's artifact.
+    const upload = ab.steps.find((s: any) => String(s.uses ?? '').startsWith('actions/upload-artifact@'))
+    const pattern = new RegExp(`^${String(download.with.pattern).replace(/\*/g, '.*')}$`)
+    expect(ab.strategy.matrix.side).toEqual(['base', 'head'])
+    for (const side of ab.strategy.matrix.side) {
+      expect(String(upload.with.name).replace('${{ matrix.side }}', side), side).toMatch(pattern)
+    }
+    // Uploaded from that directory, so the merged files keep their <side>-<suite>.json names.
+    expect(upload.with.path).toBe(`${download.with.path}/\${{ matrix.side }}-*.json`)
+    // The scoring step writes those names there, and the compare step reads them from there.
+    expect(score.run).toContain('out="$RUNNER_TEMP/eval-ab/$SIDE-$suite.json"')
+    expect(compareStep.run).toContain('dir="$RUNNER_TEMP/eval-ab"')
+    expect(compareStep.run).toContain('HOUSTON_EVAL_A="$dir/base-$suite.json" HOUSTON_EVAL_B="$dir/head-$suite.json"')
+  })
+
   describe.skipIf(process.platform === 'win32')("the scoring step's script", () => {
     // A stub npm that logs what each eval run was handed, then writes a run record unless
-    // its suite is in STUB_NO_RECORD, and exits STUB_STATUS.
+    // its suite is in STUB_NO_RECORD (an empty file if it is in STUB_EMPTY_RECORD), and
+    // exits STUB_STATUS.
     const npm = [
       'out="${HOUSTON_EVAL_OUT#"$RUNNER_TEMP"/}"',
       'echo "$*|$HOUSTON_EVAL_TASKS|$HOUSTON_EVAL_ATTEMPTS|$HOUSTON_EVAL_MAX_RUN_USD|$out|${HOUSTON_EVAL_MAX_COST_USD-unset}" >> "$RUNNER_TEMP/npm.log"',
-      'case " ${STUB_NO_RECORD:-} " in *" $HOUSTON_EVAL_TASKS "*) ;; *) echo "{}" > "$HOUSTON_EVAL_OUT" ;; esac',
+      'case " ${STUB_NO_RECORD:-} " in *" $HOUSTON_EVAL_TASKS "*) exit "${STUB_STATUS:-0}" ;; esac',
+      'case " ${STUB_EMPTY_RECORD:-} " in *" $HOUSTON_EVAL_TASKS "*) : > "$HOUSTON_EVAL_OUT" ;; *) echo "{}" > "$HOUSTON_EVAL_OUT" ;; esac',
       'exit "${STUB_STATUS:-0}"'
     ].join('\n')
     const scoreWith = (env: Record<string, string>) => {
@@ -560,6 +630,16 @@ describe('prompt A/B workflow', () => {
       expect(second.status).toBe(1)
       expect(second.calls).toHaveLength(2)
       expect(second.log).toContain('The base hard run wrote no run record')
+    })
+
+    // An empty record (a run killed mid-write, say) is no record: passed on, it would fail
+    // eval:compare's parse with no comment posted, instead of failing this side by name.
+    it('fails the side when an eval run left an empty record', () => {
+      const r = scoreWith({ SUITES: 'probes hard', STUB_EMPTY_RECORD: 'probes' })
+      expect(r.collected['eval-ab/base-probes.json'], 'the stub should have left an empty file').toBe('')
+      expect(r.status).toBe(1)
+      expect(r.calls).toHaveLength(1)
+      expect(r.log).toContain('The base probes run wrote no run record')
     })
 
     it('runs nothing without a key, a suite, or with a suite it does not know', () => {

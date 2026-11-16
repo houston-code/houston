@@ -41,8 +41,9 @@
  * Hash-only mode needs no key and makes no model call:
  *   HOUSTON_EVAL_HASH_OUT=<file>  write the gate hash for what HOUSTON_EVAL_PROVIDER
  *                                 and HOUSTON_EVAL_MODEL would be told (abGateHash in
- *                                 stamp.ts), then stop. eval-ab.yml compares it across
- *                                 a pull request.
+ *                                 stamp.ts) at the start of a task and of every probe,
+ *                                 Plan-mode ones included (see gateRuns), then stop.
+ *                                 eval-ab.yml compares it across a pull request.
  *
  * BEHAVIOR PROBES (`probes/`, see ProbeTask in types.ts) ride the same driver: a probe
  * is a short run graded on what the agent did, not on a verify command. The scripted
@@ -136,7 +137,7 @@ import {
 import { gradeHonesty } from './honesty'
 import { PROBES } from './probes'
 import { currentCommit, gitIn, toRunRecord } from './runRecord'
-import { abGateHash, hashCensus, promptHash, sharedHash, sharedPromptId } from './stamp'
+import { abGateHash, hashCensus, promptHash, sharedHash, sharedPromptId, type GateStart } from './stamp'
 import { HARD_TASKS, TASKS } from './tasks'
 import {
   callTool,
@@ -430,7 +431,7 @@ vi.mock('../plugins', () => {
 
 // Imported after the mocks are registered.
 const { startRun, resolveApproval, resolveQuestion, resolvePlan, cancelRun, setRunPolicy } = await import('../loop')
-const { getTool, UNSANDBOXED_SHELL_NOTE } = await import('../tools')
+const { getTool, PRESENT_PLAN_NAME, UNSANDBOXED_SHELL_NOTE } = await import('../tools')
 const { isSandboxed } = await import('../../sandbox')
 
 /**
@@ -846,6 +847,47 @@ async function runProbe(
   }
 }
 
+/** One run hash-only mode takes the gate hash from, with the first request it sent. */
+interface GateRun extends GateStart {
+  /** The task id, or the probe's row id (`probe:<id>`). */
+  label: string
+  /** The approval policy the run started in. */
+  policy: ApprovalPolicy
+  /** The run's first model request, as the provider received it. */
+  request: ChatRequest
+}
+
+/**
+ * The runs eval-ab's gate hash is taken from (abGateHash, HOUSTON_EVAL_HASH_OUT), each
+ * stopped after one scripted reply: the first task to start in each approval policy (every
+ * task in a policy gets the same hash, as the suite pins), and every probe, from the
+ * conversation and policy it starts with. The probes are here because the A/B scores them
+ * by default and they don't all start alike: one that starts in Plan mode is told the
+ * Plan-mode section and offered present_plan, which no full-auto run is, so a gate hashed
+ * from a task alone read a change to either as "unchanged" and skipped the A/B.
+ */
+async function gateRuns(): Promise<GateRun[]> {
+  const runs: GateRun[] = []
+  const keep = (label: string, policy: ApprovalPolicy, r: EvalResult): void => {
+    const request = h.request
+    if (!request || !r.promptHash) throw new Error(`${label}: the hash-only run made no model request to hash.`)
+    if (!r.promptId) throw new Error(`${label}: the hash-only run saved no reply carrying a promptId.`)
+    runs.push({ label, policy, request, firstRequestHash: r.promptHash, runPromptId: r.promptId })
+  }
+  const taskPolicies = new Set<ApprovalPolicy>()
+  for (const task of TASKS) {
+    const policy = task.policy ?? 'full-auto'
+    if (taskPolicies.has(policy)) continue
+    taskPolicies.add(policy)
+    keep(task.id, policy, await runTask({ ...task, script: HASH_ONLY_SCRIPT }))
+  }
+  for (const probe of PROBES) {
+    const { result } = await runProbe(probe, { script: HASH_ONLY_SCRIPT })
+    keep(result.taskId, probe.policy ?? 'full-auto', result)
+  }
+  return runs
+}
+
 /** The last few lines of a tool's output, for the trace. */
 function tail(output: string): string {
   return output.trimEnd().split('\n').slice(-8).map((l) => `    ${l.slice(0, 200)}`).join('\n')
@@ -1135,6 +1177,41 @@ describe.skipIf(LIVE || HASH_ONLY)('grading integrity', () => {
     expect(hashOnly.promptId).toMatch(/^[0-9a-f]{12}$/)
     expect(hashOnly.promptId).toBe(full.promptId)
   }, 60_000)
+
+  /**
+   * eval-ab.yml skips its A/B when the gate hash is the same on both sides, and scores
+   * the behavior probes by default, so the gate must see every way a scored run starts. A
+   * probe that starts in Plan mode is told the Plan-mode section and offered present_plan:
+   * with a gate hashed from a task alone, a pull request that changed only either of those
+   * reached the A/B as "unchanged" and was skipped.
+   */
+  it('takes the gate hash from every way a scored run starts, Plan mode included', async () => {
+    const runs = await gateRuns()
+    const policies = new Set([...TASKS, ...PROBES].map((t) => t.policy ?? 'full-auto'))
+    expect([...policies], 'no probe starts in Plan mode any more: retarget this test').toContain('plan')
+    expect(new Set(runs.map((r) => r.policy))).toEqual(policies)
+    expect(runs.map((r) => r.label)).toEqual(expect.arrayContaining(PROBES.map((p) => probeResultId(p.id))))
+    for (const r of runs) {
+      const told = r.request.system ?? ''
+      const offered = (r.request.tools ?? []).map((t) => t.name)
+      if (r.policy === 'plan') {
+        expect(told, r.label).toContain('PLAN MODE IS ON')
+        expect(offered, r.label).toContain(PRESENT_PLAN_NAME)
+      } else {
+        expect(told, r.label).not.toContain('PLAN MODE IS ON')
+        expect(offered, r.label).not.toContain(PRESENT_PLAN_NAME)
+      }
+    }
+    // The Plan-mode start is its own part of the gate, so a change to its prompt or its
+    // tools, which moves its first request's hash and promptId, moves the gate too.
+    const plan = runs.filter((r) => r.policy === 'plan')
+    const gate = abGateHash(runs)
+    expect(abGateHash(runs.filter((r) => r.policy !== 'plan'))).not.toBe(gate)
+    const moved = (field: keyof GateStart) =>
+      abGateHash(runs.map((r) => (plan.includes(r) ? { ...r, [field]: 'f'.repeat(12) } : r)))
+    expect(moved('firstRequestHash')).not.toBe(gate)
+    expect(moved('runPromptId')).not.toBe(gate)
+  }, 60_000)
 })
 
 /**
@@ -1238,22 +1315,31 @@ describe.skipIf(LIVE || HASH_ONLY)('cost caps', () => {
 })
 
 /**
- * HOUSTON_EVAL_HASH_OUT: write the prompt hash the configured live model would get,
- * with no key and no model call (the scripted fake answers, configured with the live
- * provider's kind and models). Any task will do: the suite above pins that every task
- * in a run gets the same hash.
+ * HOUSTON_EVAL_HASH_OUT: write the gate hash for what the configured live model would be
+ * told, with no key and no model call (the scripted fake answers, configured with the live
+ * provider's kind and models), over every way a run eval-ab scores starts (gateRuns). It
+ * ignores HOUSTON_EVAL_TASKS: the gate stands for whatever the A/B goes on to score.
  */
 describe.runIf(HASH_ONLY)('prompt hash only', () => {
   it(`hashes the prompt ${PROVIDER_ID}/${MODEL} would get`, async () => {
-    // A selection of probes alone names no task, and any task gives the same hash.
-    const r = await runTask({ ...(RUN_TASKS[0] ?? TASKS[0]), script: HASH_ONLY_SCRIPT })
-    expect(r.promptHash, 'the run made no model request to hash').toMatch(/^[0-9a-f]{12}$/)
-    expect(r.promptId, 'the run saved no reply carrying a promptId').toMatch(/^[0-9a-f]{12}$/)
-    const gate = abGateHash(r.promptHash!, r.promptId!)
+    const runs = await gateRuns()
+    for (const r of runs) {
+      expect(r.firstRequestHash, r.label).toMatch(/^[0-9a-f]{12}$/)
+      expect(r.runPromptId, r.label).toMatch(/^[0-9a-f]{12}$/)
+    }
+    const gate = abGateHash(runs)
     writeFileSync(resolve(HASH_OUT!), `${gate}\n`)
+    // Each distinct start once, with how many runs began that way.
+    const starts = new Map<string, number>()
+    for (const r of runs) {
+      const start = `${r.policy}: first request ${r.firstRequestHash}, promptId ${r.runPromptId}`
+      starts.set(start, (starts.get(start) ?? 0) + 1)
+    }
     console.log(
-      `Prompt hash for ${PROVIDER_ID}/${MODEL}: ${gate} (first request ${r.promptHash}, promptId ${r.promptId})` +
-        ` → ${resolve(HASH_OUT!)}`
+      [
+        `Prompt hash for ${PROVIDER_ID}/${MODEL}: ${gate} → ${resolve(HASH_OUT!)}`,
+        ...[...starts].map(([start, n]) => `  ${start} (${n} run${n === 1 ? '' : 's'})`)
+      ].join('\n')
     )
   }, 60_000)
 })
