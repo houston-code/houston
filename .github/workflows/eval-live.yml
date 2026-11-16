@@ -99,13 +99,20 @@ jobs:
     # normal one.
     timeout-minutes: 180
     runs-on: ubuntu-24.04
-    # CONCURRENCY. One group per provider, model and mode (grading or recording), and a run in
-    # progress is never cancelled. A live run takes an hour and a half or more and up to about $9
-    # on a large model, and the single cancel-in-progress group this replaced let any dispatch or
-    # re-run kill another session's run of a different model (two died that way on 2026-11-12).
-    # The key leaves out the event on purpose: the Monday run and a dispatch of the same model
-    # wait for each other instead of sharing that model's rate limit, where the throttling would
-    # read as a regression. Runs of different models still run side by side.
+    # CONCURRENCY. One group per provider and model, and a run in progress is never cancelled.
+    # A live run takes an hour and a half or more and up to about $9 on a large model, and the
+    # single cancel-in-progress group this replaced let any dispatch or re-run kill another
+    # session's run of a different model (two died that way on 2026-11-12). The key leaves out
+    # the event and the mode on purpose: the Monday run, a dispatch and a recording of the same
+    # model wait for each other instead of sharing that model's rate limit, where the throttling
+    # would read as a regression in a graded run and lower the baseline a recording writes. Runs
+    # of different models still run side by side.
+    #
+    # The key holds the `model` input as typed, so only the same string shares a group. With no
+    # `model`, a provider other than anthropic is keyed `default`, a group apart from a dispatch
+    # that names that provider's default model, and a stray space makes another group too (the
+    # suite trims it). An expression can't read src/shared/defaults.ts, and copying the defaults
+    # here would make changing one break CI.
     #
     # GitHub holds at most ONE waiting run per group: a third run with the same key cancels the
     # one still waiting (cancel-in-progress: false spares only the running one). So before
@@ -118,7 +125,7 @@ jobs:
     # cancelled but the run goes on to the alert job, which reports it. A displaced
     # workflow-level run is cancelled before any job starts, so nothing could say so.
     concurrency:
-      group: eval-live-${{ inputs.provider || 'anthropic' }}-${{ inputs.model || ((inputs.provider || 'anthropic') == 'anthropic' && 'claude-haiku-5-5' || 'default') }}-${{ inputs.record && 'record' || 'grade' }}
+      group: eval-live-${{ inputs.provider || 'anthropic' }}-${{ inputs.model || ((inputs.provider || 'anthropic') == 'anthropic' && 'claude-haiku-5-5' || 'default') }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

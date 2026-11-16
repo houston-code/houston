@@ -180,13 +180,14 @@ uploads the baseline as the `eval-baseline` artifact for you to review and commi
 
 Every run of that workflow also uploads its run record as the `eval-run-<provider>-<model>`
 artifact, kept for 90 days, so any two runs can be compared with `npm run eval:compare`
-(below) without a key. Runs for the same provider, model and mode (grading or recording)
-wait for each other instead of cancelling, so a dispatch or a re-run never stops a run
-already going, while runs of different models go side by side. GitHub keeps only one
-waiting run per group, though, and a third run cancels it: before dispatching, check
-`gh run list --workflow eval-live.yml` (the run names show the provider and model) and
-wait while a run of the same model is queued. The `attempts` input stops at 5, since each
-attempt reruns every task.
+(below) without a key. Runs for the same provider and model, grading or recording, wait
+for each other instead of cancelling, so a dispatch or a re-run never stops a run already
+going, while runs of different models go side by side. Only the same `model` input shares
+a wait: a dispatch with no `model` on openai or gemini does not wait for one that names
+that provider's default model. GitHub keeps only one waiting run per group, though, and a
+third run cancels it: before dispatching, check `gh run list --workflow eval-live.yml`
+(the run names show the provider and model) and wait while a run of the same model is
+queued. The `attempts` input stops at 5, since each attempt reruns every task.
 
 The scheduled run scores `claude-haiku-5-5`, not the provider's `defaultModel`. A
 model that sometimes fails is what makes a regression visible, and Haiku solves most

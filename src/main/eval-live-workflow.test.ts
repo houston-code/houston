@@ -27,7 +27,6 @@ const alertOnFailure = load(readFileSync(resolve(root, '.github/workflows/alert-
 const PROVIDER = "${{ inputs.provider || 'anthropic' }}"
 /** The scheduled model's expression with 'default' for "the provider's default model". */
 const MODEL_KEY = String(score.env.HOUSTON_EVAL_MODEL).replace("|| '') }}", "|| 'default') }}")
-const MODE = "${{ inputs.record && 'record' || 'grade' }}"
 
 /**
  * Write `stubs` as executables into a new temp dir, for {@link runStep}'s `bin`. Shared by a
@@ -98,17 +97,19 @@ describe('live eval workflow', () => {
   describe('concurrency', () => {
     // A single cancel-in-progress group let any dispatch or re-run kill another session's
     // run in flight: two live runs died that way on 2026-11-12.
-    it('queues runs of the same provider, model and mode, and never cancels one in progress', () => {
+    it('queues runs of the same provider and model, and never cancels one in progress', () => {
       expect(evals.concurrency).toEqual({
-        group: `eval-live-${PROVIDER}-${MODEL_KEY}-${MODE}`,
+        group: `eval-live-${PROVIDER}-${MODEL_KEY}`,
         'cancel-in-progress': false
       })
     })
 
     // A scheduled run has no inputs, so it lands in the same group as a dispatch of
-    // claude-haiku-5-5: the two wait for each other rather than share a rate limit.
-    it('keys the group on what a run scores, never on its event, ref or run', () => {
+    // claude-haiku-5-5, recording or grading: the two wait for each other rather than share a
+    // rate limit, which would read as a regression or lower the baseline being recorded.
+    it('keys the group on what a run scores, never on its event, ref, run or mode', () => {
       expect(evals.concurrency.group).not.toMatch(/github\./)
+      expect(evals.concurrency.group).not.toContain('inputs.record')
     })
 
     // A displaced waiting run is cancelled at the job, so the run still reaches `alert`.
@@ -217,6 +218,22 @@ describe('live eval workflow', () => {
       expect(r.status).toBe(1)
       expect(r.out).toEqual({ artifact: 'eval-run-anthropic-claude-haiku-5-5' })
     })
+  })
+
+  // The attempts and key checks save nothing unless they stop the job before it installs and
+  // scores: moved below the scoring step, or let through by continue-on-error, a dispatch
+  // with attempts=30 would spend the whole run while the script tests below stayed green.
+  it('runs the key check before the install and the scoring, and stops the job when it fails', () => {
+    const setupNode = steps.findIndex((s) => s.uses === './.github/actions/setup-node')
+    expect(steps.indexOf(requireKey)).toBeGreaterThan(-1)
+    expect(setupNode).toBeGreaterThan(-1)
+    expect(steps.indexOf(requireKey)).toBeLessThan(setupNode)
+    expect(steps.indexOf(requireKey)).toBeLessThan(steps.indexOf(score))
+    // With no `if` of their own, the steps after a failed check are skipped.
+    for (const step of [requireKey, steps[setupNode], score]) {
+      expect(step['continue-on-error'], step.name ?? step.uses).toBeUndefined()
+      expect(step.if, step.name ?? step.uses).toBeUndefined()
+    }
   })
 
   describe.skipIf(process.platform === 'win32')("the key check's script", () => {
