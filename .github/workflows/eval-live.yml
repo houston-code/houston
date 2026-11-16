@@ -20,12 +20,12 @@ name: Task evals (live)
 # WHICH MODEL. The schedule scores claude-haiku-5-5, not the provider's default model. The question
 # this job answers is "did a Houston change make the agent worse", and a model that sometimes fails
 # answers it: Haiku solves about 87% of the harder tasks' attempts, so there is room to regress into,
-# where the larger models solve nearly everything. It is also cheap (about $1-2 a run against roughly
-# fourteen times that for Opus). Dispatch the workflow with a `model` input to score another model on
-# demand, e.g. the default model before a release; that model needs its own baseline, and a task its
-# baseline predates is reported as unrecorded rather than failed. Dispatch with `record` to make
-# that baseline here, with the repository's key: the run uploads the file as an artifact to
-# review and commit.
+# where the larger models solve nearly everything. It is also cheap (recent runs cost $0.64-0.69,
+# against roughly fourteen times that for Opus). Dispatch the workflow with a `model` input to score
+# another model on demand, e.g. the default model before a release; that model needs its own
+# baseline, and a task its baseline predates is reported as unrecorded rather than failed. Dispatch
+# with `record` to make that baseline here, with the repository's key: the run uploads the file as
+# an artifact to review and commit.
 #
 # WHY IT STILL NEVER GATES A PR. The result is non-deterministic (a model can fail a task it passed
 # yesterday) and metered. A flaky, billed gate on every PR would train everyone to re-run it until
@@ -33,9 +33,9 @@ name: Task evals (live)
 # one flaked attempt. A task that regresses HERE is a quality/model signal; a task that fails SCRIPTED is a
 # harness regression and reds the PR that caused it.
 #
-# THIS WORKFLOW NEVER PUBLISHES ANYTHING (a recording run only uploads an Actions artifact):
-# `permissions: contents: read`, no build/dist/release step,
-# and the only secret in scope is the model API key (step-scoped, never at job level). It is a
+# THIS WORKFLOW NEVER PUBLISHES ANYTHING (it only uploads Actions artifacts: every run's run
+# record, and a recording run's baseline): `permissions: contents: read`, no build/dist/release
+# step, and the only secret in scope is the model API key (step-scoped, never at job level). It is a
 # separate file from ci.yml for the same reason provider-canary.yml is: ci.yml's packaging
 # matrix guarantees "no live API credential in scope", and folding an eval leg into it would
 # erode the posture.
@@ -68,7 +68,7 @@ on:
         default: 'anthropic'
         type: string
       attempts:
-        description: 'Attempts per task (higher = less noise, more spend)'
+        description: 'Attempts per task, at most 5 (higher = less noise, more spend)'
         required: false
         default: '3'
         type: string
@@ -78,13 +78,13 @@ on:
         default: false
         type: boolean
 
+# Names each run after what it scores, so the run list shows which provider and model a queued
+# or running run holds (see CONCURRENCY on the evals job) without opening it.
+run-name: >-
+  Task evals (live): ${{ inputs.provider || 'anthropic' }}/${{ inputs.model || ((inputs.provider || 'anthropic') == 'anthropic' && 'claude-haiku-5-5' || 'default') }}${{ inputs.record && ', recording' || '' }}
+
 permissions:
   contents: read
-
-# Don't stack a manual run on top of a scheduled one — keep the latest.
-concurrency:
-  group: eval-live
-  cancel-in-progress: true
 
 env:
   # No Electron runtime and no packaged browser are exercised here; skip the large browser download
@@ -99,6 +99,27 @@ jobs:
     # normal one.
     timeout-minutes: 180
     runs-on: ubuntu-24.04
+    # CONCURRENCY. One group per provider, model and mode (grading or recording), and a run in
+    # progress is never cancelled. A live run takes an hour and a half or more and up to about $9
+    # on a large model, and the single cancel-in-progress group this replaced let any dispatch or
+    # re-run kill another session's run of a different model (two died that way on 2026-11-12).
+    # The key leaves out the event on purpose: the Monday run and a dispatch of the same model
+    # wait for each other instead of sharing that model's rate limit, where the throttling would
+    # read as a regression. Runs of different models still run side by side.
+    #
+    # GitHub holds at most ONE waiting run per group: a third run with the same key cancels the
+    # one still waiting (cancel-in-progress: false spares only the running one). So before
+    # dispatching, check the run list (`gh run list --workflow eval-live.yml`; the run names
+    # carry provider and model) and wait while a run of the same model is queued. GitHub's
+    # `queue: max` would hold up to 100, but the actionlint ci.yml pins (1.7.12) rejects the
+    # key; switch to it once that accepts it.
+    #
+    # At the job, not the workflow: when a waiting Monday run is displaced, this job is
+    # cancelled but the run goes on to the alert job, which reports it. A displaced
+    # workflow-level run is cancelled before any job starts, so nothing could say so.
+    concurrency:
+      group: eval-live-${{ inputs.provider || 'anthropic' }}-${{ inputs.model || ((inputs.provider || 'anthropic') == 'anthropic' && 'claude-haiku-5-5' || 'default') }}-${{ inputs.record && 'record' || 'grade' }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -109,9 +130,15 @@ jobs:
       # The key is the chosen provider's (the `provider` input; anthropic on a scheduled run). The
       # three providers below are the ones this repository holds a key for; any other id stops
       # here, naming them, instead of running with no key.
+      #
+      # It also refuses an `attempts` input above 5, a dispatch typo guard: every attempt is
+      # another full pass over all 29 tasks, so a stray 30 for 3 costs ten times a normal run and
+      # cannot finish inside the job's time limit anyway. Empty (every scheduled run) is the
+      # suite's default of 3. The suite trims the value, so the check does too.
       - name: Require the model API key
         env:
           PROVIDER: ${{ inputs.provider || 'anthropic' }}
+          ATTEMPTS: ${{ inputs.attempts }}
           API_KEY: >-
             ${{ (inputs.provider || 'anthropic') == 'anthropic' && secrets.ANTHROPIC_API_KEY
             || inputs.provider == 'openai' && secrets.OPENAI_API_KEY
@@ -124,6 +151,13 @@ jobs:
             openai) key_name=OPENAI_API_KEY ;;
             gemini) key_name=GEMINI_API_KEY ;;
             *) echo "::error::No API key is wired up for provider '$PROVIDER'. This workflow can score anthropic, openai or gemini."; exit 1 ;;
+          esac
+          attempts="${ATTEMPTS:-}"
+          attempts="${attempts//[[:space:]]/}"
+          case "$attempts" in
+            '' | [1-5]) ;;
+            *[!0-9]* | 0*) echo "::error::The attempts input must be a whole number from 1 to 5, got '$ATTEMPTS'."; exit 1 ;;
+            *) echo "::error::The attempts input is $attempts, above the limit of 5. Each attempt runs every task again, so spend grows with it. The default is 3."; exit 1 ;;
           esac
           if [ -z "${API_KEY:-}" ]; then
             echo "::error::${key_name} is empty or unset, so the live eval suite cannot run. Set the repo secret."
@@ -143,7 +177,15 @@ jobs:
       # so passing them through unconditionally is safe and keeps the dispatch inputs meaningful.
       # The model is the one exception: with no `model` input it is claude-haiku-5-5 on anthropic
       # (see WHICH MODEL above), and empty, so the provider's default, on any other provider.
+      #
+      # Every run also writes its run record (HOUSTON_EVAL_OUT: per-task pass counts, cost, model,
+      # prompt hash, commit), which the last step keeps as an artifact, so any two runs can be
+      # compared later with `npm run eval:compare` and no key. The suite writes it before the gate
+      # reports, so a run that regressed keeps its record too. The artifact name carries provider
+      # and model; artifact names refuse '/' and a few other characters a model id may hold (an
+      # openai-compatible id such as org/model), so anything outside [A-Za-z0-9._-] becomes '-'.
       - name: Score the task evals against the baseline
+        id: score
         env:
           HOUSTON_EVAL_LIVE: '1'
           HOUSTON_EVAL_PROVIDER: ${{ inputs.provider }}
@@ -152,6 +194,13 @@ jobs:
           # `record` scores without grading and writes the model's baseline file (the next step
           # uploads it). Empty, so unset to the suite, on every other run.
           HOUSTON_EVAL_RECORD: ${{ inputs.record && '1' || '' }}
+          # A ceiling on the run's estimated spend, in USD. INERT FOR NOW: the driver does not
+          # read it yet (its per-run cap is a separate change), so until then it bounds nothing.
+          # The values: the scheduled run scores Haiku at three attempts, which cost $0.64-0.69 a
+          # run lately, so 5 is about seven times that. A dispatch can pick any model and up to
+          # five attempts, and the priciest run so far (gpt-6.1-sol, three attempts) cost $8-9,
+          # so about $15 at five; 25 leaves headroom over that.
+          HOUSTON_EVAL_MAX_RUN_USD: ${{ github.event_name == 'schedule' && '5' || '25' }}
           # Only the chosen provider's key reaches the step, exported under the name the suite
           # reads (the provider-canary.yml pattern).
           PROVIDER: ${{ inputs.provider || 'anthropic' }}
@@ -169,6 +218,9 @@ jobs:
           esac
           export "${key_name}=${API_KEY}"
           unset API_KEY
+          artifact="eval-run-${PROVIDER}-${HOUSTON_EVAL_MODEL:-default}"
+          echo "artifact=${artifact//[!A-Za-z0-9._-]/-}" >> "$GITHUB_OUTPUT"
+          export HOUSTON_EVAL_OUT="$RUNNER_TEMP/eval-run.json"
           npm run eval
       # A recording run commits nothing (the token is read-only): the baseline it wrote is
       # uploaded for a person to review and commit, the same way as one recorded locally with
@@ -190,18 +242,34 @@ jobs:
           retention-days: 14
           path: ${{ runner.temp }}/baseline
           if-no-files-found: error
+      # The run record the scoring step wrote, kept long enough to compare a run against the
+      # weeks before it. It runs when scoring failed (a regression still has a record), and only
+      # warns when there is none: a run stopped before scoring (a missing key) has nothing to keep.
+      - name: Upload the run record
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.score.outputs.artifact }}
+          retention-days: 90
+          path: ${{ runner.temp }}/eval-run.json
+          if-no-files-found: warn
 
-  # Tell a human when the scheduled eval breaks — GitHub's own failure notification for a
+  # Tell a human when the scheduled eval breaks: GitHub's own failure notification for a
   # scheduled run goes to github-actions[bot]. Scheduled runs only; a hand-dispatched run
   # already notifies whoever started it. See alert-on-failure.yml.
+  #
+  # Unlike the other callers, a CANCELLED scheduled run counts as a failure here. This weekly run
+  # is the only quality gate there is, so one that never finished (cancelled by hand, or displaced
+  # while it waited by a dispatch of the same model, see CONCURRENCY above) is a missed week
+  # someone needs to hear about, not a non-event. Hence `always()` without the usual
+  # `!cancelled()`, so the job runs in a cancelled run, and `failed` counts the cancellation:
+  # false would close an open alert as though the run had gone green.
   alert:
     needs: [evals]
-    if: >-
-      always() && github.event_name == 'schedule'
-      && !cancelled() && !contains(needs.*.result, 'cancelled')
+    if: ${{ always() && github.event_name == 'schedule' }}
     uses: ./.github/workflows/alert-on-failure.yml
     permissions:
       issues: write
     with:
       workflow: Task evals (live)
-      failed: ${{ contains(needs.*.result, 'failure') }}
+      failed: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}

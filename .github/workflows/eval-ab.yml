@@ -50,8 +50,8 @@ name: Prompt A/B (live)
 # later event created a run, including adding an unrelated label such as full-ci, before
 # the plan job could ignore that event. Instead each job that does work has its own group
 # per pull request (and side), so only a newer run doing the same work replaces it. None
-# of them is eval-live's group: that one cancels in progress, and sharing it would let a
-# PR's A/B kill the weekly scored run.
+# of them shares a group with eval-live.yml (`eval-live-...`): these cancel in progress,
+# and an A/B joining one of its groups would kill the weekly scored run.
 
 on:
   pull_request:
