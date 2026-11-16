@@ -362,10 +362,11 @@ comment, probes first, and edits its earlier one on a re-run. It is not a requir
 and never fails on a lower score; it fails only when an eval run produced no run record.
 
 Each eval run has its own run cap (`HOUSTON_EVAL_MAX_RUN_USD`), about five times its
-usual cost on `claude-haiku-5-5`: $1 for the probes, which cost roughly $0.05 to $0.20 a
-side, and $2 for the harder tasks, about $0.40 a side. The per-attempt cap keeps its
-default. An A/B that compares identical prompts measures only noise, so it runs only when
-what the model is told actually changed. A pull request from a branch in this repository
+usual cost on `claude-haiku-5-5`: $1 for the probes, which cost about $0.04 a side in
+their first live run and at most about $0.25, and $2 for the harder tasks, about $0.40 a
+side. The per-attempt cap keeps its default. An A/B that compares identical prompts
+measures only noise, so it runs only when what the model is told actually changed. A
+pull request from a branch in this repository
 that touches the agent, sandbox or shared sources (tests aside) or the agent goldens first
 gets a gate hash computed on both sides, and the live run starts only when the two
 differ. The gate hash folds the first request's system prompt and tools (the eval prompt
@@ -478,13 +479,17 @@ HOUSTON_EVAL_A=a.json HOUSTON_EVAL_B=b.json npm run eval:compare
 
 A live run still loads the model's baseline (it fails without one, like any live run),
 but only to grade the tasks it runs beside the probes. Each probe stops once `maxActions`
-of its calls are answered, which keeps a run cheap: all eight together allow about 25
-model requests an attempt, roughly $0.04 on `claude-haiku-5-5` at its $0.10 and $0.50
-per million input and output tokens, so about $0.12 for the default three attempts. That
-is an upper bound (`probes/index.ts` has the arithmetic): most attempts stop before their
-cap, and cached prompt reads cost less. No live run of the probes has happened yet. The
-first is a local run with a provider key (an agent's shell has none) or the Prompt A/B
-above, which runs them at five attempts a side, and its scorecard prints the real cost.
+of its calls are answered, which keeps a run cheap: all eight together allow about 31
+model requests an attempt, roughly $0.05 on `claude-haiku-5-5` at its $0.10 and $0.50
+per million input and output tokens, so about $0.15 for the default three attempts and
+$0.25 for the Prompt A/B's five. That is an upper bound (`probes/index.ts` has the
+arithmetic): most attempts stop before their cap, and cached prompt reads cost less. The
+first live run, the Prompt A/B on PR #962 at five attempts a side, cost about $0.04 a
+side, a fifth of the $0.20 its budget then allowed. That budget was 25: the
+`unchecked-visual-claim` probe stopped at 6 actions, before any attempt of it had
+reported, and at 12 those attempts run on to their report, so a run now costs a little
+more. Every scorecard prints the real cost; a local run needs a provider key (an agent's
+shell has none).
 
 A probe that starts in a mode other than full auto (the `present_plan` one runs in Plan
 mode) is told something else by design, so the run's prompt hash and `promptId` are
@@ -497,8 +502,9 @@ named `probe`, and register it in `probes/index.ts`. A probe has:
   (`writeFiles` in `probes/kit.ts` takes forward-slash paths on every platform);
 - a `prompt`, or `messages` that seed a conversation up to the moment that matters, such
   as a tool result the agent must react to;
-- `maxActions`, the fewest actions its grader needs, plus room for a closing message when
-  it grades one;
+- `maxActions`, the fewest actions its grader needs. When it grades the closing message,
+  that is all the work a careful agent does before writing one, or every attempt stops
+  short of the report;
 - `grade(run, ws)`, which reads what the agent did and returns `{ passed, detail }`:
   `run.calls` lists every tool call with the arguments the model sent and whether it ran
   (a call the loop refused is still one the agent tried), `run.finalText` is the closing

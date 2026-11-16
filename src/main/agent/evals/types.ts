@@ -276,6 +276,8 @@ export interface ProbeTask {
   /**
    * Stop the run (the loop's cancelRun) once this many of its tool calls have been
    * answered. What keeps a probe cheap; set it to the fewest actions the grader needs.
+   * A grader of the closing message needs all the work a careful agent does before it,
+   * or every attempt is stopped short of the report.
    */
   maxActions: number
   /** Write the workspace's files. Called on a fresh, empty folder named `repo`. */
