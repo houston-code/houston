@@ -135,6 +135,7 @@ import {
   type TaskReport
 } from './report'
 import { gradeHonesty } from './honesty'
+import { scanHostImports } from './hostImports'
 import { PROBES } from './probes'
 import { currentCommit, gitIn, toRunRecord } from './runRecord'
 import { abGateHash, hashCensus, promptHash, sharedHash, sharedPromptId, type GateStart } from './stamp'
@@ -326,8 +327,9 @@ const h = vi.hoisted(() => {
  * compile error. `createProvider` alone needs three (`getKey`, `getSecretHeaders`,
  * `hasStoredKey`), and omitting `getSecretHeaders` once made every live task fail
  * before it reached the model, which the recorder then wrote out as a baseline of
- * all zeros. The 'constructs the real provider' test below exercises this surface
- * on every PR so the next gap fails there instead of in the nightly.
+ * all zeros. The 'mocks every agentHost export the engine imports' test below reads
+ * the engine's imports from source on every PR and fails naming any this lacks, so
+ * the next gap fails there instead of in the nightly.
  *
  * Deliberately NOT `importActual`-spread: the real agentHost reaches the settings
  * store and the OS keychain, which is exactly the machine state an eval must not
@@ -356,7 +358,17 @@ vi.mock('../../agentHost', () => ({
   // Only consulted on the missing-key error path (getProvider reports requiresKey:
   // false), but it must exist or createProvider throws on the way past.
   hasStoredKey: () => false,
-  collectSecrets: () => []
+  collectSecrets: () => [],
+  // Flags a model its provider reported unavailable, for the model pickers. An eval has
+  // no pickers and must not write settings; the loop's own error already names the model.
+  setModelUnavailable: () => {},
+  // The "last used" note on the permission rule that decided a call, shown in Settings.
+  noteRuleUsed: () => {},
+  // For the MCP manager. The eval replaces that too (below), but this mock covers the
+  // whole engine so it doesn't depend on which other modules are mocked. No MCP server
+  // is signed in, and nothing is stored.
+  getMcpOAuth: () => null,
+  setMcpOAuth: () => {}
 }))
 // The one seam that differs by driver: scripted gets the fake, live gets the real
 // adapter. Everything downstream of this line is identical between the two. Both
@@ -969,6 +981,37 @@ describe.skipIf(HASH_ONLY)('eval fixtures', () => {
   })
 
   /**
+   * The test above reaches one path through the agentHost mock; this holds the mock to
+   * every name the engine imports. Read from source, so a run never has to reach the call:
+   * the mock once lacked setModelUnavailable, which the loop calls only when the provider
+   * reports the model unavailable, and a live recording on such a model failed every
+   * attempt on vitest's missing-export error instead of the loop's own error.
+   */
+  it('mocks every agentHost export the engine imports', async () => {
+    const srcMain = fileURLToPath(new URL('../../', import.meta.url))
+    // The engine's directories, as agentHost.ts names them and eslint keeps them
+    // Electron-free. Every module an eval loads that imports agentHost is in one; the
+    // src/main modules outside them that do (the app's and the terminal's entry points,
+    // the side chat) never load in an eval.
+    const imports = scanHostImports(srcMain, ['agent', 'providers', 'mcp', 'sandbox'], join(srcMain, 'agentHost.ts'))
+    const mocked = new Set(Object.keys(await import('../../agentHost')))
+    const exported = new Set(Object.keys(await vi.importActual<typeof import('../../agentHost')>('../../agentHost')))
+
+    // A scan that reads nothing would pass whatever the mock lacks.
+    expect(imports.map((i) => i.file), 'the scan found no importer of agentHost').toContain('agent/loop.ts')
+    expect(
+      imports.flatMap((i) => i.unreadable.map((line) => `src/main/${i.file}:${line}`)),
+      'references to agentHost whose imported names the scan cannot read (see hostImports.ts)'
+    ).toEqual([])
+    const named = imports.flatMap((i) => i.names.map((name) => ({ name, at: `src/main/${i.file} imports ${name}` })))
+    expect(named.filter((n) => !exported.has(n.name)).map((n) => n.at), 'names agentHost does not export: a misread').toEqual([])
+    expect(
+      named.filter((n) => !mocked.has(n.name)).map((n) => n.at),
+      "exports missing from the vi.mock('../../agentHost') factory: define each one there"
+    ).toEqual([])
+  })
+
+  /**
    * REGRESSION: every attempt at a task once reused one workspace folder, so a
    * file one attempt created was already there for the next, and attempt 2 of
    * new-module-write passed without doing anything. Each materialization must be
@@ -1440,6 +1483,31 @@ describe.skipIf(LIVE || HASH_ONLY)('runAgent', () => {
     expect(run.calls[1]).toMatchObject({ name: 'read_file', ran: true, ok: true })
     expect(run.calls[2]).toMatchObject({ name: 'multi_edit', args: { path: 'notes.md' }, kind: 'write', ran: false, ok: false })
     expect(run.calls[2].output).toMatch(/^Invalid arguments for tool "multi_edit"/)
+  }, 60_000)
+
+  /**
+   * A model the provider doesn't serve ends the run on the loop's own error, which names
+   * the model, after the loop flags it through agentHost's setModelUnavailable. With that
+   * export missing from the mock, the run ended on vitest's missing-export error instead,
+   * so every attempt of a live run on such a model failed with a message about the mock.
+   */
+  it('ends a run on a model its provider does not serve with the loop’s model-unavailable error', async () => {
+    const run = await runAgent(
+      workspace(),
+      {
+        runId: 'eval-run-agent-model-unavailable',
+        messages: [{ role: 'user', content: 'Read the notes.' }],
+        policy: 'full-auto',
+        // As an adapter reports an unknown model id: a 404 that names it.
+        script: [[{ type: 'error', message: `404 model "${MODEL}" not found`, status: 404 }]]
+      },
+      { label: 'model-unavailable', maxCostUsd: MAX_COST_USD }
+    )
+    expect(run.events.filter((e) => e.type === 'error')).toEqual([
+      expect.objectContaining({ cause: 'model-not-found', modelUnavailable: { providerId: PROVIDER_ID, model: MODEL } })
+    ])
+    expect(run.error).toContain(`doesn't recognize the model "${MODEL}"`)
+    expect(run.calls).toEqual([])
   }, 60_000)
 })
 
