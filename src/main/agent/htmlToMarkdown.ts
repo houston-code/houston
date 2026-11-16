@@ -19,8 +19,8 @@
  * content and the caller fences it as such.
  */
 
-import { parse } from 'parse5'
-import type { DefaultTreeAdapterTypes as T } from 'parse5'
+import { parse, Tokenizer, TokenizerMode } from 'parse5'
+import type { DefaultTreeAdapterTypes as T, Token, TokenHandler } from 'parse5'
 
 type Node = T.ChildNode | T.ParentNode
 type Element = T.Element
@@ -164,13 +164,18 @@ const LINE_BLOCK = new Set([
  * the stack.
  */
 function textContent(n: Node, blockLines = false): string {
-  let out = ''
+  // Parts are joined once at the end, and the last character is tracked apart:
+  // `out.endsWith()` on a string built by `+=` flattens it on every call, which made
+  // a large flattened subtree quadratic.
+  const out: string[] = []
+  let endsInNewline = true
   let pendingBreak = false
   const emit = (text: string): void => {
     if (!text) return
-    if (pendingBreak && out && !out.endsWith('\n') && !text.startsWith('\n')) out += '\n'
+    if (pendingBreak && out.length && !endsInNewline && !text.startsWith('\n')) out.push('\n')
     pendingBreak = false
-    out += text
+    out.push(text)
+    endsInNewline = text.endsWith('\n')
   }
   // Entries are nodes to visit, or `null` marking the end of a block element.
   const stack: (Node | null)[] = [n]
@@ -198,7 +203,7 @@ function textContent(n: Node, blockLines = false): string {
     const kids = children(cur)
     for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i])
   }
-  return out
+  return out.join('')
 }
 
 /**
@@ -219,6 +224,126 @@ function flattenDeep(root: Node): void {
     }
     for (const c of children(n)) stack.push([c, depth + 1])
   }
+}
+
+/**
+ * Tags nested deeper than this are dropped before parsing (their text is kept). The
+ * parser's tree builder scans its stack of open elements for most start tags, so its
+ * time grows with the square of the nesting depth: a 5 MB page of nested `<div>`s
+ * would take over an hour. With the stack held to this depth parsing stays linear in
+ * the page's size. It sits above {@link MAX_DEPTH}, so what is dropped here would have
+ * been flattened to text anyway.
+ */
+const MAX_PARSE_DEPTH = MAX_DEPTH + 64
+
+/** Elements that take no end tag, so never deepen the tree. */
+const VOID = new Set([
+  'area', 'base', 'basefont', 'bgsound', 'br', 'col', 'embed', 'frame', 'hr', 'image', 'img', 'input',
+  'keygen', 'link', 'meta', 'param', 'source', 'track', 'wbr'
+])
+
+/**
+ * Elements whose end tag may be left out: the next sibling closes them, so a run of
+ * them doesn't nest. Not counted, or a long list of unclosed `<li>` would read as deep.
+ */
+const OPTIONAL_END = new Set([
+  'html', 'head', 'body', 'p', 'li', 'dt', 'dd', 'option', 'optgroup', 'rb', 'rt', 'rtc', 'rp',
+  'tr', 'td', 'th', 'thead', 'tbody', 'tfoot', 'colgroup', 'caption'
+])
+
+/** What the tokenizer reads after these start tags, as the tree builder would set it. */
+const TEXT_MODE: Record<string, (typeof TokenizerMode)[keyof typeof TokenizerMode]> = {
+  script: TokenizerMode.SCRIPT_DATA,
+  style: TokenizerMode.RAWTEXT,
+  xmp: TokenizerMode.RAWTEXT,
+  iframe: TokenizerMode.RAWTEXT,
+  noembed: TokenizerMode.RAWTEXT,
+  noframes: TokenizerMode.RAWTEXT,
+  noscript: TokenizerMode.RAWTEXT,
+  textarea: TokenizerMode.RCDATA,
+  title: TokenizerMode.RCDATA,
+  plaintext: TokenizerMode.PLAINTEXT
+}
+
+/**
+ * Drops the start and end tags of elements nested past {@link MAX_PARSE_DEPTH}, in one
+ * linear tokenizer pass, so the parse that follows stays linear too. Returns the HTML
+ * unchanged when nothing is that deep.
+ */
+export function capNesting(html: string, maxDepth = MAX_PARSE_DEPTH): string {
+  // A page with fewer tags than the cap can't nest past it.
+  let tags = 0
+  for (let i = html.indexOf('<'); i !== -1 && tags <= maxDepth; i = html.indexOf('<', i + 1)) tags++
+  if (tags <= maxDepth) return html
+
+  // Offsets are taken on the text the tokenizer sees, with line endings normalized as
+  // the parser normalizes them, so they index the string spliced below.
+  const src = html.replace(/\r\n?/g, '\n')
+  const open: string[] = []
+  const openCount = new Map<string, number>()
+  const droppedCount = new Map<string, number>()
+  const cuts: [number, number][] = []
+  const cut = (t: Token.TagToken): void => {
+    if (t.location) cuts.push([t.location.startOffset, t.location.endOffset])
+  }
+  const bump = (m: Map<string, number>, name: string, by: number): void => {
+    m.set(name, (m.get(name) ?? 0) + by)
+  }
+  const noop = (): void => {}
+  const handler: TokenHandler = {
+    onStartTag(t) {
+      const name = t.tagName
+      const mode = TEXT_MODE[name]
+      if (mode !== undefined) tokenizer.state = mode
+      if (VOID.has(name) || OPTIONAL_END.has(name)) return
+      if (open.length >= maxDepth) {
+        // Raw-text elements keep their tags, so their contents stay out of the text.
+        if (mode !== undefined) return
+        cut(t)
+        bump(droppedCount, name, 1)
+        return
+      }
+      open.push(name)
+      bump(openCount, name, 1)
+    },
+    onEndTag(t) {
+      const name = t.tagName
+      // Dropped elements all sit inside the deepest kept one, so they match first.
+      if ((droppedCount.get(name) ?? 0) > 0) {
+        cut(t)
+        bump(droppedCount, name, -1)
+        return
+      }
+      if ((openCount.get(name) ?? 0) > 0) {
+        // Close back to the matching element, as the tree builder does for most tags;
+        // that closes every dropped element too.
+        for (;;) {
+          const top = open.pop()!
+          bump(openCount, top, -1)
+          if (top === name) break
+        }
+        droppedCount.clear()
+      }
+    },
+    onComment: noop,
+    onDoctype: noop,
+    onEof: noop,
+    onCharacter: noop,
+    onNullCharacter: noop,
+    onWhitespaceCharacter: noop
+  }
+  const tokenizer = new Tokenizer({ sourceCodeLocationInfo: true }, handler)
+  tokenizer.write(src, true)
+  if (!cuts.length) return html
+
+  const parts: string[] = []
+  let at = 0
+  for (const [start, end] of cuts) {
+    parts.push(src.slice(at, start))
+    at = end
+  }
+  parts.push(src.slice(at))
+  return parts.join('')
 }
 
 /** Per-element text measures, gathered in one pass so scoring stays linear in page size. */
@@ -772,7 +897,7 @@ function documentBase(doc: Node, pageUrl: string | undefined): string | undefine
 /** Convert an HTML document to markdown: the main content, with code, links and structure kept. */
 export function htmlToMarkdown(html: string, opts: HtmlToMarkdownOptions = {}): string {
   // A leading byte-order mark would push the parser out of <head>, printing the title twice.
-  const doc = parse(html.startsWith('﻿') ? html.slice(1) : html)
+  const doc = parse(capNesting(html.startsWith('﻿') ? html.slice(1) : html))
   flattenDeep(doc)
   const titleEl = findFirst(doc, 'title')
   const title = titleEl ? oneLine(textContent(titleEl)) : ''
