@@ -203,6 +203,9 @@ describe('export arguments and names', () => {
     expect(parseExportArgs('out.json')).toEqual({ format: 'json', path: 'out.json' })
     expect(parseExportArgs('json my chat.txt')).toEqual({ format: 'json', path: 'my chat.txt' })
     expect(parseExportArgs('jsonish.md')).toEqual({ format: 'md', path: 'jsonish.md' })
+    expect(parseExportArgs('html')).toEqual({ format: 'html' })
+    expect(parseExportArgs('page.htm')).toEqual({ format: 'html', path: 'page.htm' })
+    expect(parseExportArgs('HTML out/chat.txt')).toEqual({ format: 'html', path: 'out/chat.txt' })
   })
 
   it('names a default file from the title and time', () => {

@@ -190,6 +190,14 @@ describe('File menu', () => {
     }
   })
 
+  it('File > Export Chat offers JSON, HTML and Markdown', () => {
+    const exp = item(fileMenu(appMenuTemplate(true, ctx)), 'Export Chat').submenu ?? []
+    expect(exp.map((i) => i.label)).toEqual(['As JSON…', 'As HTML…', 'As Markdown…'])
+    sentCommands.length = 0
+    ;(item(exp, 'As Markdown…') as unknown as { click: () => void }).click()
+    expect(sentCommands).toEqual([{ type: 'export-chat', format: 'md' }])
+  })
+
   it('File > New Window opens a chat window on a new chat', () => {
     const opened = vi.fn(() => ({ webContents: { id: 4242, once: () => {} } }))
     setWindowOpener(opened as never)
@@ -231,7 +239,8 @@ describe('File menu', () => {
     expect(item(none, 'New Side Chat').enabled).toBe(false)
     expect(item(none, 'Export Chat').submenu!.map((i) => i.label)).toEqual([
       'As JSON…',
-      'As HTML…'
+      'As HTML…',
+      'As Markdown…'
     ])
   })
 

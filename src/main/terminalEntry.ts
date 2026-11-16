@@ -91,6 +91,7 @@ import { listModels } from './providers'
 import { runGitCapture } from './agent/gitRead'
 import { readHeadBranch } from './headBranch'
 import { writeExportFile } from './tui-sessions'
+import { importChatFile } from './tui-import'
 import {
   addPermissionRule,
   canPersistHeaderSecrets,
@@ -189,6 +190,7 @@ import {
   forkConversation,
   forkConversationAt,
   setConversationWorkspace,
+  importConversation,
   organizeConversation,
   conversationExists,
   detachConversationWorktree,
@@ -976,6 +978,19 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         )
       },
       writeExport: (path, content) => writeExportFile(tui.cwd, path, content),
+      // /import: the desktop's parser and size cap; the chat always lands in this
+      // folder, never one the file names. Model and provider fall back to the session's.
+      importChat: (path) =>
+        importChatFile(tui.cwd, path, {
+          save: (data, workspace) => {
+            const selected = getSettings().selected
+            return importConversation(data, {
+              workspace,
+              providerId: selected?.providerId ?? '',
+              model: selected?.model ?? ''
+            })
+          }
+        }),
       // /commit, /push, /ship, /pr: the Changes view's and the PR chip's own handlers,
       // with this session's folder as the one project they may touch.
       git: {

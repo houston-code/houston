@@ -627,8 +627,12 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   { name: 'rename', group: 'Chat', args: '<title>', description: 'Give this chat a title', clients: ['tui'] },
   {
-    name: 'export', group: 'Chat', args: '[md|json] [path] [--copy]',
-    description: 'Write this chat to a Markdown or JSON file, or copy it (secrets masked)', clients: ['tui']
+    name: 'export', group: 'Chat', args: '[md|json|html] [path] [--copy]',
+    description: 'Write this chat to a Markdown, JSON or HTML file, or copy it (secrets masked)', clients: ['tui']
+  },
+  {
+    name: 'import', group: 'Chat', args: '<file>',
+    description: 'Open a chat exported as JSON or HTML as a new chat here', clients: ['tui']
   },
   { name: 'delete', group: 'Chat', description: 'Delete this chat (asks first)', clients: ['tui'] },
   { name: 'open-in-app', group: 'Chat', description: 'Open this chat in the Houston desktop app', clients: ['tui'] },
@@ -767,6 +771,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   image: 'in the app, attach an image with the + button, or paste or drop it into the message box',
   rename: "in the app, rename a chat from its More actions menu in the sidebar",
   export: "in the app, export a chat from its More actions menu in the sidebar, or the File menu",
+  import: 'in the app, use File > Import Chat…',
   delete: "in the app, delete a chat from its More actions menu in the sidebar",
   'open-in-app': 'you are in the app already',
   permissions: 'in the app, saved rules and recent denials are under Settings > Permissions',

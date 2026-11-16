@@ -9868,6 +9868,54 @@ describe('session commands', () => {
     expect(t.text()).toContain('exported 1 message to /proj/out.json')
   })
 
+  it('/export html writes the self-contained HTML export the desktop app makes', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    const written: Array<[string, string]> = []
+    d.writeExport = (path, content) => {
+      written.push([path, content])
+      return `/proj/${path}`
+    }
+    d.now = () => new Date(2026, 10, 13, 9, 5).getTime()
+    const t = fakeIo(['<b>hi</b>', '/export html', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(written[0][0]).toBe('houston-new-chat-20261113-0905.html')
+    expect(written[0][1]).toMatch(/^<!doctype html>/)
+    expect(written[0][1]).toContain('&lt;b&gt;hi&lt;/b&gt;')
+    expect(written[0][1]).not.toContain('<b>hi</b>')
+  })
+
+  it('/import continues in the imported chat, and says why one could not be read', async () => {
+    const { d, rec } = deps(done)
+    d.persist = withStore().persist
+    const asked: string[] = []
+    d.importChat = (path) => {
+      asked.push(path)
+      if (path === 'bad.json') throw new Error('not a Houston chat export')
+      return {
+        id: 'imp-1',
+        title: 'Imported work',
+        messages: [
+          { role: 'user', content: 'earlier' },
+          { role: 'assistant', content: 'answer' }
+        ],
+        providerId: 'anthropic',
+        model: 'claude',
+        textOnly: true
+      }
+    }
+    const t = fakeIo(['/import', '/import bad.json', '/import chat.html', 'more', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(asked).toEqual(['bad.json', 'chat.html'])
+    expect(t.text()).toContain('usage: /import <file>')
+    expect(t.text()).toContain("couldn't import: not a Houston chat export")
+    expect(t.text()).toContain('imported "Imported work" (2 messages)')
+    expect(t.text()).toContain('only the chat text came back')
+    expect(rec.runs[0].messages.map((m) => m.content)).toEqual(['earlier', 'answer', 'more'])
+  })
+
   it('/export reports a failed write, and has nothing to do in an empty chat', async () => {
     const { d } = deps(done)
     d.persist = withStore().persist

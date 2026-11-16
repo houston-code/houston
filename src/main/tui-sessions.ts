@@ -258,7 +258,7 @@ export function chatToJson(messages: ChatMessage[], meta: ExportMeta, content: E
   )}\n`
 }
 
-export type ExportFormat = 'md' | 'json'
+export type ExportFormat = 'md' | 'json' | 'html'
 
 /** What `/export` was asked for. */
 export interface ExportArgs {
@@ -300,12 +300,13 @@ export function parseExportArgs(arg: string): ExportArgs {
   }
   let rest = words.join(' ')
   let format: ExportFormat | undefined
-  const first = /^(md|markdown|json)(?:\s+|$)/i.exec(rest)
+  const first = /^(md|markdown|json|html)(?:\s+|$)/i.exec(rest)
   if (first) {
-    format = first[1].toLowerCase() === 'json' ? 'json' : 'md'
+    const word = first[1].toLowerCase()
+    format = word === 'json' ? 'json' : word === 'html' ? 'html' : 'md'
     rest = rest.slice(first[0].length).trim()
   }
-  if (!format) format = /\.json$/i.test(rest) ? 'json' : 'md'
+  if (!format) format = /\.json$/i.test(rest) ? 'json' : /\.html?$/i.test(rest) ? 'html' : 'md'
   return { format, ...(rest ? { path: rest } : {}), ...flags }
 }
 

@@ -41,6 +41,7 @@ import {
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
 import { isForkPoint, parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
+import { chatToMarkdown } from './tui-sessions'
 import { sanitizeAttachments, exceedsImageSizeLimit, imageFileName, parseImageDataUrl } from '@shared/images'
 import { sanitizeInvocation, shellEscapeTurn } from '@shared/promptInvocation'
 import { SHELL_ESCAPE_MAX_CHARS } from '@shared/shellEscape'
@@ -1666,6 +1667,25 @@ export function registerIpc(ready?: Promise<unknown>): void {
     })
     if (res.canceled || !res.filePath) return null
     writeFileSync(res.filePath, conversationToHtml(conv), 'utf8')
+    return res.filePath
+  })
+
+  // Export a conversation as Markdown, for reading or sharing: the terminal's
+  // /export format (your messages and the replies in full, tool calls one line each,
+  // tool output cut short). Returns the path, or null if cancelled / unknown id.
+  handle(IPC.conversationExportMarkdown, async (event, id: string): Promise<string | null> => {
+    const conv = getConversation(id)
+    if (!conv) return null
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const safeTitle = conv.title.replace(/[^\w.-]+/g, '_').slice(0, 60) || 'conversation'
+    const res = await dialog.showSaveDialog(win!, {
+      title: 'Export conversation as Markdown',
+      defaultPath: `${safeTitle}.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }]
+    })
+    if (res.canceled || !res.filePath) return null
+    const meta = { id: conv.id, title: conv.title, providerId: conv.providerId, model: conv.model, at: new Date() }
+    writeFileSync(res.filePath, chatToMarkdown(conv.messages, meta), 'utf8')
     return res.filePath
   })
 

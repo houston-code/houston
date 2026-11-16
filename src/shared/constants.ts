@@ -224,6 +224,7 @@ export const IPC = {
   conversationDelete: 'conversation:delete',
   conversationExport: 'conversation:export',
   conversationExportHtml: 'conversation:exportHtml',
+  conversationExportMarkdown: 'conversation:exportMarkdown',
   conversationImport: 'conversation:import',
   conversationOrganize: 'conversation:organize',
   conversationReorder: 'conversation:reorder',

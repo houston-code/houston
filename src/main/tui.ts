@@ -149,6 +149,8 @@ import type { ForkPoint } from '@shared/conversation-io'
 import { redactSecrets } from './agent/redact'
 import { LiveTail } from './tui-livetail'
 import { latestTodos, todoProgress } from './tui-todos'
+import type { ImportedChat } from './tui-import'
+import { conversationToHtml } from '@shared/html-export'
 import { htmlToAnsi } from './syntax'
 import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
 import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
@@ -2485,8 +2487,10 @@ export type SlashResult =
   | { kind: 'fork'; turn?: number; bad?: true }
   /** Hand this chat to the desktop app (/open-in-app). */
   | { kind: 'open-in-app' }
-  /** Write this chat to a file or the clipboard (/export [md|json] [path] [--copy] ...). */
+  /** Write this chat to a file or the clipboard (/export [md|json|html] [path] [--copy] ...). */
   | ({ kind: 'export' } & ExportArgs)
+  /** Open a chat exported as JSON or HTML as a new chat here (/import <file>). */
+  | { kind: 'import'; path: string }
   /** Give this chat a title (/rename <title>); empty shows the current one. */
   | { kind: 'rename'; title: string }
   /** Delete this chat, after a confirmation (/delete). */
@@ -2695,6 +2699,8 @@ export function parseSlashCommand(
       return { kind: 'open-in-app' }
     case 'export':
       return { kind: 'export', ...parseExportArgs(arg) }
+    case 'import':
+      return { kind: 'import', path: arg.trim() }
     case 'rename':
       return { kind: 'rename', title: arg.trim() }
     case 'delete':
@@ -2951,8 +2957,9 @@ export const HELP_TEXT = [
   '  /loop [10m] <prompt>  run a prompt on a schedule in this folder (/loop 10m check CI; default every 10m)',
   '  /fork [n]             branch the current session into a copy, or from before message n (as numbered in /rewind)',
   '  /rename <title>       give this chat a title',
-  '  /export [md|json] [path]  write this chat to a file (Markdown by default)',
+  '  /export [md|json|html] [path]  write this chat to a file (Markdown by default)',
   '  /export --copy        put it on the clipboard instead; also --no-reasoning, --no-tools; secrets are masked (--no-redact keeps them)',
+  '  /import <file>        open a chat exported as JSON or HTML as a new chat here',
   '  /delete               delete this chat (asks first)',
   '  /open-in-app          open this chat in the Houston desktop app',
   '  /permissions [remove n]  all rules that apply, with warnings; or remove one',
@@ -4577,6 +4584,11 @@ export interface TuiDeps {
   chatAssist?: {
     suggest: (conversationId: string, providerId: string, model: string, onSuggestion: (text: string) => void) => void
   }
+  /**
+   * `/import <file>`: save a JSON or HTML chat export as a new chat in this folder
+   * (tui-import.ts). Throws with the reason to show. Absent ⇒ /import is unavailable.
+   */
+  importChat?: (path: string) => ImportedChat
   /**
    * Rewind the chat to an earlier message (agent/rewind.ts): preview, apply, undo.
    * Absent ⇒ /rewind says it is unavailable.
@@ -6914,12 +6926,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const content =
           result.format === 'json'
             ? chatToJson(redact ? redactExport(messages, redact) : messages, meta, kept)
-            : chatToMarkdown(messages, meta, kept)
+            : result.format === 'html'
+              ? // The desktop app's self-contained HTML export (no scripts, no network).
+                conversationToHtml({
+                  id: conversationId ?? 'unsaved',
+                  title,
+                  workspace: opts.cwd,
+                  providerId: providerId ?? '',
+                  model: model ?? '',
+                  createdAt: at.getTime(),
+                  updatedAt: at.getTime(),
+                  messages: redact ? redactExport(messages, redact) : messages
+                })
+              : chatToMarkdown(messages, meta, kept)
         const text = redact && result.format === 'md' ? redact(content) : content
         const masked = redact ? ' (secrets masked; --no-redact keeps them)' : ''
         if (result.copy) {
           const native = putOnClipboard(text, deps)
-          const what = `this chat as ${result.format === 'json' ? 'JSON' : 'Markdown'}`
+          const what = `this chat as ${result.format === 'json' ? 'JSON' : result.format === 'html' ? 'HTML' : 'Markdown'}`
           deps.io.out(
             paint(
               `✓ copied ${what} (${describeCopied(text)})${native ? '' : ', if your terminal allows clipboard access'}${masked}\n`,
@@ -6936,6 +6960,37 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         } catch (e) {
           deps.io.out(paint(`· couldn't export: ${stripControlChars((e as Error).message)}\n`, 'yellow'))
         }
+        continue
+      }
+      if (result.kind === 'import') {
+        if (!result.path) {
+          deps.io.out(paint('· usage: /import <file>, a chat exported as JSON or HTML\n', 'dim'))
+          continue
+        }
+        if (!deps.importChat) {
+          deps.io.out(paint('· import is unavailable here\n', 'dim'))
+          continue
+        }
+        let imported: ImportedChat
+        try {
+          imported = deps.importChat(result.path)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't import: ${terminalText((e as Error).message, { lines: false })}\n`, 'yellow'))
+          continue
+        }
+        // Continue in the imported chat, as the desktop app opens it.
+        conversationId = imported.id
+        messages = imported.messages
+        resetChatState()
+        persistedSettings = null
+        const shownTitle = terminalText(imported.title || 'Imported chat', { lines: false })
+        deps.io.out(paint(`· imported "${shownTitle}" (${plural(messages.length, 'message')}); this chat is now that one\n`, 'dim'))
+        if (imported.textOnly) {
+          deps.io.out(paint('· only the chat text came back (an HTML export from an older version)\n', 'yellow'))
+        }
+        const recap = renderRecap(messages, paint, { width: columns() })
+        if (recap) deps.io.out(`${recap}\n`)
+        adoptChatSettings({ providerId: imported.providerId, model: imported.model })
         continue
       }
       if (result.kind === 'rename') {
