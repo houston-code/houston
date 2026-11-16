@@ -1,0 +1,15 @@
+{
+  "id": "houston",
+  "name": "Houston",
+  "version": "latest",
+  "description": "Houston coding agent, unattended in full auto",
+  "repository": "https://github.com/houston-code/houston",
+  "license": "Apache-2.0",
+  "website": "https://houstoncode.ai",
+  "distribution": {
+    "npx": {
+      "package": "@houston-code/cli@latest",
+      "args": ["--acp", "--unattended", "--full-auto", "--effort", "high", "--max-turns", "400"]
+    }
+  }
+}

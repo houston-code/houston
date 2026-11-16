@@ -44,6 +44,15 @@ export default tseslint.config(
     }
   },
   {
+    // The benchmark kits' helpers (bench/) run on plain Node from a checkout, outside the
+    // app, so they are ES modules using only Node's own globals.
+    files: ['bench/**/*.mjs'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: { process: 'readonly' }
+    }
+  },
+  {
     // The npm package's launcher (packaging/npm/houston.cjs) is plain CommonJS that runs
     // straight from the installed package, with only Node's own modules.
     files: ['packaging/**/*.cjs'],
