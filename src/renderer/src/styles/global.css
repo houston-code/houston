@@ -6130,6 +6130,15 @@ body.is-resizing .preview-dock__resizer::after {
 .scorecard__body {
   padding: 8px 12px 16px;
 }
+.scorecard__split {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 2px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
 /* The usage view: spend and tokens per day and per project, plus the cost reminder. */
 .usage-view__body {
   padding: 12px 16px 20px;
@@ -6245,6 +6254,38 @@ body.is-resizing .preview-dock__resizer::after {
   flex: none;
   font-size: 11px;
   color: var(--text-dim);
+}
+.scorecard-card__prompt {
+  flex: none;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
+.scorecard-card__section {
+  margin-top: 10px;
+}
+.scorecard-card__none {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.scorecard-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.scorecard-chip {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12px;
+}
+.scorecard-chip__count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .scorecard-card__stats {
   display: grid;

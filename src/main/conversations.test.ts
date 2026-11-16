@@ -528,6 +528,28 @@ describe('forks and the usage scorecard', () => {
     writeRewind(fork.id, { messages: fork.messages, compaction: null, lastError: null, backup: null })
     expect(getConversation(fork.id)!.forkedFrom?.historyLength).toBe(2)
   })
+
+  it('attaches each row’s failure signals, and splits rows by prompt version when asked', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [
+      { role: 'user', content: 'fix it' },
+      { role: 'assistant', content: '', model: 'm', promptId: 'p1', toolCalls: [{ id: 'c1', name: 'multi_edit', arguments: {} }] },
+      { role: 'tool', content: 'Error: edits must be a non-empty array.', toolCallId: 'c1', toolName: 'multi_edit' },
+      { role: 'assistant', content: 'Fixed.', model: 'm', promptId: 'p1' },
+      { role: 'user', content: 'again', runEnds: [{ reason: 'error', message: 'down', at: '2026-11-01T00:00:00.000Z' }] }
+    ])
+    const card = computeScorecard()
+    expect(card.groupBy).toBe('model')
+    expect(card.models[0].signals).toMatchObject({ toolArgError: 1, unanswered: 1 })
+    expect(card.models[0].runEnds.error).toBe(1)
+    // Counts only: nothing the chat said comes back.
+    expect(JSON.stringify(card)).not.toContain('non-empty array')
+
+    const split = computeScorecard('model-prompt')
+    expect(split.groupBy).toBe('model-prompt')
+    expect(split.models.map((r) => r.promptId)).toEqual(['p1'])
+    expect(split.models[0].signals?.toolArgError).toBe(1)
+  })
 })
 
 describe('fork from a message', () => {

@@ -1417,7 +1417,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     return getConversationForView(id)
   })
   // Local-only per-model loop scorecard — aggregated on-device, never transmitted.
-  handle(IPC.conversationScorecard, () => computeScorecard())
+  // Anything but the one other grouping the panel asks for gets the per-model rows.
+  handle(IPC.conversationScorecard, (_event, groupBy: unknown) =>
+    computeScorecard(groupBy === 'model-prompt' ? 'model-prompt' : 'model')
+  )
   // Local-only spend and tokens per day and per project, for the usage view.
   handle(IPC.conversationUsageReport, () => computeUsageReport())
   // The last rate-limit state per provider, read once by each window and then followed

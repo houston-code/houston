@@ -1151,7 +1151,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // /usage: the desktop usage view's report, summed locally from the saved chats.
       usageReport: () => computeUsageReport(),
       // /scorecard: the desktop's loop scorecard, aggregated locally from the saved chats.
-      scorecard: () => computeScorecard(),
+      scorecard: (groupBy) => computeScorecard(groupBy),
       clipboardImage: () => {
         const img = readClipboardImage()
         if (!img) return { error: `no image on the clipboard (${noClipboardHint(process.platform)})` }

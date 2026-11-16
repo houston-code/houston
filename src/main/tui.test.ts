@@ -3809,6 +3809,9 @@ describe('runTui', () => {
     const { d } = deps([])
     expect(parseSlashCommand('/usage', settings())).toEqual({ kind: 'usage' })
     expect(parseSlashCommand('/scorecard', settings())).toEqual({ kind: 'scorecard' })
+    expect(parseSlashCommand('/scorecard prompts', settings())).toEqual({ kind: 'scorecard', groupBy: 'model-prompt' })
+    expect(parseSlashCommand('/scorecard Prompt', settings())).toEqual({ kind: 'scorecard', groupBy: 'model-prompt' })
+    expect(parseSlashCommand('/scorecard tools', settings())).toEqual({ kind: 'scorecard', bad: 'tools' })
     expect(parseSlashCommand('/model fallback', settings())).toEqual({ kind: 'model-fallback', op: { op: 'list' } })
     expect(parseSlashCommand('/model fallback remove 2', settings())).toEqual({
       kind: 'model-fallback',
@@ -3837,11 +3840,19 @@ describe('runTui', () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const saved: Array<Partial<AppSettings>> = []
     d.updateSettings = (p) => void saved.push(p)
-    d.scorecard = () => ({ models: [], totalRuns: 0, totalCost: 0 })
-    const t = fakeIo(['/scorecard', '/model fallback add nope', '/model fallback', null])
+    const asked: string[] = []
+    d.scorecard = (groupBy) => {
+      asked.push(groupBy)
+      return { groupBy, models: [], totalRuns: 0, totalCost: 0 }
+    }
+    const t = fakeIo(['/scorecard', '/scorecard prompts', '/scorecard nope', '/model fallback add nope', '/model fallback', null])
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('no runs yet')
+    // The bare command is per model, `prompts` splits by prompt version, and an unknown
+    // option is refused without building the scorecard.
+    expect(asked).toEqual(['model', 'model-prompt'])
+    expect(t.text()).toContain('/scorecard has no option nope')
     expect(t.text()).toContain('no model "nope"')
     expect(t.text()).toContain('no fallback models')
     expect(saved).toEqual([])

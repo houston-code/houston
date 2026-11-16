@@ -1,6 +1,7 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { Scorecard as ScorecardData } from '@shared/scorecard'
+import { emptyFailureSignalCounts } from '@shared/failureSignals'
+import { emptyRunEndCounts, NO_REPLY_PROMPT_ID, type Scorecard as ScorecardData } from '@shared/scorecard'
 import { Scorecard } from './Scorecard'
 
 /** Install a fake `window.api` whose getScorecard resolves to `data`. */
@@ -10,9 +11,10 @@ function installApi(data: ScorecardData) {
   return { getScorecard }
 }
 
-const emptyData: ScorecardData = { models: [], totalRuns: 0, totalCost: 0 }
+const emptyData: ScorecardData = { groupBy: 'model', models: [], totalRuns: 0, totalCost: 0 }
 
 const sampleData: ScorecardData = {
+  groupBy: 'model',
   totalRuns: 3,
   totalCost: 1.23,
   models: [
@@ -29,10 +31,12 @@ const sampleData: ScorecardData = {
       completedRuns: 1,
       limitedRuns: 1,
       completionRate: 0.5,
+      runEnds: { ...emptyRunEndCounts(), error: 1, limits: { ...emptyRunEndCounts().limits, stalled: 2 } },
       tools: [
         { name: 'read_file', count: 5 },
         { name: 'run_shell', count: 3 }
-      ]
+      ],
+      signals: { ...emptyFailureSignalCounts(), stalled: 2, toolArgError: 3, unanswered: 1 }
     },
     {
       model: 'gpt-5',
@@ -47,7 +51,9 @@ const sampleData: ScorecardData = {
       completedRuns: 1,
       limitedRuns: 0,
       completionRate: 1,
-      tools: []
+      runEnds: emptyRunEndCounts(),
+      tools: [],
+      signals: emptyFailureSignalCounts()
     }
   ]
 }
@@ -115,5 +121,83 @@ describe('Scorecard', () => {
     expect(api.getScorecard).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByTitle('Refresh'))
     await waitFor(() => expect(api.getScorecard).toHaveBeenCalledTimes(2))
+  })
+
+  it('lists how runs stopped short and the failure signals, each kind once', async () => {
+    installApi(sampleData)
+    render(<Scorecard onClose={vi.fn()} />)
+    const opusCard = await screen.findByLabelText('Stats for claude-opus-4-6')
+    const stops = within(opusCard).getByLabelText('Runs that stopped short')
+    expect([...stops.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['failed 1', 'stalled 2'])
+    const signals = within(opusCard).getByLabelText('Failure signals')
+    // The stall is shown with the stops, not a second time as a signal.
+    expect([...signals.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
+      'no reply 1',
+      'malformed tool calls 3'
+    ])
+    expect(within(signals).getByText(/malformed tool calls/).getAttribute('title')).toMatch(/invalid arguments/)
+
+    // A model with nothing to report says so instead of listing empty chips.
+    const gptCard = screen.getByLabelText('Stats for gpt-5')
+    expect(within(gptCard).queryByLabelText('Runs that stopped short')).toBeNull()
+    expect(within(gptCard).getByText('None found')).toBeInTheDocument()
+  })
+
+  it('says plainly that it reads the saved chats, text included, on this computer only', async () => {
+    installApi(sampleData)
+    render(<Scorecard onClose={vi.fn()} />)
+    await screen.findByText('claude-opus-4-6')
+    const copy = screen.getByText(/worked out on this computer/).textContent ?? ''
+    expect(copy).toMatch(/never\s+sent anywhere/)
+    expect(copy).toMatch(/including their\s+text/)
+    expect(copy).toMatch(/only the counts are shown/)
+    expect(copy).not.toContain('—')
+  })
+
+  it('shows no finish rate, rather than 0%, for a row no chat’s latest run was on', async () => {
+    const switchedAway = {
+      ...sampleData.models[1],
+      model: 'model-a',
+      completedRuns: 0,
+      limitedRuns: 0,
+      completionRate: 0
+    }
+    installApi({ ...sampleData, models: [sampleData.models[0], switchedAway] })
+    render(<Scorecard onClose={vi.fn()} />)
+    const card = await screen.findByLabelText('Stats for model-a')
+    const finish = within(card).getByText('Clean finish').closest('.scorecard-stat') as HTMLElement
+    expect(within(finish).getByText('–')).toBeInTheDocument()
+    expect(finish.getAttribute('title')).toMatch(/no finish to rate/)
+    expect(within(card).queryByText('0%')).toBeNull()
+    // A row with finishes to rate still shows its rate.
+    expect(within(screen.getByLabelText('Stats for claude-opus-4-6')).getByText('50%')).toBeInTheDocument()
+  })
+
+  it('asks for per-model rows first, and splits by prompt version when ticked', async () => {
+    const split: ScorecardData = {
+      groupBy: 'model-prompt',
+      totalRuns: 1,
+      totalCost: 0,
+      models: [
+        { ...sampleData.models[1], promptId: '0123456789ab' },
+        { ...sampleData.models[1], totalSteps: 1 },
+        { ...sampleData.models[1], promptId: NO_REPLY_PROMPT_ID, totalSteps: 0 }
+      ]
+    }
+    const getScorecard = vi.fn().mockImplementation((groupBy?: string) =>
+      Promise.resolve(groupBy === 'model-prompt' ? split : sampleData)
+    )
+    window.api = { getScorecard } as unknown as typeof window.api
+    render(<Scorecard onClose={vi.fn()} />)
+    await screen.findByText('claude-opus-4-6')
+    expect(getScorecard).toHaveBeenLastCalledWith('model')
+
+    fireEvent.click(screen.getByLabelText('Split each model by prompt version'))
+    await waitFor(() => expect(getScorecard).toHaveBeenLastCalledWith('model-prompt'))
+    expect(await screen.findByLabelText('Stats for gpt-5 (prompt 0123456789ab)')).toBeInTheDocument()
+    expect(screen.getByLabelText('Stats for gpt-5 (before prompt ids)')).toBeInTheDocument()
+    const noReply = screen.getByLabelText('Stats for gpt-5 (no reply yet)')
+    expect(within(noReply).getByText('no reply yet').getAttribute('title')).toMatch(/ended before the model replied/)
+    expect(screen.queryByText('claude-opus-4-6')).toBeNull()
   })
 })

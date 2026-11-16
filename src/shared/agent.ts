@@ -140,6 +140,20 @@ export interface ChatMessage {
    */
   promptId?: string
   /**
+   * Present on assistant turns: the reasoning effort Houston asked for on the request
+   * that wrote the reply (the chat's or the run's setting, or `ultrathink`'s), so a
+   * change in behavior can be told apart from a change of effort. A model that can't
+   * reason ignores it. Absent on replies saved before it was recorded. Display-only;
+   * providers never see it.
+   */
+  effort?: ReasoningEffort
+  /**
+   * Present on assistant turns: the version of Houston that saved the reply (its
+   * package version), so saved chats can be compared across releases. Absent on
+   * replies saved before it was recorded. Display-only; providers never see it.
+   */
+  appVersion?: string
+  /**
    * Present on the tool-result turn of a call that ran subagents (dispatch_agent,
    * dispatch_writable_agent, review_changes): what each one did, for the clients to
    * show (see SubagentRecord). Display-only; providers never see it.

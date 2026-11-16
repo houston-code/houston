@@ -57,7 +57,7 @@ import type {
   ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
-import type { Scorecard } from '@shared/scorecard'
+import type { Scorecard, ScorecardGroupBy } from '@shared/scorecard'
 import type { UsageReport } from '@shared/usageReport'
 import type { RateLimitState } from '@shared/rateLimitState'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
@@ -359,9 +359,11 @@ const api = {
     ipcRenderer.invoke(IPC.conversationSearch, query),
   getConversation: (id: string): Promise<Conversation | null> =>
     ipcRenderer.invoke(IPC.conversationGet, id),
-  /** Aggregate a local-only per-model loop scorecard over every persisted chat.
-   *  Computed on-device from local files — nothing is ever transmitted. */
-  getScorecard: (): Promise<Scorecard> => ipcRenderer.invoke(IPC.conversationScorecard),
+  /** Aggregate a local-only per-model (or per model and prompt version) loop
+   *  scorecard, with failure-signal counts, over every persisted chat. Computed
+   *  on-device from local files; only counts come back, and nothing is ever transmitted. */
+  getScorecard: (groupBy?: ScorecardGroupBy): Promise<Scorecard> =>
+    ipcRenderer.invoke(IPC.conversationScorecard, groupBy),
   /** Spend and tokens per day and per project over every saved chat (local only). */
   getUsageReport: (): Promise<UsageReport> => ipcRenderer.invoke(IPC.conversationUsageReport),
   /** The last rate-limit state each provider reported, for the status bar and Usage view. */

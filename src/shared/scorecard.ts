@@ -6,20 +6,26 @@
  * into it without pulling in any renderer code.
  *
  * Strict privacy: this module reads only the fields it is handed (model id, usage
- * totals, and the shape of the message log — role/toolCalls/toolName counts). It
- * never inspects message *content*, so aggregating for display can't leak what the
- * user actually said. The caller (main process) scans local files only.
+ * totals, and the shape and metadata of the message log: roles, tool names, each
+ * reply's model, promptId and usage, and each run's saved stop record). It never
+ * inspects message *content*. The failure signals shown beside it come from
+ * {@link ./failureSignals}, which does read text and tool results (still counts only,
+ * still on-device); keeping the two apart keeps this guarantee checkable here.
  *
- * WHAT IS AND ISN'T PERSISTED. Houston does not persist a per-run stop reason
- * (end_turn / max_tokens / aborted) or a per-turn tool-call tally — only the
- * message log, the cumulative usage totals, and a boolean "the last run errored"
- * flag survive to disk. So every derived metric below is reconstructed by scanning
- * `messages`: an assistant turn is one model "step"; a `tool` turn is one executed
- * tool call (grouped by `toolName` for the histogram). "Completion vs limit" is
- * inferred, not recorded — see {@link deriveOutcome}. These are honest
- * approximations of loop behavior, labeled as such in the UI, not exact telemetry.
+ * WHAT IS PERSISTED. Each saved reply names the model that served it and the
+ * `promptId` of Houston's instructions that produced it (`ChatMessage.model`,
+ * `ChatMessage.promptId`), along with what its round billed. A run that ended other
+ * than by finishing (it failed, was stopped, or hit a limit) leaves a record of why on
+ * its last message (`ChatMessage.runEnds`, read through {@link runEndRecords}). So a
+ * reply's step, cost and tool calls count toward the model that actually wrote it, and
+ * the run-end counts are exact. What is still reconstructed: a "step" is one assistant
+ * turn, a tool call is one `tool` turn, and "clean finish" is inferred from how the log
+ * ends (see {@link deriveOutcome}). Older chats predate some of these fields and fall
+ * back to the chat's own model and running totals.
  */
-import type { ChatMessage } from './agent'
+import type { ChatMessage, RunLimitReason } from './agent'
+import type { FailureSignalCounts } from './failureSignals'
+import { runEndRecords } from './runEnd'
 import { turnCostUsd } from './usage'
 
 /**
@@ -28,7 +34,7 @@ import { turnCostUsd } from './usage'
  * and the tests can fabricate fixtures without building a whole Conversation.
  */
 export interface ScorecardConversationInput {
-  /** Model id the conversation ran on (e.g. `claude-opus-4-6`). Groups the rows. */
+  /** Model id the conversation runs on (e.g. `claude-opus-4-6`): the row for anything no reply names. */
   model: string
   /** The full message log — scanned for step/tool counts and outcome inference. */
   messages: ChatMessage[]
@@ -47,14 +53,48 @@ export interface ScorecardConversationInput {
 }
 
 /** How a conversation's most recent run appears to have ended, inferred from its
- *  message log + errored flag (no stop reason is persisted — see module note). */
+ *  message log, its saved run-end records and the errored flag. */
 export type RunOutcome =
   /** Ended with a plain assistant turn that ran no tools — the natural "clean stop". */
   | 'completed'
   /** The most recent run ended in a persisted error. */
   | 'error'
-  /** Can't tell (empty log, or ends mid-tool-call — e.g. aborted or still mid-flight). */
+  /** Didn't finish: stopped, hit a limit, or can't tell (empty log, or still mid-flight). */
   | 'incomplete'
+
+/**
+ * What the rows are: one per model, or one per model and prompt version (the
+ * `promptId` each reply carries), to compare a model's behavior before and after a
+ * change to Houston's own instructions.
+ */
+export type ScorecardGroupBy = 'model' | 'model-prompt'
+
+/** Which row something is counted in. `promptId` only when grouped by prompt version. */
+export interface ScorecardGroupKey {
+  model: string
+  /**
+   * Absent for replies saved before Houston recorded one, and in the model-only
+   * grouping; {@link NO_REPLY_PROMPT_ID} for a chat with no reply at all.
+   */
+  promptId?: string
+}
+
+/**
+ * The prompt version of the row, when grouped by one, for chats with no reply at all
+ * (every run ended before the model said anything): no reply names a version, and the
+ * chat isn't one saved before replies did. Never a real `promptId`, which is never empty.
+ */
+export const NO_REPLY_PROMPT_ID = ''
+
+/** How many runs ended other than by finishing, by why (see {@link ChatMessage.runEnds}). */
+export interface RunEndCounts {
+  /** Runs that failed. */
+  error: number
+  /** Runs the user stopped. */
+  aborted: number
+  /** Runs that hit each limit. */
+  limits: Record<RunLimitReason, number>
+}
 
 /** A single tool's slice of the tool-usage histogram, for one model. */
 export interface ToolUsageEntry {
@@ -64,16 +104,21 @@ export interface ToolUsageEntry {
   count: number
 }
 
-/** Aggregated metrics for one model across every conversation that ran on it. */
+/** Aggregated metrics for one row: a model (or a model and prompt version). */
 export interface ModelScorecard {
   model: string
-  /** Number of conversations ("runs") aggregated into this row. */
+  /**
+   * Set when grouped by prompt version; absent for replies saved before Houston
+   * recorded one, and {@link NO_REPLY_PROMPT_ID} for chats with no reply yet.
+   */
+  promptId?: string
+  /** Number of conversations ("runs") with anything counted in this row. */
   runs: number
-  /** Total model "steps" (assistant turns) across all runs. */
+  /** Total model "steps" (assistant turns this model wrote) across all runs. */
   totalSteps: number
   /** Mean assistant turns per run (`totalSteps / runs`), 0 when there are no runs. */
   avgSteps: number
-  /** Total executed tool calls (`tool` turns) across all runs. */
+  /** Total executed tool calls (`tool` turns answering this model's calls) across all runs. */
   totalToolCalls: number
   /** Mean tool calls per run, 0 when there are no runs. */
   avgToolCalls: number
@@ -84,19 +129,28 @@ export interface ModelScorecard {
   totalCost: number
   /** Mean estimated USD cost per run, 0 when there are no runs. */
   avgCost: number
-  /** How many runs ended cleanly (outcome `completed`). */
+  /** How many conversations whose latest run is counted here ended it cleanly (outcome `completed`). */
   completedRuns: number
-  /** How many runs ended in an inferred limit / non-clean stop (error or incomplete). */
+  /** How many conversations whose latest run is counted here ended it otherwise (error or incomplete). */
   limitedRuns: number
-  /** Fraction of runs that ended cleanly, in [0, 1]; 0 when there are no runs. */
+  /** `completedRuns / (completedRuns + limitedRuns)`, in [0, 1]; 0 when neither. */
   completionRate: number
+  /** Every run that ended other than by finishing, by why, from the records runs leave. */
+  runEnds: RunEndCounts
   /** Tool-usage histogram, most-used first (ties broken by name for stable order). */
   tools: ToolUsageEntry[]
+  /**
+   * The failure signals counted in this row, when the scan that built the scorecard
+   * attached them (see `attachFailureSignals` in ./failureSignals). Never set here.
+   */
+  signals?: FailureSignalCounts
 }
 
 /** The whole scorecard: one row per model plus a totals summary. All local. */
 export interface Scorecard {
-  /** Per-model rows, ordered by total cost desc then run count desc then model asc. */
+  /** What each row is. */
+  groupBy: ScorecardGroupBy
+  /** Rows, ordered by total cost desc then run count desc then model asc (then prompt id). */
   models: ModelScorecard[]
   /** Number of conversations that fed the scorecard. */
   totalRuns: number
@@ -104,53 +158,93 @@ export interface Scorecard {
   totalCost: number
 }
 
+/** A row's identity as one string, for maps and React keys. */
+export function groupKeyId(k: ScorecardGroupKey): string {
+  return k.promptId === undefined ? k.model : `${k.model}\u0000${k.promptId}`
+}
+
 /**
- * Infer how a conversation's most recent run ended. Because no stop reason is
- * persisted, we reason from the tail of the message log plus the errored flag:
+ * The row each message of a log is counted in. A reply counts in its own row: the
+ * model that served it (the chat's model when an older reply doesn't say) and, grouped
+ * by prompt version, its `promptId`. Every other message counts in the row of the
+ * latest reply before it, so a tool result counts where its call was made and a
+ * run-end record where that run's last reply was. A message before the first reply
+ * counts in that reply's row, the nearest one that names a model and prompt version.
+ * A run that failed before replying is therefore credited to the model of the reply
+ * next to it, which is right unless the model was switched around that run (the
+ * record doesn't name one). A chat with no reply at all counts in its own model's
+ * row, under {@link NO_REPLY_PROMPT_ID} when grouped by prompt version.
+ */
+export function messageGroups(
+  messages: readonly ChatMessage[],
+  chatModel: string,
+  groupBy: ScorecardGroupBy = 'model'
+): ScorecardGroupKey[] {
+  const fallback: ScorecardGroupKey = { model: chatModel || 'unknown' }
+  const rowOf = (m: ChatMessage): ScorecardGroupKey => {
+    const model = m.model || fallback.model
+    return groupBy === 'model-prompt' && m.promptId ? { model, promptId: m.promptId } : { model }
+  }
+  const first = messages.find((m) => m.role === 'assistant')
+  let current: ScorecardGroupKey = first
+    ? rowOf(first)
+    : groupBy === 'model-prompt'
+      ? { ...fallback, promptId: NO_REPLY_PROMPT_ID }
+      : fallback
+  return messages.map((m) => {
+    if (m.role === 'assistant') current = rowOf(m)
+    return current
+  })
+}
+
+export function emptyRunEndCounts(): RunEndCounts {
+  return { error: 0, aborted: 0, limits: { 'max-steps': 0, 'max-output': 0, stalled: 0, 'max-cost': 0 } }
+}
+
+/**
+ * A row's run-end counts as short labeled parts, most common kinds first in a fixed
+ * order, leaving out the kinds that never happened. Shared by the desktop panel and
+ * `/scorecard` so the two word them the same.
+ */
+export function runEndParts(c: RunEndCounts): Array<{ label: string; count: number }> {
+  const parts = [
+    { label: 'failed', count: c.error },
+    { label: 'stopped', count: c.aborted },
+    { label: 'step limit', count: c.limits['max-steps'] },
+    { label: 'output limit', count: c.limits['max-output'] },
+    { label: 'stalled', count: c.limits.stalled },
+    { label: 'cost limit', count: c.limits['max-cost'] }
+  ]
+  return parts.filter((p) => p.count > 0)
+}
+
+/**
+ * Infer how a conversation's most recent run ended, walking back from the end of
+ * the log:
  *  - `errored` set → `error` (a run that failed is not a clean completion).
- *  - the log ends on an assistant turn that called NO tools → `completed` (the
- *    model chose to stop talking — the loop's natural end-of-run branch).
+ *  - a message carrying a run-end record → that record decides: `error` for a
+ *    failure, `incomplete` for a stop or a limit (the step cap leaves a plain text
+ *    reply, so without the record it would read as a clean finish).
+ *  - otherwise the log ends on an assistant turn that called NO tools → `completed`
+ *    (the model chose to stop talking — the loop's natural end-of-run branch).
  *  - the log ends on a tool call or a tool result (or is empty) → `incomplete`:
- *    the run was cut off mid-flight (aborted, hit a step/output limit, or is still
- *    running), none of which is a clean completion.
- * Pure; exported so it can be unit-tested against fabricated logs directly.
+ *    the run was cut off mid-flight (or is still running).
+ * A trailing user turn without a record (a message queued after the run ended) is
+ * skipped. Pure; exported so it can be unit-tested against fabricated logs directly.
  */
 export function deriveOutcome(input: ScorecardConversationInput): RunOutcome {
   if (input.errored) return 'error'
   const msgs = input.messages
-  if (msgs.length === 0) return 'incomplete'
-  // Walk back to the last assistant or tool turn (skip any trailing user turn —
-  // e.g. a queued message typed after the run ended shouldn't mask the outcome).
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i]
+    const end = runEndRecords(m).at(-1)
+    if (end) return end.reason === 'error' ? 'error' : 'incomplete'
     if (m.role === 'assistant') {
       return m.toolCalls && m.toolCalls.length > 0 ? 'incomplete' : 'completed'
     }
     if (m.role === 'tool') return 'incomplete'
   }
   return 'incomplete'
-}
-
-/** Count the assistant turns ("steps") in a message log. */
-function countSteps(messages: ChatMessage[]): number {
-  let n = 0
-  for (const m of messages) if (m.role === 'assistant') n++
-  return n
-}
-
-/**
- * Tally executed tool calls by name from a message log. A `tool` turn is one
- * executed call and carries the `toolName` that produced it; that's the ground
- * truth for "what ran" (an assistant turn may *request* tools that never resolve
- * on an aborted run, so we count results, not requests). Unnamed tool turns are
- * bucketed under `unknown` rather than dropped, so the totals stay honest.
- */
-function tallyTools(messages: ChatMessage[], into: Map<string, number>): void {
-  for (const m of messages) {
-    if (m.role !== 'tool') continue
-    const name = m.toolName || 'unknown'
-    into.set(name, (into.get(name) ?? 0) + 1)
-  }
 }
 
 /** Round to at most `places` decimals without trailing-zero noise (returns a number). */
@@ -160,9 +254,11 @@ function round(n: number, places = 2): number {
   return Math.round(n * f) / f
 }
 
+const nonNeg = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0)
+
 /**
- * A model's cumulative cost, preferring the persisted `usage.cost` (what the meter
- * actually charged) and falling back to a fresh estimate from the token counts
+ * A conversation's cumulative cost, preferring the persisted `usage.cost` (what the
+ * meter actually charged) and falling back to a fresh estimate from the token counts
  * when a conversation never recorded a cost (e.g. older data, or a turn whose price
  * was unknown at the time but is known now). Never negative.
  */
@@ -181,18 +277,67 @@ function conversationCost(input: ScorecardConversationInput): number {
 }
 
 /**
- * Aggregate a set of conversations into a per-model scorecard. Pure: same input →
- * same output, no I/O, no clock, no globals. The caller (main process) is
- * responsible for reading the local conversation files and handing them in;
- * nothing here touches the network or the filesystem.
+ * The scorecard's row order. Costliest models first — that's what a "where is my
+ * budget going" glance wants. Ties fall back to run count, then model id (then prompt
+ * id) for a stable order.
+ */
+export function compareScorecardRows(x: ModelScorecard, y: ModelScorecard): number {
+  return (
+    y.totalCost - x.totalCost ||
+    y.runs - x.runs ||
+    x.model.localeCompare(y.model) ||
+    (x.promptId ?? '').localeCompare(y.promptId ?? '')
+  )
+}
+
+/**
+ * A row with nothing counted in it but its runs, for something another report found
+ * in chats where the scorecard counted nothing for that row (see `attachFailureSignals`).
+ */
+export function emptyScorecardRow(key: ScorecardGroupKey, runs: number): ModelScorecard {
+  return {
+    model: key.model,
+    ...(key.promptId !== undefined ? { promptId: key.promptId } : {}),
+    runs,
+    totalSteps: 0,
+    avgSteps: 0,
+    totalToolCalls: 0,
+    avgToolCalls: 0,
+    totalOutputTokens: 0,
+    totalCost: 0,
+    avgCost: 0,
+    completedRuns: 0,
+    limitedRuns: 0,
+    completionRate: 0,
+    runEnds: emptyRunEndCounts(),
+    tools: []
+  }
+}
+
+/**
+ * Aggregate a set of conversations into a per-model (or per model and prompt
+ * version) scorecard. Pure: same input → same output, no I/O, no clock, no globals.
+ * The caller (main process) is responsible for reading the local conversation files
+ * and handing them in; nothing here touches the network or the filesystem.
+ *
+ * Each reply's step and billed usage, and the tool calls that answer it, count in
+ * its own row ({@link messageGroups}). Whatever the chat's running totals hold
+ * beyond its replies (subagents, reviews, chats saved before replies recorded their
+ * usage) counts in the row of the chat's last message, as does how its latest run
+ * ended.
  *
  * Conversations with an empty message log AND no usage are skipped — they're
  * brand-new "New chat" placeholders that never ran, and counting them as runs
  * would dilute every average with zeros.
  */
-export function buildScorecard(conversations: ScorecardConversationInput[]): Scorecard {
-  // Per-model running accumulators, keyed by model id.
+export function buildScorecard(
+  conversations: ScorecardConversationInput[],
+  options: { groupBy?: ScorecardGroupBy } = {}
+): Scorecard {
+  const groupBy = options.groupBy ?? 'model'
+  // Per-row running accumulators, keyed by groupKeyId.
   interface Acc {
+    key: ScorecardGroupKey
     runs: number
     steps: number
     toolCalls: number
@@ -200,14 +345,17 @@ export function buildScorecard(conversations: ScorecardConversationInput[]): Sco
     cost: number
     completed: number
     limited: number
+    ends: RunEndCounts
     tools: Map<string, number>
   }
-  const byModel = new Map<string, Acc>()
+  const rows = new Map<string, Acc>()
 
-  const accFor = (model: string): Acc => {
-    let a = byModel.get(model)
+  const accFor = (key: ScorecardGroupKey): Acc => {
+    const id = groupKeyId(key)
+    let a = rows.get(id)
     if (!a) {
       a = {
+        key,
         runs: 0,
         steps: 0,
         toolCalls: 0,
@@ -215,67 +363,100 @@ export function buildScorecard(conversations: ScorecardConversationInput[]): Sco
         cost: 0,
         completed: 0,
         limited: 0,
+        ends: emptyRunEndCounts(),
         tools: new Map()
       }
-      byModel.set(model, a)
+      rows.set(id, a)
     }
     return a
   }
 
+  let totalRuns = 0
   for (const input of conversations) {
     // Only this chat's own messages: a copied history is counted with its source.
-    const own = input.inherited ? input.messages.slice(input.inherited) : input.messages
+    const start = Math.max(0, input.inherited ?? 0)
+    const own = start ? input.messages.slice(start) : input.messages
     const conv: ScorecardConversationInput = { ...input, messages: own }
     const hasUsage = !!conv.usage && (conv.usage.outputTokens > 0 || conv.usage.cost > 0)
     if (own.length === 0 && !hasUsage) continue // never-ran placeholder (or an unused fork)
-    const model = conv.model || 'unknown'
-    const a = accFor(model)
-    a.runs++
-    a.steps += countSteps(own)
-    let toolTurns = 0
-    for (const m of own) if (m.role === 'tool') toolTurns++
-    a.toolCalls += toolTurns
-    tallyTools(own, a.tools)
-    if (conv.usage) {
-      a.outputTokens += conv.usage.outputTokens > 0 ? conv.usage.outputTokens : 0
+    totalRuns++
+    // Over the whole log, so a tool result right after the copied history still finds its reply.
+    const keys = messageGroups(input.messages, input.model, groupBy)
+    const touched = new Set<Acc>()
+    let replyCost = 0
+    let replyOutput = 0
+    for (let i = start; i < input.messages.length; i++) {
+      const m = input.messages[i]
+      const a = accFor(keys[i])
+      if (m.role === 'assistant') {
+        a.steps++
+        touched.add(a)
+        if (m.usage) {
+          const cost = nonNeg(m.usage.cost)
+          const out = nonNeg(m.usage.outputTokens)
+          a.cost += cost
+          a.outputTokens += out
+          replyCost += cost
+          replyOutput += out
+        }
+      } else if (m.role === 'tool') {
+        // A `tool` turn is one executed call: the ground truth for "what ran" (a reply
+        // may request calls an aborted run never resolved). Unnamed ones are bucketed
+        // under `unknown` rather than dropped, so the totals stay honest.
+        a.toolCalls++
+        const name = m.toolName || 'unknown'
+        a.tools.set(name, (a.tools.get(name) ?? 0) + 1)
+        touched.add(a)
+      }
+      for (const r of runEndRecords(m)) {
+        if (r.reason === 'limit') a.ends.limits[r.limit ?? 'max-steps']++
+        else a.ends[r.reason]++
+        touched.add(a)
+      }
     }
-    a.cost += conversationCost(conv)
-    if (deriveOutcome(conv) === 'completed') a.completed++
-    else a.limited++
+    // The chat's running totals beyond what its replies recorded, and how its latest
+    // run ended, go to the row of its last message.
+    const home = accFor(keys.at(-1) ?? { model: input.model || 'unknown' })
+    touched.add(home)
+    const output = Math.max(0, nonNeg(conv.usage?.outputTokens) - replyOutput)
+    home.outputTokens += output
+    home.cost += Math.max(0, conversationCost(conv) - replyCost)
+    if (deriveOutcome(conv) === 'completed') home.completed++
+    else home.limited++
+    for (const a of touched) a.runs++
   }
 
   const models: ModelScorecard[] = []
-  for (const [model, a] of byModel) {
+  for (const a of rows.values()) {
+    if (a.runs === 0) continue
     const tools: ToolUsageEntry[] = [...a.tools.entries()]
       .map(([name, count]) => ({ name, count }))
       .sort((x, y) => y.count - x.count || x.name.localeCompare(y.name))
+    const ended = a.completed + a.limited
     models.push({
-      model,
+      model: a.key.model,
+      ...(a.key.promptId !== undefined ? { promptId: a.key.promptId } : {}),
       runs: a.runs,
       totalSteps: a.steps,
-      avgSteps: a.runs ? round(a.steps / a.runs, 1) : 0,
+      avgSteps: round(a.steps / a.runs, 1),
       totalToolCalls: a.toolCalls,
-      avgToolCalls: a.runs ? round(a.toolCalls / a.runs, 1) : 0,
+      avgToolCalls: round(a.toolCalls / a.runs, 1),
       totalOutputTokens: a.outputTokens,
       totalCost: round(a.cost, 4),
-      avgCost: a.runs ? round(a.cost / a.runs, 4) : 0,
+      avgCost: round(a.cost / a.runs, 4),
       completedRuns: a.completed,
       limitedRuns: a.limited,
-      completionRate: a.runs ? round(a.completed / a.runs, 4) : 0,
+      completionRate: ended ? round(a.completed / ended, 4) : 0,
+      runEnds: a.ends,
       tools
     })
   }
 
-  // Costliest models first — that's what a "where is my budget going" glance wants.
-  // Ties fall back to run count, then model id for a stable, deterministic order.
-  models.sort(
-    (x, y) => y.totalCost - x.totalCost || y.runs - x.runs || x.model.localeCompare(y.model)
-  )
+  models.sort(compareScorecardRows)
 
-  const totalRuns = models.reduce((s, m) => s + m.runs, 0)
   const totalCost = round(
     models.reduce((s, m) => s + m.totalCost, 0),
     4
   )
-  return { models, totalRuns, totalCost }
+  return { groupBy, models, totalRuns, totalCost }
 }

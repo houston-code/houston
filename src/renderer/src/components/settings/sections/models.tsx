@@ -991,7 +991,7 @@ export function ScorecardSection({ ctx }: { ctx: SettingsCtx }): JSX.Element | n
   return (
     <SettingsSection
       title="Loop scorecard"
-      desc="See how each model has actually behaved across your chats: average steps, tool use, clean-finish rate, and cost. Aggregated on-device from your local data only, never sent anywhere."
+      desc="See how each model has actually behaved across your chats: average steps, tool use, clean-finish rate, cost, how runs stopped short, and failure signals. Worked out on this computer from your saved chats (their text included, for the signals) and never sent anywhere."
     >
       <button type="button" className="btn" onClick={onShowScorecard}>
         Open loop scorecard

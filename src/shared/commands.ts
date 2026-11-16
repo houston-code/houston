@@ -490,8 +490,8 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['gui', 'tui']
   },
   {
-    name: 'scorecard', group: 'Setup',
-    description: 'How each model has behaved across your chats: steps, tools, clean finishes, cost',
+    name: 'scorecard', group: 'Setup', args: '[prompts]',
+    description: 'How each model has behaved across your chats: steps, tools, clean finishes, cost, failure signals',
     clients: ['tui']
   },
   {

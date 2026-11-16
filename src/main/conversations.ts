@@ -54,7 +54,8 @@ import { repairDanglingToolResults } from './agent/repair'
 import { accumulateModelUsage } from '@shared/usage'
 import { invocationText } from '@shared/promptInvocation'
 import { runOutcome, type RunOutcome } from '@shared/runEnd'
-import { buildScorecard, type Scorecard } from '@shared/scorecard'
+import { buildScorecard, type Scorecard, type ScorecardGroupBy } from '@shared/scorecard'
+import { attachFailureSignals, buildFailureSignals } from '@shared/failureSignals'
 import type { StoredQueue } from '@shared/queue'
 import { clearConversationOverride } from './agent/overrides'
 import { forgetSubAgentSessions } from './agent/subagentSessions'
@@ -1310,16 +1311,18 @@ export function listConversations(): ConversationMeta[] {
 /**
  * Aggregate a per-model "loop scorecard" over EVERY persisted conversation,
  * entirely on-device. Reads each conversation JSON from userData/conversations,
- * feeds only the model id, cumulative usage totals, message log, and errored flag
- * into the pure {@link buildScorecard} aggregator, and returns the result.
+ * feeds the model id, cumulative usage totals, message log, and errored flag into
+ * the pure {@link buildScorecard} aggregator, and attaches each row's failure
+ * signals from {@link buildFailureSignals}, which reads the messages' text too.
  *
  * STRICT PRIVACY: this is a local-only scan — it never transmits anything, makes
  * no network calls, and reads no data beyond the user's own conversation files.
- * The heavy scan (one file read per conversation) lives here in the main process,
- * off the render path, exposed to the renderer via a single request/response IPC
- * call rather than recomputed on every event.
+ * What it returns is counts and sums, never message text. The heavy scan (one file
+ * read per conversation) lives here in the main process, off the render path,
+ * exposed to the renderer via a single request/response IPC call rather than
+ * recomputed on every event.
  */
-export function computeScorecard(): Scorecard {
+export function computeScorecard(groupBy: ScorecardGroupBy = 'model'): Scorecard {
   const files = readdirSync(dir()).filter((f) => f.endsWith('.json'))
   const inputs = []
   for (const f of files) {
@@ -1336,7 +1339,7 @@ export function computeScorecard(): Scorecard {
       errored: !!conv.lastError
     })
   }
-  return buildScorecard(inputs)
+  return attachFailureSignals(buildScorecard(inputs, { groupBy }), buildFailureSignals(inputs, { groupBy }))
 }
 
 /**

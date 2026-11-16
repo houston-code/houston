@@ -2362,12 +2362,53 @@ tokens left, and when the window refills). The cost reminder is set with
 
 ### Loop scorecard (/scorecard)
 
-The loop scorecard shows how each model has behaved across your chats, aggregated on
-this computer from the saved chats (only counts, never message content, and nothing is
-sent anywhere). For each model: its runs, average steps and tool calls per run, how
-often a run finished cleanly (the rest hit an error or were cut off), total and
-per-run estimated cost, output tokens, and the tools it used most. Figures are
-approximate. In the desktop app it opens from Settings > Providers & Models > **Open
+The loop scorecard shows how each model has behaved across your chats. Houston works it
+out on this computer from the chats saved here, and nothing is sent anywhere. To count
+the failure signals below it reads the chats themselves, including their text and tool
+results, but it only ever shows counts, never anything from a chat.
+
+For each model:
+
+- **Runs and averages:** the chats it ran in, average steps and tool calls per run,
+  total and per-run estimated cost, output tokens, and the tools it used most. Each
+  reply counts toward the model that actually wrote it, so a chat you switched models
+  in is split between them.
+- **Clean finish:** how often a chat's latest run finished on its own, rather than
+  failing, being stopped, hitting a limit, or being cut off. A model you switched away
+  from mid-chat may have no chat's latest run to rate, and then shows "–".
+- **Stopped short:** every run that ended other than by finishing, by why: failed,
+  stopped, step limit, output limit, stalled, or cost limit. These come from the record
+  each run saves of why it stopped, so they are exact (chats from older versions of
+  Houston may not have one).
+- **Failure signals:** signs worth a look, found by reading the chats:
+  - **no reply:** a run that ended before the model replied at all.
+  - **malformed tool calls:** a tool call refused for invalid arguments or an empty edit.
+  - **repeated errors:** the same tool failing the same way for the third time in a chat.
+    For a command, that means the same command with the same output; a command that
+    exits with an error code but prints nothing (a search with no match, say) isn't
+    counted as failing.
+  - **tool calls as text:** a reply that wrote a tool call out as text instead of making
+    it. Code a reply quotes on purpose, such as an example of a call, isn't counted.
+  - **silent ends:** a turn that ended on a tool result with no closing message. Chats
+    saved by older versions of Houston, which didn't record every stop, are left out.
+  - **question bursts:** a turn that asked you three or more questions before changing
+    any file.
+  - **unchecked todos:** a todo marked done whose check (tests, a build) never passed.
+  - **loosened tests:** a turn that deleted, skipped, or weakened a test.
+
+The signals are heuristics: use them to spot a trend or to find a chat worth opening,
+not as a score. The chat's latest turn is left out of the turn-shape checks, since it may
+still be running. Figures are approximate.
+
+Every saved reply also records the version of Houston's own instructions that wrote
+it, the reasoning effort it asked for, and the Houston version, so a change in
+behavior can be traced to a prompt change, an effort change, or an upgrade. To compare
+prompt versions, tick **Split each model by prompt version** in the desktop panel, or
+run `/scorecard prompts` in the terminal: each model then gets a row per version
+(replies saved before Houston recorded one share a "before prompt ids" row, and chats
+with no reply yet share a "no reply yet" row).
+
+In the desktop app the scorecard opens from Settings > Providers & Models > **Open
 loop scorecard**; in the terminal, `/scorecard` prints it.
 
 ## Version and updates
