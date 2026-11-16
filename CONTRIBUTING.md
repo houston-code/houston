@@ -349,20 +349,30 @@ and `probe:<id>` select the behavior probes below). It can't be combined with
 registered stops the run. `HOUSTON_EVAL_COMPARE_OUT=<file>` also writes
 the comparison to a file.
 
-The **Prompt A/B (live)** workflow (`eval-ab.yml`) does this for a pull request. It
-scores the harder tasks on `claude-haiku-5-5`, two attempts each, on the base commit and
-on the pull request's merge commit, and posts the `eval:compare` scorecard as a comment,
-editing its earlier one on a re-run. It is not a required check and never fails on a
-lower score; it fails only when a side produced no run record.
+The **Prompt A/B (live)** workflow (`eval-ab.yml`) does this for a pull request on
+`claude-haiku-5-5`, comparing the base commit with the pull request's merge commit. By
+default each side runs the behavior probes below (`HOUSTON_EVAL_TASKS=probes`), five
+attempts each: they grade the habits a prompt change usually targets, which no task can
+see, and on the tasks alone a comparison resolves little more than a near-sweep. With the
+`eval-ab` label, each side also scores the harder tasks, two attempts each, as a second
+eval run with its own run record, so each keeps its own attempt count. A base commit from
+before the probes can't select them, so then both sides score the harder tasks alone, and
+the comment says so. The workflow posts one `eval:compare` scorecard per suite as a
+comment, probes first, and edits its earlier one on a re-run. It is not a required check
+and never fails on a lower score; it fails only when an eval run produced no run record.
 
-A live A/B costs about $0.80, and one that compares identical prompts measures only
-noise, so it runs only when what the model is told actually changed. A pull request
-from a branch in this repository that touches the agent, sandbox or shared sources
-(tests aside) or the agent goldens first gets a gate hash computed on both sides, and
-the live run starts only when the two differ. The gate hash folds the first request's
-system prompt and tools (the eval prompt hash) together with the loop's `promptId`,
-which also covers the deferred tools' schemas. It needs no key and makes no model call,
-so you can check a change the same way locally:
+Each eval run has its own run cap (`HOUSTON_EVAL_MAX_RUN_USD`), about five times its
+usual cost on `claude-haiku-5-5`: $1 for the probes, which cost roughly $0.05 to $0.20 a
+side, and $2 for the harder tasks, about $0.40 a side. The per-attempt cap keeps its
+default. An A/B that compares identical prompts measures only noise, so it runs only when
+what the model is told actually changed. A pull request from a branch in this repository
+that touches the agent, sandbox or shared sources (tests aside) or the agent goldens first
+gets a gate hash computed on both sides, and the live run starts only when the two
+differ. The gate hash folds the first request's system prompt and tools (the eval prompt
+hash) together with the loop's `promptId`, which also covers the deferred tools' schemas.
+It is taken at the start of a task and of every probe, so a probe that starts in Plan mode
+adds the Plan-mode section of the prompt and `present_plan`'s schema. It needs no key and
+makes no model call, so you can check a change the same way locally:
 
 ```bash
 HOUSTON_EVAL_MODEL=claude-haiku-5-5 HOUSTON_EVAL_HASH_OUT=hash.txt npm run eval
@@ -371,9 +381,10 @@ HOUSTON_EVAL_MODEL=claude-haiku-5-5 HOUSTON_EVAL_HASH_OUT=hash.txt npm run eval
 The hash covers the lines for the host's OS, so compare hashes from the same kind of
 machine. The product guide is not part of it: the model reads `docs/houston-guide.md`
 only on demand, through the houston-guide skill. Neither is text the model reads later
-in a run, such as a tool's results or error messages. To run the A/B on any pull request
-regardless, add the `eval-ab` label; to run it again after a push, remove the label and
-add it back.
+in a run, such as a tool's results or error messages, or the note a switch into Plan mode
+mid-run sends. To run the A/B on any pull request
+regardless, with the harder tasks as well, add the `eval-ab` label; to run it again after
+a push, remove the label and add it back.
 
 #### External benchmarks
 
@@ -472,8 +483,8 @@ model requests an attempt, roughly $0.04 on `claude-haiku-5-5` at its $0.10 and 
 per million input and output tokens, so about $0.12 for the default three attempts. That
 is an upper bound (`probes/index.ts` has the arithmetic): most attempts stop before their
 cap, and cached prompt reads cost less. No live run of the probes has happened yet. The
-first is a local run with a provider key, since an agent's shell has none, and its
-scorecard prints the real cost.
+first is a local run with a provider key (an agent's shell has none) or the Prompt A/B
+above, which runs them at five attempts a side, and its scorecard prints the real cost.
 
 A probe that starts in a mode other than full auto (the `present_plan` one runs in Plan
 mode) is told something else by design, so the run's prompt hash and `promptId` are

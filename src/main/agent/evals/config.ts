@@ -47,11 +47,12 @@ export interface EvalConfig {
    */
   tasks?: string
   /**
-   * Hash-only mode (HOUSTON_EVAL_HASH_OUT=<file>): write the prompt hash the live
-   * provider and model would get, then stop. It drives one run against a fake
-   * provider configured like the live one, so it needs no key and makes no network
-   * call. The eval-ab workflow uses it to skip an A/B when the pull request leaves
-   * the eval prompt unchanged.
+   * Hash-only mode (HOUSTON_EVAL_HASH_OUT=<file>): write the gate hash for what the
+   * live provider and model would be told, then stop. It starts a task and every probe
+   * (a Plan-mode one included) against a fake provider configured like the live one,
+   * each for one scripted reply, so it needs no key and makes no network call. The
+   * eval-ab workflow uses it to skip an A/B when the pull request leaves the eval
+   * prompt unchanged.
    */
   hashOut?: string
   /**

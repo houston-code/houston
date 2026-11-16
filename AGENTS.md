@@ -117,10 +117,15 @@ of `npm test`) uses the scripted driver and gates every PR;
 provider's `defaultModel` breaks nothing in CI; scoring the new default, on demand or in a
 local live run with no `HOUSTON_EVAL_MODEL`, needs a baseline recorded for it first. A pull
 request whose change reaches what the model is told (its gate hash, the eval prompt hash
-folded with the loop's `promptId` and computed keylessly with `HOUSTON_EVAL_HASH_OUT`,
-differs between the merge commit and its first parent), or that carries the `eval-ab`
-label, also gets a non-gating live A/B of the harder tasks from `eval-ab.yml`, posted as a
-comment. Its concurrency groups are per job and per pull request, never workflow-level
+folded with the loop's `promptId` at the start of a task and of every probe, Plan-mode
+ones included, and computed keylessly with `HOUSTON_EVAL_HASH_OUT`, differs between the
+merge commit and its first parent), or that carries the `eval-ab`
+label, also gets a non-gating live A/B from `eval-ab.yml`, posted as a comment: the
+behavior probes at five attempts a side, plus (with the label) the harder tasks at two as
+a second eval run and run record, each under its own `HOUSTON_EVAL_MAX_RUN_USD`. Its
+`payload` job greps the base's `config.ts` for the probes keyword, and a base without it
+runs the harder tasks alone on both sides; it reads the label again itself, since a run
+that hashed before the label was added replaces the labelled run's legs. Its concurrency groups are per job and per pull request, never workflow-level
 (that cancelled a running A/B whenever another label was added) and never
 `eval-live.yml`'s, whose group sits on its `evals` job, keyed on provider and model (not
 the event or record mode, so runs of one model wait rather than share its rate limit) with
