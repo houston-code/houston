@@ -1,19 +1,30 @@
 name: Prompt A/B (live)
 
-# A paired live A/B of the task evals for a pull request that changes what the model is
-# told: the system prompt and the tool descriptions and schemas a live run sends. Add the
-# `eval-ab` label to run it on any pull request regardless (remove and re-add it to run it
-# again after a push).
+# A paired live A/B of the evals for a pull request that changes what the model is told:
+# the system prompt and the tool descriptions and schemas a live run sends. Add the
+# `eval-ab` label to run it on any pull request regardless, with the harder tasks as well
+# (remove and re-add it to run it again after a push).
 #
 # WHAT IT ANSWERS. The goldens show that the prompt changed, not whether the agent got
-# better or worse at real work. This runs the harder task subset on the base commit (A,
-# the merge commit's first parent, so the base the merge was actually built on) and on
-# the pull request's merge commit (B), two attempts per task on claude-haiku-5-5,
-# and posts `npm run eval:compare`'s scorecard as a comment: per-task deltas, the sign
-# test, and the stamps (model, prompt hash, commit) that say what each side ran.
+# better or worse at real work. This runs the same evals on the base commit (A, the merge
+# commit's first parent, so the base the merge was actually built on) and on the pull
+# request's merge commit (B), on claude-haiku-5-5, and posts `npm run eval:compare`'s
+# scorecard as a comment: per-task deltas, the sign test, and the stamps (model, prompt
+# hash, commit) that say what each side ran.
 #
-# WHEN IT SPENDS. A live A/B costs about $0.80, and one that compares two identical
-# prompts can only measure noise. So two free checks run first:
+# WHAT EACH SIDE RUNS (the payload job decides, once for both). By default the behavior
+# probes (HOUSTON_EVAL_TASKS=probes) at five attempts each: short checks graded on what
+# the agent did over its next few actions, aimed at the habits a prompt change targets. A
+# task grades only whether the work got done, so a change aimed at a habit shows nothing
+# there, and across the task subset a comparison resolves little more than near-sweeps.
+# The label adds the harder task subset (HOUSTON_EVAL_TASKS=hard) at two attempts each, as
+# a second eval run with its own run record, so each keeps its own attempt count, and the
+# comment shows both scorecards, probes first. A base commit from before the probes can't
+# select them, so then both sides run the harder tasks alone, and the comment says so.
+#
+# WHEN IT SPENDS. A side's probes cost roughly $0.05 to $0.20 and its harder tasks about
+# $0.40, and an A/B that compares two identical prompts can only measure noise. So two
+# free checks run first:
 #   1. The plan job skips pull requests that touch none of the code that can shape the
 #      prompt: the agent, sandbox and shared sources (tests aside), the agent goldens,
 #      and the eval driver the hash comes from, so a pull request that breaks hash-only
@@ -29,30 +40,35 @@ name: Prompt A/B (live)
 #      desktop-only and CLI-only lines, or lines another OS gets. Text the model reads
 #      later in a run, such as a tool's result or error messages, is not part of it.
 # The label skips both checks. A base commit from before hash-only mode existed has no
-# hash to compare, so its pull request is A/B'd as before.
+# hash to compare, so its pull request is A/B'd as before. Every eval run also has its own
+# run cap (HOUSTON_EVAL_MAX_RUN_USD, from the env below), which the driver enforces between
+# attempts; the per-attempt cap keeps its default.
 #
 # IT NEVER GATES. The result is non-deterministic and billed, so it is not a required
-# check and its scorecard is information for the reviewer. Each side's eval run exits
-# non-zero when a task, or the run as a whole, falls below its weekly baseline (the run
-# record is written first); that is still a valid side of the comparison, so the job
-# only fails when a side wrote no run record at all.
+# check and its scorecard is information for the reviewer. An eval run exits non-zero
+# when a task, or the run as a whole, falls below its weekly baseline (a probe has none,
+# so it never does), or when its run cap stops it; the run record is written first, and
+# that is still a valid side of the comparison, so the job only fails when an eval run
+# wrote no run record at all.
 #
 # SECRETS AND TRUST. This is a `pull_request` workflow, never `pull_request_target`: it
 # runs the pull request's own code, so the model key reaches only pull requests from
 # branches in this repository (GitHub withholds secrets from forks, and the plan job
 # skips them so they don't fail at the key check). The key is step-scoped in the `ab`
 # job, which holds a read-only token. The hash jobs run the pull request's code with no
-# secret at all. The job that runs the comparison holds no secret, and the job that
-# comments runs none of the pull request's code. As in eval-live.yml, the eval driver
-# auto-approves every tool call, so a live model really can run shell commands here; the
-# ephemeral runner and the read-only token contain it. Do not add a publish credential.
+# secret at all, and the payload job only reads the base's config.ts. The job that runs
+# the comparison holds no secret, and the job that comments runs none of the pull
+# request's code. As in eval-live.yml, the eval driver auto-approves every tool call, so
+# a live model really can run shell commands here; the ephemeral runner and the
+# read-only token contain it. Do not add a publish credential.
 #
 # CONCURRENCY. No workflow-level group. One would cancel a running A/B the moment any
 # later event created a run, including adding an unrelated label such as full-ci, before
 # the plan job could ignore that event. Instead each job that does work has its own group
 # per pull request (and side), so only a newer run doing the same work replaces it. None
 # of them shares a group with eval-live.yml (`eval-live-...`): these cancel in progress,
-# and an A/B joining one of its groups would kill the weekly scored run.
+# and an A/B joining one of its groups would kill the weekly scored run. The payload job
+# needs none: it reads one file, and the ab job's groups do the replacing.
 
 on:
   pull_request:
@@ -64,6 +80,23 @@ permissions:
 env:
   # No Electron runtime and no packaged browser are exercised here.
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+  # How a side scores each suite: attempts per task, and the run cap for that suite's eval
+  # run (HOUSTON_EVAL_MAX_RUN_USD: once a run has spent it, no further attempt starts and
+  # the run fails, naming what it skipped). The ab job runs each suite with these, and the
+  # compare job labels its scorecards with them. Not HOUSTON_EVAL_* names, which would
+  # reach the hash jobs' eval runs too. Each cap is about five times what the run costs
+  # on claude-haiku-5-5, so it stops a runaway without cutting a normal run short:
+  #   probes  one attempt at all eight allows about 25 model requests, at most about $0.04
+  #           uncached (src/main/agent/evals/probes/index.ts), so five attempts cost at
+  #           most about $0.20, and less with early stops and cached prompt reads: $1.
+  #   hard    two-attempt runs of the 20 harder tasks averaged about $0.011 an attempt
+  #           (src/main/agent/evals/costCaps.ts), so about $0.45 a run: $2.
+  # The attempt that crosses a cap still finishes, bounded by the per-attempt cap
+  # (HOUSTON_EVAL_MAX_COST_USD), which keeps its default.
+  AB_PROBES_ATTEMPTS: '5'
+  AB_PROBES_MAX_RUN_USD: '1'
+  AB_HARD_ATTEMPTS: '2'
+  AB_HARD_MAX_RUN_USD: '2'
 
 jobs:
   # Decides whether this event may spend anything: the `eval-ab` label is on the pull
@@ -266,17 +299,64 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
-  # One live run per side. A is the base commit, B the merge commit GitHub built for
-  # this pull request, so the only difference between them is the pull request itself.
+  # What each side scores, decided once so both run the same suites: the behavior probes,
+  # then the harder tasks too when the label is set, or the harder tasks alone when the
+  # base predates the probes. The suites are HOUSTON_EVAL_TASKS keywords, in the order the
+  # comment shows them. Checks out the base and reads one file, running none of its code.
   #
   # Every job from here on states its own condition with !cancelled(). Without one, a job
   # inherits a skip from anywhere above it, and the label path skips the hash jobs: the
   # A/B the label asked for would be skipped with them.
-  ab:
-    needs: [decide]
+  payload:
+    needs: [plan, decide]
     if: ${{ !cancelled() && needs.decide.result == 'success' && needs.decide.outputs.run == 'true' }}
     runs-on: ubuntu-24.04
-    # The harder tasks at two attempts each, on Haiku: well under an hour per side.
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      suites: ${{ steps.pick.outputs.suites }}
+      fallback: ${{ steps.pick.outputs.fallback }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      # The base the A side runs (see hash-base).
+      - run: git checkout --quiet --detach HEAD^1
+      # A base whose config.ts doesn't define the probes keyword stops at "names tasks that
+      # aren't registered" and writes no run record, which would fail its side. Detect it
+      # up front, as hash-base detects hash-only mode, and score the harder tasks on both
+      # sides instead, so the two still run the same thing.
+      - id: pick
+        env:
+          LABELLED: ${{ needs.plan.outputs.labelled }}
+        run: |
+          set -euo pipefail
+          if grep -qF "PROBES_SUBSET = 'probes'" src/main/agent/evals/config.ts 2>/dev/null; then
+            echo "fallback=false" >> "$GITHUB_OUTPUT"
+            if [ "$LABELLED" = "true" ]; then
+              echo "Both sides score the behavior probes, then the harder tasks the eval-ab label adds."
+              echo "suites=probes hard" >> "$GITHUB_OUTPUT"
+            else
+              echo "Both sides score the behavior probes."
+              echo "suites=probes" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "The base commit predates the behavior probes, so both sides score the harder tasks instead."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "suites=hard" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The live runs, one job per side. A is the base commit, B the merge commit GitHub built
+  # for this pull request, so the only difference between them is the pull request itself.
+  ab:
+    needs: [payload]
+    if: ${{ !cancelled() && needs.payload.result == 'success' }}
+    runs-on: ubuntu-24.04
+    # The harder tasks at two attempts each take well under an hour on Haiku, and a probe
+    # stops after a few actions, so both suites fit.
     timeout-minutes: 120
     permissions:
       contents: read
@@ -299,13 +379,14 @@ jobs:
       - uses: ./.github/actions/setup-node
         with:
           install: full
-      - name: Score the harder tasks
+      # One eval run per suite, each writing its own record ($SIDE-<suite>.json) under its
+      # own attempts and run cap. The key stays in this one step for all of them.
+      - name: Score each suite
         env:
           HOUSTON_EVAL_LIVE: '1'
           HOUSTON_EVAL_PROVIDER: anthropic
           HOUSTON_EVAL_MODEL: claude-haiku-5-5
-          HOUSTON_EVAL_ATTEMPTS: '2'
-          HOUSTON_EVAL_TASKS: hard
+          SUITES: ${{ needs.payload.outputs.suites }}
           SIDE: ${{ matrix.side }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
@@ -314,25 +395,41 @@ jobs:
             echo "::error::ANTHROPIC_API_KEY is empty or unset, so the live A/B cannot run."
             exit 1
           fi
-          mkdir -p "$RUNNER_TEMP/eval-ab"
-          export HOUSTON_EVAL_OUT="$RUNNER_TEMP/eval-ab/$SIDE.json"
-          status=0
-          npm run eval || status=$?
-          if [ ! -s "$HOUSTON_EVAL_OUT" ]; then
-            echo "::error::The $SIDE run wrote no run record (eval exited $status), so there is nothing to compare."
+          read -ra suites <<< "$SUITES"
+          if [ "${#suites[@]}" -eq 0 ]; then
+            echo "::error::The payload job named no suite to score."
             exit 1
           fi
-          echo "The $SIDE run exited $status. A drop below the baseline (one task, or the run as a whole) fails the run, but its record still counts."
+          mkdir -p "$RUNNER_TEMP/eval-ab"
+          for suite in "${suites[@]}"; do
+            case "$suite" in
+              probes) attempts="$AB_PROBES_ATTEMPTS" cap="$AB_PROBES_MAX_RUN_USD" ;;
+              hard) attempts="$AB_HARD_ATTEMPTS" cap="$AB_HARD_MAX_RUN_USD" ;;
+              *)
+                echo "::error::'$suite' is not a suite this workflow scores."
+                exit 1
+                ;;
+            esac
+            out="$RUNNER_TEMP/eval-ab/$SIDE-$suite.json"
+            status=0
+            HOUSTON_EVAL_TASKS="$suite" HOUSTON_EVAL_ATTEMPTS="$attempts" HOUSTON_EVAL_MAX_RUN_USD="$cap" \
+              HOUSTON_EVAL_OUT="$out" npm run eval || status=$?
+            if [ ! -s "$out" ]; then
+              echo "::error::The $SIDE $suite run wrote no run record (eval exited $status), so there is nothing to compare."
+              exit 1
+            fi
+            echo "The $SIDE $suite run exited $status. A drop below the baseline (one task, or the run as a whole) or a stop at the run cap fails the run, but its record still counts."
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: eval-ab-${{ matrix.side }}
           retention-days: 14
-          path: ${{ runner.temp }}/eval-ab/${{ matrix.side }}.json
+          path: ${{ runner.temp }}/eval-ab/${{ matrix.side }}-*.json
           if-no-files-found: error
 
-  # Builds the scorecard from the two records. Holds no secret.
+  # Builds a scorecard from each suite's two records. Holds no secret.
   compare:
-    needs: [ab]
+    needs: [payload, ab]
     if: ${{ !cancelled() && needs.ab.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -352,27 +449,56 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/eval-ab
       - name: Compare B against A
+        env:
+          SUITES: ${{ needs.payload.outputs.suites }}
+          FALLBACK: ${{ needs.payload.outputs.fallback }}
         run: |
           set -euo pipefail
           # The commits the ab job ran: the merge commit and its first parent.
           MERGE_SHA="$(git rev-parse HEAD)"
           BASE_SHA="$(git rev-parse HEAD^1)"
           dir="$RUNNER_TEMP/eval-ab"
-          HOUSTON_EVAL_A="$dir/base.json" HOUSTON_EVAL_B="$dir/head.json" \
-            HOUSTON_EVAL_COMPARE_OUT="$dir/scorecard.txt" npm run eval:compare
+          read -ra suites <<< "$SUITES"
           {
             # Marks the comment so the next run edits it instead of adding another.
             echo '<!-- houston:eval-ab -->'
             echo '### Prompt A/B (live)'
             echo
-            echo "Harder eval tasks on claude-haiku-5-5, 2 attempts each. A is the base commit (\`${BASE_SHA:0:12}\`), B this pull request merged onto it (\`${MERGE_SHA:0:12}\`)."
-            echo
-            echo '```'
-            cat "$dir/scorecard.txt"
-            echo '```'
+            echo "On claude-haiku-5-5. A is the base commit (\`${BASE_SHA:0:12}\`), B this pull request merged onto it (\`${MERGE_SHA:0:12}\`)."
+            if [ "$FALLBACK" = "true" ]; then
+              echo
+              echo "The base commit predates the behavior probes, so both sides scored the harder eval tasks instead."
+            fi
+          } > "$dir/comment.md"
+          # One scorecard per suite, in the order the sides ran them: the probes first.
+          for suite in "${suites[@]}"; do
+            case "$suite" in
+              probes) title="Behavior probes (\`HOUSTON_EVAL_TASKS=probes\`), $AB_PROBES_ATTEMPTS attempts each" ;;
+              hard) title="Harder eval tasks (\`HOUSTON_EVAL_TASKS=hard\`), $AB_HARD_ATTEMPTS attempts each" ;;
+              *)
+                echo "::error::'$suite' is not a suite this workflow scores."
+                exit 1
+                ;;
+            esac
+            HOUSTON_EVAL_A="$dir/base-$suite.json" HOUSTON_EVAL_B="$dir/head-$suite.json" \
+              HOUSTON_EVAL_COMPARE_OUT="$dir/scorecard-$suite.txt" npm run eval:compare
+            {
+              echo
+              echo "#### $title"
+              echo
+              echo '```'
+              cat "$dir/scorecard-$suite.txt"
+              echo '```'
+            } >> "$dir/comment.md"
+          done
+          {
             echo
             echo "Live results vary from run to run, so this is information for review, not a gate. To run it again, remove the \`eval-ab\` label and add it back."
-          } > "$dir/comment.md"
+            if [ "$SUITES" = "probes" ]; then
+              echo
+              echo "With the \`eval-ab\` label set, each side also scores the harder eval tasks, $AB_HARD_ATTEMPTS attempts each."
+            fi
+          } >> "$dir/comment.md"
           cat "$dir/comment.md" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -25,7 +25,8 @@
  * scale, a recorded three-attempt run of all 29 tasks cost $0.66.
  *
  * No live run has measured it yet: an agent's shell has no provider key, so the first
- * one is a local run with a key, and its scorecard prints the real figure:
+ * one is a local run with a key or an eval-ab.yml A/B (five attempts a side, under a $1
+ * run cap), and its scorecard prints the real figure:
  *
  *   HOUSTON_EVAL_LIVE=1 HOUSTON_EVAL_MODEL=claude-haiku-5-5 HOUSTON_EVAL_TASKS=probes npm run eval
  */
