@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ToolSchema } from '@shared/agent'
-import { abGateHash, promptHash, sharedHash } from './stamp'
+import { abGateHash, hashCensus, hashGap, promptHash, sharedHash, sharedPromptId } from './stamp'
 
 const tool = (description: string): ToolSchema =>
   ({ name: 'read_file', description, parameters: { type: 'object', properties: {} } }) as unknown as ToolSchema
@@ -98,5 +98,64 @@ describe('sharedHash', () => {
 
   it('returns nothing for no attempts', () => {
     expect(sharedHash([])).toBeUndefined()
+  })
+})
+
+describe('sharedPromptId', () => {
+  // An attempt whose first request failed saved no reply to carry the id, though it made
+  // a request; the run is still labeled by the id every other attempt reported.
+  it('takes the id the attempts that report one agree on', () => {
+    expect(sharedPromptId(['abc', 'abc', undefined])).toBe('abc')
+    expect(sharedPromptId(['abc', 'abc', 'abc'])).toBe('abc')
+  })
+
+  it('returns nothing when those attempts disagree, or none reported one', () => {
+    expect(sharedPromptId(['abc', 'def', undefined])).toBeUndefined()
+    expect(sharedPromptId([undefined, undefined])).toBeUndefined()
+    expect(sharedPromptId([])).toBeUndefined()
+  })
+})
+
+describe('hashCensus', () => {
+  it('counts the attempts with no hash apart from the different hashes', () => {
+    expect(hashCensus(['abc', undefined, 'def', 'abc', undefined])).toEqual({ attempts: 5, missing: 2, distinct: 2 })
+    expect(hashCensus([])).toEqual({ attempts: 0, missing: 0, distinct: 0 })
+  })
+})
+
+// sharedHash is undefined for two different reasons, and the scorecard has to say which.
+describe('hashGap', () => {
+  const gap = (hashes: (string | undefined)[]): string | undefined => hashGap(hashCensus(hashes))
+
+  it('says nothing when the attempts share a hash, or when none ran', () => {
+    expect(gap(['abc', 'abc'])).toBeUndefined()
+    expect(gap([])).toBeUndefined()
+  })
+
+  it('names a normalization gap when the attempts disagree', () => {
+    expect(gap(['abc', 'def', 'abc', 'ghi'])).toBe(
+      'no prompt hash: the 4 attempts saw 3 different prompts (a normalization gap in stamp.ts)'
+    )
+  })
+
+  it('names the attempts that made no model request', () => {
+    expect(gap(['abc', undefined, 'abc'])).toBe(
+      'no prompt hash: 1 of 3 attempts made no model request to hash (the other 2 agree)'
+    )
+    expect(gap([undefined, undefined])).toBe('no prompt hash: none of the 2 attempts made a model request to hash')
+  })
+
+  it('names both when both happened', () => {
+    expect(gap(['abc', undefined, 'def'])).toBe(
+      'no prompt hash: 1 of 3 attempts made no model request to hash, and the rest saw 2 different prompts ' +
+        '(a normalization gap in stamp.ts)'
+    )
+  })
+
+  // The two functions must agree on when there is a hash.
+  it('is silent exactly when sharedHash has one', () => {
+    for (const hashes of [['a'], ['a', 'a'], ['a', 'b'], ['a', undefined], [undefined], []]) {
+      expect(gap(hashes) === undefined, JSON.stringify(hashes)).toBe(sharedHash(hashes) !== undefined || !hashes.length)
+    }
   })
 })

@@ -164,10 +164,28 @@ how to author a task. The invariants to preserve when changing this code:
   run naming every task it skipped: it must never shrink the graded set, because
   `compareToBaseline` ignores a task missing from the scores. Both caps are stamped in
   the run record, so a comparison names a difference in caps.
+- **The live gate grades the run as a whole as well as each task.** The per-task tolerance
+  passes any number of single flakes and can never fail a task baselined at 0 or 1/3, so
+  `compareAggregate` (`evals/baseline.ts`) also compares the whole run with its baseline:
+  as two samples (the baseline is a noisy recording too), stratified by task
+  (`stratifiedDropTest` in `evals/stats.ts`, exact distribution, mid-p), one-sided at
+  `AGGREGATE_ALPHA` (1%, sized for a weekly run). Keep both checks. Don't swap in a pooled
+  or one-sample test, and compare rates, never counts: eval-ab runs two attempts against
+  three-attempt baselines. It throws in `afterAll`, after the run record is written. The
+  power figures in its doc comment and in CONTRIBUTING.md come from simulation; rerun it if
+  the suite's size or the level changes, and keep `smallestDetectableChange` in step.
 - **Every task in a run sees the same prompt hash** (`evals/stamp.ts`), and the scripted
   suite asserts it. Anything task-specific that reaches the prompt breaks the stamp, and
   is usually a hint to the model too: a workspace folder named after the task once put
-  `fix-null-deref` in the prompt.
+  `fix-null-deref` in the prompt. A run with no hash says which cause it was (`hashGap`:
+  attempts with none, or attempts that disagree).
+- **What changes what the model gets is stamped, hash or not.** The prompt hash covers the
+  first request's system prompt and tools, and run records add the loop's `promptId`, which
+  also covers deferred tool schemas. The reasoning effort is a request parameter neither
+  sees, so it is stamped on the scorecard, the run record and the baseline (with the
+  commit), and `compareRuns` lists it in `differs`. A new knob the driver pins outside the
+  prompt needs the same treatment. Stamps stay optional, so older baselines and records
+  still load.
 - Every task directory is registered exactly once, and fixtures stay dependency-free
   (plain `.mjs`, no install step).
 - The driver cannot be factored into a shared helper: `startRun` takes no provider

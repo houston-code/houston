@@ -33,8 +33,9 @@ name: Prompt A/B (live)
 #
 # IT NEVER GATES. The result is non-deterministic and billed, so it is not a required
 # check and its scorecard is information for the reviewer. Each side's eval run exits
-# non-zero when a task falls below its weekly baseline; that is still a valid side of
-# the comparison, so the job only fails when a side wrote no run record at all.
+# non-zero when a task, or the run as a whole, falls below its weekly baseline (the run
+# record is written first); that is still a valid side of the comparison, so the job
+# only fails when a side wrote no run record at all.
 #
 # SECRETS AND TRUST. This is a `pull_request` workflow, never `pull_request_target`: it
 # runs the pull request's own code, so the model key reaches only pull requests from
@@ -321,7 +322,7 @@ jobs:
             echo "::error::The $SIDE run wrote no run record (eval exited $status), so there is nothing to compare."
             exit 1
           fi
-          echo "The $SIDE run exited $status. A task below its baseline fails the run, but its record still counts."
+          echo "The $SIDE run exited $status. A drop below the baseline (one task, or the run as a whole) fails the run, but its record still counts."
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: eval-ab-${{ matrix.side }}

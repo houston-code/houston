@@ -83,6 +83,7 @@ import { COST_CAP_REMINDER_FRACTION, landingReminder } from '../budget'
 import {
   assertRecordable,
   baselineFileName,
+  compareAggregate,
   compareToBaseline,
   isDeadBaseline,
   isEvalBaseline,
@@ -111,10 +112,17 @@ import {
   runVerify,
   taskDirNames
 } from './fixtures'
-import { failureCauses, formatReport, slowestOf, toTaskReport, type TaskReport } from './report'
+import {
+  aggregateRegressionMessage,
+  failureCauses,
+  formatReport,
+  slowestOf,
+  toTaskReport,
+  type TaskReport
+} from './report'
 import { gradeHonesty } from './honesty'
 import { currentCommit, gitIn, toRunRecord } from './runRecord'
-import { abGateHash, promptHash, sharedHash } from './stamp'
+import { abGateHash, hashCensus, promptHash, sharedHash, sharedPromptId } from './stamp'
 import { HARD_TASKS, TASKS } from './tasks'
 import { callTool, say, turn, type EvalResult, type EvalTask, type TimedCall } from './types'
 
@@ -149,6 +157,13 @@ const HASH_ONLY = HASH_OUT !== undefined
 
 /** The tasks this run scores (HOUSTON_EVAL_TASKS); every one unless a subset is named. */
 const RUN_TASKS = selectTasks(TASKS, HARD_TASKS, TASK_SPEC)
+
+/**
+ * The reasoning effort a live run drives the model at, stamped on its scorecard, record
+ * and baseline: a request parameter, so the prompt hash can't see it. The scripted fake
+ * ignores it, so a scripted run stamps none.
+ */
+const EFFORT = LIVE ? DEFAULT_REASONING_EFFORT : undefined
 
 function liveProviderConfig(): ProviderConfig {
   const cfg = defaultProviders().find((p) => p.id === PROVIDER_ID)
@@ -892,12 +907,24 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
   const reports: TaskReport[] = []
   /** Every attempt's prompt hash; the run is stamped only when they all agree. */
   const hashes: (string | undefined)[] = []
+  /** Every attempt's loop promptId, stamped on the run record when those that have one agree. */
+  const promptIds: (string | undefined)[] = []
 
   afterAll(() => {
     const skipped = [...RUN_SPEND.skipped]
     if (!reports.length && !skipped.length) return
     const driver = LIVE ? 'live' : 'scripted'
     const runHash = sharedHash(hashes)
+    // Only a record or a baseline names the commit, so only those spawn git.
+    const commit = OUT || RECORD ? currentCommit(gitIn(process.cwd())) : undefined
+    const scores: TaskScore[] = reports.map((r) => ({
+      taskId: r.taskId,
+      passRate: r.passRate,
+      attempts: r.attempts
+    }))
+    // The whole run against the baseline, beside each task's own verdict: the per-task
+    // tolerance passes a task that lost one attempt, however many tasks did.
+    const aggregate = BASELINE ? compareAggregate(BASELINE, scores) : undefined
     console.log(
       formatReport(
         {
@@ -905,7 +932,11 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
           model: MODEL,
           attempts: ATTEMPTS,
           promptHash: runHash,
+          hashes: hashCensus(hashes),
           baselinePromptHash: BASELINE?.promptHash,
+          reasoningEffort: EFFORT,
+          baselineReasoningEffort: BASELINE?.reasoningEffort,
+          ...(aggregate ? { aggregate } : {}),
           caps: CAPS,
           ...(skipped.length ? { stopped: { spentUsd: RUN_SPEND.spentUsd, skipped } } : {})
         },
@@ -913,8 +944,8 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
       )
     )
     if (OUT) {
-      // Written before the baseline step, which can throw: a run that recorded no
-      // baseline is still a valid side of an A/B comparison.
+      // Written before the gate and the baseline step, both of which can throw: a run
+      // that failed its gate or recorded no baseline is still a valid side of an A/B.
       const record = toRunRecord(
         {
           driver,
@@ -922,7 +953,9 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
           model: MODEL,
           attempts: ATTEMPTS,
           promptHash: runHash,
-          commit: currentCommit(gitIn(process.cwd())),
+          promptId: sharedPromptId(promptIds),
+          reasoningEffort: EFFORT,
+          commit,
           host: process.platform,
           caps: CAPS,
           skipped
@@ -934,16 +967,14 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
       console.log(`Wrote run record → ${resolve(OUT)}`)
     }
     // Each skipped task's own test has already failed; finishRun fails the run as a
-    // whole, naming all of them in one place, and never reaches the recording below.
+    // whole, naming all of them in one place, and never reaches the gate or the
+    // recording below (the gate reads a task missing from a baseline as unrecorded).
     finishRun(RUN_SPEND, () => {
+      // No single task's test can fail for this, so the run fails here, after the record.
+      if (aggregate?.kind === 'regressed') throw new Error(aggregateRegressionMessage(aggregate, BASELINE!.recordedAt))
       if (!RECORD) return
       // Recording writes the scorecard as the model's new baseline. Reviewed and
       // committed like a golden: the diff is what documents the behavior change.
-      const scores: TaskScore[] = reports.map((r) => ({
-        taskId: r.taskId,
-        passRate: r.passRate,
-        attempts: r.attempts
-      }))
       // Never write a baseline that would gate nothing — see assertRecordable.
       // Fold the actual per-task causes into the message: the scorecard is already
       // on stdout, but it scrolls away in a CI log and gets cropped when someone
@@ -962,7 +993,11 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
         )
       }
       mkdirSync(BASELINES_DIR, { recursive: true })
-      const baseline = recordBaseline(PROVIDER_ID, MODEL, ATTEMPTS, scores, new Date(), runHash)
+      const baseline = recordBaseline(PROVIDER_ID, MODEL, ATTEMPTS, scores, new Date(), {
+        promptHash: runHash,
+        reasoningEffort: EFFORT,
+        commit
+      })
       writeFileSync(baselineFile, `${JSON.stringify(baseline, null, 2)}\n`)
       console.log(`Recorded baseline → ${baselineFile}\nReview the scores and commit it.`)
     })
@@ -972,9 +1007,10 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
     '%s',
     async (_id, task) => {
       // Throws when the run cap cut the task short: it is failed, never graded on fewer attempts.
-      const attempts = await runTaskAttempts(task.id, ATTEMPTS, RUN_SPEND, () => runTask(task), (ran) =>
+      const attempts = await runTaskAttempts(task.id, ATTEMPTS, RUN_SPEND, () => runTask(task), (ran) => {
         hashes.push(...ran.map((a) => a.promptHash))
-      )
+        promptIds.push(...ran.map((a) => a.promptId))
+      })
       const passes = attempts.filter((a) => a.passed).length
       const passRate = passes / ATTEMPTS
       const verdict: BaselineVerdict | undefined = BASELINE
@@ -1009,7 +1045,8 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
       if (RECORD) return
 
       // LIVE grades quality against the recorded baseline, with a tolerance that
-      // absorbs one flaked attempt (see DEFAULT_TOLERANCE).
+      // absorbs one flaked attempt (see DEFAULT_TOLERANCE). The flakes it absorbs are
+      // added up across the run in afterAll (compareAggregate).
       expect(
         verdict?.kind,
         [

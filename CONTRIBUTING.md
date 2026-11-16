@@ -207,6 +207,22 @@ everyone learns to ignore. Two flakes is a real drop and fails. A task scoring
 *above* its baseline is reported as `improved`, which means the baseline is stale
 and worth re-recording.
 
+That tolerance can't see a fall spread thinly: nine tasks each losing one attempt (79/87
+to 70/87) are nine passing tasks, and a task baselined at 0 or 1/3 can never fail it. So
+the run is also graded **as a whole**. The whole-run check compares the run's pass rate
+with the baseline's, task by task, as two samples (the baseline is one recorded run, as
+noisy as the run graded against it), using a stratified test (`stratifiedDropTest` in
+`evals/stats.ts`): only differences inside a task count, so easy and hard tasks can't
+blur each other, and a run at a different attempt count is compared by rate. It fails the
+run below a one-sided 1%, which a run that changed nothing reaches about once in two years
+of weekly runs, and it runs after the run record is written, so a failed run is still a
+valid side of an A/B. It is a backstop for a broad, sizeable fall rather than a fine
+instrument: at 29 tasks and three attempts it catches a true drop of 9 points about a third
+of the time and 18 points almost nine times in ten (`AGGREGATE_ALPHA` in
+`evals/baseline.ts` has the numbers). Every weekly run meets the same baseline, so one
+recorded on a lucky day keeps the odds of a false red raised until it is re-recorded; a
+red that repeats on the same few tasks with nothing changed is worth a fresh recording.
+
 A recording is also refused when any failed attempt ended in a run error (the
 provider refused the call, the account ran out of credit) rather than a result:
 that is not a score, and a task frozen at 0 can never regress.
@@ -256,11 +272,34 @@ them is flakiness that the average hides. The interval is a 95% Wilson interval 
 attempts. It treats attempts as independent, which they only partly are (a hard task
 tends to fail every time), so read it as the narrowest the truth could be.
 
+Graded against a baseline, two more lines follow:
+
+```
+  vs baseline: attempts 77/87 = 89% against 79/87 = 91% on 29 tasks, stratified p = 0.236 (fails below 0.01): held
+  smallest detectable change: about 19 points (80% power, one-sided 1%; 29 tasks, 3 attempts a side)
+```
+
+The first is the whole-run check above; when it fails it reads `REGRESSED` and lists the
+tasks that fell. The second is a property of the design rather than of the result: the true
+fall in the per-attempt rate that a suite this size catches four runs in five, measured from
+the baseline's rate. A smaller move can still show, but not reliably, so a few points either
+way on the scorecard is noise. Only more tasks or more attempts shrink it: five attempts a
+side bring it to about 14 points. A recording prints it too, for what a run like it could
+see against the new baseline.
+
 The title line also carries the run's **prompt hash**: a short hash of the system
 prompt and tool schemas the model actually received, with the workspace path and
 dates scrubbed out. Baselines record it too, and the scorecard says when the prompt
 has changed since the baseline was recorded. The hash still covers the host lines
-(OS, shell, sandbox), so compare hashes from the same kind of machine.
+(OS, shell, sandbox), so compare hashes from the same kind of machine. A run with no
+hash says why: either some attempts made no model request to hash (look at their run
+errors), or the attempts saw different prompts, which means something task- or
+machine-specific got past the scrubbing in `evals/stamp.ts`.
+
+The **reasoning effort** (the shipped default the driver runs at) is stamped beside it, on
+the scorecard, the run record and the baseline. It reaches the model as a request parameter,
+not as prompt text, so the prompt hash can't see it change; the scorecard says when the
+baseline was recorded at a different effort.
 
 A row also says what explains it. When some attempts reported dishonestly, it shows
 the first such attempt's findings beside the checks that attempt's receipt recorded,
@@ -280,14 +319,24 @@ HOUSTON_EVAL_A=a.json HOUSTON_EVAL_B=b.json npm run eval:compare
 ```
 
 Each side is an ordinary live run, so its model needs a recorded baseline. The run
-record names the model, prompt hash, commit (with `-dirty` for uncommitted edits),
-host and cost caps, and the comparison lists whichever of those differ. It also names
-the attempts a cost cap stopped or told to wrap up, and the tasks a run cap kept from
-running, which are left out of the comparison rather than scored. It pairs each task
-across the two runs and applies a sign test to the tasks that moved. Only tasks that moved
-count, so even across 29 tasks a significant result needs several of them to move the
-same way. That is the real resolving power of a suite this size, so "no significant
-difference" is an honest answer rather than a bug. Raising `HOUSTON_EVAL_ATTEMPTS` on
+record names the model, prompt hash, the loop's `promptId` (which also covers the deferred
+tools' schemas), reasoning effort, commit (with `-dirty` for uncommitted edits), host and
+cost caps, and the comparison lists whichever of those differ. A stamp prints `?` on a
+record from before it existed, and on one whose attempts didn't share it: a prompt hash
+when an attempt made no model request or the attempts disagreed (the run's scorecard says
+which), a `promptId` when no attempt saved a reply or those that did disagreed. It also
+names the attempts a cost cap stopped or told to wrap up, and the tasks a run cap kept from
+running, which are left out of the comparison rather than scored. It pairs each task across
+the two runs and applies a sign test to the tasks that moved. Only tasks that moved count,
+so even across 29 tasks a significant result needs several of them to move the same way.
+That is the real resolving power of a suite this size, so "no
+significant difference" is an honest answer rather than a bug. The comparison prints that
+resolving power under the verdict, as the same smallest detectable change the scorecard
+shows (two-sided at 5% here, measured from A's rate; the sign test, which counts tasks
+rather than attempts, needs a little more). It is quoted as a fall even for a two-sided
+test: a rise needs failures to fix, and near the ceiling those sit on a few tasks, so a
+suite at 91% may have no room to show an improvement at all. An `honest reports` row puts
+the two sides' honest closing reports side by side. Raising `HOUSTON_EVAL_ATTEMPTS` on
 both sides steadies the per-task rates. A cheap model such as `claude-haiku-5-5` keeps
 this affordable: a full three-attempt run of all 29 tasks cost about $0.66 and took 92
 minutes when its baseline was recorded. It solved 87% of the attempts at the 20 harder

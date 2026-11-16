@@ -14,8 +14,10 @@ name: Task evals (live)
 # Only a real model solving a real task measures quality. This job runs the identical fixtures with
 # the script ignored, several attempts per task, and GRADES the result against the per-model baseline
 # checked in under src/main/agent/evals/baselines/. A task that drops materially below its baseline
-# reds this job. A live score with nothing to compare it against would just be a log line, so a
-# missing baseline reds the job too, with the command to record one.
+# reds this job, and so does a run that falls below it as a whole (compareAggregate in
+# evals/baseline.ts: a stratified test at 1%, for the fall spread one flake per task that no single
+# task's check can see). A live score with nothing to compare it against would just be a log line, so
+# a missing baseline reds the job too, with the command to record one.
 #
 # WHICH MODEL. The schedule scores claude-haiku-5-5, not the provider's default model. The question
 # this job answers is "did a Houston change make the agent worse", and a model that sometimes fails
@@ -53,7 +55,9 @@ on:
     #
     # WEEKLY, NOT NIGHTLY. A full run takes about an hour and a half (29 tasks, three attempts each,
     # one at a time), and a prompt or harness change that lowers task quality rarely needs catching
-    # within a day. The gate reds when a task falls more than one flaked attempt below its baseline.
+    # within a day. The gate reds when a task falls more than one flaked attempt below its baseline,
+    # or when the whole run falls below it by more than noise; the whole-run check's 1% level is
+    # sized for this cadence (about one false red in two years of weekly runs).
     - cron: '0 9 * * 1'
   # On-demand run, e.g. to score a new model the day it ships without waiting for the weekly slot.
   workflow_dispatch:
@@ -173,10 +177,11 @@ jobs:
       - uses: ./.github/actions/setup-node
         with:
           install: full
-      # Drives the real model against every fixture, grades each task against the recorded baseline,
-      # and prints the scorecard (per-task pass rate, baseline delta, the tools each run reached for,
-      # wall-clock, and estimated spend) to the job log. Fails on a regression, on an unrecorded
-      # model, or on a malformed baseline — never on a single flaked attempt.
+      # Drives the real model against every fixture, grades each task and then the whole run against
+      # the recorded baseline, and prints the scorecard (per-task pass rate, baseline delta, the tools
+      # each run reached for, wall-clock, estimated spend, and the whole-run check) to the job log.
+      # Fails on a regression, on an unrecorded model, or on a malformed baseline, but never on a
+      # single flaked attempt.
       # On a SCHEDULED run there are no inputs, so every one of these interpolates to an empty
       # string — `env: FOO: ${{ inputs.foo }}` sets FOO='', it does not leave it unset. That is
       # exactly how a nightly once resolved an empty model id and recorded a baseline of all zeros.

@@ -12,7 +12,12 @@
  * it is skipped when the two files aren't named, so `npm run eval` passes over it.
  *
  * It prints, it does not gate: a comparison is a question someone asked, and the
- * answer (including "no significant difference") is the output.
+ * answer (including "no significant difference", beside the smallest change the two
+ * runs could have shown) is the output. A record from before a stamp existed (the
+ * promptId, the reasoning effort) still loads, and prints `?` for it. So does a stamp
+ * the run's attempts didn't share: a prompt hash the attempts disagreed on or one had
+ * none of, or a promptId those that saved a reply disagreed on, or that none saved (see
+ * sharedHash and sharedPromptId in stamp.ts).
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync, writeFileSync } from 'node:fs'
