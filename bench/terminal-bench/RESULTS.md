@@ -83,14 +83,12 @@ Opus the two agreed. `spend.mjs` now uses Houston's figure alone.
   token counts were recorded (their cost is Houston's last update before the drop). #879
   keeps every frame under the limit, and no build B trial failed this way.
 - **Three build A trials stopped before doing the work.** With no one to answer, Haiku ended
-  its only turn announcing what it would do next (ks-solver-cpp: "Next step: write the
-  solver...", never writing `solution.cpp`; fin-saccr-rwa: "Next I'll add the cap, write
-  `output/sa_ccr_results.csv`...") or handing a choice back (vpp-loss-divergence: "Tell me to
-  bridge `main_grad`..."). #880 added `--unattended`, which sends such a turn back to keep
-  working. On build B no Haiku trial ended on an announced next step (ks-solver-cpp wrote
-  `solution.cpp` this time), though some still ended by leaving a call to the user ("This
-  needs your confirmation of the custody terms.", "it is your call"), which the early-stop
-  check does not catch yet.
+  its only turn announcing what it would do next (ks-solver-cpp, which never wrote its
+  solver, and fin-saccr-rwa, which never wrote its output) or handing a choice back to the
+  user (vpp-loss-divergence). #880 added `--unattended`, which sends such a turn back to keep
+  working. On build B no Haiku trial ended on an announced next step (ks-solver-cpp wrote its
+  solver this time), though some (fin-saccr-rwa and ontology-kg-querying among them) still
+  ended by leaving a decision to the user, which the early-stop check does not catch yet.
 - **Haiku 5.5 scored 0 on both builds.** The fixes changed how its trials ended, not what
   they scored. The 3 Opus solves cost $1.85 to $3.87 each, and no trial in any job hit the
   400-step cap.

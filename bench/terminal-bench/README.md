@@ -104,14 +104,14 @@ harbor run -d terminal-bench/terminal-bench@4.1.0 \
   --agent acp --ak registry_entry_path=$HOME/.cache/houston-bench/jobs/opus-1.agent.json \
   -m anthropic/claude-opus-5-5 --ae 'ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}' -y \
   --env docker \
-  --mounts '[{"type":"bind","source":"<folder holding the .tgz>","target":"/opt/houston-pkg","read_only":true}]' \
+  --mounts '[{"type":"bind","source":"<path to the .tgz>","target":"/opt/houston-pkg/houston-code-cli-0.12.0.tgz","read_only":true}]' \
   -n 2 --job-name opus-1 -o $HOME/.cache/houston-bench/jobs
 ```
 
 The key goes in as the literal `${ANTHROPIC_API_KEY}` reference: Harbor records that in the
 job's config and resolves it from your environment when it starts each container. The entry
-`run.sh` writes for a local build mounts the tarball read-only and launches its `houston`
-command through npx:
+`run.sh` writes for a local build mounts the tarball read-only (the file alone, not the
+folder it is in) and launches its `houston` command through npx:
 
 ```json
 "npx": {
@@ -135,9 +135,11 @@ the same number Harbor records as each trial's `cost_usd`.
 Once the total reaches `--cap`, `run.sh` stops the job: it sends Harbor SIGTERM (Harbor then
 cancels the running trials), kills Harbor if it is still running after 120 seconds
 (`BENCH_STOP_GRACE`), removes any container left from this job's trials (and no other), and
-exits 3. Ctrl-C stops the job the same way. The guard also fails closed: if the spend check
-itself fails three polls in a row, it stops the job rather than run on without a limit. The
-latest table is in `<job>.spend` next to the job, and you can check a job at any time:
+exits 3. Ctrl-C, or closing the terminal, stops the job the same way. The guard also fails
+closed: if the spend check itself fails three polls in a row (a trial file it cannot read
+counts as a failure, never as zero spend), it stops the job rather than run on without a
+limit. The latest table is in `<job>.spend` next to the job, and you can check a job at any
+time:
 
 ```bash
 node bench/terminal-bench/spend.mjs ~/.cache/houston-bench/jobs/opus-1
@@ -148,6 +150,10 @@ What it does not cover:
 - **It can overshoot** by what the running trials spend between two polls and while they
   wind down. In the pilot an Opus trial spent up to about $0.40 a minute, so at `-n 2` allow a
   dollar or two above the cap.
+- **Delegated work counts only once it finishes.** Houston reports a subagent's or a review's
+  cost over ACP in one update when that work ends, so the cap can be overshot by a whole
+  dispatch, and one cut off when the job is stopped may never be counted, here or in Harbor's
+  `cost_usd`.
 - **It is Houston's estimate**, not the provider's bill, and it reads log files written
   inside the task container. Check the provider's usage page after a large run.
 - **There is no per-trial money limit.** `--max-turns 400` caps the steps of each trial, but

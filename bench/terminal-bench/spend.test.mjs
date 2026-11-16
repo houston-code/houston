@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -179,4 +179,28 @@ describe('spend.mjs', () => {
     expect(main([join(job, 'missing')], capture(), err)).toBe(2)
     expect(err.text).toContain('no job directory')
   })
+
+  // chmod 000 blocks reads only for a non-root user on a POSIX system.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'fails instead of counting a trial as free when its events or summary cannot be read',
+    () => {
+      for (const file of ['acp-events.jsonl', 'acp-summary.json']) {
+        const job = mkdtempSync(join(tmpdir(), 'tb-job-'))
+        dirs.push(job)
+        const agent = join(job, 'fin-saccr-rwa__wJRWh3F', 'agent')
+        write(join(agent, 'acp-events.jsonl'), `${usageLine(50)}\n`)
+        write(join(agent, 'acp-summary.json'), { latest_usage_update: { cost: { amount: 50, currency: 'USD' }, sessionUpdate: 'usage_update' } })
+        expect(main([job, '--cap', '10'], capture(), capture()), file).toBe(3)
+
+        chmodSync(join(agent, file), 0o000)
+        const out = capture()
+        const err = capture()
+        expect(main([job, '--cap', '10'], out, err), file).toBe(1)
+        expect(out.text, file).toBe('')
+        expect(err.text, file).toContain("cannot read the job's spend")
+        expect(err.text, file).toContain('EACCES')
+        chmodSync(join(agent, file), 0o644)
+      }
+    }
+  )
 })

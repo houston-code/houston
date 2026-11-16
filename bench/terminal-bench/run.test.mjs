@@ -1,7 +1,8 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -14,8 +15,8 @@ afterEach(() => {
 
 // Stand-ins for Harbor and Docker. The Harbor stub records its argv and the key it was handed,
 // then plays one trial whose events report STUB_COST; with STUB_HANG it keeps running until
-// it is stopped, like a job mid-run. The Docker stub lists this job's two containers and a
-// stranger's, and records every call.
+// it is stopped, like a job mid-run, and records the SIGTERM that stops it. The Docker stub
+// lists this job's two containers and a stranger's, and records every call.
 const HARBOR_STUB = `#!/usr/bin/env bash
 printf '%s\\n' "$@" > "$STUB_LOG/argv"
 printf '%s' "\${ANTHROPIC_API_KEY-unset}" > "$STUB_LOG/key"
@@ -26,7 +27,13 @@ done
 trial="$out/$job/fin-saccr-rwa__AbC123/agent"
 mkdir -p "$trial"
 printf '{"event_type": "session_update", "payload": {"update": {"sessionUpdate": "usage_update", "cost": {"amount": %s, "currency": "USD"}}}}\\n' "$STUB_COST" > "$trial/acp-events.jsonl"
-[ "\${STUB_HANG-}" = 1 ] && exec sleep 30
+if [ "\${STUB_HANG-}" = 1 ]; then
+  trap 'echo TERM >> "$STUB_LOG/harbor-signals"; kill "$s" 2>/dev/null; exit 143' TERM
+  sleep 30 &
+  s=$!
+  : > "$STUB_LOG/harbor-ready"
+  wait "$s"
+fi
 exit 0
 `
 const DOCKER_STUB = `#!/usr/bin/env bash
@@ -59,19 +66,35 @@ function run(t, args, env = {}, { jobsDir = true, kit = null } = {}) {
   const res = spawnSync('bash', [kit ? join(kit, 'run.sh') : script, ...(jobsDir ? ['--jobs-dir', t.jobs] : []), ...args], {
     encoding: 'utf8',
     timeout: 20_000,
-    env: {
-      PATH: `${t.bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
-      HARBOR: join(t.bin, 'harbor'),
-      DOCKER: join(t.bin, 'docker'),
-      STUB_LOG: t.log,
-      STUB_COST: '0.5',
-      BENCH_POLL_SECONDS: '0.2',
-      BENCH_STOP_GRACE: '5',
-      ...env
-    }
+    env: stubEnv(t, env)
   })
+  return { ...res, ...stubLogs(t) }
+}
+
+function stubEnv(t, env) {
+  return {
+    PATH: `${t.bin}:${dirname(process.execPath)}:/usr/bin:/bin`,
+    HARBOR: join(t.bin, 'harbor'),
+    DOCKER: join(t.bin, 'docker'),
+    STUB_LOG: t.log,
+    STUB_COST: '0.5',
+    BENCH_POLL_SECONDS: '0.2',
+    BENCH_STOP_GRACE: '5',
+    ...env
+  }
+}
+
+function stubLogs(t) {
   const read = (name) => (existsSync(join(t.log, name)) ? readFileSync(join(t.log, name), 'utf8') : null)
-  return { ...res, argv: read('argv')?.split('\n').filter(Boolean) ?? null, key: read('key'), docker: read('docker') }
+  return { argv: read('argv')?.split('\n').filter(Boolean) ?? null, key: read('key'), docker: read('docker'), harborSignals: read('harbor-signals') }
+}
+
+async function waitFor(check, what) {
+  const deadline = Date.now() + 10_000
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
+    await sleep(50)
+  }
 }
 
 /** A copy of the kit whose spend check always crashes, as a bug in it would. */
@@ -114,18 +137,20 @@ describe.skipIf(process.platform === 'win32')('run.sh', () => {
     expect(existsSync(join(jobs, 'home.spend'))).toBe(true)
   })
 
-  it('mounts a local package read-only and launches it from the generated entry', () => {
+  it('mounts only the local package, read-only, and launches it from the generated entry', () => {
     const t = setup()
     const pkg = join(t.dir, 'dist', 'houston-code-cli-0.12.0.tgz')
     mkdirSync(dirname(pkg))
     writeFileSync(pkg, '')
+    // A file next to the tarball must stay out of the task container.
+    writeFileSync(join(dirname(pkg), 'private-notes.txt'), 'not for the agent')
     const res = run(t, ['--cap', '5', '--pkg', pkg, '--label', 'main.abc1234', 'local', 'anthropic/claude-haiku-5-5', 'ks-solver-cpp'], {
       ANTHROPIC_API_KEY: KEY
     })
     expect(res.status).toBe(0)
     expect(res.argv.filter((a) => a === '--include-task-name')).toHaveLength(1)
     const mounts = JSON.parse(res.argv[res.argv.indexOf('--mounts') + 1])
-    expect(mounts).toEqual([{ type: 'bind', source: dirname(pkg), target: '/opt/houston-pkg', read_only: true }])
+    expect(mounts).toEqual([{ type: 'bind', source: pkg, target: '/opt/houston-pkg/houston-code-cli-0.12.0.tgz', read_only: true }])
     const entry = JSON.parse(readFileSync(join(t.jobs, 'local.agent.json'), 'utf8'))
     expect(entry.version).toBe('0.12.0+main.abc1234')
     expect(entry.distribution.npx.package).toBe('--package=/opt/houston-pkg/houston-code-cli-0.12.0.tgz')
@@ -146,8 +171,42 @@ describe.skipIf(process.platform === 'win32')('run.sh', () => {
     expect(res.docker).toContain('rm -f c2')
     expect(res.docker).not.toContain('c3')
     expect(res.docker).not.toContain('c4')
+    expect(res.harborSignals).toBe('TERM\n')
     expect(readFileSync(join(t.jobs, 'capped.spend'), 'utf8')).toContain('TOTAL $1.50')
   })
+
+  it('stops the job the same way when the terminal hangs up', async () => {
+    const t = setup()
+    // Its own process group, like a terminal's foreground job, so the hangup can go to all of it.
+    const child = spawn('bash', [script, '--jobs-dir', t.jobs, '--cap', '100', 'hangup', 'anthropic/claude-opus-5-5', 'fin-saccr-rwa'], {
+      detached: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: stubEnv(t, { ANTHROPIC_API_KEY: KEY, STUB_HANG: '1' })
+    })
+    let stderr = ''
+    child.stderr.on('data', (d) => (stderr += d))
+    const exited = new Promise((done) => child.on('exit', (code, signal) => done({ code, signal })))
+    try {
+      // Once Harbor is mid-job and the guard is polling, hang up the whole group, as the
+      // kernel does when the terminal closes or an SSH session drops.
+      await waitFor(() => existsSync(join(t.log, 'harbor-ready')) && existsSync(join(t.jobs, 'hangup.spend')), 'the job to start')
+      process.kill(-child.pid, 'SIGHUP')
+      expect(await exited).toEqual({ code: 143, signal: null })
+    } finally {
+      try {
+        process.kill(-child.pid, 'SIGKILL')
+      } catch {
+        // Already gone.
+      }
+    }
+    const logs = stubLogs(t)
+    expect(stderr).toContain('interrupted; stopping hangup')
+    expect(logs.harborSignals).toBe('TERM\n')
+    expect(logs.docker).toContain('rm -f c1')
+    expect(logs.docker).toContain('rm -f c2')
+    expect(logs.docker).not.toContain('c3')
+    expect(logs.docker).not.toContain('c4')
+  }, 20_000)
 
   it('stops the job when it cannot read the spend three checks in a row', () => {
     const t = setup()

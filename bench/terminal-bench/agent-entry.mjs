@@ -7,7 +7,7 @@
 //
 // Prints the entry as JSON. Harbor's npx distribution runs `npx -y <package> <args...>` in the
 // task container. --release pins the published @houston-code/cli. --pkg runs a local build
-// instead: run.sh mounts the tarball's folder read-only at PKG_MOUNT, and the entry names the
+// instead: run.sh mounts the tarball alone read-only into PKG_MOUNT, and the entry names the
 // tarball as `--package=<path>` with the `houston` command as the first argument, so npx
 // installs the tarball and runs its bin with the template's flags.
 //

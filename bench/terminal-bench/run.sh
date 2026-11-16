@@ -132,9 +132,12 @@ mounts=''
 if [ -n "$pkg" ]; then
   [ -z "$release" ] || die '--pkg and --release are alternatives'
   [ -f "$pkg" ] || die "no package at $pkg"
-  pkg_dir=$(cd "$(dirname "$pkg")" && pwd)
-  entry_args=(--pkg "$pkg_dir/$(basename "$pkg")" --label "${label:-local}")
-  mounts=$(node -e 'process.stdout.write(JSON.stringify([{ type: "bind", source: process.argv[1], target: "/opt/houston-pkg", read_only: true }]))' "$pkg_dir")
+  pkg_name=$(basename "$pkg")
+  pkg=$(cd "$(dirname "$pkg")" && pwd)/$pkg_name
+  entry_args=(--pkg "$pkg" --label "${label:-local}")
+  # Bind the tarball alone, never the folder it sits in: the agent and the task's own code
+  # can read everything the container is given.
+  mounts=$(node -e 'process.stdout.write(JSON.stringify([{ type: "bind", source: process.argv[1], target: "/opt/houston-pkg/" + process.argv[2], read_only: true }]))' "$pkg" "$pkg_name")
 elif [ -n "$label" ]; then
   die '--label goes with --pkg'
 elif [ -n "$release" ]; then
@@ -198,14 +201,23 @@ on_signal() {
   stop_job
 }
 
+# Harbor starts with SIGHUP ignored: when the terminal closes, it would otherwise die at once
+# without its teardown and leave its containers running. on_signal stops it instead.
 if [ "$dry" -eq 1 ]; then
-  env "$key_var=$dry_key" "$harbor" "${args[@]}" &
+  (
+    trap '' HUP
+    exec env "$key_var=$dry_key" "$harbor" "${args[@]}"
+  ) &
 else
-  "$harbor" "${args[@]}" &
+  (
+    trap '' HUP
+    exec "$harbor" "${args[@]}"
+  ) &
 fi
 pid=$!
-# A background job ignores Ctrl-C, so pass it on to Harbor as the SIGTERM it handles.
-trap on_signal INT TERM
+# A background job ignores Ctrl-C, and Harbor ignores the hangup, so pass either on to it as
+# the SIGTERM it handles.
+trap on_signal HUP INT TERM
 
 # A guard that cannot read the spend fails closed: three failed checks in a row stop the job.
 failures=0
@@ -236,7 +248,7 @@ while kill -0 "$pid" 2>/dev/null; do
 done
 wait "$pid"
 status=$?
-trap - INT TERM
+trap - HUP INT TERM
 
 if [ -d "$job_dir" ]; then
   node "$here/spend.mjs" "$job_dir" | tee "$spend_file"

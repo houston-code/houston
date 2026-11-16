@@ -11,7 +11,8 @@
 //
 // Prints one tab-separated row per trial and a TOTAL line, or with --markdown the table
 // RESULTS.md uses. With --cap, exits 3 once the total reaches the cap (the exit code a
-// headless run uses for a limit). Exits 2 on bad arguments or a missing job directory.
+// headless run uses for a limit). Exits 2 on bad arguments or a missing job directory, and 1
+// when a trial's file exists but cannot be read, so the guard never counts it as free.
 //
 // The pure readers below are unit-tested in spend.test.mjs.
 
@@ -22,9 +23,26 @@ import { fileURLToPath } from 'node:url'
 export const CAP_EXIT = 3
 const USAGE = 'usage: spend.mjs <job-dir> [--cap <usd>] [--markdown]'
 
-function readJson(path) {
+/**
+ * A file's text, or null when it does not exist yet. Any other read error (a file the
+ * container wrote with modes the host user cannot read, say) is thrown, so the spend check
+ * fails instead of counting the trial as free.
+ */
+function readIfPresent(path) {
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
+    return readFileSync(path, 'utf8')
+  } catch (e) {
+    if (e?.code === 'ENOENT') return null
+    throw e
+  }
+}
+
+/** A JSON file, or null when it does not exist yet or is still being written. */
+function readJson(path) {
+  const text = readIfPresent(path)
+  if (text === null) return null
+  try {
+    return JSON.parse(text)
   } catch {
     return null
   }
@@ -67,12 +85,8 @@ function taskName(result, trial) {
 function rewardOf(result, dir) {
   const reward = result?.verifier_result?.rewards?.reward
   if (typeof reward === 'number') return reward
-  try {
-    const text = readFileSync(join(dir, 'verifier', 'reward.txt'), 'utf8').trim()
-    return text === '' || Number.isNaN(Number(text)) ? null : Number(text)
-  } catch {
-    return null
-  }
+  const text = readIfPresent(join(dir, 'verifier', 'reward.txt'))?.trim() ?? ''
+  return text === '' || Number.isNaN(Number(text)) ? null : Number(text)
 }
 
 function agentMinutes(result) {
@@ -88,12 +102,8 @@ export function readTrial(dir) {
   const trial = basename(dir)
   const result = readJson(join(dir, 'result.json'))
   const summary = readJson(join(dir, 'agent', 'acp-summary.json'))
-  let events = null
-  try {
-    events = readFileSync(join(dir, 'agent', 'acp-events.jsonl'), 'utf8')
-  } catch {
-    // The agent has not connected yet.
-  }
+  // Null until the agent has connected.
+  const events = readIfPresent(join(dir, 'agent', 'acp-events.jsonl'))
   const costs = [usageCost(summary?.latest_usage_update), events === null ? null : reportedCost(events)]
     .filter((c) => c !== null)
   const usage = summary?.prompt_response?.usage ?? {}
@@ -206,7 +216,13 @@ export function main(argv, out = process.stdout, err = process.stderr) {
     err.write(`spend.mjs: no job directory at ${opts.jobDir}\n`)
     return 2
   }
-  const rows = readJob(jobDir)
+  let rows
+  try {
+    rows = readJob(jobDir)
+  } catch (e) {
+    err.write(`spend.mjs: cannot read the job's spend: ${e.message}\n`)
+    return 1
+  }
   out.write(opts.markdown ? markdownTable(rows) : textReport(rows))
   return opts.cap !== null && totalCost(rows) >= opts.cap ? CAP_EXIT : 0
 }
