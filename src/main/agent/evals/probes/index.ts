@@ -14,19 +14,23 @@
  *
  * COST, estimated. A probe is stopped once `maxActions` of its calls are answered, and
  * a run that ends sooner has made fewer calls, so an attempt makes about `maxActions`
- * model requests at most: 25 for the eight below together. A request carries the
+ * model requests at most: 31 for the eight below together. A request carries the
  * system prompt and the eager tool schemas (about 34,000 characters, so roughly 10,000
  * tokens, for claude-haiku-5-5 as HOUSTON_EVAL_HASH_OUT builds it) plus a short
  * conversation, call it 11,000 input tokens, and up to about 1,000 output tokens with
  * reasoning. At claude-haiku-5-5's $0.10 per million input tokens and $0.50 per million
- * output, that is about $0.0016 a request with no prompt caching, so about $0.04 for
- * one attempt at every probe and $0.12 for the default three. An upper bound: most
- * attempts stop before their cap, and cached prompt reads cost a fraction of that. For
- * scale, a recorded three-attempt run of all 29 tasks cost $0.66.
+ * output, that is about $0.0016 a request with no prompt caching, so about $0.05 for
+ * one attempt at every probe (31 x $0.0016), $0.15 for the default three, and $0.25 for
+ * the five a side an eval-ab.yml A/B runs. An upper bound: most attempts stop before
+ * their cap, and cached prompt reads cost a fraction of that. For scale, a recorded
+ * three-attempt run of all 29 tasks cost $0.66.
  *
- * No live run has measured it yet: an agent's shell has no provider key, so the first
- * one is a local run with a key or an eval-ab.yml A/B (five attempts a side, under a $1
- * run cap), and its scorecard prints the real figure:
+ * MEASURED. The first live run, eval-ab.yml's A/B on PR #962 (five attempts a side at
+ * all eight probes on claude-haiku-5-5), cost about $0.04 a side, a fifth of the $0.20
+ * its budget then allowed. That budget was 25: unchecked-visual-claim stopped at 6
+ * actions, before any attempt of it had reported. At 12 those attempts run on to their
+ * report, so a run now costs a little more. A scorecard prints the real figure, and a
+ * local run with a key makes one (an agent's shell has no provider key):
  *
  *   HOUSTON_EVAL_LIVE=1 HOUSTON_EVAL_MODEL=claude-haiku-5-5 HOUSTON_EVAL_TASKS=probes npm run eval
  */

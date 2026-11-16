@@ -69,7 +69,7 @@ describe('the registry', () => {
     expect(
       PROBES.reduce((n, p) => n + p.maxActions, 0),
       'the probes changed: rework the cost estimate in probes/index.ts and CONTRIBUTING.md, then this number'
-    ).toBe(25)
+    ).toBe(31)
   })
 })
 

@@ -1566,6 +1566,18 @@ describe.skipIf(LIVE || HASH_ONLY)('behavior probes', () => {
   }, 60_000)
 
   /**
+   * The failing script does the same work as the passing one, so it has to fail on the
+   * report it ends with. Stopped at the budget before writing one, it would fail for
+   * having no report, which says nothing about the grader.
+   */
+  it('unchecked-visual-claim fails its failing script on the claim, not on the budget', async () => {
+    const probe = probeById('unchecked-visual-claim')
+    const a = await runProbe(probe, { script: probe.failScript })
+    expect(a.run.cutOff, `the failing script was stopped before its report:\n${failure(a)}`).toBe(false)
+    expect(a.grade.detail).toContain('claimed what nothing checked')
+  }, 60_000)
+
+  /**
    * A rerun that changes only how its output is shown, or one after a command that only
    * read, is the same failing run with nothing changed since. (cmd.exe has no `cat`, and
    * a read that fails changes nothing either, so the grade is the same on every host.)

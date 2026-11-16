@@ -22,7 +22,7 @@ name: Prompt A/B (live)
 # comment shows both scorecards, probes first. A base commit from before the probes can't
 # select them, so then both sides run the harder tasks alone, and the comment says so.
 #
-# WHEN IT SPENDS. A side's probes cost roughly $0.05 to $0.20 and its harder tasks about
+# WHEN IT SPENDS. A side's probes cost about $0.04 to $0.25 and its harder tasks about
 # $0.40, and an A/B that compares two identical prompts can only measure noise. So two
 # free checks run first:
 #   1. The plan job skips pull requests that touch none of the code that can shape the
@@ -89,9 +89,10 @@ env:
   # compare job labels its scorecards with them. Not HOUSTON_EVAL_* names, which would
   # reach the hash jobs' eval runs too. Each cap is about five times what the run costs
   # on claude-haiku-5-5, so it stops a runaway without cutting a normal run short:
-  #   probes  one attempt at all eight allows about 25 model requests, at most about $0.04
+  #   probes  one attempt at all eight allows about 31 model requests, at most about $0.05
   #           uncached (src/main/agent/evals/probes/index.ts), so five attempts cost at
-  #           most about $0.20, and less with early stops and cached prompt reads: $1.
+  #           most about $0.25, and less with early stops and cached prompt reads (the
+  #           first live run, on a 25-request budget, cost about $0.04 a side): $1.
   #   hard    two-attempt runs of the 20 harder tasks averaged about $0.011 an attempt
   #           (src/main/agent/evals/costCaps.ts), so about $0.45 a run: $2.
   # The attempt that crosses a cap still finishes, bounded by the per-attempt cap
