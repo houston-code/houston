@@ -214,7 +214,7 @@ export interface NotebookEdit {
   /** 1-based cell number, matching the numbers {@link renderNotebook} shows. */
   cell: number
   mode: NotebookEditMode
-  /** New source, for replace/insert. */
+  /** New source, required for replace/insert ("" for an empty cell). */
   source?: string
   /** Cell kind for an insert; defaults to the kind of the cell it lands before. */
   cellType?: string
@@ -247,7 +247,12 @@ export function editNotebook(nb: Notebook, edit: NotebookEdit): Notebook {
         `Cannot insert at cell ${n}: the notebook has ${cells.length} cell${cells.length === 1 ? '' : 's'}, so the last insertable position is ${cells.length + 1}.`
       )
     }
-    const source = edit.source ?? ''
+    // A missing source is not an empty cell: the code went under another key, and an
+    // empty cell reported as inserted would read as if it held that code.
+    if (edit.source === undefined) {
+      throw new Error('Inserting a cell requires "source" (pass "" for an empty cell).')
+    }
+    const source = edit.source
     const cellType = edit.cellType ?? cells[n - 1]?.cell_type ?? 'code'
     if (!CELL_TYPES.includes(cellType)) {
       throw new Error(`Unknown cell_type "${cellType}": expected one of ${CELL_TYPES.join(', ')}.`)

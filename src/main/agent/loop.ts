@@ -5459,7 +5459,7 @@ export async function startRun(
         }
         const tool = lookupTool(call.name)
         if (!tool) return null
-        const issues = validateToolArgs(call.arguments, tool.schema.parameters)
+        const issues = validateToolArgs(call.arguments, tool.schema.parameters, tool.validateArgs)
         if (issues.length === 0) return null
         return {
           call,
@@ -5716,7 +5716,7 @@ export async function startRun(
           let execArgs = call.arguments
           let rewriteError: string | null = null
           if (!pre.blocked && pre.updatedInput) {
-            const issues = validateToolArgs(pre.updatedInput, tool.schema.parameters)
+            const issues = validateToolArgs(pre.updatedInput, tool.schema.parameters, tool.validateArgs)
             if (issues.length === 0) {
               execArgs = pre.updatedInput
             } else {

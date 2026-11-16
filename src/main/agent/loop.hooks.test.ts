@@ -460,6 +460,31 @@ describe('PreToolUse rewrites are re-matched against permission rules', () => {
     expect(existsSync(join(ws, 'ok.txt'))).toBe(false)
     expect(existsSync(join(ws, 'secrets', 'x.txt'))).toBe(false)
   })
+
+  it('a rewrite into a multi_edit whose edit lacks new_string fails the call', async () => {
+    writeFileSync(join(ws, 'api.mjs'), 'export function load() {}\n')
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'multi_edit', command: 'rw' }]
+    const edits = (edit: Record<string, unknown>): Record<string, unknown> => ({ path: 'api.mjs', edits: [edit] })
+    h.static = {
+      rw: { stdout: JSON.stringify({ updatedInput: edits({ old_string: 'load() {}', replacement: 'load() { return 1 }' }) }) }
+    }
+    const { events } = await run({
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: { id: 'm1', name: 'multi_edit', arguments: edits({ old_string: 'load() {}', new_string: 'load() { return 2 }' }) }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(toolResult(events)).toContain('A PreToolUse hook rewrote the input, but it was invalid')
+    expect(toolResult(events)).toContain('edit 1 (edits[0]) is missing required "new_string"')
+    expect(readFileSync(join(ws, 'api.mjs'), 'utf8')).toBe('export function load() {}\n')
+  })
 })
 
 // A PreToolUse hook's `{decision:"approve"}` skips the approval prompt — but only

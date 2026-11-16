@@ -960,7 +960,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
       // Fix obvious argument-shape slips first, as the main loop does, so validation and
       // execution see the same corrected arguments the transcript records.
       if (schema && !call.incomplete) call.arguments = coerceToolArgs(call.arguments, schema)
-      const issues = schema && !call.incomplete ? validateToolArgs(call.arguments, schema) : []
+      const issues = schema && !call.incomplete ? validateToolArgs(call.arguments, schema, tool?.validateArgs) : []
       let output: string
       // Whether the call did what it was asked; refusals and errors don't.
       let ok = true

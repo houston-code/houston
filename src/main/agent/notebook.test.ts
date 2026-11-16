@@ -301,6 +301,9 @@ describe('editNotebook', () => {
   it('rejects a replace with no source, and an unknown cell type', () => {
     const one = nb([codeCell('a')])
     expect(() => editNotebook(one, { cell: 1, mode: 'replace' })).toThrow(/requires "source"/)
+    // Insert too: a missing source is not an empty cell; an empty one is asked for with ''.
+    expect(() => editNotebook(one, { cell: 2, mode: 'insert' })).toThrow(/Inserting a cell requires "source"/)
+    expect(editNotebook(one, { cell: 2, mode: 'insert', source: '' }).cells).toHaveLength(2)
     expect(() => editNotebook(one, { cell: 1, mode: 'replace', source: 'x', cellType: 'sql' })).toThrow(
       /Unknown cell_type "sql"/
     )
