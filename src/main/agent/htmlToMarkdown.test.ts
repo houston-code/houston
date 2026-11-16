@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { htmlToMarkdown } from './htmlToMarkdown'
+import { capNesting, htmlToMarkdown } from './htmlToMarkdown'
 
 const BASE = 'https://docs.example/guide/page.html'
 const md = (html: string, fullPage = true): string => htmlToMarkdown(html, { baseUrl: BASE, fullPage })
@@ -260,6 +260,58 @@ describe('htmlToMarkdown main content', () => {
     const nested = `${'<div>'.repeat(depth)}<p>Deep text.</p>${'</div>'.repeat(depth)}`
     expect(htmlToMarkdown(`<body>${nested}</body>`)).toContain('Deep text.')
     expect(htmlToMarkdown(`<body><p>${'<b>'.repeat(5_000)}Bold deep.</p></body>`)).toContain('Bold deep.')
+  })
+
+  it('converts a page nested far deeper still, and a large subtree past the flattening depth', () => {
+    // The parser's time grew with the square of the depth, and joining the text of a
+    // flattened subtree with the square of its size: each would take minutes here.
+    const depth = 100_000
+    const nested = `${'<div>'.repeat(depth)}<p>Deep text.</p>${'</div>'.repeat(depth)}`
+    expect(htmlToMarkdown(`<body>${nested}</body>`)).toContain('Deep text.')
+    const wide = `<body>${'<div>'.repeat(300)}${'<div><p>line</p></div>'.repeat(20_000)}<p>Last line.</p></body>`
+    const out = htmlToMarkdown(wide)
+    expect(out).toContain('Last line.')
+    expect(out.match(/line/g)).toHaveLength(20_001)
+  })
+})
+
+describe('capNesting', () => {
+  const nested = (depth: number, inner: string): string => `${'<div>'.repeat(depth)}${inner}${'</div>'.repeat(depth)}`
+
+  it('returns a page that is not nested past the cap unchanged', () => {
+    const html = `<ul>${'<li>item'.repeat(1_000)}</ul><p>a<p>b<br><img src="x">${nested(10, 'deep')}`
+    expect(capNesting(html, 20)).toBe(html)
+    expect(capNesting('<div><div>a</div></div>', 2)).toBe('<div><div>a</div></div>')
+  })
+
+  it('drops the tags nested past the cap, with their end tags, and keeps the text', () => {
+    expect(capNesting(nested(4, 'text'), 2)).toBe('<div><div>text</div></div>')
+    expect(capNesting('<div><div><b>x</b><i>y</i></div><span>z</span></div>', 1)).toBe('<div>xyz</div>')
+    const capped = capNesting(nested(8_000, '<p>Deep text.</p>'))
+    expect(capped.match(/<div>/g)).toHaveLength(320)
+    expect(capped.match(/<\/div>/g)).toHaveLength(320)
+    expect(capped).toContain('<p>Deep text.</p>')
+  })
+
+  it('closes back to the matching element, as the parser does for a stray end tag', () => {
+    // The </div> closes the unclosed <span> too, so the next <div> is at depth 1 again.
+    expect(capNesting('<div><span></div><div><div>x</div></div>', 2)).toBe('<div><span></div><div><div>x</div></div>')
+  })
+
+  it('keeps raw-text elements whole past the cap, so their contents never become text', () => {
+    const html = `<body>${nested(400, '<script>window.secret = "<div>"</script><style>.a{}</style><p>Seen.</p>')}</body>`
+    const out = htmlToMarkdown(html)
+    expect(out).toContain('Seen.')
+    expect(out).not.toContain('secret')
+    expect(out).not.toContain('.a{}')
+  })
+
+  it('cuts at the right places after characters outside the Basic Multilingual Plane', () => {
+    expect(capNesting('<div>\u{1F600}<div>\u{1F680}<i>a</i></div></div>', 1)).toBe('<div>\u{1F600}\u{1F680}a</div>')
+  })
+
+  it('cuts at the right places in a page with CRLF line endings', () => {
+    expect(capNesting('<div>\r\n<div>\r\n<div>a\r\nb</div>\r\n</div>\r\n</div>', 1)).toBe('<div>\n\na\nb\n\n</div>')
   })
 })
 
