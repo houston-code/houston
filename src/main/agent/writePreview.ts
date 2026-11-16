@@ -3,7 +3,7 @@ import { diffLines, hunkDiff, type DiffLine, type FileDiffPreview } from '@share
 import { parsePatch } from './apply-patch'
 import { resolveEdit } from './edit-match'
 import { editNotebook, parseNotebook, renderNotebook, type NotebookEditMode } from './notebook'
-import { resolveInRoots } from './tools'
+import { multiEditIssues, resolveInRoots } from './tools'
 
 /**
  * Compute what a write-kind tool call WOULD do to each file it touches, as a diff
@@ -104,18 +104,21 @@ export async function previewWrite(
 
       case 'edit_file': {
         const path = str(args, 'path')
-        if (!path) return null
+        // The tool refuses a call without both strings; reading a missing new_string
+        // as '' would preview a deletion it will never make.
+        if (!path || typeof args.old_string !== 'string' || typeof args.new_string !== 'string') return null
         const abs = resolveInRoots(roots, path)
         const before = await readOrNull(abs)
         if (before === null) return null
-        const { content } = resolveEdit(before, str(args, 'old_string'), str(args, 'new_string'), args.replace_all === true, PREVIEW_ONLY)
+        const { content } = resolveEdit(before, args.old_string, args.new_string, args.replace_all === true, PREVIEW_ONLY)
         return [previewOf(path, before, content)]
       }
 
       case 'multi_edit': {
         const path = str(args, 'path')
         const edits = args.edits
-        if (!path || !Array.isArray(edits) || edits.length === 0) return null
+        // An edit the tool would refuse (one with no new_string, say) has no preview.
+        if (!path || !Array.isArray(edits) || multiEditIssues(args).length) return null
         const abs = resolveInRoots(roots, path)
         const before = await readOrNull(abs)
         if (before === null) return null
@@ -123,10 +126,8 @@ export async function previewWrite(
         // one's result — so the preview is the real combined outcome and not a
         // per-edit approximation.
         let after = before
-        for (const raw of edits) {
-          if (raw === null || typeof raw !== 'object') return null
-          const e = raw as Record<string, unknown>
-          after = resolveEdit(after, str(e, 'old_string'), str(e, 'new_string'), e.replace_all === true, PREVIEW_ONLY).content
+        for (const e of edits as Array<{ old_string: string; new_string: string; replace_all?: unknown }>) {
+          after = resolveEdit(after, e.old_string, e.new_string, e.replace_all === true, PREVIEW_ONLY).content
         }
         return [previewOf(path, before, after)]
       }

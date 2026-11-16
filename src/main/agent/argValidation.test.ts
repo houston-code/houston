@@ -174,6 +174,32 @@ describe('validateToolArgs', () => {
   })
 })
 
+describe('tool-specific checks', () => {
+  const multiEdit = getTool('multi_edit')!
+
+  it('adds the tool\'s own checks of what the top-level schema check cannot see', () => {
+    const args = { path: 'api.mjs', edits: [{ old_string: 'load() {}', replacement: 'load() { return 1 }' }] }
+    // The schema check alone passes it: every top-level key is present and well typed.
+    expect(validateToolArgs(args, multiEditSchema)).toEqual([])
+    const issues = validateToolArgs(args, multiEditSchema, multiEdit.validateArgs)
+    expect(issues.map((i) => i.message)).toEqual([
+      expect.stringMatching(/^edit 1 \(edits\[0\]\) is missing required "new_string"/),
+      expect.stringMatching(/^edit 1 \(edits\[0\]\) has unknown key "replacement"/)
+    ])
+    expect(validationError('multi_edit', multiEditSchema, issues)).toMatch(
+      /^Invalid arguments for tool "multi_edit": edit 1 \(edits\[0\]\) is missing required "new_string"/
+    )
+  })
+
+  it('runs them only once the schema check passes, so one problem is not reported twice', () => {
+    const garbled = { path: 'a.ts', edits: ['[{"old_string">  const { login } = useAuth();'] }
+    expect(validateToolArgs(garbled, multiEditSchema, multiEdit.validateArgs).map((i) => i.key)).toEqual(['edits'])
+    expect(validateToolArgs({ edits: [{}] }, multiEditSchema, multiEdit.validateArgs).map((i) => i.message)).toEqual([
+      'missing required "path"'
+    ])
+  })
+})
+
 describe('validationError', () => {
   it('renders the problems and the expected shape for the model', () => {
     const issues = validateToolArgs({ offset: 1 }, readFileSchema)

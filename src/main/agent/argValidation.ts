@@ -25,7 +25,11 @@ import type { JSONSchema } from '@shared/agent'
  *
  * We do NOT recurse into array items or nested object properties, do NOT enforce
  * enums, and do NOT reject unknown extra keys — matching the tools' existing
- * tolerance. The schemas the tools actually declare are a small JSON-Schema subset
+ * tolerance. A tool whose items must be checked anyway (multi_edit: an edit missing
+ * new_string would delete the text it matched) supplies its own check, which
+ * {@link validateToolArgs} runs after these (see ToolDef.validateArgs).
+ *
+ * The schemas the tools actually declare are a small JSON-Schema subset
  * built by `objectSchema` (tools.ts): a top-level object with `properties`,
  * `required`, and per-property `{ type: 'string' | 'number' | 'boolean' | 'array'
  * | 'object' }` (occasionally with `enum`, which we intentionally ignore here).
@@ -46,7 +50,7 @@ type SchemaTypeName = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'o
  * The runtime "type" of a value, in JSON-Schema terms. `null` is reported as
  * `'null'` so a null where a value is required reads sensibly in the error.
  */
-function runtimeType(v: unknown): string {
+export function runtimeType(v: unknown): string {
   if (v === null) return 'null'
   if (Array.isArray(v)) return 'array'
   return typeof v // 'string' | 'number' | 'boolean' | 'object' | 'undefined' | ...
@@ -103,11 +107,22 @@ function declaredType(propSchema: unknown): SchemaTypeName | null {
  * issues found — empty when the arguments are acceptable. Never throws: an
  * unrecognized/absent schema is treated as "no constraints" so a tool without a
  * declared object schema (or an MCP tool with a freeform schema) always passes.
+ *
+ * `toolCheck` is the tool's own check of what the schema check above does not look
+ * at (ToolDef.validateArgs). It runs only once the schema check passes, so the model
+ * fixes the call's top level first and one problem is not reported twice.
  */
 export function validateToolArgs(
   args: Record<string, unknown>,
-  schema: JSONSchema | undefined
+  schema: JSONSchema | undefined,
+  toolCheck?: (args: Record<string, unknown>) => ArgValidationIssue[]
 ): ArgValidationIssue[] {
+  const issues = schemaIssues(args, schema)
+  return issues.length === 0 && toolCheck ? toolCheck(args) : issues
+}
+
+/** The schema-level checks of {@link validateToolArgs}, numbered (1)-(3) below. */
+function schemaIssues(args: Record<string, unknown>, schema: JSONSchema | undefined): ArgValidationIssue[] {
   const issues: ArgValidationIssue[] = []
   if (!schema || typeof schema !== 'object') return issues
 

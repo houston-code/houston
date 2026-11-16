@@ -1294,6 +1294,44 @@ describe('output limit and argument checks', () => {
     expect(existsSync(join(ws, 'x.txt'))).toBe(false)
   })
 
+  it('checks each multi_edit edit too, not just the top-level keys', async () => {
+    writeFileSync(join(ws, 'api.mjs'), 'export function load() {}\n')
+    const { provider, requests } = capRecording([
+      [
+        {
+          type: 'tool_call',
+          call: {
+            id: 'r1',
+            name: 'read_file',
+            arguments: { path: 'api.mjs' }
+          }
+        },
+        {
+          type: 'tool_call',
+          call: {
+            id: 'm1',
+            name: 'multi_edit',
+            arguments: { path: 'api.mjs', edits: [{ old_string: 'load() {}', replacement: 'load() { return 1 }' }] }
+          }
+        },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'edit',
+      writable: true,
+      signal: new AbortController().signal
+    })
+    expect(toolResults(requests[1].messages)[1]).toMatch(
+      /^Invalid arguments for tool "multi_edit": edit 1 \(edits\[0\]\) is missing required "new_string"/
+    )
+    expect(readFileSync(join(ws, 'api.mjs'), 'utf8')).toBe('export function load() {}\n')
+  })
+
   it('continues a report the limit cut off and returns the whole of it', async () => {
     const { provider, requests } = capRecording([
       [{ type: 'text', text: 'The answer is lo' }, { type: 'done', stopReason: 'max_tokens' }],

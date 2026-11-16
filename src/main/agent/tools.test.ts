@@ -632,6 +632,23 @@ describe('write/read/edit', () => {
     )
   })
 
+  it('refuses an edit_file call with no new_string instead of deleting old_string', async () => {
+    // Argument validation catches this before a call runs; a caller that skips it
+    // (anything invoking execute directly) must still not read the missing key as ''.
+    await run('write_file', { path: 'x.txt', content: 'keep this line' })
+    await expect(run('edit_file', { path: 'x.txt', old_string: ' this', replacement: ' that' })).rejects.toThrow(
+      /edit_file requires "new_string"/
+    )
+    await expect(run('edit_file', { path: 'x.txt', old_string: ' this', new_string: 7 })).rejects.toThrow(
+      /edit_file requires "new_string"/
+    )
+    await expect(run('edit_file', { path: 'x.txt', new_string: 'x' })).rejects.toThrow(/edit_file requires "old_string"/)
+    expect(fileText('x.txt')).toBe('keep this line')
+    // An explicit '' is a deletion asked for, and still works.
+    await run('edit_file', { path: 'x.txt', old_string: ' this', new_string: '' })
+    expect(fileText('x.txt')).toBe('keep line')
+  })
+
   it('requires replace_all for ambiguous edits', async () => {
     await run('write_file', { path: 'x.txt', content: 'a a a' })
     await expect(run('edit_file', { path: 'x.txt', old_string: 'a', new_string: 'b' })).rejects.toThrow(
@@ -856,6 +873,20 @@ describe('notebook_edit', () => {
     expect(readFileSync(join(workspace, 'a.ipynb'), 'utf8')).toBe(before)
   })
 
+  it('refuses an insert with no source instead of inserting an empty cell', async () => {
+    // The code went under the wrong key; the insert used to add an empty cell and
+    // report "Inserted a code cell at 3" as if the code were in it.
+    writeNb()
+    const before = readFileSync(join(workspace, 'a.ipynb'), 'utf8')
+    await expect(
+      run('notebook_edit', { path: 'a.ipynb', cell: 3, mode: 'insert', content: 'z = 3' })
+    ).rejects.toThrow(/Inserting a cell requires "source"/)
+    expect(readFileSync(join(workspace, 'a.ipynb'), 'utf8')).toBe(before)
+    // An empty cell asked for explicitly is still inserted.
+    await run('notebook_edit', { path: 'a.ipynb', cell: 3, mode: 'insert', source: '' })
+    expect((readNb().cells as unknown[]).length).toBe(3)
+  })
+
   it('refuses a non-notebook and points at the right tool', async () => {
     await run('write_file', { path: 'a.py', content: 'x = 1' })
     await expect(run('notebook_edit', { path: 'a.py', cell: 1, source: 'x' })).rejects.toThrow(/edit_file/)
@@ -994,6 +1025,79 @@ describe('multi_edit', () => {
   it('rejects an empty edits array', async () => {
     await run('write_file', { path: 'm.txt', content: 'a' })
     await expect(run('multi_edit', { path: 'm.txt', edits: [] })).rejects.toThrow(/non-empty/)
+  })
+
+  it('refuses an edit with no new_string instead of deleting the text it matched', async () => {
+    // The replacement went under the wrong key. The edit used to run with new_string
+    // read as '', deleting the matched text, and the call reported success.
+    const before = 'export const a = 1\nexport function load() {}\n'
+    await run('write_file', { path: 'api.mjs', content: before })
+    const call = run('multi_edit', {
+      path: 'api.mjs',
+      edits: [
+        { old_string: 'a = 1', new_string: 'a = 2' },
+        { old_string: 'function load() {}', replacement: 'function load() { return 1 }' }
+      ]
+    })
+    await expect(call).rejects.toThrow(/edit 2 \(edits\[1\]\) is missing required "new_string"/)
+    await expect(call).rejects.toThrow(/edit 2 \(edits\[1\]\) has unknown key "replacement"/)
+    expect(fileText('api.mjs')).toBe(before)
+  })
+
+  it('names each malformed edit by its position and key, and writes nothing', async () => {
+    await run('write_file', { path: 'm.txt', content: 'a b c' })
+    const call = run('multi_edit', {
+      path: 'm.txt',
+      edits: [
+        { old_string: 'a', new_string: 'A' },
+        'b -> B',
+        { old_string: 3, new_string: 'C' },
+        { new_string: 'x' },
+        { old_string: 'c', new_string: 'C', replace_all: 'yes' },
+        { old_string: 'c', new_string: 'C', path: 'other.txt' }
+      ]
+    })
+    await expect(call).rejects.toThrow(/edit 2 \(edits\[1\]\) should be an object with "old_string" and "new_string", got string/)
+    await expect(call).rejects.toThrow(/edit 3 \(edits\[2\]\) "old_string" should be string, got number/)
+    await expect(call).rejects.toThrow(/edit 4 \(edits\[3\]\) is missing required "old_string"/)
+    await expect(call).rejects.toThrow(/edit 5 \(edits\[4\]\) "replace_all" should be boolean, got string/)
+    await expect(call).rejects.toThrow(/edit 6 \(edits\[5\]\) has unknown key "path"/)
+    await expect(call).rejects.not.toThrow(/edit 1 /)
+    expect(fileText('m.txt')).toBe('a b c')
+  })
+
+  it('still deletes text when new_string is an explicit empty string', async () => {
+    await run('write_file', { path: 'm.txt', content: 'one two three' })
+    await run('multi_edit', { path: 'm.txt', edits: [{ old_string: ' two', new_string: '' }] })
+    expect(fileText('m.txt')).toBe('one three')
+  })
+
+  it('checks every edit before the call is gated, through validateArgs', () => {
+    const validate = getTool('multi_edit')!.validateArgs!
+    expect(validate({ path: 'm.txt', edits: [{ old_string: 'a', new_string: 'b', replace_all: true }] })).toEqual([])
+    // replace_all may be null (treated as omitted), the way an optional top-level key may.
+    expect(validate({ path: 'm.txt', edits: [{ old_string: 'a', new_string: 'b', replace_all: null }] })).toEqual([])
+    const issues = validate({ path: 'm.txt', edits: [{ old_string: 'a', new_string: null }] })
+    expect(issues.map((i) => i.key)).toEqual(['edits'])
+    expect(issues[0].message).toMatch(/^edit 1 \(edits\[0\]\) is missing required "new_string"/)
+    // Pass "" to delete: the message says how to ask for the deletion that used to happen silently.
+    expect(issues[0].message).toContain('""')
+    expect(validate({ path: 'm.txt', edits: [] }).map((i) => i.message)).toEqual([
+      expect.stringMatching(/non-empty/)
+    ])
+    // Not an array at all is the schema check's to report, not this one's.
+    expect(validate({ path: 'm.txt', edits: 'nope' })).toEqual([])
+  })
+
+  it('caps the problems it lists for a long list of malformed edits', () => {
+    const edits = Array.from({ length: 30 }, (_, i) => ({ old_string: `x${i}`, replacement: 'y' }))
+    const issues = getTool('multi_edit')!.validateArgs!({ path: 'm.txt', edits })
+    expect(issues.length).toBeLessThanOrEqual(11)
+    expect(issues[issues.length - 1].message).toMatch(/\d+ more problems/)
+    // ...and the unknown keys it names for one edit.
+    const extra = Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`k${i}`, i]))
+    const [one] = getTool('multi_edit')!.validateArgs!({ path: 'm.txt', edits: [{ old_string: 'a', new_string: 'b', ...extra }] })
+    expect(one.message).toContain('unknown keys "k0", "k1", "k2", "k3", "k4", 3 more;')
   })
 })
 

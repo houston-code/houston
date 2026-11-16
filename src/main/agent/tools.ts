@@ -124,6 +124,7 @@ import { resolveRipgrep, searchContents } from './search'
 import { FALLBACK_SKIP_DIRS, globTester, hasHiddenSegment, listScope, type ScopeCache } from './fileScope'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { EditNotFoundError, resolveEdit, type EditRegion, type EditResult, type EditStrategy } from './edit-match'
+import { runtimeType, type ArgValidationIssue } from './argValidation'
 import { displayLines, numberLines, numberWidth } from './line-numbers'
 import { MAX_READ_CHARS, numberedRead, streamNumberedRead } from './read-lines'
 import { fileDigest, type FileReadTracker, type StaleWriteReason } from './readCache'
@@ -457,6 +458,14 @@ export interface ToolDef {
    * in its place, so its effect passes exactly the checks the concrete tool does.
    */
   materialize?: (args: Record<string, unknown>, ctx: ToolContext) => Promise<MaterializedCall>
+  /**
+   * Checks of a call's arguments that the schema validation leaves out: it looks at
+   * top-level keys only (see argValidation.ts), so a tool whose array items can be
+   * wrong in a way that matters (multi_edit's edits) checks them here. The loop runs
+   * it with the schema checks, before any gate, so a malformed call is sent back for
+   * repair rather than approved and then failed.
+   */
+  validateArgs?: (args: Record<string, unknown>) => ArgValidationIssue[]
   execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string>
 }
 
@@ -1149,8 +1158,9 @@ const editFile: ToolDef = withShellCwdHint({
   async execute(args, ctx) {
     const rel = str(args, 'path')
     const abs = resolveInRoots(rootsOf(ctx), rel)
-    const oldStr = str(args, 'old_string')
-    const newStr = str(args, 'new_string')
+    // Read strictly: a missing new_string taken as '' would delete old_string.
+    const oldStr = requiredEditString(args, 'old_string', 'edit_file')
+    const newStr = requiredEditString(args, 'new_string', 'edit_file')
     const replaceAll = args.replace_all === true
     const buf = await fs.readFile(abs)
     assertSeen(ctx, 'edit_file', abs, rel, buf)
@@ -1171,18 +1181,90 @@ const editFile: ToolDef = withShellCwdHint({
   }
 })
 
+/** What each edit key holds, as the messages below describe it to the model. */
+const EDIT_KEY_HELP = {
+  old_string: 'the exact text to replace',
+  new_string: 'the replacement text; pass "" to delete old_string'
+} as const
+
+/**
+ * An edit's `old_string` or `new_string` from a call that may not have one, or a
+ * thrown error naming the key. Never '' for a missing value: an edit whose
+ * replacement went under another key would otherwise delete the text it matched
+ * and report success.
+ */
+function requiredEditString(args: Record<string, unknown>, key: keyof typeof EDIT_KEY_HELP, tool: string): string {
+  const v = args[key]
+  if (typeof v === 'string') return v
+  const got = v === undefined || v === null ? 'it is missing' : `got ${runtimeType(v)}`
+  throw new Error(`${tool} requires "${key}" (${EDIT_KEY_HELP[key]}) as a string; ${got}. Nothing was written.`)
+}
+
+/** One multi_edit edit, as {@link multiEditIssues} has checked it. */
 interface EditSpec {
   old_string: string
   new_string: string
-  replace_all?: boolean
+  replace_all?: boolean | null
+}
+
+/** The keys a multi_edit edit may carry. */
+const EDIT_KEYS: readonly string[] = ['old_string', 'new_string', 'replace_all']
+/** Most problems listed for one call; a longer list ends with a count of the rest. */
+const MAX_EDIT_ISSUES = 10
+/** Most unknown keys one edit's message names. */
+const MAX_UNKNOWN_KEYS = 5
+
+/**
+ * What is wrong with a multi_edit call's `edits`, one issue per problem, each naming
+ * the edit (counted from 1, as the tool's other errors count them, and by its array
+ * index) and the key. Argument validation checks only top-level keys, so without
+ * this an edit whose replacement went under another key ("replacement") ran with no
+ * new_string and deleted the text it matched. Unknown keys are refused too: one may
+ * carry what the edit was meant to do (a per-edit "path", a misspelled replace_all),
+ * and ignoring it would apply something other than what was asked. A null
+ * replace_all counts as omitted, as a null optional key does at the top level.
+ * Empty when `edits` is not an array, which the schema check reports. Pure.
+ */
+export function multiEditIssues(args: Record<string, unknown>): ArgValidationIssue[] {
+  const edits = args.edits
+  if (!Array.isArray(edits)) return []
+  if (edits.length === 0) return [{ key: 'edits', message: '"edits" must be a non-empty array of edits' }]
+  const issues: string[] = []
+  edits.forEach((item, i) => {
+    const which = `edit ${i + 1} (edits[${i}])`
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      issues.push(`${which} should be an object with "old_string" and "new_string", got ${runtimeType(item)}`)
+      return
+    }
+    const edit = item as Record<string, unknown>
+    for (const key of ['old_string', 'new_string'] as const) {
+      const v = edit[key]
+      if (v === undefined || v === null) issues.push(`${which} is missing required "${key}" (${EDIT_KEY_HELP[key]})`)
+      else if (typeof v !== 'string') issues.push(`${which} "${key}" should be string, got ${runtimeType(v)}`)
+    }
+    const all = edit.replace_all
+    if (all !== undefined && all !== null && typeof all !== 'boolean') {
+      issues.push(`${which} "replace_all" should be boolean, got ${runtimeType(all)}`)
+    }
+    const unknown = Object.keys(edit).filter((k) => !EDIT_KEYS.includes(k))
+    if (unknown.length) {
+      const named = unknown.slice(0, MAX_UNKNOWN_KEYS).map((k) => `"${k.slice(0, 40)}"`)
+      if (unknown.length > named.length) named.push(`${unknown.length - named.length} more`)
+      const names = named.join(', ')
+      issues.push(
+        `${which} has unknown key${unknown.length === 1 ? '' : 's'} ${names}; an edit takes only old_string, new_string, and replace_all`
+      )
+    }
+  })
+  const shown = issues.slice(0, MAX_EDIT_ISSUES)
+  if (issues.length > shown.length) shown.push(`and ${issues.length - shown.length} more problems in these edits`)
+  return shown.map((message) => ({ key: 'edits', message }))
 }
 
 /** Apply one find/replace to `data` via the resilient matcher, with per-edit error context. */
 function applyEdit(data: string, edit: EditSpec, index: number, showCandidate: boolean): EditResult {
-  const oldStr = typeof edit.old_string === 'string' ? edit.old_string : ''
-  const newStr = typeof edit.new_string === 'string' ? edit.new_string : ''
   try {
-    return resolveEdit(data, oldStr, newStr, edit.replace_all === true, { showCandidate })
+    return resolveEdit(data, edit.old_string, edit.new_string, edit.replace_all === true, { showCandidate })
   } catch (e) {
     // A closest-region listing is numbered against the file with the earlier edits
     // applied in memory, which is not what is on disk (nothing was written): say so.
@@ -1248,13 +1330,21 @@ const multiEdit: ToolDef = withShellCwdHint({
       ['path', 'edits']
     )
   },
+  validateArgs: multiEditIssues,
   async execute(args, ctx) {
     const rel = str(args, 'path')
     const abs = resolveInRoots(rootsOf(ctx), rel)
-    const edits = args.edits
-    if (!Array.isArray(edits) || edits.length === 0) {
+    const raw = args.edits
+    if (!Array.isArray(raw) || raw.length === 0) {
       throw new Error('edits must be a non-empty array.')
     }
+    // The loop has run these checks already; a caller that skips it gets them here,
+    // so a malformed edit can never reach applyEdit.
+    const issues = multiEditIssues(args)
+    if (issues.length) {
+      throw new Error(`multi_edit: ${issues.map((i) => i.message).join('; ')}. Nothing was written.`)
+    }
+    const edits = raw as EditSpec[]
     const buf = await fs.readFile(abs)
     assertSeen(ctx, 'multi_edit', abs, rel, buf)
     const original = editableText(buf, rel)
@@ -1264,7 +1354,7 @@ const multiEdit: ToolDef = withShellCwdHint({
     const flagged: { index: number; note: string; strategy: EditStrategy; regions: EditRegion[] }[] = []
     const sensitive = isSensitivePath(rel)
     edits.forEach((edit, i) => {
-      const result = applyEdit(data, (edit ?? {}) as EditSpec, i, !sensitive)
+      const result = applyEdit(data, edit, i, !sensitive)
       for (const f of flagged) f.regions = f.regions.map((r) => shiftRegion(r, result.regions))
       const note = matchNote(result)
       if (note) flagged.push({ index: i, note, strategy: result.strategy, regions: result.regions })

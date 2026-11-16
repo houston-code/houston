@@ -1135,6 +1135,38 @@ describe('startRun', () => {
     expect(result?.output).toContain('content')
   })
 
+  it('rejects a multi_edit whose edit lacks new_string BEFORE prompting, and leaves the file alone', async () => {
+    // The top-level keys are all there; the broken key is inside an edit. It used to
+    // pass validation, be approved, and delete the text the edit matched.
+    writeFileSync(join(ws, 'api.mjs'), 'export function load() {}\n')
+    const r = await run({
+      policy: 'ask',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: {
+              id: 'me',
+              name: 'multi_edit',
+              arguments: { path: 'api.mjs', edits: [{ old_string: 'load() {}', replacement: 'load() { return 1 }' }] }
+            }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'noted' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    expect(types(r)).not.toContain('tool_approval')
+    expect(readFileSync(join(ws, 'api.mjs'), 'utf8')).toBe('export function load() {}\n')
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'multi_edit') as
+      | { ok: boolean; output: string }
+      | undefined
+    expect(result?.ok).toBe(false)
+    expect(result?.output).toMatch(/^Invalid arguments for tool "multi_edit": edit 1 \(edits\[0\]\) is missing required "new_string"/)
+    expect(result?.output).toContain('has unknown key "replacement"')
+  })
+
   it('preserves intra-turn read-after-write: a read after a write in the same turn observes the WRITTEN content', async () => {
     // [write_file X, read_file X] in one turn. Because the read follows the write,
     // it must run sequentially AFTER the write (not race ahead in the parallel

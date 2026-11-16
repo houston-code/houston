@@ -58,6 +58,11 @@ describe('previewWrite: edit_file', () => {
   it('returns null for a file that does not exist', async () => {
     expect(await previewWrite('edit_file', { path: 'nope.ts', old_string: 'a', new_string: 'b' }, roots())).toBeNull()
   })
+
+  it('returns null without a new_string, rather than previewing a deletion', async () => {
+    write('a.ts', 'one two three\n')
+    expect(await previewWrite('edit_file', { path: 'a.ts', old_string: ' two', replacement: ' 2' }, roots())).toBeNull()
+  })
 })
 
 describe('previewWrite: multi_edit', () => {
@@ -109,6 +114,18 @@ describe('previewWrite: multi_edit', () => {
     write('m.ts', 'a\n')
     expect(await previewWrite('multi_edit', { path: 'm.ts', edits: [] }, roots())).toBeNull()
     expect(await previewWrite('multi_edit', { path: 'm.ts', edits: ['nope'] }, roots())).toBeNull()
+  })
+
+  it('returns null when an edit has no new_string, rather than previewing a deletion', async () => {
+    // The tool refuses this call; an approval card must not show the deletion that
+    // reading the missing key as '' would produce.
+    write('m.ts', 'one\ntwo\n')
+    const p = await previewWrite(
+      'multi_edit',
+      { path: 'm.ts', edits: [{ old_string: 'one', new_string: '1' }, { old_string: 'two', replacement: '2' }] },
+      roots()
+    )
+    expect(p).toBeNull()
   })
 })
 
