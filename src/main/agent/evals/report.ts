@@ -12,7 +12,7 @@ import { AGGREGATE_ALPHA, type AggregateVerdict, type BaselineVerdict } from './
 import { capsLabel, formatCap, formatUsd, type CostCaps } from './costCaps'
 import { hashGap, type HashCensus } from './stamp'
 import { formatDetectable, pct, suiteStats } from './stats'
-import type { EvalResult, TimedCall } from './types'
+import { isProbeResultId, type EvalResult, type TimedCall } from './types'
 
 export interface ReportHeader {
   driver: 'scripted' | 'live'
@@ -148,7 +148,8 @@ function fmtVerdict(v: BaselineVerdict | undefined): string {
     case 'improved':
       return `  improved (baseline ${v.baseline.toFixed(2)}, now ${v.observed.toFixed(2)} — re-record)`
     case 'unrecorded':
-      return '  unrecorded (not in the baseline yet)'
+      // A probe will never be in one: probes are an A/B instrument, not a gated score.
+      return isProbeResultId(v.taskId) ? '  unrecorded (a probe: never baselined)' : '  unrecorded (not in the baseline yet)'
     case 'held':
       return ''
   }

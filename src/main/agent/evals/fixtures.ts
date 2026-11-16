@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { headline } from './report'
-import type { EvalTask, EvalVerify } from './types'
+import type { EvalTask, EvalVerify, ProbeTask } from './types'
 
 /** Absolute path of `evals/tasks`, resolved from this module rather than cwd. */
 export const TASKS_DIR = fileURLToPath(new URL('./tasks', import.meta.url))
@@ -39,6 +39,20 @@ export function taskDirNames(): string[] {
     .sort()
 }
 
+/** Absolute path of `evals/probes`: one module per behavior probe, beside the registry. */
+export const PROBES_DIR = fileURLToPath(new URL('./probes', import.meta.url))
+
+/** The probe registry and the graders' shared helpers, which are not probes. */
+const PROBE_SUPPORT_FILES = new Set(['index.ts', 'kit.ts'])
+
+/** Probe module names on disk, so the suite can assert none is unregistered. */
+export function probeFileNames(): string[] {
+  return readdirSync(PROBES_DIR)
+    .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && !PROBE_SUPPORT_FILES.has(f))
+    .map((f) => f.slice(0, -'.ts'.length))
+    .sort()
+}
+
 /**
  * Copy a task's fixture repo into a fresh workspace under `tmpRoot`.
  *
@@ -57,9 +71,22 @@ export function taskDirNames(): string[] {
  * made the prompt (and its hash, stamp.ts) differ from task to task.
  */
 export function materializeTask(task: EvalTask, tmpRoot: string): string {
+  const ws = freshWorkspace(tmpRoot)
+  cpSync(repoDirFor(task.id), ws, { recursive: true })
+  return ws
+}
+
+/** A probe's workspace: fresh and named `repo` for the same reasons, filled by its `setup`. */
+export function materializeProbe(probe: ProbeTask, tmpRoot: string): string {
+  const ws = freshWorkspace(tmpRoot)
+  probe.setup(ws)
+  return ws
+}
+
+/** An empty `repo` folder in its own new folder under `tmpRoot`. */
+function freshWorkspace(tmpRoot: string): string {
   const ws = join(mkdtempSync(join(tmpRoot, 'attempt-')), 'repo')
   mkdirSync(ws, { recursive: true })
-  cpSync(repoDirFor(task.id), ws, { recursive: true })
   return ws
 }
 

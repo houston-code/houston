@@ -343,9 +343,10 @@ minutes when its baseline was recorded. It solved 87% of the attempts at the 20 
 tasks, and the tasks it sometimes fails are where a comparison can show a change.
 
 `HOUSTON_EVAL_TASKS=hard` runs only those 20 harder tasks (`HARD_TASKS` in
-`evals/tasks/index.ts`), and a comma-separated list of task ids runs just those. It
-can't be combined with `HOUSTON_EVAL_RECORD`, since a baseline records every task, and
-an id that isn't registered stops the run. `HOUSTON_EVAL_COMPARE_OUT=<file>` also writes
+`evals/tasks/index.ts`), and a comma-separated list of task ids runs just those (`probes`
+and `probe:<id>` select the behavior probes below). It can't be combined with
+`HOUSTON_EVAL_RECORD`, since a baseline records every task, and an id that isn't
+registered stops the run. `HOUSTON_EVAL_COMPARE_OUT=<file>` also writes
 the comparison to a file.
 
 The **Prompt A/B (live)** workflow (`eval-ab.yml`) does this for a pull request. It
@@ -435,6 +436,79 @@ wrong about a check its author never saw.
 A fixture whose bytes matter, such as a CRLF export with a byte order mark, needs a
 `-text` line in `.gitattributes`. Otherwise checkout normalizes it to LF and the task
 may pass before the agent touches it.
+
+#### Behavior probes
+
+A task grades whether the work got done. A behavior probe grades how the agent went
+about it, over its next few actions: whether it wrote a second copy of a file the project
+already has, opened a clear feature request with questions instead of reading the code,
+said a CSS change "looks great" with nothing checked, fetched article URLs it made up
+after `web_search` had no key, retried a refused call the same broken way, kept writing
+after Plan mode came on, ran a command a fetched page told it to, or reran a command
+that had just failed twice. No task can see those habits, so an A/B of a prompt change
+aimed at one finds no difference whatever the change does. The probes live in
+[`evals/probes/`](src/main/agent/evals/probes/), one file each, registered in
+`probes/index.ts`.
+
+Probes are an A/B instrument, not part of the weekly score. The default run
+(`npm run eval`, and the scheduled live run) includes none of them, a baseline never
+records one, and the gate reads every probe row as `unrecorded`, so a probe never fails
+a live run.
+Select them with `HOUSTON_EVAL_TASKS`: `probes` runs all of them, `probe:<id>` runs one,
+and either combines with task ids or `hard`. Their rows are named `probe:<id>` in the
+scorecard and the run record, so two runs compare with `npm run eval:compare` as usual:
+
+```bash
+export HOUSTON_EVAL_LIVE=1 HOUSTON_EVAL_MODEL=claude-haiku-5-5 HOUSTON_EVAL_TASKS=probes
+HOUSTON_EVAL_OUT=a.json npm run eval     # on main
+HOUSTON_EVAL_OUT=b.json npm run eval     # with your change
+HOUSTON_EVAL_A=a.json HOUSTON_EVAL_B=b.json npm run eval:compare
+```
+
+A live run still loads the model's baseline (it fails without one, like any live run),
+but only to grade the tasks it runs beside the probes. Each probe stops once `maxActions`
+of its calls are answered, which keeps a run cheap: all eight together allow about 25
+model requests an attempt, roughly $0.04 on `claude-haiku-5-5` at its $0.10 and $0.50
+per million input and output tokens, so about $0.12 for the default three attempts. That
+is an upper bound (`probes/index.ts` has the arithmetic): most attempts stop before their
+cap, and cached prompt reads cost less. No live run of the probes has happened yet. The
+first is a local run with a provider key, since an agent's shell has none, and its
+scorecard prints the real cost.
+
+A probe that starts in a mode other than full auto (the `present_plan` one runs in Plan
+mode) is told something else by design, so the run's prompt hash and `promptId` are
+taken from the other rows.
+
+**Writing a probe.** Add `probes/<id>.ts` exporting a `ProbeTask` (see `evals/types.ts`)
+named `probe`, and register it in `probes/index.ts`. A probe has:
+
+- `setup(ws)`, which writes its workspace: a few small, dependency-free files
+  (`writeFiles` in `probes/kit.ts` takes forward-slash paths on every platform);
+- a `prompt`, or `messages` that seed a conversation up to the moment that matters, such
+  as a tool result the agent must react to;
+- `maxActions`, the fewest actions its grader needs, plus room for a closing message when
+  it grades one;
+- `grade(run, ws)`, which reads what the agent did and returns `{ passed, detail }`:
+  `run.calls` lists every tool call with the arguments the model sent and whether it ran
+  (a call the loop refused is still one the agent tried), `run.finalText` is the closing
+  message, and `run.receipt` is what ran;
+- a `passScript` the grader must pass, and a `failScript` of the failure the probe exists
+  to catch, which it must fail.
+
+The scripted suite runs both scripts of every probe through the real loop, so each
+grader is tested at no cost, and a grader that passes everything fails CI. Grader
+branches the scripts don't reach get unit tests in `probes/kit.test.ts`. Every seeded
+tool result must be the loop's real output for that call: the suite replays the seeded
+calls in the probe's workspace and compares them word for word, so when a tool's output
+changes it names the seed to update. A result that differs by host is seeded from a
+function of the host instead: run_shell adds a note to a command no OS sandbox confined
+(Windows, Linux without a usable bubblewrap), so `messages` there takes a `ProbeHost`.
+A probe never reaches the network: `web` lists the
+pages `web_fetch` serves, through the real fetch pipeline (URL checks, HTML to markdown,
+the untrusted-content fence and its classifier), and any other URL answers 404.
+`onEvent` can change the run while it streams, for example switching Plan mode on the
+way the clients' mode toggle does. As with tasks, keep fixtures and graders
+Windows-safe: build paths with `join`, and run nothing but `node`.
 
 There's also an end-to-end suite in [`e2e/`](e2e/) that launches the real
 Electron app with Playwright. `npm run test:e2e` builds first, then prefers the
