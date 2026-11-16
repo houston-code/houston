@@ -112,8 +112,12 @@ work is done; the suite copies it to a throwaway workspace, drives the real `sta
 and grades on that command's exit code, never on the transcript. `npm run eval` (part
 of `npm test`) uses the scripted driver and gates every PR;
 `HOUSTON_EVAL_LIVE=1 npm run eval` drives a real model against the baselines in
-`evals/baselines/` and runs weekly instead, on `claude-haiku-5-5` (named in
-`eval-live.yml`, which `baselines.test.ts` reads to require its baseline). Changing a
+`evals/baselines/` and runs on a schedule instead, in three legs: `claude-haiku-5-5` weekly,
+`gpt-6-luna` monthly and `gemini-3.5-flash-lite` quarterly (its run costs about $8.62, with no
+prompt caching). `eval-live.yml`'s `resolve` job maps each cron to its provider, model and run
+cap, and is the only place that does: the concurrency group, key selection, suite env, artifact
+name and alert title all read its outputs, and `baselines.test.ts` reads its legs to require a
+live baseline for each. Changing a
 provider's `defaultModel` breaks nothing in CI; scoring the new default, on demand or in a
 local live run with no `HOUSTON_EVAL_MODEL`, needs a baseline recorded for it first. A pull
 request whose change reaches what the model is told (its gate hash, the eval prompt hash

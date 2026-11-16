@@ -5,28 +5,42 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { load } from 'js-yaml'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { resolveEvalConfig } from './agent/evals/config'
+import { evaluate, evaluateIf, type Value } from './test/actions-expression'
+import { loadEvalLive, resolveStep, scheduleArms, scheduledCrons, scheduledLegs, type ScheduledLeg } from './test/eval-live-legs'
 
 /**
- * Guards how eval-live.yml spends and reports, the weekly live eval and its on-demand
- * dispatches. A live run costs real money and takes over an hour, so these pin that no
- * dispatch or re-run cancels one in progress, that a dispatch typo stops before the install,
- * that every run keeps its run record, and that a scheduled run which never finished still
- * reaches a human. baselines.test.ts pins its model, keys and baseline recording.
+ * Guards how eval-live.yml spends and reports, its scheduled legs and their on-demand
+ * dispatches. A live run costs real money and takes over an hour, so these pin which model
+ * each cron scores and under what cap, that no dispatch or re-run cancels one in progress,
+ * that a dispatch typo stops before the install, that every run keeps its run record, and
+ * that a scheduled run which never finished still reaches a human. baselines.test.ts pins
+ * the keys, the baseline recording, and a baseline for every scheduled leg.
  */
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const source = readFileSync(resolve(root, '.github/workflows/eval-live.yml'), 'utf8')
-const doc = load(source) as any
-const { evals, alert } = doc.jobs
+const { source, doc } = loadEvalLive()
+const { resolve: resolveJob, evals, alert, 'alert-resolve': alertResolve } = doc.jobs
 const steps = evals.steps as any[]
+const leg = resolveStep(doc)
 const requireKey = steps.find((s) => s.name === 'Require the model API key')
 const score = steps.find((s) => s.id === 'score')
 const upload = steps.find((s) => s.name === 'Upload the run record')
 const alertOnFailure = load(readFileSync(resolve(root, '.github/workflows/alert-on-failure.yml'), 'utf8')) as any
 
-/** The provider a run scores, as every step spells it: anthropic when nothing says otherwise. */
-const PROVIDER = "${{ inputs.provider || 'anthropic' }}"
-/** The scheduled model's expression with 'default' for "the provider's default model". */
-const MODEL_KEY = String(score.env.HOUSTON_EVAL_MODEL).replace("|| '') }}", "|| 'default') }}")
+/** An output of the resolve job, as the jobs after it spell it. */
+const R = (name: string) => `\${{ needs.resolve.outputs.${name} }}`
+
+/** The workflow's code: every line but its comments, which may name anything. */
+const code = source
+  .split('\n')
+  .filter((l) => !l.trim().startsWith('#'))
+  .join('\n')
+
+/** The scheduled legs as they stand, and the cap a dispatch runs under. */
+const HAIKU = { cron: '0 9 * * 1', provider: 'anthropic', model: 'claude-haiku-5-5', maxRunUsd: '5' }
+const LUNA = { cron: '23 12 3 * *', provider: 'openai', model: 'gpt-6-luna', maxRunUsd: '5' }
+const FLASH_LITE = { cron: '47 14 5 1,4,7,10 *', provider: 'gemini', model: 'gemini-3.5-flash-lite', maxRunUsd: '20' }
+const DISPATCH_CAP = '25'
 
 /**
  * Write `stubs` as executables into a new temp dir, for {@link runStep}'s `bin`. Shared by a
@@ -82,16 +96,320 @@ function runStep(
   }
 }
 
+/** The resolve script run for an event, with no inputs unless given, as a scheduled run has none. */
+const resolveFor = (env: { EVENT: string; SCHEDULE?: string; PROVIDER_INPUT?: string; MODEL_INPUT?: string }) =>
+  runStep(leg.run, { SCHEDULE: '', PROVIDER_INPUT: '', MODEL_INPUT: '', ...env })
+const scheduled = (cron: string) => resolveFor({ EVENT: 'schedule', SCHEDULE: cron })
+const dispatched = (provider: string, model = '') =>
+  resolveFor({ EVENT: 'workflow_dispatch', PROVIDER_INPUT: provider, MODEL_INPUT: model })
+
+/** What the resolve job writes for a run of `provider` and `model` (empty: the provider default). */
+const outputs = (provider: string, model: string, cap: string) => ({
+  provider,
+  model,
+  key: model || 'default',
+  artifact: `eval-run-${provider}-${model || 'default'}`,
+  max_run_usd: cap
+})
+
+/** The evals job's concurrency group, filled in with what the resolve job wrote. */
+const groupFor = (out: Record<string, string>) =>
+  String(evals.concurrency.group).replace(R('provider'), out.provider).replace(R('key'), out.key)
+
+/**
+ * The API key both steps that read one are handed: the resolved provider's own secret, or
+ * empty (which the key check refuses) for a provider this repository holds no key for.
+ */
+const KEY =
+  "${{ needs.resolve.outputs.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || " +
+  "needs.resolve.outputs.provider == 'openai' && secrets.OPENAI_API_KEY || " +
+  "needs.resolve.outputs.provider == 'gemini' && secrets.GEMINI_API_KEY || '' }}"
+const SECRET_OF: Record<string, string> = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY' }
+
+/** The path of every value in the workflow that names a secret, and of any `secrets:` key. */
+function secretReads(node: unknown, path = ''): string[] {
+  if (typeof node === 'string') return /\bsecrets\b/.test(node) ? [path] : []
+  if (!node || typeof node !== 'object') return []
+  return Object.entries(node).flatMap(([key, value]) => {
+    const at = path ? `${path}.${key}` : key
+    return [...(key === 'secrets' ? [at] : []), ...secretReads(value, at)]
+  })
+}
+
+type Result = 'success' | 'failure' | 'cancelled' | 'skipped'
+const RESULTS: Result[] = ['success', 'failure', 'cancelled', 'skipped']
+
+/** One way a run can end: its event, its leg, each job's result, and whether the run was cancelled. */
+interface Ending {
+  event: string
+  leg: ScheduledLeg
+  resolve: Result
+  evals: Result
+  cancelled: boolean
+}
+
+/**
+ * Every way a run of each leg can end. evals needs resolve and has no `if`, so it runs only
+ * after a resolve that succeeded. A skipped resolve, or a skipped evals after a resolve that
+ * succeeded, can't happen as the jobs stand (the tests above keep them unconditional); they
+ * are here so that a condition added later still can't make a run that scored nothing green.
+ */
+function endings(event = 'schedule'): Ending[] {
+  return scheduledLegs(doc).flatMap((leg) =>
+    RESULTS.flatMap((resolve) =>
+      RESULTS.filter((evals) => resolve === 'success' || evals === 'skipped').flatMap((evals) =>
+        [false, true].map((cancelled) => ({ event, leg, resolve, evals, cancelled }))
+      )
+    )
+  )
+}
+
+/** The jobs that call the shared alert, as [name, job]. */
+const alertCallers = Object.entries(doc.jobs as Record<string, any>).filter(
+  ([, job]) => job.uses === './.github/workflows/alert-on-failure.yml'
+)
+
+interface Report {
+  job: string
+  title: string
+  failed: boolean
+}
+
+/**
+ * What a run that ended this way reports to the shared alert: the issue title each caller
+ * reaches, and whether it says failed (false closes that issue). It evaluates each caller's
+ * `if:` and inputs and then the shared alert's own `if:`, so it follows what the workflow
+ * does, not how it is spelled. A call either condition skips reports nothing.
+ */
+function reports(e: Ending): Report[] {
+  // A job that didn't succeed set no outputs, which read as empty.
+  const resolved = e.resolve === 'success'
+  const needs: Record<string, Value> = {
+    resolve: {
+      result: e.resolve,
+      outputs: resolved
+        ? outputs(e.leg.provider, e.leg.model, e.leg.maxRunUsd)
+        : Object.fromEntries(Object.keys(resolveJob.outputs).map((o) => [o, '']))
+    },
+    evals: { result: e.evals, outputs: {} }
+  }
+  const found: Report[] = []
+  for (const [name, job] of alertCallers) {
+    const caller = {
+      contexts: { github: { event_name: e.event }, needs: Object.fromEntries((job.needs as string[]).map((n) => [n, needs[n]])) },
+      cancelled: e.cancelled
+    }
+    if (!evaluateIf(job.if, caller)) continue
+    const failed = evaluate(job.with.failed, caller)
+    if (typeof failed !== 'boolean') throw new Error(`${name}'s failed input is ${JSON.stringify(failed)}, not a boolean`)
+    const called = { contexts: { inputs: { workflow: evaluate(job.with.workflow, caller), failed } }, cancelled: e.cancelled }
+    if (!evaluateIf(alertOnFailure.jobs.alert.if, called)) continue
+    found.push({ job: name, title: String(evaluate(alertOnFailure.jobs.alert.env.TITLE, called)), failed })
+  }
+  return found.sort((a, b) => a.job.localeCompare(b.job))
+}
+
+/** The issue a run that resolved no leg files, and the one each leg files. */
+const BARE_TITLE = 'Task evals (live) is failing'
+const legTitle = (l: ScheduledLeg) => `Task evals (live): ${l.provider}/${l.model} is failing`
+
 describe('live eval workflow', () => {
   it('reads its inputs the way this test assumes', () => {
-    expect(score.env.HOUSTON_EVAL_MODEL).toBe(
-      "${{ inputs.model || ((inputs.provider || 'anthropic') == 'anthropic' && 'claude-haiku-5-5' || '') }}"
+    // Event data and inputs reach the resolve script through env, and only there.
+    expect(leg.env).toEqual({
+      EVENT: '${{ github.event_name }}',
+      SCHEDULE: '${{ github.event.schedule }}',
+      PROVIDER_INPUT: '${{ inputs.provider }}',
+      MODEL_INPUT: '${{ inputs.model }}'
+    })
+    expect(resolveJob.outputs).toEqual(
+      Object.fromEntries(
+        ['provider', 'model', 'key', 'artifact', 'max_run_usd'].map((o) => [o, `\${{ steps.leg.outputs.${o} }}`])
+      )
     )
-    expect(MODEL_KEY).not.toBe(score.env.HOUSTON_EVAL_MODEL)
-    expect(requireKey.env.PROVIDER).toBe(PROVIDER)
-    expect(score.env.PROVIDER).toBe(PROVIDER)
+    expect(evals.needs).toEqual(['resolve'])
+    expect(requireKey.env.PROVIDER).toBe(R('provider'))
+    expect(score.env.PROVIDER).toBe(R('provider'))
+    expect(score.env.HOUSTON_EVAL_PROVIDER).toBe(R('provider'))
+    expect(score.env.HOUSTON_EVAL_MODEL).toBe(R('model'))
+    expect(score.env.HOUSTON_EVAL_MAX_RUN_USD).toBe(R('max_run_usd'))
+    expect(upload.with.name).toBe(R('artifact'))
     expect(requireKey.env.ATTEMPTS).toBe('${{ inputs.attempts }}')
     expect(score.env.HOUSTON_EVAL_ATTEMPTS).toBe('${{ inputs.attempts }}')
+  })
+
+  // The openai and gemini legs run unattended: a stray clause in the key expression (another
+  // provider's secret first, or as the fallback when the leg's own is empty) would send that
+  // secret to the leg's provider with nobody watching. So the expression is pinned whole,
+  // evaluated for every provider with every secret set or empty, and is the only place the
+  // workflow reads a secret.
+  it('hands each run only the key of the provider it scores', () => {
+    expect(requireKey.env.API_KEY).toBe(KEY)
+    expect(score.env.API_KEY).toBe(KEY)
+    for (const provider of ['anthropic', 'openai', 'gemini', 'mistral', '']) {
+      for (let set = 0; set < 8; set++) {
+        const secrets = Object.fromEntries(
+          Object.values(SECRET_OF).map((name, i) => [name, set & (1 << i) ? `${name}-value` : ''])
+        )
+        const want = SECRET_OF[provider] ? secrets[SECRET_OF[provider]] : ''
+        const contexts = { needs: { resolve: { outputs: { provider } } }, secrets }
+        for (const step of [requireKey, score]) {
+          expect(evaluate(step.env.API_KEY, { contexts }), `${step.name}: ${provider} with ${JSON.stringify(secrets)}`).toBe(want)
+        }
+      }
+    }
+    expect(secretReads(doc)).toEqual([
+      `jobs.evals.steps.${steps.indexOf(requireKey)}.env.API_KEY`,
+      `jobs.evals.steps.${steps.indexOf(score)}.env.API_KEY`
+    ])
+  })
+
+  describe('the scheduled legs', () => {
+    it('scores Haiku weekly on the Monday cron, luna monthly and flash-lite quarterly', () => {
+      expect(scheduledLegs(doc)).toEqual([HAIKU, LUNA, FLASH_LITE])
+    })
+
+    // Cron fields: minute hour day-of-month month day-of-week. Setting both day fields would
+    // run on either (cron ORs them), so each leg sets one.
+    it('keeps each cadence to the one its cost allows', () => {
+      const fields = (cron: string) => cron.split(' ')
+      const [, , dom, month, dow] = fields(HAIKU.cron)
+      expect([dom, month, dow]).toEqual(['*', '*', '1'])
+      for (const monthly of [LUNA, FLASH_LITE]) {
+        const [m, h, d, , w] = fields(monthly.cron)
+        expect([m, h, d].every((f) => /^\d+$/.test(f)), monthly.cron).toBe(true)
+        expect(Number(d), monthly.cron).toBeLessThanOrEqual(28) // every month has the day
+        expect(w, monthly.cron).toBe('*')
+      }
+      expect(fields(LUNA.cron)[3]).toBe('*')
+      // About $8.62 a run: four a year, three months apart.
+      expect(fields(FLASH_LITE.cron)[3]).toBe('1,4,7,10')
+    })
+
+    it('starts no two legs together', () => {
+      const crons = scheduledCrons(doc)
+      expect(new Set(crons).size).toBe(crons.length)
+      const times = crons.map((c) => c.split(' ').slice(0, 2).join(' '))
+      expect(new Set(times).size, 'two legs share a start time').toBe(times.length)
+      // The monthly and quarterly legs never share a day of the month.
+      expect(LUNA.cron.split(' ')[2]).not.toBe(FLASH_LITE.cron.split(' ')[2])
+    })
+
+    // An arm with no cron is dead code that reads as a leg; a cron with no arm fails its
+    // run (scheduledLegs throws for it, and the script test below shows the run failing).
+    it('has one resolve arm for every cron under on.schedule, and none besides', () => {
+      expect([...scheduleArms(doc).keys()].sort()).toEqual([...scheduledCrons(doc)].sort())
+    })
+
+    // The mapping lives in the resolve job alone: every other consumer reads its outputs, and
+    // only run-name (which GitHub evaluates before any job) reads the schedule at all.
+    it('maps a cron to its leg in one place', () => {
+      expect(code.split('github.event.schedule')).toHaveLength(3)
+      expect(leg.env.SCHEDULE).toBe('${{ github.event.schedule }}')
+      expect(doc['run-name']).toContain('github.event.schedule')
+      for (const [name, job] of Object.entries({ evals, alert, alertResolve })) {
+        const text = JSON.stringify(job)
+        expect(text, name).not.toContain('github.event.schedule')
+        expect(text, name).not.toContain('inputs.provider')
+        expect(text, name).not.toContain('inputs.model')
+      }
+      for (const { cron, model } of [LUNA, FLASH_LITE]) {
+        expect(code.split(`'${cron}'`), cron).toHaveLength(3) // on.schedule and the arm
+        expect(code.split(model), model).toHaveLength(2) // the arm
+      }
+    })
+
+    it('runs the resolve job with no secret and no token', () => {
+      expect(resolveJob.permissions).toEqual({})
+      expect(JSON.stringify(resolveJob)).not.toContain('secrets.')
+      expect(resolveJob.concurrency).toBeUndefined()
+    })
+
+    // A skipped resolve job skips evals as well, so a condition on it would let a scheduled
+    // run score nothing; and its step let through by continue-on-error would hand evals empty
+    // outputs. The alert tests below show such a run still reports failed.
+    it('runs the resolve job on every run, and stops the run when it fails', () => {
+      expect(resolveJob.if).toBeUndefined()
+      expect(resolveJob.needs).toBeUndefined()
+      expect(resolveJob['continue-on-error']).toBeUndefined()
+      expect(leg.if).toBeUndefined()
+      expect(leg['continue-on-error']).toBeUndefined()
+    })
+  })
+
+  describe.skipIf(process.platform === 'win32')("the resolve job's script", () => {
+    it.each([HAIKU, LUNA, FLASH_LITE])('maps the cron "$cron" to $provider/$model under a $maxRunUsd USD cap', (l) => {
+      const r = scheduled(l.cron)
+      expect(r.status, r.log).toBe(0)
+      expect(r.out).toEqual(outputs(l.provider, l.model, l.maxRunUsd))
+      expect(r.log).toContain(`Scoring ${l.provider}/${l.model}, with a run cap of $${l.maxRunUsd}.`)
+    })
+
+    // What scheduledLegs reads from the script's text is what the script does.
+    it('agrees with the legs the baselines test reads', () => {
+      for (const l of scheduledLegs(doc)) expect(scheduled(l.cron).out, l.cron).toEqual(outputs(l.provider, l.model, l.maxRunUsd))
+    })
+
+    // A cron added to on.schedule with no arm must not score some default and look green.
+    it('fails a scheduled run whose cron has no leg, writing nothing', () => {
+      for (const cron of ['0 0 * * *', '0 9 * * 2', '0  9 * * 1', ' 0 9 * * 1', '']) {
+        const r = scheduled(cron)
+        expect(r.status, JSON.stringify(cron)).toBe(1)
+        expect(r.log).toContain(`::error::The schedule '${cron}' has no leg in eval-live.yml's resolve job.`)
+        expect(r.out).toEqual({})
+      }
+    })
+
+    it('fails an event it has no leg for', () => {
+      const r = resolveFor({ EVENT: 'push', PROVIDER_INPUT: 'anthropic' })
+      expect(r.status).toBe(1)
+      expect(r.log).toContain("::error::eval-live.yml has no leg for a 'push' event.")
+      expect(r.out).toEqual({})
+    })
+
+    it('scores the leg on a scheduled run whatever inputs say, and the inputs on a dispatch whatever the schedule says', () => {
+      const run = resolveFor({ EVENT: 'schedule', SCHEDULE: LUNA.cron, PROVIDER_INPUT: 'anthropic', MODEL_INPUT: 'claude-opus-5-5' })
+      expect(run.out).toEqual(outputs('openai', 'gpt-6-luna', '5'))
+      const dispatch = resolveFor({ EVENT: 'workflow_dispatch', SCHEDULE: FLASH_LITE.cron })
+      expect(dispatch.out).toEqual(outputs('anthropic', 'claude-haiku-5-5', DISPATCH_CAP))
+    })
+
+    // As before the legs: claude-haiku-5-5 on anthropic with no model, the provider's default
+    // (an empty model) on any other provider, and the model input as typed.
+    it('resolves a dispatch from its inputs, under the dispatch cap', () => {
+      expect(dispatched('anthropic').out).toEqual(outputs('anthropic', 'claude-haiku-5-5', DISPATCH_CAP))
+      expect(dispatched('').out).toEqual(outputs('anthropic', 'claude-haiku-5-5', DISPATCH_CAP))
+      expect(dispatched('anthropic', 'claude-opus-5-5').out).toEqual(outputs('anthropic', 'claude-opus-5-5', DISPATCH_CAP))
+      expect(dispatched('openai').out).toEqual(outputs('openai', '', DISPATCH_CAP))
+      expect(dispatched('gemini').out).toEqual(outputs('gemini', '', DISPATCH_CAP))
+      expect(dispatched('openai', 'gpt-6.1-sol').out).toEqual(outputs('openai', 'gpt-6.1-sol', DISPATCH_CAP))
+      // The suite trims the model, and the group keeps it as typed.
+      expect(dispatched('anthropic', ' claude-opus-5-5').out).toMatchObject({ model: ' claude-opus-5-5', key: ' claude-opus-5-5' })
+      // An unknown provider resolves, and the key check stops it, naming the ones it knows.
+      expect(dispatched('mistral').out).toEqual(outputs('mistral', '', DISPATCH_CAP))
+    })
+
+    it('names the artifact with a model id an artifact name can hold', () => {
+      expect(dispatched('openai', 'org/model:v1').out).toMatchObject({ key: 'org/model:v1', artifact: 'eval-run-openai-org-model-v1' })
+      expect(dispatched('openai', 'a"b*c?d<e>f|g\\h').out.artifact).toBe('eval-run-openai-a-b-c-d-e-f-g-h')
+    })
+
+    // An input reaches GITHUB_OUTPUT as an output line: a newline in one would write an
+    // output of its own, such as a larger cap. Carriage returns split lines too.
+    it('refuses an input holding a newline or other control character, before writing anything', () => {
+      for (const [provider, model] of [
+        ['anthropic', 'm\nmax_run_usd=1000'],
+        ['anthropic', 'm\rmax_run_usd=1000'],
+        ['openai\nmax_run_usd=1000', ''],
+        ['openai', 'gpt-6-luna\t'],
+        ['openai', 'gpt\u001b[0m']
+      ]) {
+        const r = dispatched(provider, model)
+        expect(r.status, JSON.stringify([provider, model])).toBe(1)
+        expect(r.log).toContain('::error::The provider and model inputs must not hold a newline or other control character.')
+        expect(r.out).toEqual({})
+      }
+    })
   })
 
   describe('concurrency', () => {
@@ -99,24 +417,43 @@ describe('live eval workflow', () => {
     // run in flight: two live runs died that way on 2026-11-12.
     it('queues runs of the same provider and model, and never cancels one in progress', () => {
       expect(evals.concurrency).toEqual({
-        group: `eval-live-${PROVIDER}-${MODEL_KEY}`,
+        group: `eval-live-${R('provider')}-${R('key')}`,
         'cancel-in-progress': false
       })
     })
 
-    // A scheduled run has no inputs, so it lands in the same group as a dispatch of
-    // claude-haiku-5-5, recording or grading: the two wait for each other rather than share a
+    // The leg's model, not the event: a scheduled leg lands in the same group as a dispatch of
+    // that model, recording or grading, so the two wait for each other rather than share a
     // rate limit, which would read as a regression or lower the baseline being recorded.
     it('keys the group on what a run scores, never on its event, ref, run or mode', () => {
-      expect(evals.concurrency.group).not.toMatch(/github\./)
-      expect(evals.concurrency.group).not.toContain('inputs.record')
+      expect(evals.concurrency.group).not.toMatch(/github\.|inputs\./)
+    })
+
+    describe.skipIf(process.platform === 'win32')('per leg', () => {
+      it('gives each scheduled leg a group of its own', () => {
+        const groups = [HAIKU, LUNA, FLASH_LITE].map((l) => groupFor(scheduled(l.cron).out))
+        expect(groups).toEqual([
+          'eval-live-anthropic-claude-haiku-5-5',
+          'eval-live-openai-gpt-6-luna',
+          'eval-live-gemini-gemini-3.5-flash-lite'
+        ])
+      })
+
+      it('shares each leg group with a dispatch of that model, and keeps others apart', () => {
+        expect(groupFor(dispatched('anthropic').out)).toBe(groupFor(scheduled(HAIKU.cron).out))
+        expect(groupFor(dispatched('openai', 'gpt-6-luna').out)).toBe(groupFor(scheduled(LUNA.cron).out))
+        expect(groupFor(dispatched('gemini', 'gemini-3.5-flash-lite').out)).toBe(groupFor(scheduled(FLASH_LITE.cron).out))
+        expect(groupFor(dispatched('openai').out)).toBe('eval-live-openai-default')
+        expect(groupFor(dispatched('anthropic', 'claude-opus-5-5').out)).toBe('eval-live-anthropic-claude-opus-5-5')
+      })
     })
 
     // A displaced waiting run is cancelled at the job, so the run still reaches `alert`.
     // A workflow-level group would cancel the whole run before any job could report it.
-    it('sits on the job that spends, not on the workflow, so the alert job stays outside it', () => {
+    it('sits on the job that spends, not on the workflow, so the alert jobs stay outside it', () => {
       expect(doc.concurrency).toBeUndefined()
       expect(alert.concurrency).toBeUndefined()
+      expect(alertResolve.concurrency).toBeUndefined()
     })
 
     // GitHub keeps at most one waiting run per group, and a newer one cancels it whatever
@@ -128,7 +465,14 @@ describe('live eval workflow', () => {
       expect(source).toContain('GitHub holds at most ONE waiting run per group')
       expect(source).toContain('a third run with the same key cancels the')
       expect(source).toContain('`gh run list --workflow eval-live.yml`')
-      expect(doc['run-name']).toBe(`Task evals (live): ${PROVIDER}/${MODEL_KEY}\${{ inputs.record && ', recording' || '' }}`)
+      // A dispatch is named after its provider and model, a scheduled run after its cron, and
+      // the job after the leg the resolve job picked.
+      expect(doc['run-name']).toBe(
+        "Task evals (live): ${{ github.event_name == 'schedule' && format('scheduled {0}', github.event.schedule) || " +
+          "format('{0}/{1}{2}', inputs.provider || 'anthropic', inputs.model || ((inputs.provider || 'anthropic') == 'anthropic' && " +
+          "'claude-haiku-5-5' || 'default'), inputs.record && ', recording' || '') }}"
+      )
+      expect(evals.name).toBe(`evals (${R('provider')}/${R('key')})`)
     })
   })
 
@@ -145,7 +489,7 @@ describe('live eval workflow', () => {
       expect(steps.indexOf(upload)).toBeGreaterThan(steps.indexOf(score))
       expect(upload.if).toBe('${{ !cancelled() }}')
       expect(upload.with).toEqual({
-        name: '${{ steps.score.outputs.artifact }}',
+        name: R('artifact'),
         'retention-days': 90,
         path: '${{ runner.temp }}/eval-run.json',
         'if-no-files-found': 'warn'
@@ -171,6 +515,7 @@ describe('live eval workflow', () => {
           'echo "out=${HOUSTON_EVAL_OUT#"$RUNNER_TEMP"/}"',
           'echo "anthropic=${ANTHROPIC_API_KEY:-}"',
           'echo "openai=${OPENAI_API_KEY:-}"',
+          'echo "gemini=${GEMINI_API_KEY:-}"',
           'echo "api_key=${API_KEY-unset}"',
           'exit "${STUB_STATUS:-0}"'
         ].join('\n')
@@ -178,7 +523,7 @@ describe('live eval workflow', () => {
     })
     afterAll(() => rmSync(bin, { recursive: true, force: true }))
     const scoreWith = (env: Record<string, string>) => {
-      const r = runStep(score.run, { PROVIDER: 'anthropic', API_KEY: 'sk-test', HOUSTON_EVAL_MODEL: '', ...env }, bin)
+      const r = runStep(score.run, { PROVIDER: 'anthropic', API_KEY: 'sk-test', ...env }, bin)
       const seen = Object.fromEntries(
         r.log
           .split('\n')
@@ -189,34 +534,17 @@ describe('live eval workflow', () => {
     }
 
     it("runs the suite with the record path set and the key under the provider's own name", () => {
-      const r = scoreWith({ HOUSTON_EVAL_MODEL: 'claude-haiku-5-5' })
+      const r = scoreWith({})
       expect(r.status, r.log).toBe(0)
-      expect(r.seen).toEqual({ args: 'run eval', out: 'eval-run.json', anthropic: 'sk-test', openai: '', api_key: 'unset' })
-      expect(r.out).toEqual({ artifact: 'eval-run-anthropic-claude-haiku-5-5' })
-      expect(scoreWith({ PROVIDER: 'openai', HOUSTON_EVAL_MODEL: 'gpt-6.1-sol' }).seen).toMatchObject({
-        anthropic: '',
-        openai: 'sk-test'
-      })
+      expect(r.seen).toEqual({ args: 'run eval', out: 'eval-run.json', anthropic: 'sk-test', openai: '', gemini: '', api_key: 'unset' })
+      // The resolve job names the artifact; this step writes no output.
+      expect(r.out).toEqual({})
+      expect(scoreWith({ PROVIDER: 'openai' }).seen).toMatchObject({ anthropic: '', openai: 'sk-test', gemini: '' })
+      expect(scoreWith({ PROVIDER: 'gemini' }).seen).toMatchObject({ anthropic: '', openai: '', gemini: 'sk-test' })
     })
 
-    it('names the artifact with a model id an artifact name can hold', () => {
-      const artifact = (env: Record<string, string>) => scoreWith(env).out
-      expect(artifact({ PROVIDER: 'openai', HOUSTON_EVAL_MODEL: 'gpt-6.1-sol' })).toEqual({ artifact: 'eval-run-openai-gpt-6.1-sol' })
-      expect(artifact({ PROVIDER: 'openai', HOUSTON_EVAL_MODEL: 'org/model:v1' })).toEqual({
-        artifact: 'eval-run-openai-org-model-v1'
-      })
-      // No model input on another provider scores that provider's default.
-      expect(artifact({ PROVIDER: 'gemini' })).toEqual({ artifact: 'eval-run-gemini-default' })
-      // The model comes from a dispatch input: a newline in it can't add an output line.
-      expect(artifact({ PROVIDER: 'openai', HOUSTON_EVAL_MODEL: 'm\nartifact=x' })).toEqual({
-        artifact: 'eval-run-openai-m-artifact-x'
-      })
-    })
-
-    it('fails on a failed suite, with the artifact already named for the upload', () => {
-      const r = scoreWith({ HOUSTON_EVAL_MODEL: 'claude-haiku-5-5', STUB_STATUS: '1' })
-      expect(r.status).toBe(1)
-      expect(r.out).toEqual({ artifact: 'eval-run-anthropic-claude-haiku-5-5' })
+    it('fails on a failed suite', () => {
+      expect(scoreWith({ STUB_STATUS: '1' }).status).toBe(1)
     })
   })
 
@@ -234,6 +562,10 @@ describe('live eval workflow', () => {
       expect(step['continue-on-error'], step.name ?? step.uses).toBeUndefined()
       expect(step.if, step.name ?? step.uses).toBeUndefined()
     }
+    // A failed resolve job (a cron with no leg) skips the whole job, so nothing is spent.
+    expect(evals.if).toBeUndefined()
+    expect(evals['continue-on-error']).toBeUndefined()
+    expect(resolveJob['continue-on-error']).toBeUndefined()
   })
 
   describe.skipIf(process.platform === 'win32')("the key check's script", () => {
@@ -275,23 +607,124 @@ describe('live eval workflow', () => {
     })
   })
 
-  // Inert until the driver reads it; pinned so the ceiling is a deliberate number.
-  it('gives the scoring step a spend ceiling, tighter for the unattended scheduled run', () => {
-    expect(score.env.HOUSTON_EVAL_MAX_RUN_USD).toBe("${{ github.event_name == 'schedule' && '5' || '25' }}")
+  describe('the run caps', () => {
+    // HOUSTON_EVAL_MAX_RUN_USD, which the driver enforces: once a run has spent it, no
+    // attempt starts and the run fails. Each scheduled leg's cap sits over its recorded run
+    // (Haiku $0.67, luna $0.45, flash-lite $8.62, three attempts each), and a dispatch,
+    // which may pick any model at up to five attempts, gets the widest.
+    it('caps each scheduled leg for its model, below the dispatch cap', () => {
+      const caps = Object.fromEntries(scheduledLegs(doc).map((l) => [l.model, l.maxRunUsd]))
+      expect(caps).toEqual({ 'claude-haiku-5-5': '5', 'gpt-6-luna': '5', 'gemini-3.5-flash-lite': '20' })
+      // flash-lite has no prompt caching: one run costs $8.62, so a 5 cap would stop every one partway.
+      expect(Number(caps['gemini-3.5-flash-lite'])).toBeGreaterThan(2 * 8.62)
+      for (const cap of Object.values(caps)) expect(Number(cap)).toBeLessThan(Number(DISPATCH_CAP))
+    })
+
+    it('hands the driver each cap in a form it reads as that many dollars', () => {
+      for (const cap of [...scheduledLegs(doc).map((l) => l.maxRunUsd), DISPATCH_CAP]) {
+        expect(resolveEvalConfig({ HOUSTON_EVAL_MAX_RUN_USD: cap }, []).maxRunUsd, cap).toBe(Number(cap))
+      }
+    })
+
+    it.skipIf(process.platform === 'win32')('gives a dispatch the dispatch cap whatever it scores', () => {
+      for (const [provider, model] of [
+        ['anthropic', ''],
+        ['gemini', 'gemini-3.5-flash-lite'],
+        ['openai', 'gpt-6.1-sol']
+      ]) {
+        expect(dispatched(provider, model).out.max_run_usd, `${provider}/${model}`).toBe(DISPATCH_CAP)
+      }
+    })
   })
 
   describe('alerting', () => {
-    // The weekly run is the only quality gate: one that never finished is a missed week.
-    it('reports a scheduled run that failed or was cancelled, and no dispatched run', () => {
-      expect(alert.needs).toEqual(['evals'])
-      expect(alert.uses).toBe('./.github/workflows/alert-on-failure.yml')
-      expect(alert.permissions).toEqual({ issues: 'write' })
-      expect(alert.if).toBe("${{ always() && github.event_name == 'schedule' }}")
-      // `failed: false` closes the open issue, so a cancellation has to count as a failure.
+    // One call per issue: per leg once a leg is resolved, and under the workflow's own name
+    // for a run that resolved none.
+    it('calls the shared alert for each leg and for the resolve job, with only issue access', () => {
+      expect(alertCallers.map(([name]) => name).sort()).toEqual(['alert', 'alert-resolve'])
+      for (const [name, job] of alertCallers) {
+        expect(job.permissions, name).toEqual({ issues: 'write' })
+        expect(job.secrets, name).toBeUndefined()
+      }
+      expect(alert.needs).toEqual(['resolve', 'evals'])
+      expect(alert.if).toBe("${{ always() && github.event_name == 'schedule' && needs.resolve.result == 'success' }}")
       expect(alert.with).toEqual({
-        workflow: 'Task evals (live)',
-        failed: "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}"
+        workflow: "${{ format('Task evals (live): {0}/{1}', needs.resolve.outputs.provider, needs.resolve.outputs.key) }}",
+        failed: "${{ needs.evals.result != 'success' }}"
       })
+      expect(alertResolve.needs).toEqual(['resolve'])
+      expect(alertResolve.if).toBe("${{ always() && github.event_name == 'schedule' }}")
+      expect(alertResolve.with).toEqual({ workflow: 'Task evals (live)', failed: "${{ needs.resolve.result != 'success' }}" })
+      expect(alertOnFailure.jobs.alert.env.TITLE).toBe('${{ inputs.workflow }} is failing')
+    })
+
+    // The tests below walk every way a run can end through those expressions and the shared
+    // alert's own condition (see `reports`).
+
+    it('reports nothing for a dispatched run', () => {
+      for (const e of endings('workflow_dispatch')) expect(reports(e), JSON.stringify(e)).toEqual([])
+    })
+
+    // The scheduled legs are the only quality gate: one that never finished is a missed slot.
+    it('reports a failure for every scheduled run that did not score its leg', () => {
+      for (const e of endings()) {
+        if (e.resolve === 'success' && e.evals === 'success') continue
+        expect(
+          reports(e).some((r) => r.failed),
+          JSON.stringify(e)
+        ).toBe(true)
+      }
+    })
+
+    // `failed: false` closes the open issue, so a job that was cancelled or skipped must never
+    // report it, and nor may a cancelled run.
+    it('reports green only for jobs that all succeeded, in a run that was not cancelled', () => {
+      for (const e of endings()) {
+        for (const r of reports(e).filter((x) => !x.failed)) {
+          expect(e.cancelled, `${r.job} in ${JSON.stringify(e)}`).toBe(false)
+          for (const need of doc.jobs[r.job].needs as ('resolve' | 'evals')[]) {
+            expect(e[need], `${r.job} in ${JSON.stringify(e)}`).toBe('success')
+          }
+        }
+      }
+    })
+
+    // The shared alert keeps one issue per title, and a green run closes it: one title for
+    // every leg would let a green weekly Haiku run close a red monthly luna run's issue.
+    it("files each leg under its own issue, and touches no other leg's", () => {
+      const titles = scheduledLegs(doc).map(legTitle)
+      expect(new Set(titles).size).toBe(titles.length)
+      for (const e of endings()) {
+        for (const r of reports(e)) expect([BARE_TITLE, legTitle(e.leg)], `${r.job} in ${JSON.stringify(e)}`).toContain(r.title)
+      }
+    })
+
+    // It can't say which leg it missed, and a leg's title built from empty outputs would be a
+    // stray issue no run ever closes.
+    it('files a run that resolved no leg under the workflow alone', () => {
+      for (const e of endings()) {
+        if (e.resolve !== 'success') expect(reports(e), JSON.stringify(e)).toEqual([{ job: 'alert-resolve', title: BARE_TITLE, failed: true }])
+      }
+    })
+
+    // The issue alert-on-failure.yml opens tells its reader it closes itself when the workflow
+    // next goes green, so every issue a run can open must be one a later run closes.
+    it('closes every issue it can open on a later green run', () => {
+      const opened = new Set(endings().flatMap((e) => reports(e).filter((r) => r.failed).map((r) => r.title)))
+      expect([...opened].sort()).toEqual([BARE_TITLE, ...scheduledLegs(doc).map(legTitle)].sort())
+      for (const leg of scheduledLegs(doc)) {
+        expect(reports({ event: 'schedule', leg, resolve: 'success', evals: 'success', cancelled: false })).toEqual([
+          { job: 'alert', title: legTitle(leg), failed: false },
+          { job: 'alert-resolve', title: BARE_TITLE, failed: false }
+        ])
+      }
+      // A run that resolves a leg closes the bare issue whether or not that leg then passes.
+      for (const e of endings()) {
+        if (e.resolve === 'success' && !e.cancelled) {
+          expect(reports(e), JSON.stringify(e)).toContainEqual({ job: 'alert-resolve', title: BARE_TITLE, failed: false })
+        }
+      }
+      expect(alertOnFailure.jobs.alert.steps[0].run).toContain('closes itself when *$WORKFLOW*')
     })
 
     // Called from a cancelled run, the alert job's default `success()` would skip it.
@@ -301,10 +734,16 @@ describe('live eval workflow', () => {
   })
 
   it('passes event data through env, never interpolated into a script', () => {
-    for (const step of steps) if (step.run) expect(step.run, step.name).not.toContain('${{')
+    for (const [name, job] of Object.entries(doc.jobs as Record<string, any>)) {
+      for (const step of job.steps ?? []) if (step.run) expect(step.run, `${name}: ${step.name}`).not.toContain('${{')
+    }
+    // The resolve script is the one that reads the event, so check it was found.
+    expect(leg.run).toContain('case "$SCHEDULE" in')
   })
 
   it('pins every action to a commit SHA', () => {
-    for (const step of steps) if (step.uses?.startsWith('actions/')) expect(step.uses).toMatch(/@[0-9a-f]{40}$/)
+    for (const job of Object.values(doc.jobs as Record<string, any>)) {
+      for (const step of job.steps ?? []) if (step.uses?.startsWith('actions/')) expect(step.uses).toMatch(/@[0-9a-f]{40}$/)
+    }
   })
 })

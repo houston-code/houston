@@ -156,8 +156,8 @@ honest finish is to say so.
 The **live** driver runs the identical fixtures against a real model with the
 script ignored, several attempts per task, and grades each task against the
 per-model baseline checked in under `evals/baselines/`. It is non-deterministic
-and metered, so it never gates a PR; it runs weekly from
-[`eval-live.yml`](.github/workflows/eval-live.yml) and **fails on a regression**
+and metered, so it never gates a PR; it runs on a schedule from
+[`eval-live.yml`](.github/workflows/eval-live.yml) (below) and **fails on a regression**
 rather than just printing a scorecard. To run it locally, set a provider key the
 same way the CLI does (e.g. `ANTHROPIC_API_KEY`):
 
@@ -186,20 +186,45 @@ going, while runs of different models go side by side. Only the same `model` inp
 a wait: a dispatch with no `model` on openai or gemini does not wait for one that names
 that provider's default model. GitHub keeps only one waiting run per group, though, and a
 third run cancels it: before dispatching, check `gh run list --workflow eval-live.yml`
-(the run names show the provider and model) and wait while a run of the same model is
+(a dispatched run's name shows its provider and model, and a scheduled run's name its
+cron, which the table below maps to a model) and wait while a run of the same model is
 queued. The `attempts` input stops at 5, since each attempt reruns every task.
 
-The scheduled run scores `claude-haiku-5-5`, not the provider's `defaultModel`. A
-model that sometimes fails is what makes a regression visible, and Haiku solves most
-but not all of the harder tasks, at a small fraction of a larger model's cost.
+The schedule scores three models, each a provider's low-cost model rather than its
+`defaultModel`, at three attempts per task:
+
+| When (UTC) | Provider and model | Recorded run | Run cap | Per month |
+| --- | --- | --- | --- | --- |
+| Mondays, 09:00 | anthropic `claude-haiku-5-5` | $0.67, 77/87 attempts | $5 | about $2.90 |
+| The 3rd of each month, 12:23 | openai `gpt-6-luna` | $0.45, 73/87 attempts | $5 | about $0.45 |
+| The 5th of January, April, July and October, 14:47 | gemini `gemini-3.5-flash-lite` | $8.62, 57/87 attempts | $20 | about $2.90 |
+
+That is about $6.20 a month in all. A model that sometimes fails is what makes a
+regression visible, and each of these solves most but not all of the tasks, at a small
+fraction of a larger model's cost; the legs on the other two providers catch a change
+that hurts only one provider's adapter or prompt notes. The weekly Haiku run is the main
+gate. Gemini runs quarterly rather than monthly because `gemini-3.5-flash-lite` has no
+prompt caching, so every request pays the full input price and one run costs about as
+much as three months of Haiku. Each run cap (`HOUSTON_EVAL_MAX_RUN_USD`, below) sits
+well over its leg's recorded run, with the Gemini leg's at $20 so a run that needs more
+turns than usual still finishes; a dispatch, which can pick any model at up to five
+attempts, runs under $25. The workflow's `resolve` job is the one place that maps a
+cron to its leg, and everything else in the run (the concurrency group, the API key,
+the suite's environment, the run record's name, the alert issue) reads it. Each leg
+files its own alert issue, so one leg going green can't close another's. A scheduled
+run that resolves no leg (a cron with no arm in `resolve`, or a run cancelled before
+it picks one) files its issue under the workflow's own name instead, and the next
+scheduled run that resolves a leg closes it.
+
 Dispatch the workflow with a `model` input to score another model on demand, for
 example the default model before a release. That model needs a recorded baseline,
 and any task its baseline predates is reported as `unrecorded` rather than failed.
 So changing a default model in `src/shared/defaults.ts` breaks nothing in CI, but to
 score the new default (on demand, or in a local live run with no
-`HOUSTON_EVAL_MODEL`), record a baseline for it first. Moving the schedule to another
-model needs that model's baseline in the same PR; `baselines.test.ts` reads the model
-from `eval-live.yml` and fails without one.
+`HOUSTON_EVAL_MODEL`), record a baseline for it first. Adding a scheduled leg, or
+moving one to another model, needs that model's baseline in the same PR:
+`baselines.test.ts` reads every leg from `eval-live.yml` and fails on one without a
+baseline, or with a baseline where every task scored 0.
 
 The gate has a tolerance sized to absorb exactly one flaked attempt out of the
 default three, because a live model that reds the scheduled run on noise is a job
@@ -219,9 +244,10 @@ of weekly runs, and it runs after the run record is written, so a failed run is 
 valid side of an A/B. It is a backstop for a broad, sizeable fall rather than a fine
 instrument: at 29 tasks and three attempts it catches a true drop of 9 points about a third
 of the time and 18 points almost nine times in ten (`AGGREGATE_ALPHA` in
-`evals/baseline.ts` has the numbers). Every weekly run meets the same baseline, so one
-recorded on a lucky day keeps the odds of a false red raised until it is re-recorded; a
-red that repeats on the same few tasks with nothing changed is worth a fresh recording.
+`evals/baseline.ts` has the numbers). Every scheduled run of a model meets the same
+baseline, so one recorded on a lucky day keeps the odds of a false red raised until it is
+re-recorded; a red that repeats on the same few tasks with nothing changed is worth a
+fresh recording.
 
 A recording is also refused when any failed attempt ended in a run error (the
 provider refused the call, the account ran out of credit) rather than a result:
@@ -248,7 +274,8 @@ crosses the cap still runs to its end, so a run can overshoot by up to one attem
 which that attempt's own cap bounds. A model Houston has no price for reports a cost
 of 0, so neither cap can stop it: the run warns about that, and refuses to start at
 all when `HOUSTON_EVAL_MAX_COST_USD` or `HOUSTON_EVAL_MAX_RUN_USD` is set, since a
-limit someone set must not pass as enforced.
+limit someone set must not pass as enforced. `eval-live.yml` sets it on every run: each
+scheduled leg's cap is in the table above, and a dispatch gets $25.
 
 A baseline where **every** task scored 0 is refused, both when recording it and
 when loading it. Nothing passing is almost always a misconfiguration (an empty or
@@ -462,8 +489,8 @@ aimed at one finds no difference whatever the change does. The probes live in
 [`evals/probes/`](src/main/agent/evals/probes/), one file each, registered in
 `probes/index.ts`.
 
-Probes are an A/B instrument, not part of the weekly score. The default run
-(`npm run eval`, and the scheduled live run) includes none of them, a baseline never
+Probes are an A/B instrument, not part of the scheduled score. The default run
+(`npm run eval`, and the scheduled live runs) includes none of them, a baseline never
 records one, and the gate reads every probe row as `unrecorded`, so a probe never fails
 a live run.
 Select them with `HOUSTON_EVAL_TASKS`: `probes` runs all of them, `probe:<id>` runs one,

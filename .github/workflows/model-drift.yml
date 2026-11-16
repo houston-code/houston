@@ -20,8 +20,9 @@ name: Model drift
 
 on:
   schedule:
-    # Daily at 10:00 UTC, after provider-canary (08:00 daily) and eval-live (09:00 Mondays). A
-    # run takes about a minute and only lists models, so a new model is flagged within a day.
+    # Daily at 10:00 UTC, after provider-canary (08:00 daily) and eval-live's weekly leg (09:00
+    # Mondays; its monthly and quarterly legs start in the afternoon). A run takes about a
+    # minute and only lists models, so a new model is flagged within a day.
     - cron: '0 10 * * *'
   workflow_dispatch: {}
 

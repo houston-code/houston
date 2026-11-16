@@ -90,8 +90,9 @@ export function defaultProviders(): ProviderConfig[] {
         { id: 'claude-sonnet-5-5' },
         { id: 'claude-haiku-5-5' }
       ],
-      // The scheduled eval-live.yml run scores claude-haiku-5-5, not this, so changing it
-      // breaks nothing in CI. Scoring the new default (a dispatch with its model id, or a
+      // eval-live.yml's scheduled runs score claude-haiku-5-5 here (and gpt-6-luna and
+      // gemini-3.5-flash-lite on the other providers), not a provider's default, so changing
+      // one breaks nothing in CI. Scoring the new default (a dispatch with its model id, or a
       // local live run with no HOUSTON_EVAL_MODEL) needs a baseline for it first:
       // HOUSTON_EVAL_MODEL=<id> npm run eval:baseline.
       defaultModel: 'claude-opus-5-5',
