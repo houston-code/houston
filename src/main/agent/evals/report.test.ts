@@ -7,6 +7,7 @@ import {
   SLOW_CALL_MS,
   slowestOf,
   summarize,
+  toTaskReport,
   type TaskReport
 } from './report'
 import type { EvalResult } from './types'
@@ -203,6 +204,70 @@ describe('honesty in the scorecard', () => {
       { ...report('fix-null-deref', 1, unbacked()), honestyRate: 2 / 3 }
     ])
     expect(out).toContain('recorded: nothing')
+  })
+})
+
+describe('toTaskReport', () => {
+  const ok = result({ passed: true, costUsd: 0.25, durationMs: 100 })
+  const errored = result({ runErrored: true, error: '529 overloaded', costUsd: 0, durationMs: 5 })
+  const capped = result({ costCapped: true, exitCode: 0, error: 'stopped at the per-attempt cost cap', costUsd: 20.4 })
+
+  it('aggregates every attempt into the row', () => {
+    const r = toTaskReport('t', [ok, errored, capped])
+    expect(r).toMatchObject({
+      taskId: 't',
+      attempts: 3,
+      passRate: 1 / 3,
+      erroredAttempts: 1,
+      cappedAttempts: 1,
+      durationMs: 115,
+      honestyRate: 1
+    })
+    expect(r.costUsd).toBeCloseTo(20.65, 10)
+    // The first failed attempt explains the row.
+    expect(r.sample).toBe(errored)
+  })
+
+  it('counts no capped or errored attempts on a clean run', () => {
+    expect(toTaskReport('t', [ok, ok])).toMatchObject({ passRate: 1, cappedAttempts: 0, erroredAttempts: 0 })
+  })
+})
+
+describe('cost caps in the scorecard', () => {
+  const capped = result({ costCapped: true, error: 'stopped at the per-attempt cost cap: spent $20.40 against $20.00' })
+  const caps = { attemptUsd: 20, runUsd: 5 }
+
+  it('names the caps the run ran under', () => {
+    const out = formatReport({ driver: 'live', model: 'm', attempts: 3, caps }, [report('a', 1, result({ passed: true }))])
+    expect(out).toContain('cost caps: $20/attempt, $5/run')
+    expect(out).not.toContain('COST-CAPPED')
+    expect(out).not.toContain('STOPPED')
+  })
+
+  it('flags a capped attempt on its row and in the totals', () => {
+    const out = formatReport({ driver: 'live', model: 'm', attempts: 3, caps }, [
+      { ...report('semver-ranges', 2 / 3, capped), cappedAttempts: 1 }
+    ])
+    expect(out).toMatch(/semver-ranges .*COST-CAPPED 1\/3/)
+    expect(out).toContain('stopped at the per-attempt cost cap: spent $20.40 against $20.00')
+    expect(out).toContain('1 attempt(s) stopped at the per-attempt cost cap ($20), each counted as failed')
+  })
+
+  // The solved count covers only the tasks that ran, so the stop must be unmissable.
+  it('names the tasks the run cap kept from running, above the rows and under the totals', () => {
+    const out = formatReport(
+      { driver: 'live', model: 'm', attempts: 3, caps, stopped: { spentUsd: 5.2, skipped: ['b', 'c'] } },
+      [report('a', 1, result({ passed: true }))]
+    )
+    const line = 'STOPPED at the run cost cap ($5, spent $5.20): 2 task(s) not graded: b, c'
+    expect(out.split(line)).toHaveLength(3)
+    expect(out.indexOf(line)).toBeLessThan(out.indexOf('  PASS'))
+  })
+
+  it('prints the stop even when no task finished', () => {
+    const out = formatReport({ driver: 'live', model: 'm', attempts: 3, caps, stopped: { spentUsd: 6, skipped: ['a'] } }, [])
+    expect(out).toContain('1 task(s) not graded: a')
+    expect(out).toContain('0/0 solved')
   })
 })
 

@@ -170,6 +170,13 @@ export interface EvalResult {
    * opposed to stopping at a limit. Such an attempt measured the failure, not the model.
    */
   runErrored?: boolean
+  /**
+   * True when the per-attempt cost cap stopped the run (a `max-cost` limit). Such an
+   * attempt is graded as failed whatever the verify says: the cap sits far above any
+   * normal attempt, so reaching it means the run got away, and its last step ran with
+   * tools off (see costCaps.ts).
+   */
+  costCapped?: boolean
   /** Estimated USD cost the run reported (live mode; scripted is fixed/fake). */
   costUsd: number
   /** Whether the closing message claimed more than what ran (see honesty.ts). Report-only. */

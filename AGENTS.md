@@ -140,6 +140,16 @@ how to author a task. The invariants to preserve when changing this code:
   named `repo` (`evals/fixtures.ts`) and an empty memory store (`runTask`). A reused
   workspace once let attempt 2 of `new-module-write` pass on attempt 1's file, and pass
   rates, pass^k, and the A/B sign test all assume independent attempts.
+- **Live spend is capped without changing what is graded.** Every attempt passes the
+  loop a `maxCostUsd` (`evals/costCaps.ts`, overridden by `HOUSTON_EVAL_MAX_COST_USD`).
+  That cap is not inert (a wrap-up reminder at 80%, a tools-off last step), so its
+  default stays a runaway guard sized far above the costliest observed attempt, never
+  an average. A capped attempt grades as failed whatever its verify says, is flagged
+  in the scorecard, and blocks recording (`assertRecordable`). The run cap
+  (`HOUSTON_EVAL_MAX_RUN_USD`) only stops attempts from starting, and then fails the
+  run naming every task it skipped: it must never shrink the graded set, because
+  `compareToBaseline` ignores a task missing from the scores. Both caps are stamped in
+  the run record, so a comparison names a difference in caps.
 - **Every task in a run sees the same prompt hash** (`evals/stamp.ts`), and the scripted
   suite asserts it. Anything task-specific that reaches the prompt breaks the stamp, and
   is usually a hint to the model too: a workspace folder named after the task once put

@@ -8,6 +8,7 @@ import {
   selectTasks,
   type Env
 } from './config'
+import { DEFAULT_ATTEMPT_MAX_COST_USD } from './costCaps'
 
 const providers = [
   { id: 'anthropic', kind: 'anthropic', label: 'Anthropic', models: [], defaultModel: 'claude-opus-4-8' },
@@ -47,7 +48,8 @@ describe('resolveEvalConfig', () => {
       providerId: 'anthropic',
       model: SCRIPTED_MODEL,
       attempts: 1,
-      trace: false
+      trace: false,
+      maxCostUsd: DEFAULT_ATTEMPT_MAX_COST_USD
     })
   })
 
@@ -151,6 +153,45 @@ describe('resolveEvalConfig', () => {
     ).toThrow(/records every task/)
     expect(resolveEvalConfig(live({ HOUSTON_EVAL_RECORD: '1', HOUSTON_EVAL_TASKS: '' }), providers).record).toBe(
       true
+    )
+  })
+
+  describe('cost caps', () => {
+    // Always a per-attempt cap: the default is a runaway guard, never "none".
+    it('caps every attempt at the default, in either driver', () => {
+      expect(resolveEvalConfig({}, providers).maxCostUsd).toBe(DEFAULT_ATTEMPT_MAX_COST_USD)
+      expect(resolveEvalConfig(live(), providers).maxCostUsd).toBe(DEFAULT_ATTEMPT_MAX_COST_USD)
+    })
+
+    it('has no run cap unless one is set', () => {
+      expect('maxRunUsd' in resolveEvalConfig(live(), providers)).toBe(false)
+    })
+
+    it('reads both caps in either driver', () => {
+      const env = { HOUSTON_EVAL_MAX_COST_USD: '40', HOUSTON_EVAL_MAX_RUN_USD: ' 2.5 ' }
+      expect(resolveEvalConfig(live(env), providers)).toMatchObject({ maxCostUsd: 40, maxRunUsd: 2.5 })
+      expect(resolveEvalConfig(env, providers)).toMatchObject({ maxCostUsd: 40, maxRunUsd: 2.5 })
+      expect(resolveEvalConfig(live({ HOUSTON_EVAL_MAX_RUN_USD: '.5' }), providers).maxRunUsd).toBe(0.5)
+    })
+
+    // The workflows pass unset inputs through as ''.
+    it('treats an empty cap as unset', () => {
+      const cfg = resolveEvalConfig(live({ HOUSTON_EVAL_MAX_COST_USD: '', HOUSTON_EVAL_MAX_RUN_USD: ' ' }), providers)
+      expect(cfg.maxCostUsd).toBe(DEFAULT_ATTEMPT_MAX_COST_USD)
+      expect('maxRunUsd' in cfg).toBe(false)
+    })
+
+    // A cap that fails to parse must stop the run, never become NaN (no cap) or 0.
+    it.each(['0', '0.0', '-1', '$5', '5 USD', '1e2', '0x10', 'Infinity', 'NaN', 'five', '5,00'])(
+      'rejects %s',
+      (raw) => {
+        expect(() => resolveEvalConfig(live({ HOUSTON_EVAL_MAX_COST_USD: raw }), providers)).toThrow(
+          /HOUSTON_EVAL_MAX_COST_USD must be a positive amount in US dollars/
+        )
+        expect(() => resolveEvalConfig(live({ HOUSTON_EVAL_MAX_RUN_USD: raw }), providers)).toThrow(
+          /HOUSTON_EVAL_MAX_RUN_USD must be a positive amount in US dollars/
+        )
+      }
     )
   })
 

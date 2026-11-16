@@ -117,8 +117,17 @@ export function regressions(verdicts: BaselineVerdict[]): Extract<BaselineVerdic
  * once frozen they can never regress. It really happened too: a provider account
  * ran out of credit two thirds of the way through a recording, and the last nine
  * tasks were written as 0 beside twenty real scores.
+ *
+ * `capped` is the same problem from the other side: attempts the per-attempt cost
+ * cap stopped (costCaps.ts). The cap sits far above any normal attempt, so one that
+ * reached it ran away, and its tools-off last step can't finish the work. Frozen as a
+ * failure, it would record a 0 for a task the model can solve.
  */
-export function assertRecordable(scores: TaskScore[], errored: Array<{ taskId: string; attempts: number }> = []): void {
+export function assertRecordable(
+  scores: TaskScore[],
+  errored: Array<{ taskId: string; attempts: number }> = [],
+  capped: Array<{ taskId: string; attempts: number }> = []
+): void {
   if (scores.length === 0) {
     throw new Error('Refusing to record a baseline with no tasks — nothing ran.')
   }
@@ -134,6 +143,21 @@ export function assertRecordable(scores: TaskScore[], errored: Array<{ taskId: s
         'and a task frozen at 0 can never regress.',
         '',
         'Fix the cause and re-record.'
+      ].join('\n')
+    )
+  }
+  if (capped.length > 0) {
+    const attempts = capped.reduce((n, e) => n + e.attempts, 0)
+    throw new Error(
+      [
+        `Refusing to record a baseline: ${attempts} attempt(s) across ${capped.length} task(s) were stopped by the per-attempt cost cap.`,
+        `Tasks: ${capped.map((e) => e.taskId).join(', ')}`,
+        '',
+        'The cap is a runaway guard set far above a normal attempt, so a capped attempt is',
+        'not a score: recording it would freeze a 0 for a task the model may well solve.',
+        '',
+        'Find what ran away (HOUSTON_EVAL_TRACE=1 prints every call), or raise',
+        'HOUSTON_EVAL_MAX_COST_USD if this model genuinely needs more, and re-record.'
       ].join('\n')
     )
   }
