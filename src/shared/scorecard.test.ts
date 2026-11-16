@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import type { ChatMessage } from './agent'
+import type { ChatMessage, RunEndRecord } from './agent'
 import {
   buildScorecard,
   deriveOutcome,
+  emptyRunEndCounts,
+  messageGroups,
+  runEndParts,
   type ScorecardConversationInput
 } from './scorecard'
 
@@ -200,5 +203,244 @@ describe('buildScorecard', () => {
   it('handles a missing model id by bucketing under "unknown"', () => {
     const s = buildScorecard([conv({ model: '', messages: [user(), assistant('x')], usage: { inputTokens: 1, outputTokens: 1, cost: 0.001 } })])
     expect(s.models[0].model).toBe('unknown')
+  })
+
+  it('says what it grouped by, per model unless asked otherwise', () => {
+    expect(buildScorecard([]).groupBy).toBe('model')
+    expect(buildScorecard([], { groupBy: 'model-prompt' }).groupBy).toBe('model-prompt')
+  })
+})
+
+// ---- what each reply and run recorded ----
+
+const at = '2026-11-01T00:00:00.000Z'
+const ended = (...records: Array<Omit<RunEndRecord, 'at'>>): RunEndRecord[] => records.map((r) => ({ ...r, at }))
+/** A reply as the loop saves it now: the model that served it and the prompt version. */
+const reply = (model: string, promptId?: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({
+  role: 'assistant',
+  content: 'ok',
+  model,
+  ...(promptId ? { promptId } : {}),
+  ...extra
+})
+const call = (name: string, id = `${name}-1`): ChatMessage['toolCalls'] => [{ id, name, arguments: {} }]
+
+describe('deriveOutcome with run-end records', () => {
+  it('reads a step-limit stop on a plain text reply as incomplete, not a clean finish', () => {
+    const msgs = [user(), { ...assistant('Halfway there.'), runEnds: ended({ reason: 'limit', limit: 'max-steps' }) }]
+    expect(deriveOutcome(conv({ messages: msgs }))).toBe('incomplete')
+  })
+
+  it('reads a failed run as an error even with no errored flag', () => {
+    const msgs = [user(), assistant('done'), { ...user('again'), runEnds: ended({ reason: 'error', message: 'boom' }) }]
+    expect(deriveOutcome(conv({ messages: msgs }))).toBe('error')
+  })
+
+  it('reads a run the user stopped before any reply as incomplete', () => {
+    const msgs = [user(), assistant('done'), { ...user('next'), runEnds: ended({ reason: 'aborted' }) }]
+    expect(deriveOutcome(conv({ messages: msgs }))).toBe('incomplete')
+  })
+
+  it('reads the older no-reply record the same way', () => {
+    const msgs = [{ ...user(), unanswered: [{ reason: 'error' as const, at }] }]
+    expect(deriveOutcome(conv({ messages: msgs }))).toBe('error')
+  })
+
+  it('goes by the latest run: an earlier run that failed, then a clean reply, is completed', () => {
+    const msgs = [{ ...user(), runEnds: ended({ reason: 'error' }) }, assistant('done')]
+    expect(deriveOutcome(conv({ messages: msgs }))).toBe('completed')
+  })
+})
+
+describe('buildScorecard run-end counts', () => {
+  it('counts every run that stopped short, by why, per model', () => {
+    const messages: ChatMessage[] = [
+      { ...user('one'), runEnds: ended({ reason: 'error', message: 'provider down' }, { reason: 'aborted' }) },
+      reply('m'),
+      user('two'),
+      { ...reply('m'), runEnds: ended({ reason: 'limit', limit: 'max-steps' }) },
+      user('three'),
+      { ...reply('m'), runEnds: ended({ reason: 'limit', limit: 'stalled' }) },
+      user('four'),
+      { ...reply('m'), runEnds: ended({ reason: 'limit', limit: 'max-cost' }, { reason: 'limit', limit: 'max-output' }) },
+      // A limit saved without saying which reads as the step limit, as the notices do.
+      { ...user('five'), runEnds: ended({ reason: 'limit' }) },
+      // The older record of a run that got no reply.
+      { ...user('six'), unanswered: [{ reason: 'aborted', at }] }
+    ]
+    const row = buildScorecard([conv({ model: 'm', messages })]).models[0]
+    expect(row.runEnds).toEqual({
+      error: 1,
+      aborted: 2,
+      limits: { 'max-steps': 2, stalled: 1, 'max-cost': 1, 'max-output': 1 }
+    })
+  })
+
+  it('reports no stops for a chat whose runs all finished', () => {
+    const row = buildScorecard([conv({ model: 'm', messages: [user(), assistant('done')] })]).models[0]
+    expect(row.runEnds).toEqual(emptyRunEndCounts())
+  })
+
+  it("doesn't count the stops in a fork's copied history", () => {
+    const copied = [user(), { ...reply('m'), runEnds: ended({ reason: 'error' }) }]
+    const s = buildScorecard([conv({ model: 'm', messages: [...copied, user('more'), reply('m')], inherited: 2 })])
+    expect(s.models[0].runEnds.error).toBe(0)
+  })
+
+  it('credits a stop to the model of the run that stopped', () => {
+    const messages: ChatMessage[] = [
+      user(),
+      reply('old-model', undefined, { toolCalls: call('run_shell') }),
+      { ...toolTurn('run_shell'), runEnds: ended({ reason: 'aborted' }) },
+      user('switched'),
+      { ...reply('new-model'), runEnds: ended({ reason: 'limit', limit: 'stalled' }) }
+    ]
+    const rows = buildScorecard([conv({ model: 'new-model', messages })]).models
+    const by = Object.fromEntries(rows.map((r) => [r.model, r]))
+    expect(by['old-model'].runEnds.aborted).toBe(1)
+    expect(by['old-model'].runEnds.limits.stalled).toBe(0)
+    expect(by['new-model'].runEnds.limits.stalled).toBe(1)
+    expect(by['new-model'].runEnds.aborted).toBe(0)
+  })
+
+  it('credits a run that failed before any reply to the chat model', () => {
+    const s = buildScorecard([conv({ model: 'misconfigured', messages: [{ ...user(), runEnds: ended({ reason: 'error' }) }] })])
+    expect(s.models).toHaveLength(1)
+    expect(s.models[0].model).toBe('misconfigured')
+    expect(s.models[0].runEnds.error).toBe(1)
+  })
+
+  it('words the stops the same way for every client, leaving out the ones that never happened', () => {
+    const c = emptyRunEndCounts()
+    expect(runEndParts(c)).toEqual([])
+    c.error = 2
+    c.limits['max-steps'] = 1
+    c.limits['max-cost'] = 3
+    expect(runEndParts(c)).toEqual([
+      { label: 'failed', count: 2 },
+      { label: 'step limit', count: 1 },
+      { label: 'cost limit', count: 3 }
+    ])
+  })
+})
+
+describe('buildScorecard per-reply models', () => {
+  // A chat that started on one model and was switched: the chat names only the second.
+  const switched = (): ScorecardConversationInput =>
+    conv({
+      model: 'model-b',
+      messages: [
+        user(),
+        reply('model-a', undefined, { toolCalls: call('read_file'), usage: { inputTokens: 10, outputTokens: 100, cost: 0.4 } }),
+        toolTurn('read_file'),
+        reply('model-a', undefined, { usage: { inputTokens: 10, outputTokens: 50, cost: 0.2 } }),
+        user('now with b'),
+        reply('model-b', undefined, { toolCalls: call('run_shell'), usage: { inputTokens: 10, outputTokens: 30, cost: 0.1 } }),
+        toolTurn('run_shell'),
+        reply('model-b', undefined, { usage: { inputTokens: 10, outputTokens: 20, cost: 0.1 } })
+      ],
+      // The running total also holds a subagent's spend that no reply recorded.
+      usage: { inputTokens: 10, outputTokens: 250, cost: 1 }
+    })
+
+  it("credits each reply's step, usage and tool calls to the model that wrote it", () => {
+    const s = buildScorecard([switched()])
+    const by = Object.fromEntries(s.models.map((r) => [r.model, r]))
+    expect(by['model-a'].totalSteps).toBe(2)
+    expect(by['model-a'].tools).toEqual([{ name: 'read_file', count: 1 }])
+    expect(by['model-a'].totalCost).toBeCloseTo(0.6, 6)
+    expect(by['model-a'].totalOutputTokens).toBe(150)
+    expect(by['model-b'].totalSteps).toBe(2)
+    expect(by['model-b'].tools).toEqual([{ name: 'run_shell', count: 1 }])
+    // Its own replies (0.2) plus what the total holds beyond every reply (1 - 0.8).
+    expect(by['model-b'].totalCost).toBeCloseTo(0.4, 6)
+    expect(by['model-b'].totalOutputTokens).toBe(100)
+  })
+
+  it('counts the chat once in total but as a run for each model it used', () => {
+    const s = buildScorecard([switched()])
+    expect(s.totalRuns).toBe(1)
+    expect(s.models.map((r) => r.runs)).toEqual([1, 1])
+    expect(s.totalCost).toBeCloseTo(1, 6)
+  })
+
+  it("puts the latest run's outcome on the model that ran it, and rates finishes over those", () => {
+    const by = Object.fromEntries(buildScorecard([switched()]).models.map((r) => [r.model, r]))
+    expect(by['model-b'].completedRuns).toBe(1)
+    expect(by['model-b'].completionRate).toBe(1)
+    // model-a ran no chat's latest run: nothing to rate, rather than a 0% finish rate.
+    expect(by['model-a'].completedRuns + by['model-a'].limitedRuns).toBe(0)
+    expect(by['model-a'].completionRate).toBe(0)
+  })
+
+  it('falls back to the chat model for replies saved before they named one', () => {
+    const s = buildScorecard([conv({ model: 'm', messages: [user(), assistant('old reply'), user(), reply('m')] })])
+    expect(s.models).toHaveLength(1)
+    expect(s.models[0].totalSteps).toBe(2)
+  })
+})
+
+describe('buildScorecard by prompt version', () => {
+  const chat = (): ScorecardConversationInput =>
+    conv({
+      model: 'm',
+      messages: [
+        user(),
+        assistant('saved before prompt ids'),
+        user(),
+        reply('m', 'aaaaaaaaaaaa', { toolCalls: call('read_file') }),
+        toolTurn('read_file'),
+        { ...reply('m', 'aaaaaaaaaaaa'), runEnds: ended({ reason: 'limit', limit: 'max-steps' }) },
+        user(),
+        reply('m', 'bbbbbbbbbbbb', { usage: { inputTokens: 1, outputTokens: 5, cost: 0.01 } })
+      ],
+      usage: { inputTokens: 1, outputTokens: 5, cost: 0.01 }
+    })
+
+  it('splits each model into one row per prompt version, plus one for replies with none', () => {
+    const s = buildScorecard([chat()], { groupBy: 'model-prompt' })
+    const by = Object.fromEntries(s.models.map((r) => [r.promptId ?? '(none)', r]))
+    expect(Object.keys(by).sort()).toEqual(['(none)', 'aaaaaaaaaaaa', 'bbbbbbbbbbbb'])
+    expect(s.models.every((r) => r.model === 'm')).toBe(true)
+    expect(by['(none)'].totalSteps).toBe(1)
+    expect(by.aaaaaaaaaaaa.totalSteps).toBe(2)
+    expect(by.aaaaaaaaaaaa.totalToolCalls).toBe(1)
+    expect(by.aaaaaaaaaaaa.runEnds.limits['max-steps']).toBe(1)
+    expect(by.bbbbbbbbbbbb.totalSteps).toBe(1)
+    expect(by.bbbbbbbbbbbb.totalCost).toBeCloseTo(0.01, 6)
+    expect(by.bbbbbbbbbbbb.completedRuns).toBe(1)
+    // The costliest row first; the free ones by prompt id, the one with none first.
+    expect(s.models.map((r) => r.promptId)).toEqual(['bbbbbbbbbbbb', undefined, 'aaaaaaaaaaaa'])
+  })
+
+  it('keeps one row per model when not asked to split, with no prompt id on it', () => {
+    const s = buildScorecard([chat()])
+    expect(s.models).toHaveLength(1)
+    expect(s.models[0].promptId).toBeUndefined()
+    expect(s.models[0].totalSteps).toBe(4)
+  })
+})
+
+describe('messageGroups', () => {
+  it('counts a message in the row of the latest reply at or before it', () => {
+    const msgs = [user(), reply('a', 'p1'), toolTurn('x'), user(), reply('b', 'p2')]
+    expect(messageGroups(msgs, 'chat', 'model')).toEqual([
+      { model: 'chat' },
+      { model: 'a' },
+      { model: 'a' },
+      { model: 'a' },
+      { model: 'b' }
+    ])
+    expect(messageGroups(msgs, 'chat', 'model-prompt').map((k) => k.promptId)).toEqual([
+      undefined,
+      'p1',
+      'p1',
+      'p1',
+      'p2'
+    ])
+  })
+
+  it('names an unnamed chat model "unknown"', () => {
+    expect(messageGroups([user()], '')).toEqual([{ model: 'unknown' }])
   })
 })

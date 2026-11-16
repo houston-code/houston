@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseShellEscape, plainTerminalText, renderShellEscapeRecord } from './shellEscape'
+import { isShellEscapeRecord, parseShellEscape, plainTerminalText, renderShellEscapeRecord } from './shellEscape'
 import { shellEscapeTurn } from './promptInvocation'
 
 describe('parseShellEscape', () => {
@@ -32,6 +32,20 @@ describe('plainTerminalText', () => {
 
   it('drops other control characters but keeps tabs', () => {
     expect(plainTerminalText('a\tb\x07\x08c')).toBe('a\tbc')
+  })
+})
+
+describe('isShellEscapeRecord', () => {
+  it('recognizes a record of a command the user ran, whatever it exited with', () => {
+    expect(isShellEscapeRecord(renderShellEscapeRecord('npm test', '2 failed', 1))).toBe(true)
+    expect(isShellEscapeRecord(renderShellEscapeRecord('ls', 'a', 0))).toBe(true)
+    expect(isShellEscapeRecord(renderShellEscapeRecord('true', '', 0))).toBe(true)
+    expect(isShellEscapeRecord(renderShellEscapeRecord('x', 'y', -1))).toBe(true)
+  })
+
+  it('does not take a message that merely talks about running something for one', () => {
+    expect(isShellEscapeRecord('I ran this in my shell: npm test, and it failed')).toBe(false)
+    expect(isShellEscapeRecord('Earlier I ran this in my shell:\n\n$ ls')).toBe(false)
   })
 })
 

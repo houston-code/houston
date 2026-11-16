@@ -166,7 +166,7 @@ import {
   type StatusLinePayload
 } from './tui-statusline'
 import type { UsageReport } from '@shared/usageReport'
-import type { Scorecard } from '@shared/scorecard'
+import type { Scorecard, ScorecardGroupBy } from '@shared/scorecard'
 import { renderScorecard } from './tui-scorecard'
 import { FALLBACK_USAGE, fallbackChange, parseFallbackArgs, renderFallbacks, type FallbackOp } from './tui-fallback'
 import {
@@ -2577,8 +2577,8 @@ export type SlashResult =
   | { kind: 'usage' }
   /** Show the custom status line's setup and the JSON its command reads (/statusline). */
   | { kind: 'statusline' }
-  /** How each model has behaved across the saved chats (/scorecard). */
-  | { kind: 'scorecard' }
+  /** How each model has behaved across the saved chats (/scorecard [prompts]); `bad` is an unknown argument. */
+  | { kind: 'scorecard'; groupBy?: 'model-prompt'; bad?: string }
   /** List or edit the fallback models (/model fallback [add|remove|up|down]). */
   | { kind: 'model-fallback'; op: FallbackOp }
   /** List (and open) the background sessions the agent spawned (/spawned). */
@@ -2819,8 +2819,12 @@ export function parseSlashCommand(
       return { kind: 'usage' }
     case 'statusline':
       return { kind: 'statusline' }
-    case 'scorecard':
-      return { kind: 'scorecard' }
+    case 'scorecard': {
+      // `/scorecard prompts` splits each model by the prompt version its replies carried.
+      const a = arg.trim().toLowerCase()
+      if (!a) return { kind: 'scorecard' }
+      return a === 'prompts' || a === 'prompt' ? { kind: 'scorecard', groupBy: 'model-prompt' } : { kind: 'scorecard', bad: a }
+    }
     case 'copy': {
       // `/copy` is the last reply; a number counts back from there.
       const a = arg.trim()
@@ -2968,7 +2972,7 @@ export const HELP_TEXT = [
   '  /cost                 show session token + cost totals, by model and by subagent',
   '  /usage                spend and tokens per day (last 7) and per project, from the chats on this computer',
   '  /statusline           the custom status line: its command, and the JSON that command reads',
-  '  /scorecard            how each model has behaved across your chats: steps, tools, clean finishes, cost',
+  '  /scorecard [prompts]  how each model has behaved across your chats: steps, tools, clean finishes, cost, failure signals (prompts: a row per prompt version too)',
   '  /context              what fills the context now, part by part',
   '  /skills /agents       list workspace skills / custom agents',
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
@@ -4458,7 +4462,7 @@ export interface TuiDeps {
    */
   usageReport?: () => UsageReport
   /** The loop scorecard over the chats saved on this computer, for `/scorecard`. Absent ⇒ unavailable. */
-  scorecard?: () => Scorecard
+  scorecard?: (groupBy: ScorecardGroupBy) => Scorecard
   /**
    * Open `initial` text in the user's `$VISUAL`/`$EDITOR` and return the edited
    * result (null if no editor is configured or the edit was aborted). Used by the
@@ -7341,12 +7345,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'scorecard') {
+        if (result.bad) {
+          deps.io.out(
+            paint(`· /scorecard has no option ${stripControlChars(result.bad)}: use /scorecard, or /scorecard prompts\n`, 'yellow')
+          )
+          continue
+        }
         if (!deps.scorecard) {
           deps.io.out(paint('· the scorecard is unavailable here\n', 'dim'))
           continue
         }
         try {
-          deps.io.out(`${renderScorecard(deps.scorecard(), paint)}\n`)
+          deps.io.out(`${renderScorecard(deps.scorecard(result.groupBy ?? 'model'), paint)}\n`)
         } catch (e) {
           deps.io.out(paint(`· couldn't build the scorecard: ${(e as Error).message}\n`, 'yellow'))
         }

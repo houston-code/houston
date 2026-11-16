@@ -92,6 +92,9 @@ import { isOllamaProvider, ollamaContextLengthCached, ollamaContextNotice } from
 /** How long a run waits on Ollama for the context it runs a model with. */
 const OLLAMA_PROBE_TIMEOUT_MS = 3000
 import { buildSystemPrompt, promptId } from './prompt'
+// Inlined at build in every client (the desktop app, the CLI bundle), so each saved
+// reply says which release of Houston wrote it.
+import { version as APP_VERSION } from '../../../package.json'
 import { createLiveOutput } from './liveOutput'
 import { applyRunOverrides } from './run-overrides'
 import {
@@ -4986,7 +4989,12 @@ export async function startRun(
           content: assistantText,
           ...(toolCalls.length ? { toolCalls } : {}),
           ...(turnReasoning.length ? { reasoning: turnReasoning } : {}),
+          // Beside the prompt version: the effort this round asked for and the release
+          // that ran it, so saved chats can tell a prompt change from an effort or
+          // version change.
           ...(runPromptId ? { promptId: runPromptId } : {}),
+          ...(reasoningEffort ? { effort: reasoningEffort } : {}),
+          appVersion: APP_VERSION,
           at: new Date().toISOString(),
           model: route.model,
           ...(roundUsage ? { usage: roundUsage } : {})

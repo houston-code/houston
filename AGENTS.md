@@ -72,10 +72,20 @@ and does not catch.
 
 Every reply the loop saves carries a `promptId` (`promptId` in `src/main/agent/prompt.ts`):
 a short hash of the system prompt Houston wrote for that run's configuration and the
-built-in tool schemas it offered, with the project's and user's own inputs left out. Group
-saved conversations by it to compare behavior before and after a prompt change. Anything
-that changes what the model is told should flow through `buildSystemPrompt` or a tool
-schema so the id moves with it.
+built-in tool schemas it offered, with the project's and user's own inputs left out. Beside
+it each reply records the reasoning `effort` its round asked for and the `appVersion` that
+saved it, so a behavior change can be told apart from an effort change or an upgrade. Group
+saved conversations by it to compare behavior before and after a prompt change (the loop
+scorecard's "by prompt version" split does this on-device). Anything that changes what the
+model is told should flow through `buildSystemPrompt` or a tool schema so the id moves
+with it.
+
+The loop scorecard (`src/shared/scorecard.ts`) never reads message content: only roles,
+tool names, each reply's model, `promptId` and usage, and each run's `runEnds` record. The
+failure signals shown beside it (`src/shared/failureSignals.ts`) do read reply text and
+tool results, on-device, and return counts only. Keep that split: a detector that needs
+text belongs in `failureSignals.ts`, and nothing either module returns may carry text from
+a chat. Its fixtures are synthetic, never copied from a real transcript.
 
 ## Model knowledge
 

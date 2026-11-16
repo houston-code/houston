@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '@shared/constants'
 import { MAX_APPROVAL_NOTE } from '@shared/agent'
+import type { Scorecard } from '@shared/scorecard'
 
 // Hoisted holders the mocks close over, so each test can steer run ownership and
 // observe the loop resolvers the handlers call.
@@ -1782,5 +1783,28 @@ describe('eventForView', () => {
     expect(shown.type === 'turn_start' && shown.images?.[0].data).toBe('')
     const text = { runId: 'r', type: 'tool_result' as const, callId: 'c', name: 'read_file', ok: true, output: 'x' }
     expect(eventForView(conv.id, text)).toBe(text)
+  })
+})
+
+describe('the loop scorecard handler', () => {
+  registerIpc()
+  const scorecard = (...args: unknown[]): Scorecard =>
+    h.handlers.get(IPC.conversationScorecard)!({ sender: {} }, ...args) as Scorecard
+
+  it('splits rows by prompt version only when asked for that by name', () => {
+    const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(conv.id, [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello', model: 'm', promptId: 'abcdefabcdef' }
+    ])
+    const split = scorecard('model-prompt')
+    expect(split.groupBy).toBe('model-prompt')
+    expect(split.models.some((r) => r.promptId === 'abcdefabcdef')).toBe(true)
+    // Anything else the renderer could send gets the per-model rows.
+    for (const arg of [undefined, 'model', 'prompts', { groupBy: 'model-prompt' }, 42]) {
+      const card = scorecard(arg)
+      expect(card.groupBy).toBe('model')
+      expect(card.models.every((r) => r.promptId === undefined)).toBe(true)
+    }
   })
 })

@@ -687,6 +687,29 @@ describe('startRun', () => {
     expect(ids(await run({ turns: [[{ type: 'text', text: 'a plan' }, { type: 'done', stopReason: 'end_turn' }]], policy: 'plan' }))[0]).not.toBe(first[0])
   })
 
+  it('stamps every reply with the effort it was asked for and the version of Houston that saved it', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'hello')
+    const r = await run({
+      reasoningEffort: 'medium',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done reading' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const replies = r.messages.filter((m) => m.role === 'assistant')
+    expect(replies).toHaveLength(2)
+    const { version } = JSON.parse(readFileSync(join(__dirname, '../../../package.json'), 'utf8')) as { version: string }
+    for (const m of replies) {
+      expect(m.effort).toBe('medium')
+      expect(m.appVersion).toBe(version)
+    }
+    // Neither is a user turn's to carry.
+    expect(r.messages.filter((m) => m.role !== 'assistant').some((m) => m.effort || m.appVersion)).toBe(false)
+  })
+
   it('redacts stored secrets from a tool result before the model, UI, and transcript see it', async () => {
     h.secrets = ['stored-opaque-credential-value-xyz']
     // A file the agent reads that happens to contain this install's own credential (an
@@ -1355,6 +1378,8 @@ describe('startRun', () => {
           role: 'assistant',
           content: 'the whole answer',
           promptId: expect.any(String),
+          effort: 'off',
+          appVersion: expect.any(String),
           at: expect.any(String),
           model: expect.any(String),
           usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number), cost: expect.any(Number) }
@@ -2912,8 +2937,10 @@ describe('startRun', () => {
           yield { type: 'done', stopReason: 'end_turn' }
         }
       }
-      await run({ provider })
+      const r = await run({ provider })
       expect(seen).toEqual(['low', 'high'])
+      // Each saved reply says which effort its own round asked for.
+      expect(r.messages.filter((m) => m.role === 'assistant').map((m) => m.effort)).toEqual(['low', 'high'])
     } finally {
       h.settings = original
     }
@@ -2948,6 +2975,8 @@ describe('startRun', () => {
         userText: 'why is this slow? ultrathink'
       })
       expect(seen).toEqual(['xhigh', 'xhigh'])
+      // The replies record the effort that was actually asked for, not the chat's own.
+      expect(r.messages.filter((m) => m.role === 'assistant').map((m) => m.effort)).toEqual(['xhigh', 'xhigh'])
       expect(notes(r)).toHaveLength(1)
       expect(notices(r)).toHaveLength(1)
       // The note follows the message that carries the keyword, as a note from Houston.

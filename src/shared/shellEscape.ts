@@ -42,6 +42,14 @@ export function renderShellEscapeRecord(command: string, output: string, exitCod
     : `${head}\n\n$ ${command}\n\n(no output)`
 }
 
+/**
+ * Whether a user turn's text is a {@link renderShellEscapeRecord} record: output the
+ * user put in the chat, not a message that started a run.
+ */
+export function isShellEscapeRecord(text: string): boolean {
+  return /^I ran this in my shell(?: \(it exited -?\d+\))?:\n\n\$ /.test(text)
+}
+
 /** The most terminal output kept for the record, before the line cap applies. */
 export const SHELL_ESCAPE_MAX_CHARS = 64 * 1024
 

@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ModelScorecard, Scorecard as ScorecardData } from '@shared/scorecard'
+import { FAILURE_SIGNAL_INFO, signalParts } from '@shared/failureSignals'
+import {
+  groupKeyId,
+  runEndParts,
+  type ModelScorecard,
+  type Scorecard as ScorecardData,
+  type ScorecardGroupBy
+} from '@shared/scorecard'
 import { formatTokens, formatUsd } from '@shared/usage'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { Icon } from './Icon'
@@ -8,19 +15,21 @@ import { Icon } from './Icon'
  * A slide-over panel showing a LOCAL-ONLY per-model "loop scorecard": how each
  * model has actually behaved across every persisted chat — run count, average
  * steps/tool-calls per run, cumulative + average cost and output tokens, how often
- * a run ended cleanly, and which tools it leaned on.
+ * a run ended cleanly, how the others stopped short, its failure signals, and which
+ * tools it leaned on. Optionally split by prompt version (each reply's promptId).
  *
  * PRIVACY: every number here is aggregated on-device from the user's own local
  * conversation files (the main process does the scan and hands back only the
- * summary). Nothing is transmitted, and no message content is read — only counts.
- * The metrics are honest approximations of loop behavior derived from the message
- * log, not exact telemetry (Houston doesn't persist per-run stop reasons), so the
- * copy says "approximate" where that matters.
+ * summary). Nothing is transmitted. The failure signals come from reading the chats'
+ * text and tool results, so the copy says that plainly; the panel only ever receives
+ * counts. Steps and outcomes are reconstructed from the message log, so the copy
+ * says "approximate" where that matters.
  */
 export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
   const [data, setData] = useState<ScorecardData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [groupBy, setGroupBy] = useState<ScorecardGroupBy>('model')
   const panelRef = useRef<HTMLElement>(null)
   useFocusTrap(panelRef, onClose)
 
@@ -28,20 +37,21 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
     setError(null)
     setLoading(true)
     try {
-      const s = await window.api.getScorecard()
+      const s = await window.api.getScorecard(groupBy)
       setData(s)
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [groupBy])
 
   useEffect(() => {
     void reload()
   }, [reload])
 
   const isEmpty = !!data && data.models.length === 0
+  const byPrompt = data?.groupBy === 'model-prompt'
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
@@ -58,8 +68,9 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
           <div className="changes-panel__titles">
             <h2 className="changes-panel__title">Loop scorecard</h2>
             <p className="changes-panel__scope">
-              How each model has behaved across your chats, aggregated on-device from local
-              data only, never sent anywhere. Figures are approximate.
+              How each model has behaved across your chats, worked out on this computer and never
+              sent anywhere. The failure signals come from reading your saved chats, including their
+              text; only the counts are shown. Figures are approximate.
             </p>
           </div>
           {data && data.totalRuns > 0 && (
@@ -88,6 +99,14 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
         </header>
 
         <div className="changes-panel__body scorecard__body">
+          <label className="scorecard__split">
+            <input
+              type="checkbox"
+              checked={groupBy === 'model-prompt'}
+              onChange={(e) => setGroupBy(e.target.checked ? 'model-prompt' : 'model')}
+            />
+            Split each model by prompt version
+          </label>
           {error ? (
             <p className="changes-panel__empty">Couldn’t build the scorecard: {error}</p>
           ) : !data ? (
@@ -97,7 +116,7 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
               No runs yet. Once you’ve chatted with a model, its stats show up here.
             </p>
           ) : (
-            data.models.map((m) => <ModelCard key={m.model} row={m} />)
+            data.models.map((m) => <ModelCard key={groupKeyId(m)} row={m} byPrompt={byPrompt} />)
           )}
         </div>
       </aside>
@@ -105,17 +124,38 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
   )
 }
 
-/** One model's card: headline stats up top, a small tool-usage histogram below. */
-function ModelCard({ row }: { row: ModelScorecard }): JSX.Element {
+/** What a row's prompt version reads as, when the scorecard is split by one. */
+function promptLabel(row: ModelScorecard): string {
+  return row.promptId ? `prompt ${row.promptId}` : 'before prompt ids'
+}
+
+/** One model's card: headline stats up top, how runs stopped short, signals, and tool usage. */
+function ModelCard({ row, byPrompt }: { row: ModelScorecard; byPrompt: boolean }): JSX.Element {
   const completionPct = Math.round(row.completionRate * 100)
+  const ended = row.completedRuns + row.limitedRuns
   // The busiest tool sets the bar scale so the histogram fills the row nicely.
   const maxTool = row.tools.reduce((mx, t) => Math.max(mx, t.count), 0)
+  const ends = runEndParts(row.runEnds)
+  const signals = row.signals ? signalParts(row.signals) : null
+  const name = byPrompt ? `${row.model} (${promptLabel(row)})` : row.model
   return (
-    <section className="scorecard-card" aria-label={`Stats for ${row.model}`}>
+    <section className="scorecard-card" aria-label={`Stats for ${name}`}>
       <header className="scorecard-card__head">
         <h3 className="scorecard-card__model" title={row.model}>
           {row.model}
         </h3>
+        {byPrompt && (
+          <span
+            className="scorecard-card__prompt"
+            title={
+              row.promptId
+                ? 'The version of Houston’s own instructions these replies were written under'
+                : 'Replies saved before Houston recorded which instructions wrote them'
+            }
+          >
+            {promptLabel(row)}
+          </span>
+        )}
         <span className="scorecard-card__runs">
           {row.runs} run{row.runs === 1 ? '' : 's'}
         </span>
@@ -131,7 +171,7 @@ function ModelCard({ row }: { row: ModelScorecard }): JSX.Element {
         <Stat
           label="Clean finish"
           value={`${completionPct}%`}
-          hint={`${row.completedRuns} of ${row.runs} runs ended cleanly (rest hit an error or were cut off)`}
+          hint={`${row.completedRuns} of ${ended} chats ended their latest run cleanly (the rest failed, were stopped, hit a limit, or were cut off)`}
         />
         <Stat
           label="Total cost"
@@ -148,6 +188,36 @@ function ModelCard({ row }: { row: ModelScorecard }): JSX.Element {
           hint="Cumulative output tokens across all runs"
         />
       </dl>
+
+      {ends.length > 0 && (
+        <div className="scorecard-card__section">
+          <span className="scorecard-card__tools-label">Stopped short</span>
+          <ul className="scorecard-chips" aria-label="Runs that stopped short">
+            {ends.map((p) => (
+              <li key={p.label} className="scorecard-chip">
+                {p.label} <span className="scorecard-chip__count">{p.count}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {signals && (
+        <div className="scorecard-card__section">
+          <span className="scorecard-card__tools-label">Failure signals</span>
+          {signals.length > 0 ? (
+            <ul className="scorecard-chips" aria-label="Failure signals">
+              {signals.map((p) => (
+                <li key={p.signal} className="scorecard-chip" title={FAILURE_SIGNAL_INFO[p.signal].hint}>
+                  {p.label} <span className="scorecard-chip__count">{p.count}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="scorecard-card__none">None found</p>
+          )}
+        </div>
+      )}
 
       {row.tools.length > 0 && (
         <div className="scorecard-card__tools">
