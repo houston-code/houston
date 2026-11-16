@@ -33,7 +33,12 @@ export function loadEvalLive(): EvalLive {
 }
 
 /** The resolve job's step: the one place a run's provider, model and cap are decided. */
-export function resolveStep(doc: any): { env: Record<string, string>; run: string } {
+export function resolveStep(doc: any): {
+  env: Record<string, string>
+  run: string
+  if?: string
+  'continue-on-error'?: boolean | string
+} {
   const step = (doc.jobs?.resolve?.steps ?? []).find((s: any) => s.id === 'leg')
   if (!step) throw new Error("eval-live.yml has no resolve job with a step `id: leg`")
   return step

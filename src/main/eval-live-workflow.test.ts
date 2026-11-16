@@ -6,7 +6,8 @@ import { dirname, join, resolve } from 'node:path'
 import { load } from 'js-yaml'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { resolveEvalConfig } from './agent/evals/config'
-import { loadEvalLive, resolveStep, scheduleArms, scheduledCrons, scheduledLegs } from './test/eval-live-legs'
+import { evaluate, evaluateIf, type Value } from './test/actions-expression'
+import { loadEvalLive, resolveStep, scheduleArms, scheduledCrons, scheduledLegs, type ScheduledLeg } from './test/eval-live-legs'
 
 /**
  * Guards how eval-live.yml spends and reports, its scheduled legs and their on-demand
@@ -18,7 +19,7 @@ import { loadEvalLive, resolveStep, scheduleArms, scheduledCrons, scheduledLegs 
  */
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const { source, doc } = loadEvalLive()
-const { resolve: resolveJob, evals, alert } = doc.jobs
+const { resolve: resolveJob, evals, alert, 'alert-resolve': alertResolve } = doc.jobs
 const steps = evals.steps as any[]
 const leg = resolveStep(doc)
 const requireKey = steps.find((s) => s.name === 'Require the model API key')
@@ -115,6 +116,103 @@ const outputs = (provider: string, model: string, cap: string) => ({
 const groupFor = (out: Record<string, string>) =>
   String(evals.concurrency.group).replace(R('provider'), out.provider).replace(R('key'), out.key)
 
+/**
+ * The API key both steps that read one are handed: the resolved provider's own secret, or
+ * empty (which the key check refuses) for a provider this repository holds no key for.
+ */
+const KEY =
+  "${{ needs.resolve.outputs.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY || " +
+  "needs.resolve.outputs.provider == 'openai' && secrets.OPENAI_API_KEY || " +
+  "needs.resolve.outputs.provider == 'gemini' && secrets.GEMINI_API_KEY || '' }}"
+const SECRET_OF: Record<string, string> = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY' }
+
+/** The path of every value in the workflow that names a secret, and of any `secrets:` key. */
+function secretReads(node: unknown, path = ''): string[] {
+  if (typeof node === 'string') return /\bsecrets\b/.test(node) ? [path] : []
+  if (!node || typeof node !== 'object') return []
+  return Object.entries(node).flatMap(([key, value]) => {
+    const at = path ? `${path}.${key}` : key
+    return [...(key === 'secrets' ? [at] : []), ...secretReads(value, at)]
+  })
+}
+
+type Result = 'success' | 'failure' | 'cancelled' | 'skipped'
+const RESULTS: Result[] = ['success', 'failure', 'cancelled', 'skipped']
+
+/** One way a run can end: its event, its leg, each job's result, and whether the run was cancelled. */
+interface Ending {
+  event: string
+  leg: ScheduledLeg
+  resolve: Result
+  evals: Result
+  cancelled: boolean
+}
+
+/**
+ * Every way a run of each leg can end. evals needs resolve and has no `if`, so it runs only
+ * after a resolve that succeeded. A skipped resolve, or a skipped evals after a resolve that
+ * succeeded, can't happen as the jobs stand (the tests above keep them unconditional); they
+ * are here so that a condition added later still can't make a run that scored nothing green.
+ */
+function endings(event = 'schedule'): Ending[] {
+  return scheduledLegs(doc).flatMap((leg) =>
+    RESULTS.flatMap((resolve) =>
+      RESULTS.filter((evals) => resolve === 'success' || evals === 'skipped').flatMap((evals) =>
+        [false, true].map((cancelled) => ({ event, leg, resolve, evals, cancelled }))
+      )
+    )
+  )
+}
+
+/** The jobs that call the shared alert, as [name, job]. */
+const alertCallers = Object.entries(doc.jobs as Record<string, any>).filter(
+  ([, job]) => job.uses === './.github/workflows/alert-on-failure.yml'
+)
+
+interface Report {
+  job: string
+  title: string
+  failed: boolean
+}
+
+/**
+ * What a run that ended this way reports to the shared alert: the issue title each caller
+ * reaches, and whether it says failed (false closes that issue). It evaluates each caller's
+ * `if:` and inputs and then the shared alert's own `if:`, so it follows what the workflow
+ * does, not how it is spelled. A call either condition skips reports nothing.
+ */
+function reports(e: Ending): Report[] {
+  // A job that didn't succeed set no outputs, which read as empty.
+  const resolved = e.resolve === 'success'
+  const needs: Record<string, Value> = {
+    resolve: {
+      result: e.resolve,
+      outputs: resolved
+        ? outputs(e.leg.provider, e.leg.model, e.leg.maxRunUsd)
+        : Object.fromEntries(Object.keys(resolveJob.outputs).map((o) => [o, '']))
+    },
+    evals: { result: e.evals, outputs: {} }
+  }
+  const found: Report[] = []
+  for (const [name, job] of alertCallers) {
+    const caller = {
+      contexts: { github: { event_name: e.event }, needs: Object.fromEntries((job.needs as string[]).map((n) => [n, needs[n]])) },
+      cancelled: e.cancelled
+    }
+    if (!evaluateIf(job.if, caller)) continue
+    const failed = evaluate(job.with.failed, caller)
+    if (typeof failed !== 'boolean') throw new Error(`${name}'s failed input is ${JSON.stringify(failed)}, not a boolean`)
+    const called = { contexts: { inputs: { workflow: evaluate(job.with.workflow, caller), failed } }, cancelled: e.cancelled }
+    if (!evaluateIf(alertOnFailure.jobs.alert.if, called)) continue
+    found.push({ job: name, title: String(evaluate(alertOnFailure.jobs.alert.env.TITLE, called)), failed })
+  }
+  return found.sort((a, b) => a.job.localeCompare(b.job))
+}
+
+/** The issue a run that resolved no leg files, and the one each leg files. */
+const BARE_TITLE = 'Task evals (live) is failing'
+const legTitle = (l: ScheduledLeg) => `Task evals (live): ${l.provider}/${l.model} is failing`
+
 describe('live eval workflow', () => {
   it('reads its inputs the way this test assumes', () => {
     // Event data and inputs reach the resolve script through env, and only there.
@@ -138,6 +236,32 @@ describe('live eval workflow', () => {
     expect(upload.with.name).toBe(R('artifact'))
     expect(requireKey.env.ATTEMPTS).toBe('${{ inputs.attempts }}')
     expect(score.env.HOUSTON_EVAL_ATTEMPTS).toBe('${{ inputs.attempts }}')
+  })
+
+  // The openai and gemini legs run unattended: a stray clause in the key expression (another
+  // provider's secret first, or as the fallback when the leg's own is empty) would send that
+  // secret to the leg's provider with nobody watching. So the expression is pinned whole,
+  // evaluated for every provider with every secret set or empty, and is the only place the
+  // workflow reads a secret.
+  it('hands each run only the key of the provider it scores', () => {
+    expect(requireKey.env.API_KEY).toBe(KEY)
+    expect(score.env.API_KEY).toBe(KEY)
+    for (const provider of ['anthropic', 'openai', 'gemini', 'mistral', '']) {
+      for (let set = 0; set < 8; set++) {
+        const secrets = Object.fromEntries(
+          Object.values(SECRET_OF).map((name, i) => [name, set & (1 << i) ? `${name}-value` : ''])
+        )
+        const want = SECRET_OF[provider] ? secrets[SECRET_OF[provider]] : ''
+        const contexts = { needs: { resolve: { outputs: { provider } } }, secrets }
+        for (const step of [requireKey, score]) {
+          expect(evaluate(step.env.API_KEY, { contexts }), `${step.name}: ${provider} with ${JSON.stringify(secrets)}`).toBe(want)
+        }
+      }
+    }
+    expect(secretReads(doc)).toEqual([
+      `jobs.evals.steps.${steps.indexOf(requireKey)}.env.API_KEY`,
+      `jobs.evals.steps.${steps.indexOf(score)}.env.API_KEY`
+    ])
   })
 
   describe('the scheduled legs', () => {
@@ -183,7 +307,7 @@ describe('live eval workflow', () => {
       expect(code.split('github.event.schedule')).toHaveLength(3)
       expect(leg.env.SCHEDULE).toBe('${{ github.event.schedule }}')
       expect(doc['run-name']).toContain('github.event.schedule')
-      for (const [name, job] of Object.entries({ evals, alert })) {
+      for (const [name, job] of Object.entries({ evals, alert, alertResolve })) {
         const text = JSON.stringify(job)
         expect(text, name).not.toContain('github.event.schedule')
         expect(text, name).not.toContain('inputs.provider')
@@ -199,6 +323,17 @@ describe('live eval workflow', () => {
       expect(resolveJob.permissions).toEqual({})
       expect(JSON.stringify(resolveJob)).not.toContain('secrets.')
       expect(resolveJob.concurrency).toBeUndefined()
+    })
+
+    // A skipped resolve job skips evals as well, so a condition on it would let a scheduled
+    // run score nothing; and its step let through by continue-on-error would hand evals empty
+    // outputs. The alert tests below show such a run still reports failed.
+    it('runs the resolve job on every run, and stops the run when it fails', () => {
+      expect(resolveJob.if).toBeUndefined()
+      expect(resolveJob.needs).toBeUndefined()
+      expect(resolveJob['continue-on-error']).toBeUndefined()
+      expect(leg.if).toBeUndefined()
+      expect(leg['continue-on-error']).toBeUndefined()
     })
   })
 
@@ -315,9 +450,10 @@ describe('live eval workflow', () => {
 
     // A displaced waiting run is cancelled at the job, so the run still reaches `alert`.
     // A workflow-level group would cancel the whole run before any job could report it.
-    it('sits on the job that spends, not on the workflow, so the alert job stays outside it', () => {
+    it('sits on the job that spends, not on the workflow, so the alert jobs stay outside it', () => {
       expect(doc.concurrency).toBeUndefined()
       expect(alert.concurrency).toBeUndefined()
+      expect(alertResolve.concurrency).toBeUndefined()
     })
 
     // GitHub keeps at most one waiting run per group, and a newer one cancels it whatever
@@ -502,25 +638,93 @@ describe('live eval workflow', () => {
   })
 
   describe('alerting', () => {
-    // The scheduled legs are the only quality gate: one that never finished is a missed slot.
-    it('reports a scheduled run that failed or was cancelled, and no dispatched run', () => {
+    // One call per issue: per leg once a leg is resolved, and under the workflow's own name
+    // for a run that resolved none.
+    it('calls the shared alert for each leg and for the resolve job, with only issue access', () => {
+      expect(alertCallers.map(([name]) => name).sort()).toEqual(['alert', 'alert-resolve'])
+      for (const [name, job] of alertCallers) {
+        expect(job.permissions, name).toEqual({ issues: 'write' })
+        expect(job.secrets, name).toBeUndefined()
+      }
       expect(alert.needs).toEqual(['resolve', 'evals'])
-      expect(alert.uses).toBe('./.github/workflows/alert-on-failure.yml')
-      expect(alert.permissions).toEqual({ issues: 'write' })
-      expect(alert.if).toBe("${{ always() && github.event_name == 'schedule' }}")
-      // `failed: false` closes the open issue, so a cancellation has to count as a failure.
-      // A failed resolve job (a cron with no leg) skips evals, and still counts.
-      expect(alert.with.failed).toBe("${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}")
+      expect(alert.if).toBe("${{ always() && github.event_name == 'schedule' && needs.resolve.result == 'success' }}")
+      expect(alert.with).toEqual({
+        workflow: "${{ format('Task evals (live): {0}/{1}', needs.resolve.outputs.provider, needs.resolve.outputs.key) }}",
+        failed: "${{ needs.evals.result != 'success' }}"
+      })
+      expect(alertResolve.needs).toEqual(['resolve'])
+      expect(alertResolve.if).toBe("${{ always() && github.event_name == 'schedule' }}")
+      expect(alertResolve.with).toEqual({ workflow: 'Task evals (live)', failed: "${{ needs.resolve.result != 'success' }}" })
+      expect(alertOnFailure.jobs.alert.env.TITLE).toBe('${{ inputs.workflow }} is failing')
+    })
+
+    // The tests below walk every way a run can end through those expressions and the shared
+    // alert's own condition (see `reports`).
+
+    it('reports nothing for a dispatched run', () => {
+      for (const e of endings('workflow_dispatch')) expect(reports(e), JSON.stringify(e)).toEqual([])
+    })
+
+    // The scheduled legs are the only quality gate: one that never finished is a missed slot.
+    it('reports a failure for every scheduled run that did not score its leg', () => {
+      for (const e of endings()) {
+        if (e.resolve === 'success' && e.evals === 'success') continue
+        expect(
+          reports(e).some((r) => r.failed),
+          JSON.stringify(e)
+        ).toBe(true)
+      }
+    })
+
+    // `failed: false` closes the open issue, so a job that was cancelled or skipped must never
+    // report it, and nor may a cancelled run.
+    it('reports green only for jobs that all succeeded, in a run that was not cancelled', () => {
+      for (const e of endings()) {
+        for (const r of reports(e).filter((x) => !x.failed)) {
+          expect(e.cancelled, `${r.job} in ${JSON.stringify(e)}`).toBe(false)
+          for (const need of doc.jobs[r.job].needs as ('resolve' | 'evals')[]) {
+            expect(e[need], `${r.job} in ${JSON.stringify(e)}`).toBe('success')
+          }
+        }
+      }
     })
 
     // The shared alert keeps one issue per title, and a green run closes it: one title for
     // every leg would let a green weekly Haiku run close a red monthly luna run's issue.
-    it('files each leg under its own issue, and a run with no leg under the workflow', () => {
-      expect(alert.with.workflow).toBe(
-        "${{ needs.resolve.outputs.key && format('Task evals (live): {0}/{1}', needs.resolve.outputs.provider, " +
-          "needs.resolve.outputs.key) || 'Task evals (live)' }}"
-      )
-      expect(alertOnFailure.jobs.alert.env.TITLE).toBe('${{ inputs.workflow }} is failing')
+    it("files each leg under its own issue, and touches no other leg's", () => {
+      const titles = scheduledLegs(doc).map(legTitle)
+      expect(new Set(titles).size).toBe(titles.length)
+      for (const e of endings()) {
+        for (const r of reports(e)) expect([BARE_TITLE, legTitle(e.leg)], `${r.job} in ${JSON.stringify(e)}`).toContain(r.title)
+      }
+    })
+
+    // It can't say which leg it missed, and a leg's title built from empty outputs would be a
+    // stray issue no run ever closes.
+    it('files a run that resolved no leg under the workflow alone', () => {
+      for (const e of endings()) {
+        if (e.resolve !== 'success') expect(reports(e), JSON.stringify(e)).toEqual([{ job: 'alert-resolve', title: BARE_TITLE, failed: true }])
+      }
+    })
+
+    // The issue alert-on-failure.yml opens tells its reader it closes itself when the workflow
+    // next goes green, so every issue a run can open must be one a later run closes.
+    it('closes every issue it can open on a later green run', () => {
+      const opened = new Set(endings().flatMap((e) => reports(e).filter((r) => r.failed).map((r) => r.title)))
+      expect([...opened].sort()).toEqual([BARE_TITLE, ...scheduledLegs(doc).map(legTitle)].sort())
+      for (const leg of scheduledLegs(doc)) {
+        expect(reports({ event: 'schedule', leg, resolve: 'success', evals: 'success', cancelled: false })).toEqual([
+          { job: 'alert', title: legTitle(leg), failed: false },
+          { job: 'alert-resolve', title: BARE_TITLE, failed: false }
+        ])
+      }
+      // A run that resolves a leg closes the bare issue whether or not that leg then passes.
+      for (const e of endings()) {
+        if (e.resolve === 'success' && !e.cancelled) {
+          expect(reports(e), JSON.stringify(e)).toContainEqual({ job: 'alert-resolve', title: BARE_TITLE, failed: false })
+        }
+      }
+      expect(alertOnFailure.jobs.alert.steps[0].run).toContain('closes itself when *$WORKFLOW*')
     })
 
     // Called from a cancelled run, the alert job's default `success()` would skip it.

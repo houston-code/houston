@@ -134,10 +134,12 @@ jobs:
   # issue title all read its outputs. A scheduled run has no inputs, so its cron
   # (github.event.schedule) picks the leg, one case arm per cron under `on.schedule`, each on one
   # line in the same form (baselines.test.ts reads them to require each leg's baseline). A cron
-  # with no arm fails this job, naming the cron, rather than scoring some default, and the alert
-  # job reports it. A dispatch uses its inputs as it always has: the `provider` input (anthropic
-  # when empty) and the `model` input, which with none is claude-haiku-5-5 on anthropic and empty,
-  # so the provider's default model, on any other provider.
+  # with no arm fails this job, naming the cron, rather than scoring some default, and the
+  # alert-resolve job reports it. This job has no `if:` and must never get one: a skipped resolve
+  # skips evals too, and a run that scored nothing must not read as a pass. A dispatch uses its
+  # inputs as it always has: the `provider` input (anthropic when empty) and the `model` input,
+  # which with none is claude-haiku-5-5 on anthropic and empty, so the provider's default model,
+  # on any other provider.
   #
   # The outputs: `provider`; `model`, the id the suite is handed (empty for the provider's
   # default); `key`, the model or `default`, which keys the concurrency group and names the run
@@ -388,26 +390,37 @@ jobs:
   # run goes to github-actions[bot]. Scheduled runs only; a hand-dispatched run already notifies
   # whoever started it. See alert-on-failure.yml.
   #
-  # One issue per leg: the issue title carries the leg's provider and model, so a green weekly
-  # Haiku run can't close the issue a red monthly luna run opened. A run whose cron has no leg
-  # (the resolve job failed) reports under the bare workflow name, and that issue closes by hand
-  # once the schedule is fixed, since no leg reports under it.
+  # Two issues, from two calls. `alert` keeps one per leg: its title carries the leg's provider and
+  # model, so a green weekly Haiku run can't close the issue a red monthly luna run opened. It runs
+  # only once the resolve job has named a leg. `alert-resolve` keeps one under the bare workflow
+  # name for a run that resolved no leg (a cron with no arm, a runner that never started, a run
+  # cancelled during that job), which can't say which leg it missed. Every scheduled run reports
+  # to it, so the next run that resolves a leg closes that issue, as the issue's text promises.
   #
   # Unlike the other callers, a CANCELLED scheduled run counts as a failure here. These scheduled
   # runs are the only quality gate there is, so one that never finished (cancelled by hand, or
   # displaced while it waited by a dispatch of the same model, see CONCURRENCY above) is a missed
   # slot someone needs to hear about, not a non-event. Hence `always()` without the usual
-  # `!cancelled()`, so the job runs in a cancelled run, and `failed` counts the cancellation:
-  # false would close an open alert as though the run had gone green.
-  alert:
-    needs: [resolve, evals]
+  # `!cancelled()`, so both jobs run in a cancelled run, and `failed` is anything short of
+  # success: a cancelled or skipped job reporting false would close an open alert as though the
+  # run had gone green.
+  alert-resolve:
+    needs: [resolve]
     if: ${{ always() && github.event_name == 'schedule' }}
     uses: ./.github/workflows/alert-on-failure.yml
     permissions:
       issues: write
     with:
+      workflow: Task evals (live)
+      failed: ${{ needs.resolve.result != 'success' }}
+
+  alert:
+    needs: [resolve, evals]
+    if: ${{ always() && github.event_name == 'schedule' && needs.resolve.result == 'success' }}
+    uses: ./.github/workflows/alert-on-failure.yml
+    permissions:
+      issues: write
+    with:
       workflow: >-
-        ${{ needs.resolve.outputs.key
-        && format('Task evals (live): {0}/{1}', needs.resolve.outputs.provider, needs.resolve.outputs.key)
-        || 'Task evals (live)' }}
-      failed: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        ${{ format('Task evals (live): {0}/{1}', needs.resolve.outputs.provider, needs.resolve.outputs.key) }}
+      failed: ${{ needs.evals.result != 'success' }}

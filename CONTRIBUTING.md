@@ -211,7 +211,10 @@ turns than usual still finishes; a dispatch, which can pick any model at up to f
 attempts, runs under $25. The workflow's `resolve` job is the one place that maps a
 cron to its leg, and everything else in the run (the concurrency group, the API key,
 the suite's environment, the run record's name, the alert issue) reads it. Each leg
-files its own alert issue, so one leg going green can't close another's.
+files its own alert issue, so one leg going green can't close another's. A scheduled
+run that resolves no leg (a cron with no arm in `resolve`, or a run cancelled before
+it picks one) files its issue under the workflow's own name instead, and the next
+scheduled run that resolves a leg closes it.
 
 Dispatch the workflow with a `model` input to score another model on demand, for
 example the default model before a release. That model needs a recorded baseline,
