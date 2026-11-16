@@ -1,0 +1,10 @@
+# Terminal-Bench 4.1 tasks run.sh uses when none are named, one per line, without the
+# terminal-bench/ prefix. The 2026-11 pilot ran exactly these eight (see RESULTS.md).
+glycan-ms2-elucidation
+medical-claims-processing
+ontology-kg-querying
+sound-change-cascade
+sglang-qwen-burst
+vpp-loss-divergence
+ks-solver-cpp
+fin-saccr-rwa

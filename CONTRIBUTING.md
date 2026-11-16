@@ -300,6 +300,18 @@ in a run, such as a tool's results or error messages. To run the A/B on any pull
 regardless, add the `eval-ab` label; to run it again after a push, remove the label and
 add it back.
 
+#### External benchmarks
+
+The task evals are Houston's own fixtures. [`bench/terminal-bench/`](bench/terminal-bench/)
+runs Terminal-Bench 4.1 tasks against Houston through the Harbor framework's ACP agent, in
+Docker, as a check on harder work Houston has never seen. Nothing in CI runs it: every run
+is billed, starts from your own shell with the provider key in your environment, and stops
+once the cost Houston reports reaches the cap you pass. Its README covers the setup,
+including the Harbor pin and how to run a local build of the CLI until a release has
+`--unattended`. Commit the summary table `spend.mjs --markdown` prints to its `RESULTS.md`;
+never commit job folders (trajectories and task content), raw logs, or leaderboard exports.
+The kit's helpers are unit-tested in the `node` project, like the scripts.
+
 #### Writing a task
 
 To add a task, create `src/main/agent/evals/tasks/<id>/` with a `repo/` fixture

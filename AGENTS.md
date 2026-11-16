@@ -153,6 +153,14 @@ how to author a task. The invariants to preserve when changing this code:
   parameter, so injection depends on the eval file's own `vi.mock` plus a deferred
   `await import('../loop')`, and `vi.mock` is file-scoped.
 
+## Benchmark kits
+
+`bench/` holds kits for external benchmarks (`bench/terminal-bench/`). They run only by
+hand, billed, under a spend cap; nothing in CI runs them, and an agent never starts one
+unasked. Commit scripts, manifests, and summary tables only: never job folders,
+trajectories, raw logs, or leaderboard exports. Provider keys come from the environment,
+never from a file a kit reads.
+
 ## Product self-knowledge
 
 Houston answers questions about its own features (slash commands, skills, hooks, MCP,

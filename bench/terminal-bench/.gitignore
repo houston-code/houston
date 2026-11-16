@@ -1,0 +1,3 @@
+# Harbor's default output folder, if it is run from here directly. Job folders hold full
+# trajectories and task content: keep them out of git (see README.md).
+jobs/
