@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ToolSchema } from '@shared/agent'
-import { abGateHash, hashCensus, hashGap, promptHash, sharedHash } from './stamp'
+import { abGateHash, hashCensus, hashGap, promptHash, sharedHash, sharedPromptId } from './stamp'
 
 const tool = (description: string): ToolSchema =>
   ({ name: 'read_file', description, parameters: { type: 'object', properties: {} } }) as unknown as ToolSchema
@@ -98,6 +98,21 @@ describe('sharedHash', () => {
 
   it('returns nothing for no attempts', () => {
     expect(sharedHash([])).toBeUndefined()
+  })
+})
+
+describe('sharedPromptId', () => {
+  // An attempt whose first request failed saved no reply to carry the id, though it made
+  // a request; the run is still labeled by the id every other attempt reported.
+  it('takes the id the attempts that report one agree on', () => {
+    expect(sharedPromptId(['abc', 'abc', undefined])).toBe('abc')
+    expect(sharedPromptId(['abc', 'abc', 'abc'])).toBe('abc')
+  })
+
+  it('returns nothing when those attempts disagree, or none reported one', () => {
+    expect(sharedPromptId(['abc', 'def', undefined])).toBeUndefined()
+    expect(sharedPromptId([undefined, undefined])).toBeUndefined()
+    expect(sharedPromptId([])).toBeUndefined()
   })
 })
 

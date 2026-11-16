@@ -88,6 +88,20 @@ export function sharedHash(hashes: (string | undefined)[]): string | undefined {
   return [...distinct][0]
 }
 
+/**
+ * The loop promptId a run's attempts share, taken from the attempts that report one:
+ * undefined when none does, or when those that do disagree.
+ *
+ * A missing id is not the signal a missing hash is. The loop stamps its promptId on the
+ * replies it saves, so an attempt whose first request failed (a refusal, an overload, no
+ * credit left) has a prompt hash but no promptId, and {@link sharedHash} over every
+ * attempt would leave the whole run's record without one, read in a comparison as a
+ * record from before the stamp existed.
+ */
+export function sharedPromptId(ids: (string | undefined)[]): string | undefined {
+  return sharedHash(ids.filter((id): id is string => id !== undefined))
+}
+
 /** What a run's attempts said about their prompt hash, for when they share none. */
 export interface HashCensus {
   attempts: number

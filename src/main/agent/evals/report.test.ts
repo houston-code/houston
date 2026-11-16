@@ -12,9 +12,10 @@ import {
   toTaskReport,
   type TaskReport
 } from './report'
+import { smallestDetectableChange } from './stats'
 import type { EvalResult } from './types'
 
-const result = (over: Partial<EvalResult> = {}): EvalResult => ({
+const result =(over: Partial<EvalResult> = {}): EvalResult => ({
   taskId: 't',
   passed: false,
   exitCode: 1,
@@ -210,9 +211,34 @@ describe('the whole-run check in the scorecard', () => {
   })
 
   it('prints what the gate can detect, from the baseline’s rate and both sides’ attempts', () => {
-    const aggregate = compareAggregate(base, scores(0).map((s) => ({ ...s, attempts: 2 })))!
+    // A perfect baseline against a run with two flakes (18/20): the two rates give
+    // different figures, so quoting the run's rate would fail here.
+    const flaky = ids.map((taskId, i) => ({ taskId, passRate: i < 2 ? 1 / 2 : 1, attempts: 2 }))
+    const aggregate = compareAggregate(base, flaky)!
+    expect(aggregate.run).toEqual({ passes: 18, attempts: 20 })
+    const points = (rate: number): number => Math.round(smallestDetectableChange(10, 3, 2, { rate, alpha: 0.01 })! * 100)
+    expect(points(1)).not.toBe(points(0.9))
     const out = formatReport({ ...header, attempts: 2, aggregate }, rows(0))
-    expect(out).toMatch(/ {2}smallest detectable change: about \d+ points \(80% power, one-sided 1%; 10 tasks, 3 and 2 attempts a side\)/)
+    expect(out).toContain(
+      `  smallest detectable change: about ${points(1)} points (80% power, one-sided 1%; 10 tasks, 3 and 2 attempts a side)`
+    )
+  })
+
+  // Rounded to three places, a p just under the level would print as the level itself,
+  // beside a REGRESSED, and read the same as a p at the level that held.
+  it('prints a p near the level on the same side of it as the verdict', () => {
+    const regressed = { ...compareAggregate(base, scores(7))!, p: 0.00973099609375 }
+    expect(regressed.kind).toBe('regressed')
+    const out = formatReport({ ...header, aggregate: regressed }, rows(7))
+    expect(out).toContain('stratified p = 0.0097 (fails below 0.01): REGRESSED')
+    const held = { ...compareAggregate(base, scores(1))!, p: 0.01 }
+    expect(held.kind).toBe('held')
+    expect(formatReport({ ...header, aggregate: held }, rows(1))).toContain('stratified p = 0.010 (fails below 0.01): held')
+    // The failure message's four places have the same edge, a little closer in.
+    expect(aggregateRegressionMessage({ ...regressed, p: 0.00996 }, base.recordedAt)).toContain(
+      'stratified p = 0.00996, below 0.01'
+    )
+    expect(aggregateRegressionMessage(regressed, base.recordedAt)).toContain('stratified p = 0.0097, below 0.01')
   })
 
   // A recording has no baseline yet: the line says what a run like it could see against it.

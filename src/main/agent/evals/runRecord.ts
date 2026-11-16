@@ -51,9 +51,10 @@ export interface EvalRunRecord {
   /** See stamp.ts. Absent when the attempts disagreed (a normalization gap) or one had none. */
   promptHash?: string
   /**
-   * The loop's promptId for the run (EvalResult.promptId), when every attempt agreed. It
-   * covers every built-in tool schema, deferred ones included, which the first request
-   * (and so `promptHash`) names only in find_tools' catalog.
+   * The loop's promptId for the run (EvalResult.promptId), when every attempt that saved a
+   * reply to carry one agreed (see sharedPromptId). It covers every built-in tool schema,
+   * deferred ones included, which the first request (and so `promptHash`) names only in
+   * find_tools' catalog. Absent when they disagreed or none saved a reply.
    */
   promptId?: string
   /**

@@ -361,9 +361,20 @@ function fall(f: AggregateVerdict['fell'][number], v: AggregateVerdict): string 
   return `${f.taskId} ${Math.round(f.baseline * k)}/${k} to ${Math.round(f.observed * n)}/${n}`
 }
 
+/**
+ * A p-value to `decimals` places, or more where rounding would carry it across the level
+ * it is held to: a p of 0.0097 against 0.01 would print as 0.010 beside a REGRESSED, the
+ * same figure a p at the level prints beside a held.
+ */
+function pValue(p: number, alpha: number, decimals: number): string {
+  let d = decimals
+  while (d < 12 && (Number(p.toFixed(d)) < alpha) !== (p < alpha)) d++
+  return p.toFixed(d)
+}
+
 /** The scorecard line for the whole-run check, and the tasks behind a regression. */
 export function formatAggregate(v: AggregateVerdict): string[] {
-  const p = v.p < 0.001 ? '< 0.001' : `= ${v.p.toFixed(3)}`
+  const p = v.p < 0.001 ? '< 0.001' : `= ${pValue(v.p, v.alpha, 3)}`
   const head =
     `  vs baseline: attempts ${share(v.run)} against ${share(v.baseline)} on ${v.tasks} tasks, ` +
     `stratified p ${p} (fails below ${v.alpha}): ${v.kind === 'regressed' ? 'REGRESSED' : 'held'}`
@@ -375,7 +386,7 @@ export function aggregateRegressionMessage(v: AggregateVerdict, recordedAt: stri
   return [
     `The run as a whole scored ${share(v.run)} of its attempts against a baseline of ${share(v.baseline)} ` +
       `(recorded ${recordedAt}), over the ${v.tasks} tasks both scored.`,
-    `A fall that size across the suite is unlikely to be noise: stratified p = ${v.p.toFixed(4)}, below ${v.alpha}.`,
+    `A fall that size across the suite is unlikely to be noise: stratified p = ${pValue(v.p, v.alpha, 4)}, below ${v.alpha}.`,
     `Tasks below their baseline: ${v.fell.map((f) => fall(f, v)).join(', ')}`,
     '',
     'The per-task check passes a task that lost one of three attempts, so a fall spread thinly over',

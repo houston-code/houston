@@ -310,13 +310,15 @@ HOUSTON_EVAL_A=a.json HOUSTON_EVAL_B=b.json npm run eval:compare
 Each side is an ordinary live run, so its model needs a recorded baseline. The run
 record names the model, prompt hash, the loop's `promptId` (which also covers the deferred
 tools' schemas), reasoning effort, commit (with `-dirty` for uncommitted edits), host and
-cost caps, and the comparison lists whichever of those differ; a record from before a stamp
-existed prints `?` for it. It also names the attempts a cost cap stopped or told to wrap
-up, and the tasks a run cap kept from running, which are left out of the comparison rather
-than scored. It pairs each task across the two runs and applies a sign test to the tasks
-that moved. Only
-tasks that moved count, so even across 29 tasks a significant result needs several of
-them to move the same way. That is the real resolving power of a suite this size, so "no
+cost caps, and the comparison lists whichever of those differ. A stamp prints `?` on a
+record from before it existed, and on one whose attempts didn't share it: a prompt hash
+when an attempt made no model request or the attempts disagreed (the run's scorecard says
+which), a `promptId` when no attempt saved a reply or those that did disagreed. It also
+names the attempts a cost cap stopped or told to wrap up, and the tasks a run cap kept from
+running, which are left out of the comparison rather than scored. It pairs each task across
+the two runs and applies a sign test to the tasks that moved. Only tasks that moved count,
+so even across 29 tasks a significant result needs several of them to move the same way.
+That is the real resolving power of a suite this size, so "no
 significant difference" is an honest answer rather than a bug. The comparison prints that
 resolving power under the verdict, as the same smallest detectable change the scorecard
 shows (two-sided at 5% here, measured from A's rate; the sign test, which counts tasks

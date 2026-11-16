@@ -122,7 +122,7 @@ import {
 } from './report'
 import { gradeHonesty } from './honesty'
 import { currentCommit, gitIn, toRunRecord } from './runRecord'
-import { abGateHash, hashCensus, promptHash, sharedHash } from './stamp'
+import { abGateHash, hashCensus, promptHash, sharedHash, sharedPromptId } from './stamp'
 import { HARD_TASKS, TASKS } from './tasks'
 import { callTool, say, turn, type EvalResult, type EvalTask, type TimedCall } from './types'
 
@@ -907,7 +907,7 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
   const reports: TaskReport[] = []
   /** Every attempt's prompt hash; the run is stamped only when they all agree. */
   const hashes: (string | undefined)[] = []
-  /** Every attempt's loop promptId, stamped on the run record the same way. */
+  /** Every attempt's loop promptId, stamped on the run record when those that have one agree. */
   const promptIds: (string | undefined)[] = []
 
   afterAll(() => {
@@ -953,7 +953,7 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
           model: MODEL,
           attempts: ATTEMPTS,
           promptHash: runHash,
-          promptId: sharedHash(promptIds),
+          promptId: sharedPromptId(promptIds),
           reasoningEffort: EFFORT,
           commit,
           host: process.platform,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  collapsePower,
   formatDetectable,
   normalCdf,
   normalQuantile,
@@ -208,6 +209,50 @@ describe('smallestDetectableChange', () => {
     expect(smallestDetectableChange(0, 3, 3, gate)).toBeUndefined()
     // Nothing to fall from.
     expect(smallestDetectableChange(29, 3, 3, { ...gate, rate: 0 })).toBeUndefined()
+    // The whole fall from 5% is caught about a quarter of the time: genuinely out of reach.
+    expect(smallestDetectableChange(29, 3, 3, { ...gate, rate: 0.05 })).toBeUndefined()
+  })
+
+  // Near a floor the normal approximation puts even the whole fall short of 80%, which
+  // the stratified test catches 88% of the time, so that fall is checked exactly.
+  it('quotes the whole fall from a low rate when the gate would catch it', () => {
+    expect(collapsePower(29, 3, 3, 0.1, 0.01)).toBeCloseTo(0.878, 3)
+    expect(smallestDetectableChange(29, 3, 3, { ...gate, rate: 0.1 })).toBe(0.1)
+    // Above that rate the scan finds a fall short of the whole one, as before.
+    expect(smallestDetectableChange(29, 3, 3, { ...gate, rate: 0.12 })!).toBeLessThan(0.12)
+  })
+})
+
+describe('collapsePower', () => {
+  // Two tasks of one attempt a side: a task the baseline passed has half a chance of its
+  // pass landing on the run's side, so one such task gives a mid-p of 1/4 and two of 1/8.
+  it('matches a case worked by hand', () => {
+    expect(collapsePower(2, 1, 1, 0.3, 0.2)).toBeCloseTo(0.3 ** 2, 12)
+    expect(collapsePower(2, 1, 1, 0.3, 0.1)).toBe(0)
+  })
+
+  // Every baseline draw over four tasks, each graded by the real test against a run that
+  // never passes, weighted by its chance.
+  it('is the power of the stratified test against a run that never passes', () => {
+    const rate = 0.3
+    const alpha = 0.04
+    const chance = (k: number): number => [1, 3, 3, 1][k] * rate ** k * (1 - rate) ** (3 - k)
+    let power = 0
+    for (let draw = 0; draw < 4 ** 4; draw++) {
+      const ks = [0, 1, 2, 3].map((t) => Math.floor(draw / 4 ** t) % 4)
+      const test = stratifiedDropTest(ks.map((k) => pair(k, 0, 3, 2)))
+      if (test.p < alpha) power += ks.reduce((n, k) => n * chance(k), 1)
+    }
+    expect(power).toBeGreaterThan(0)
+    expect(collapsePower(4, 3, 2, rate, alpha)).toBeCloseTo(power, 12)
+  })
+
+  it('rounds a fractional mean of attempts, and stops at a lower bound when the products outgrow it', () => {
+    expect(collapsePower(4, 3, 2.2, 0.3, 0.04)).toBe(collapsePower(4, 3, 2, 0.3, 0.04))
+    const exact = collapsePower(29, 3, 3, 0.1, 0.01)
+    const bounded = collapsePower(29, 3, 3, 0.1, 0.01, 2)
+    expect(bounded).toBeGreaterThanOrEqual(0)
+    expect(bounded).toBeLessThan(exact)
   })
 })
 
@@ -224,6 +269,13 @@ describe('formatDetectable', () => {
   it('says so when the design can see nothing', () => {
     expect(formatDetectable(1, 1, 1, { alpha: 0.01 })).toBe(
       '  smallest detectable change: none at 80% power, one-sided 1% (1 task, 1 attempt a side)'
+    )
+  })
+
+  // A weak model's baseline: the gate does see a collapse from it.
+  it('quotes the whole fall from a low rate rather than none', () => {
+    expect(formatDetectable(29, 3, 3, { alpha: 0.01, rate: 0.1 })).toBe(
+      '  smallest detectable change: about 10 points (80% power, one-sided 1%; 29 tasks, 3 attempts a side)'
     )
   })
 })

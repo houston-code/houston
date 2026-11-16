@@ -233,10 +233,67 @@ export interface DetectionOptions {
 /** Steps the scan below takes: a twentieth of a point. */
 const SCAN_STEP = 0.0005
 
+/** How many distinct partial products {@link collapsePower} tracks before it settles for a lower bound. */
+const COLLAPSE_MAX_STATES = 100_000
+
+/**
+ * The exact power of {@link stratifiedDropTest} at `alpha` against the biggest fall there
+ * is: every task's `attemptsA` baseline attempts passing at `rate`, independently, and
+ * all `attemptsB` of the run's failing.
+ *
+ * With no run passes the observed total is the least the test allows, so its mid-p is half
+ * the product, over tasks, of the chance that none of a task's passes fell on the run's
+ * side, and that chance depends only on how many passes the baseline drew there. The power
+ * is the chance the product comes out under twice `alpha`, counted task by task over the
+ * products still above it (a product only shrinks, so one under it stays under). Attempts
+ * are rounded to whole numbers, since a run's mean attempts per task can be fractional.
+ * Should the products still above it outgrow `maxStates`, it stops and returns what it
+ * has counted, which can only understate the power.
+ */
+export function collapsePower(
+  tasks: number,
+  attemptsA: number,
+  attemptsB: number,
+  rate: number,
+  alpha: number,
+  maxStates = COLLAPSE_MAX_STATES
+): number {
+  const n1 = Math.max(1, Math.round(attemptsA))
+  const n2 = Math.max(1, Math.round(attemptsB))
+  const draws: Array<{ chance: number; factor: number }> = []
+  for (let k = 0; k <= n1; k++) {
+    draws.push({
+      chance: choose(n1, k) * rate ** k * (1 - rate) ** (n1 - k),
+      factor: choose(n1 + n2 - k, n2) / choose(n1 + n2, n2)
+    })
+  }
+  // Partial product -> probability, keyed to 12 digits so the same draws in another order merge.
+  let open = new Map<number, number>([[1, 1]])
+  let caught = 0
+  for (let t = 0; t < tasks && open.size > 0; t++) {
+    const next = new Map<number, number>()
+    for (const [product, chance] of open) {
+      for (const draw of draws) {
+        const p = product * draw.factor
+        const q = chance * draw.chance
+        if (p < 1 && p / 2 < alpha) caught += q
+        else {
+          const key = Number(p.toPrecision(12))
+          next.set(key, (next.get(key) ?? 0) + q)
+        }
+      }
+    }
+    if (next.size > maxStates) break
+    open = next
+  }
+  return Math.min(1, caught)
+}
+
 /**
  * The smallest true fall in the per-attempt pass rate, from `rate`, that comparing
  * `tasks` tasks at `attemptsA` attempts each with the same tasks at `attemptsB` detects
- * with the given power. Undefined when no fall in range gets there (too few attempts).
+ * with the given power. Undefined when no fall in range gets there, not even the whole
+ * fall to never passing (too few attempts, or nothing to fall from).
  *
  * A property of the design, not of any result: it says how big a change has to be before
  * a suite this size can see it, so a smaller move on the scorecard reads as the noise it
@@ -250,6 +307,11 @@ const SCAN_STEP = 0.0005
  * at about 16 points, where this says 18.5 from its 91%), so read it as a slightly
  * cautious figure. The A/B's sign test counts tasks rather than attempts and needs a
  * little more.
+ *
+ * NEAR A FLOOR the approximation is not slightly but badly cautious. From a 10% rate at
+ * 29 tasks x 3 attempts it puts even the whole fall, to never passing, short of 80%, where
+ * the stratified test catches that fall 88% of the time. So when the scan finds nothing,
+ * the whole fall is checked exactly ({@link collapsePower}) and quoted if it gets there.
  *
  * Always a fall, even for a two-sided test. A rise needs failures to fix, and on a suite
  * near its ceiling they sit on a few tasks: the formula, which assumes every task at the
@@ -276,6 +338,7 @@ export function smallestDetectableChange(
     const spread = Math.sqrt((rate * (1 - rate)) / a + (to * (1 - to)) / b)
     if (spread > 0 && normalCdf((d - z * null0) / spread) >= power) return d
   }
+  if (rate > 0 && collapsePower(tasks, attemptsA, attemptsB, rate, twoSided ? alpha / 2 : alpha) >= power) return rate
   return undefined
 }
 
