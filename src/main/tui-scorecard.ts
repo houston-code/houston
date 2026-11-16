@@ -1,5 +1,5 @@
 import { signalParts } from '@shared/failureSignals'
-import { runEndParts, type ModelScorecard, type Scorecard } from '@shared/scorecard'
+import { NO_REPLY_PROMPT_ID, runEndParts, type ModelScorecard, type Scorecard } from '@shared/scorecard'
 import { formatTokens, formatUsd } from '@shared/usage'
 import type { Painter } from './tui'
 import { stripControlChars } from './tui-wrap'
@@ -20,15 +20,25 @@ const joinParts = (parts: Array<{ label: string; count: number }>): string =>
 
 /** A row's prompt version, when the scorecard is split by one. */
 function promptLabel(m: ModelScorecard): string {
+  if (m.promptId === NO_REPLY_PROMPT_ID) return 'no reply yet'
   return m.promptId ? `prompt ${stripControlChars(m.promptId)}` : 'before prompt ids'
 }
 
-function modelBlock(m: ModelScorecard, byPrompt: boolean, paint: Painter): string[] {
+/**
+ * How often the row's latest runs finished cleanly. A row that no chat's latest run
+ * was on (a model switched away from mid-chat, an older prompt version) has nothing
+ * to rate, which isn't a 0% rate.
+ */
+function cleanFinish(m: ModelScorecard): string {
   const ended = m.completedRuns + m.limitedRuns
-  const pct = Math.round(m.completionRate * 100)
+  if (ended === 0) return 'clean finish – (no latest run here)'
+  return `clean finish ${Math.round(m.completionRate * 100)}% (${m.completedRuns} of ${ended})`
+}
+
+function modelBlock(m: ModelScorecard, byPrompt: boolean, paint: Painter): string[] {
   const lines = [
     `${paint(stripControlChars(m.model), 'bold')}  ${byPrompt ? `${paint(promptLabel(m), 'cyan')}  ` : ''}${paint(`${m.runs} run${m.runs === 1 ? '' : 's'}`, 'dim')}`,
-    `  avg steps ${m.avgSteps} · avg tools ${m.avgToolCalls} · clean finish ${pct}% (${m.completedRuns} of ${ended}) · cost ${money(m.totalCost)}${
+    `  avg steps ${m.avgSteps} · avg tools ${m.avgToolCalls} · ${cleanFinish(m)} · cost ${money(m.totalCost)}${
       m.totalCost > 0 ? ` (${money(m.avgCost)} per run)` : ''
     } · output ${formatTokens(m.totalOutputTokens)}`
   ]

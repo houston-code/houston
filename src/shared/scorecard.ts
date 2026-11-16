@@ -72,9 +72,19 @@ export type ScorecardGroupBy = 'model' | 'model-prompt'
 /** Which row something is counted in. `promptId` only when grouped by prompt version. */
 export interface ScorecardGroupKey {
   model: string
-  /** Absent for replies saved before Houston recorded one, and in the model-only grouping. */
+  /**
+   * Absent for replies saved before Houston recorded one, and in the model-only
+   * grouping; {@link NO_REPLY_PROMPT_ID} for a chat with no reply at all.
+   */
   promptId?: string
 }
+
+/**
+ * The prompt version of the row, when grouped by one, for chats with no reply at all
+ * (every run ended before the model said anything): no reply names a version, and the
+ * chat isn't one saved before replies did. Never a real `promptId`, which is never empty.
+ */
+export const NO_REPLY_PROMPT_ID = ''
 
 /** How many runs ended other than by finishing, by why (see {@link ChatMessage.runEnds}). */
 export interface RunEndCounts {
@@ -97,7 +107,10 @@ export interface ToolUsageEntry {
 /** Aggregated metrics for one row: a model (or a model and prompt version). */
 export interface ModelScorecard {
   model: string
-  /** Set when grouped by prompt version; absent for replies saved before Houston recorded one. */
+  /**
+   * Set when grouped by prompt version; absent for replies saved before Houston
+   * recorded one, and {@link NO_REPLY_PROMPT_ID} for chats with no reply yet.
+   */
   promptId?: string
   /** Number of conversations ("runs") with anything counted in this row. */
   runs: number
@@ -155,10 +168,12 @@ export function groupKeyId(k: ScorecardGroupKey): string {
  * model that served it (the chat's model when an older reply doesn't say) and, grouped
  * by prompt version, its `promptId`. Every other message counts in the row of the
  * latest reply before it, so a tool result counts where its call was made and a
- * run-end record where that run's last reply was. A message before any reply counts
- * in the chat's own model's row. A run that failed before replying is therefore
- * credited to the model of the reply before it, which is right unless the model was
- * switched just before that run (the record doesn't name one).
+ * run-end record where that run's last reply was. A message before the first reply
+ * counts in that reply's row, the nearest one that names a model and prompt version.
+ * A run that failed before replying is therefore credited to the model of the reply
+ * next to it, which is right unless the model was switched around that run (the
+ * record doesn't name one). A chat with no reply at all counts in its own model's
+ * row, under {@link NO_REPLY_PROMPT_ID} when grouped by prompt version.
  */
 export function messageGroups(
   messages: readonly ChatMessage[],
@@ -166,12 +181,18 @@ export function messageGroups(
   groupBy: ScorecardGroupBy = 'model'
 ): ScorecardGroupKey[] {
   const fallback: ScorecardGroupKey = { model: chatModel || 'unknown' }
-  let current = fallback
+  const rowOf = (m: ChatMessage): ScorecardGroupKey => {
+    const model = m.model || fallback.model
+    return groupBy === 'model-prompt' && m.promptId ? { model, promptId: m.promptId } : { model }
+  }
+  const first = messages.find((m) => m.role === 'assistant')
+  let current: ScorecardGroupKey = first
+    ? rowOf(first)
+    : groupBy === 'model-prompt'
+      ? { ...fallback, promptId: NO_REPLY_PROMPT_ID }
+      : fallback
   return messages.map((m) => {
-    if (m.role === 'assistant') {
-      const model = m.model || fallback.model
-      current = groupBy === 'model-prompt' && m.promptId ? { model, promptId: m.promptId } : { model }
-    }
+    if (m.role === 'assistant') current = rowOf(m)
     return current
   })
 }
@@ -253,6 +274,44 @@ function conversationCost(input: ScorecardConversationInput): number {
   // cost was persisted; outputTokens is the true cumulative output.
   const est = turnCostUsd(input.model, u.inputTokens, u.outputTokens)
   return est > 0 ? est : 0
+}
+
+/**
+ * The scorecard's row order. Costliest models first — that's what a "where is my
+ * budget going" glance wants. Ties fall back to run count, then model id (then prompt
+ * id) for a stable order.
+ */
+export function compareScorecardRows(x: ModelScorecard, y: ModelScorecard): number {
+  return (
+    y.totalCost - x.totalCost ||
+    y.runs - x.runs ||
+    x.model.localeCompare(y.model) ||
+    (x.promptId ?? '').localeCompare(y.promptId ?? '')
+  )
+}
+
+/**
+ * A row with nothing counted in it but its runs, for something another report found
+ * in chats where the scorecard counted nothing for that row (see `attachFailureSignals`).
+ */
+export function emptyScorecardRow(key: ScorecardGroupKey, runs: number): ModelScorecard {
+  return {
+    model: key.model,
+    ...(key.promptId !== undefined ? { promptId: key.promptId } : {}),
+    runs,
+    totalSteps: 0,
+    avgSteps: 0,
+    totalToolCalls: 0,
+    avgToolCalls: 0,
+    totalOutputTokens: 0,
+    totalCost: 0,
+    avgCost: 0,
+    completedRuns: 0,
+    limitedRuns: 0,
+    completionRate: 0,
+    runEnds: emptyRunEndCounts(),
+    tools: []
+  }
 }
 
 /**
@@ -393,15 +452,7 @@ export function buildScorecard(
     })
   }
 
-  // Costliest models first — that's what a "where is my budget going" glance wants.
-  // Ties fall back to run count, then model id (then prompt id) for a stable order.
-  models.sort(
-    (x, y) =>
-      y.totalCost - x.totalCost ||
-      y.runs - x.runs ||
-      x.model.localeCompare(y.model) ||
-      (x.promptId ?? '').localeCompare(y.promptId ?? '')
-  )
+  models.sort(compareScorecardRows)
 
   const totalCost = round(
     models.reduce((s, m) => s + m.totalCost, 0),

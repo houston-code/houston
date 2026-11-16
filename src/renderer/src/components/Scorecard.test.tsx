@@ -1,7 +1,7 @@
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { emptyFailureSignalCounts } from '@shared/failureSignals'
-import { emptyRunEndCounts, type Scorecard as ScorecardData } from '@shared/scorecard'
+import { emptyRunEndCounts, NO_REPLY_PROMPT_ID, type Scorecard as ScorecardData } from '@shared/scorecard'
 import { Scorecard } from './Scorecard'
 
 /** Install a fake `window.api` whose getScorecard resolves to `data`. */
@@ -154,6 +154,25 @@ describe('Scorecard', () => {
     expect(copy).not.toContain('—')
   })
 
+  it('shows no finish rate, rather than 0%, for a row no chat’s latest run was on', async () => {
+    const switchedAway = {
+      ...sampleData.models[1],
+      model: 'model-a',
+      completedRuns: 0,
+      limitedRuns: 0,
+      completionRate: 0
+    }
+    installApi({ ...sampleData, models: [sampleData.models[0], switchedAway] })
+    render(<Scorecard onClose={vi.fn()} />)
+    const card = await screen.findByLabelText('Stats for model-a')
+    const finish = within(card).getByText('Clean finish').closest('.scorecard-stat') as HTMLElement
+    expect(within(finish).getByText('–')).toBeInTheDocument()
+    expect(finish.getAttribute('title')).toMatch(/no finish to rate/)
+    expect(within(card).queryByText('0%')).toBeNull()
+    // A row with finishes to rate still shows its rate.
+    expect(within(screen.getByLabelText('Stats for claude-opus-4-6')).getByText('50%')).toBeInTheDocument()
+  })
+
   it('asks for per-model rows first, and splits by prompt version when ticked', async () => {
     const split: ScorecardData = {
       groupBy: 'model-prompt',
@@ -161,7 +180,8 @@ describe('Scorecard', () => {
       totalCost: 0,
       models: [
         { ...sampleData.models[1], promptId: '0123456789ab' },
-        { ...sampleData.models[1], totalSteps: 1 }
+        { ...sampleData.models[1], totalSteps: 1 },
+        { ...sampleData.models[1], promptId: NO_REPLY_PROMPT_ID, totalSteps: 0 }
       ]
     }
     const getScorecard = vi.fn().mockImplementation((groupBy?: string) =>
@@ -176,6 +196,8 @@ describe('Scorecard', () => {
     await waitFor(() => expect(getScorecard).toHaveBeenLastCalledWith('model-prompt'))
     expect(await screen.findByLabelText('Stats for gpt-5 (prompt 0123456789ab)')).toBeInTheDocument()
     expect(screen.getByLabelText('Stats for gpt-5 (before prompt ids)')).toBeInTheDocument()
+    const noReply = screen.getByLabelText('Stats for gpt-5 (no reply yet)')
+    expect(within(noReply).getByText('no reply yet').getAttribute('title')).toMatch(/ended before the model replied/)
     expect(screen.queryByText('claude-opus-4-6')).toBeNull()
   })
 })

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { FAILURE_SIGNAL_INFO, signalParts } from '@shared/failureSignals'
 import {
   groupKeyId,
+  NO_REPLY_PROMPT_ID,
   runEndParts,
   type ModelScorecard,
   type Scorecard as ScorecardData,
@@ -126,13 +127,33 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
 
 /** What a row's prompt version reads as, when the scorecard is split by one. */
 function promptLabel(row: ModelScorecard): string {
+  if (row.promptId === NO_REPLY_PROMPT_ID) return 'no reply yet'
   return row.promptId ? `prompt ${row.promptId}` : 'before prompt ids'
+}
+
+/** The tooltip on a row's prompt version. */
+function promptHint(row: ModelScorecard): string {
+  if (row.promptId === NO_REPLY_PROMPT_ID) {
+    return 'Chats whose runs all ended before the model replied, so no reply names a version'
+  }
+  return row.promptId
+    ? 'The version of Houston’s own instructions these replies were written under'
+    : 'Replies saved before Houston recorded which instructions wrote them'
 }
 
 /** One model's card: headline stats up top, how runs stopped short, signals, and tool usage. */
 function ModelCard({ row, byPrompt }: { row: ModelScorecard; byPrompt: boolean }): JSX.Element {
   const completionPct = Math.round(row.completionRate * 100)
   const ended = row.completedRuns + row.limitedRuns
+  // A row no chat's latest run was on (a model switched away from mid-chat, an older
+  // prompt version) has nothing to rate, which isn't a 0% finish rate.
+  const finish =
+    ended > 0
+      ? {
+          value: `${completionPct}%`,
+          hint: `${row.completedRuns} of ${ended} chats ended their latest run cleanly (the rest failed, were stopped, hit a limit, or were cut off)`
+        }
+      : { value: '–', hint: 'No chat’s latest run was on this row, so there is no finish to rate' }
   // The busiest tool sets the bar scale so the histogram fills the row nicely.
   const maxTool = row.tools.reduce((mx, t) => Math.max(mx, t.count), 0)
   const ends = runEndParts(row.runEnds)
@@ -145,14 +166,7 @@ function ModelCard({ row, byPrompt }: { row: ModelScorecard; byPrompt: boolean }
           {row.model}
         </h3>
         {byPrompt && (
-          <span
-            className="scorecard-card__prompt"
-            title={
-              row.promptId
-                ? 'The version of Houston’s own instructions these replies were written under'
-                : 'Replies saved before Houston recorded which instructions wrote them'
-            }
-          >
+          <span className="scorecard-card__prompt" title={promptHint(row)}>
             {promptLabel(row)}
           </span>
         )}
@@ -168,11 +182,7 @@ function ModelCard({ row, byPrompt }: { row: ModelScorecard; byPrompt: boolean }
           value={String(row.avgToolCalls)}
           hint="Tool calls executed per run"
         />
-        <Stat
-          label="Clean finish"
-          value={`${completionPct}%`}
-          hint={`${row.completedRuns} of ${ended} chats ended their latest run cleanly (the rest failed, were stopped, hit a limit, or were cut off)`}
-        />
+        <Stat label="Clean finish" value={finish.value} hint={finish.hint} />
         <Stat
           label="Total cost"
           value={row.totalCost > 0 ? `≈${formatUsd(row.totalCost)}` : '–'}

@@ -12,23 +12,39 @@ import {
   type FailureSignal,
   type FailureSignalsInput
 } from './failureSignals'
-import { buildScorecard } from './scorecard'
+import { buildScorecard, NO_REPLY_PROMPT_ID } from './scorecard'
 import { renderShellEscapeRecord } from './shellEscape'
 
 // ---- fixture builders (synthetic only, never real user data) ----
 
 const at = '2026-11-01T00:00:00.000Z'
 const user = (content = 'please fix the bug'): ChatMessage => ({ role: 'user', content })
+// Replies as the current version saves them, naming the version that wrote them.
 const reply = (content = 'Done.', extra: Partial<ChatMessage> = {}): ChatMessage => ({
   role: 'assistant',
   content,
   model: 'model-x',
+  appVersion: '1.0.0',
   ...extra
 })
 const calls = (...names: string[]): Partial<ChatMessage> => ({
   toolCalls: names.map((name, i) => ({ id: `c${i}`, name, arguments: {} }))
 })
 const result = (toolName: string, content = 'ok'): ChatMessage => ({ role: 'tool', content, toolName, toolCallId: 'c0' })
+/** A run_shell call of `command` and its result, as run_shell writes one: the output, then the exit line. */
+let shellId = 0
+const shellRun = (command: string, output: string, exitCode: number, notes: string[] = []): ChatMessage[] => {
+  const id = `sh${shellId++}`
+  return [
+    reply('', { toolCalls: [{ id, name: 'run_shell', arguments: { command } }] }),
+    {
+      role: 'tool',
+      content: [...(output ? [output] : []), `[exit code: ${exitCode}]`, ...notes].join('\n'),
+      toolName: 'run_shell',
+      toolCallId: id
+    }
+  ]
+}
 const ended = (r: Omit<RunEndRecord, 'at'>): Partial<ChatMessage> => ({ runEnds: [{ ...r, at }] })
 const receipt = (extra: Partial<TurnReceipt>): TurnReceipt => ({
   v: 1,
@@ -175,6 +191,90 @@ describe('repeatedError', () => {
     ])
     expect(fired(c)).toEqual({ repeatedError: 1 })
   })
+
+  // A pytest run as run_shell returns it: the session banner (80 characters on its
+  // own) first, the failure in the middle, the summary and the exit line last.
+  const pytest = (failing: string, seconds: string): string =>
+    [
+      '============================= test session starts ==============================',
+      'platform darwin -- Python 3.12.1, pytest-8.0.0, pluggy-1.4.0',
+      'rootdir: /work/proj',
+      'collected 3 items',
+      '',
+      'tests/test_calc.py .F.                                                   [100%]',
+      '',
+      '=================================== FAILURES ===================================',
+      `_________________________________ ${failing} __________________________________`,
+      '',
+      `    def ${failing}():`,
+      '>       assert compute() == 3',
+      'E       assert 2 == 3',
+      '',
+      'tests/test_calc.py:9: AssertionError',
+      '=========================== short test summary info ============================',
+      `FAILED tests/test_calc.py::${failing} - assert 2 == 3`,
+      `========================= 1 failed, 2 passed in ${seconds} ==========================`
+    ].join('\n')
+
+  it('tells apart test runs that fail different tests, though their output opens the same', () => {
+    const c = chat([
+      user('make the tests pass'),
+      ...shellRun('pytest', pytest('test_divide', '0.03s'), 1),
+      ...shellRun('pytest', pytest('test_add', '0.04s'), 1),
+      ...shellRun('pytest', pytest('test_sub', '0.03s'), 1),
+      reply('All three fixed.')
+    ])
+    expect(fired(c)).toEqual({})
+  })
+
+  it('counts the same command failing the same way three times, timings aside', () => {
+    const c = chat([
+      user('make the tests pass'),
+      ...shellRun('pytest', pytest('test_divide', '0.03s'), 1, ['[cwd: packages/app]']),
+      ...shellRun('pytest', pytest('test_divide', '0.05s'), 1, ['[cwd: packages/app]']),
+      ...shellRun('pytest', pytest('test_divide', '1.20s'), 1, ['[cwd: packages/app]']),
+      reply('It still fails.')
+    ])
+    expect(fired(c)).toEqual({ repeatedError: 1 })
+    // The same output from a different command each time is a different failure.
+    const other = chat([
+      user(),
+      ...shellRun('pytest tests/a.py', pytest('test_divide', '0.03s'), 1),
+      ...shellRun('pytest tests/b.py', pytest('test_divide', '0.03s'), 1),
+      ...shellRun('pytest tests/c.py', pytest('test_divide', '0.03s'), 1),
+      reply()
+    ])
+    expect(fired(other)).toEqual({})
+  })
+
+  it("doesn't take a command that exits non-zero without output for a failure", () => {
+    const c = chat([
+      user('is there anything left to do?'),
+      ...shellRun('grep -rn TODO src', '', 1),
+      ...shellRun('test -f .env', '', 1),
+      ...shellRun('git diff --quiet', '', 1),
+      ...shellRun('git diff --quiet', '', 1, ['[cwd: packages/app]']),
+      ...shellRun('git diff --quiet', '', 1),
+      reply('Nothing left: no TODOs, no .env, and no changes.')
+    ])
+    expect(fired(c)).toEqual({})
+  })
+
+  it('reads the last exit line of a long output, not a lookalike the command printed', () => {
+    const long = `${'ok line\n'.repeat(20_000)}FAIL src/a.test.ts > adds\n  expected 1, got 2`
+    const c = chat([
+      user(),
+      ...shellRun('npm test', long, 1),
+      ...shellRun('npm test', long, 1),
+      ...shellRun('npm test', long, 1),
+      // The command printed an exit line of its own, then passed.
+      ...shellRun('./ci.sh', 'step one\n[exit code: 1]\nretrying', 0),
+      ...shellRun('./ci.sh', 'step one\n[exit code: 1]\nretrying', 0),
+      ...shellRun('./ci.sh', 'step one\n[exit code: 1]\nretrying', 0),
+      reply()
+    ])
+    expect(fired(c)).toEqual({ repeatedError: 1 })
+  })
 })
 
 describe('toolCallAsText', () => {
@@ -185,12 +285,54 @@ describe('toolCallAsText', () => {
       user('ok'),
       reply('<parameter name="path">a.ts</parameter>'),
       user('ok'),
-      // Call markup leaked into a real call's arguments.
-      reply('', { toolCalls: [{ id: 'c0', name: 'write_file', arguments: { path: '<parameter name="path">a.ts' } }] }),
-      result('write_file', 'Wrote a.ts'),
+      // A reply that is nothing but a fenced call.
+      reply('```json\n{"name": "read_file", "arguments": {"path": "a.ts"}}\n```'),
+      user('ok'),
       reply('Done.')
     ])
     expect(fired(c)).toEqual({ toolCallAsText: 3 })
+  })
+
+  it("doesn't count call markup a reply quotes or a file holds on purpose", () => {
+    const report = '<jasperReport name="invoice">\n  <parameter name="InvoiceId" class="java.lang.Integer"/>\n</jasperReport>\n'
+    const c = chat([
+      user('what does a tool call look like in the chat completions API?'),
+      reply(
+        'Each call names the function and its arguments:\n```json\n{"name": "get_weather", "arguments": "{\\"city\\": \\"Paris\\"}"}\n```\nThe arguments arrive as a JSON string.'
+      ),
+      user('and in the XML style?'),
+      reply('Each argument is a `<parameter name="city">` element inside the call.'),
+      user('add an InvoiceId parameter to the report'),
+      reply('', { toolCalls: [{ id: 'w', name: 'write_file', arguments: { path: 'invoice.jrxml', content: report } }] }),
+      { role: 'tool', content: 'Wrote invoice.jrxml', toolName: 'write_file', toolCallId: 'w' },
+      reply('Added the parameter.')
+    ])
+    expect(fired(c)).toEqual({})
+  })
+
+  it('counts a call with leaked markup in its arguments once: as malformed when refused, as text when it ran', () => {
+    const garbled = (resultText: string): FailureSignalsInput =>
+      chat([
+        user(),
+        reply('', { toolCalls: [{ id: 'g', name: 'ask_user', arguments: { options: ['<parameter name="label">Yes'] } }] }),
+        { role: 'tool', content: resultText, toolName: 'ask_user', toolCallId: 'g' },
+        reply('Done.')
+      ])
+    const refusal =
+      'Invalid arguments for tool "ask_user": "options" contains tool-call syntax (e.g. `<parameter name=...>` or `"key">`) instead of a plain value; the call was garbled. Re-issue it with valid JSON arguments.\nRequired: question'
+    expect(fired(garbled(refusal))).toEqual({ toolArgError: 1 })
+    // A chat saved before the validator checked for markup: the call ran with it.
+    expect(fired(garbled('Yes'))).toEqual({ toolCallAsText: 1 })
+    // One reply that both wrote a call out and leaked markup into another counts once.
+    const both = chat([
+      user(),
+      reply('<parameter name="path">a.ts</parameter>', {
+        toolCalls: [{ id: 'g', name: 'write_file', arguments: { path: 'a.ts', content: 'x</parameter>' } }]
+      }),
+      { role: 'tool', content: 'Wrote a.ts', toolName: 'write_file', toolCallId: 'g' },
+      reply('Done.')
+    ])
+    expect(fired(both)).toEqual({ toolCallAsText: 1 })
   })
 })
 
@@ -198,6 +340,19 @@ describe('silentTurnEnd', () => {
   it('counts a turn that ended on a tool result with no closing message', () => {
     const c = chat([user(), reply('', calls('run_shell')), result('run_shell', 'built\n[exit code: 0]'), user('well?'), reply()])
     expect(fired(c)).toEqual({ silentTurnEnd: 1 })
+  })
+
+  it('leaves out turns from versions that kept no record of a stop or an error after a reply', () => {
+    // Saved before replies named their version: the user may have pressed Stop here.
+    const old = { appVersion: undefined }
+    const c = chat([
+      user(),
+      reply('', { ...calls('run_shell'), ...old }),
+      result('run_shell', 'building...\n[exit code: 0]'),
+      user('stop, use pnpm instead'),
+      reply('Switching to pnpm.', old)
+    ])
+    expect(fired(c)).toEqual({})
   })
 
   it("doesn't count one the record explains, a denial, or the interrupted-call placeholder", () => {
@@ -239,6 +394,22 @@ describe('todoGap and testEdit', () => {
       reply('Done again.', { receipt: receipt({ testEdits: [], testEditsOmitted: 2 }) })
     ])
     expect(fired(c)).toEqual({ todoGap: 1, testEdit: 2 })
+  })
+
+  it('counts each unchecked todo, as the label says, and each loosening turn once', () => {
+    const c = chat([
+      user(),
+      reply('All done.', {
+        receipt: receipt({
+          todoGaps: ['Run tests', 'Run lint', 'Build'],
+          testEdits: [
+            { path: 'a.test.ts', kind: 'skip', detail: 'added it.skip' },
+            { path: 'b.test.ts', kind: 'deleted', detail: 'removed the file' }
+          ]
+        })
+      })
+    ])
+    expect(fired(c)).toEqual({ todoGap: 3, testEdit: 1 })
   })
 })
 
@@ -312,6 +483,44 @@ describe('attachFailureSignals', () => {
     const c = chat([user(), reply()])
     const card = attachFailureSignals(buildScorecard([c]), buildFailureSignals([c], { groupBy: 'model-prompt' }))
     expect(card.models[0].signals).toBeUndefined()
+  })
+
+  const both = (c: FailureSignalsInput, groupBy: 'model' | 'model-prompt' = 'model') =>
+    attachFailureSignals(buildScorecard([c], { groupBy }), buildFailureSignals([c], { groupBy }))
+
+  it("counts what came before a chat's first reply in that reply's row, never dropping it", () => {
+    // A turn with no reply (saved before records), then one answered under prompt p1.
+    const c = chat([user(), user(), reply('Hi.', { model: 'model-a', promptId: 'p1' })], { model: 'model-b' })
+    for (const groupBy of ['model', 'model-prompt'] as const) {
+      const card = both(c, groupBy)
+      expect(card.models.map((r) => [r.model, r.promptId])).toEqual([['model-a', groupBy === 'model' ? undefined : 'p1']])
+      expect(card.models[0].signals?.unanswered).toBe(1)
+    }
+  })
+
+  it("puts a chat with no reply at all on a row of its own when split by prompt version, not with older replies", () => {
+    const c = chat([{ ...user(), ...ended({ reason: 'error', message: 'no API key' }) }])
+    const card = both(c, 'model-prompt')
+    expect(card.models).toHaveLength(1)
+    expect(card.models[0]).toMatchObject({ model: 'model-x', promptId: NO_REPLY_PROMPT_ID, runs: 1 })
+    expect(card.models[0].runEnds.error).toBe(1)
+    expect(card.models[0].signals?.unanswered).toBe(1)
+    expect(both(c).models.map((r) => [r.model, r.promptId])).toEqual([['model-x', undefined]])
+  })
+
+  it('adds a row only the signals have, so no count is dropped', () => {
+    // A fork whose first own turn (saved before records) got no reply: it counts with
+    // the copied reply's model, which the scorecard counts nothing for here.
+    const c = chat([user(), reply('Hi.', { model: 'model-a' }), user('more'), user('more'), reply('Ok.', { model: 'model-b' })], {
+      model: 'model-b',
+      inherited: 2
+    })
+    const card = both(c)
+    const by = Object.fromEntries(card.models.map((r) => [r.model, r]))
+    expect(by['model-a']).toMatchObject({ runs: 1, totalSteps: 0, completedRuns: 0, limitedRuns: 0 })
+    expect(by['model-a'].signals?.unanswered).toBe(1)
+    expect(by['model-b'].signals?.unanswered).toBe(0)
+    expect(card.totalRuns).toBe(1)
   })
 })
 

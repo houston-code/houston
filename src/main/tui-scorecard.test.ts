@@ -63,6 +63,29 @@ describe('renderScorecard', () => {
     expect(bare).not.toContain('stopped short')
   })
 
+  it('shows no finish rate, rather than 0%, for a model no chat’s latest run was on', () => {
+    const messages = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'first', model: 'model-a' },
+      { role: 'user', content: 'switch' },
+      { role: 'assistant', content: 'second', model: 'model-b' }
+    ] as ChatMessage[]
+    const out = renderScorecard(buildScorecard([{ model: 'model-b', messages }]), plain)
+    const block = (model: string): string => out.split('\n\n').find((b) => b.includes(`${model}  `)) ?? ''
+    expect(block('model-a')).toContain('clean finish – (no latest run here)')
+    expect(block('model-a')).not.toContain('0%')
+    expect(block('model-b')).toContain('clean finish 100% (1 of 1)')
+  })
+
+  it('names the row of chats with no reply yet when split by prompt version', () => {
+    const at = '2026-11-01T00:00:00.000Z'
+    const input = [{ model: 'm', messages: [{ role: 'user', content: 'go', runEnds: [{ reason: 'error', at }] }] as ChatMessage[] }]
+    const card = attachFailureSignals(buildScorecard(input, { groupBy: 'model-prompt' }), buildFailureSignals(input, { groupBy: 'model-prompt' }))
+    const out = renderScorecard(card, plain)
+    expect(out).toContain('m  no reply yet  1 run')
+    expect(out).not.toContain('before prompt ids')
+  })
+
   it('names each row’s prompt version when split by one', () => {
     const messages = [
       { role: 'user', content: 'go' },

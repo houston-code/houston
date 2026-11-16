@@ -5,6 +5,7 @@ import {
   deriveOutcome,
   emptyRunEndCounts,
   messageGroups,
+  NO_REPLY_PROMPT_ID,
   runEndParts,
   type ScorecardConversationInput
 } from './scorecard'
@@ -422,22 +423,35 @@ describe('buildScorecard by prompt version', () => {
 })
 
 describe('messageGroups', () => {
-  it('counts a message in the row of the latest reply at or before it', () => {
+  it("counts a message in the row of the latest reply at or before it, or else the first reply's", () => {
     const msgs = [user(), reply('a', 'p1'), toolTurn('x'), user(), reply('b', 'p2')]
     expect(messageGroups(msgs, 'chat', 'model')).toEqual([
-      { model: 'chat' },
+      { model: 'a' },
       { model: 'a' },
       { model: 'a' },
       { model: 'a' },
       { model: 'b' }
     ])
     expect(messageGroups(msgs, 'chat', 'model-prompt').map((k) => k.promptId)).toEqual([
-      undefined,
+      'p1',
       'p1',
       'p1',
       'p1',
       'p2'
     ])
+  })
+
+  it('puts a chat with no reply in its own model, under its own prompt row when split', () => {
+    expect(messageGroups([user(), user()], 'chat', 'model')).toEqual([{ model: 'chat' }, { model: 'chat' }])
+    expect(messageGroups([user()], 'chat', 'model-prompt')).toEqual([{ model: 'chat', promptId: NO_REPLY_PROMPT_ID }])
+  })
+
+  it("credits a run that failed before the first reply to that reply's row, not a model no reply used", () => {
+    const messages: ChatMessage[] = [{ ...user(), runEnds: ended({ reason: 'error' }) }, user(), reply('a', 'p1')]
+    const byModel = buildScorecard([conv({ model: 'switched-to-later', messages })]).models
+    expect(byModel.map((r) => [r.model, r.runEnds.error])).toEqual([['a', 1]])
+    const byPrompt = buildScorecard([conv({ model: 'a', messages })], { groupBy: 'model-prompt' }).models
+    expect(byPrompt.map((r) => [r.promptId, r.runEnds.error])).toEqual([['p1', 1]])
   })
 
   it('names an unnamed chat model "unknown"', () => {
