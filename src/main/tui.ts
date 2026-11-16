@@ -204,7 +204,9 @@ import {
   type NotifyMode,
   type TerminalSignal
 } from './tui-notify'
-import { renderSettingsOverview, renderSettingsPage } from './tui-settings'
+import { parseSettingsCommand, renderAccessSummary, type SettingsCommand } from './tui-settings-set'
+import { runSettingsCommand } from './tui-settings-run'
+import { inferVerifyCommand } from './verifyInfer'
 import { BTW_QUESTION_PROMPT, renderRecentSideChat } from './tui-btw'
 import { workspaceLabel, type NotifySpec } from '@shared/notify'
 import {
@@ -2512,8 +2514,11 @@ export type SlashResult =
   | { kind: 'set-model'; providerId: string; model: string; asDefault?: boolean }
   /** Summarize older turns now (/compact [focus]), steering the summary toward `focus`. */
   | { kind: 'compact'; focus?: string }
-  /** The settings overview hub (/settings), or what covers one desktop page (/settings <page>). */
-  | { kind: 'settings'; page?: string }
+  /**
+   * The settings hub (/settings), what covers one desktop page (/settings <page>), or
+   * get, set, export, import, or reset one (/settings set <key> <value>, ...).
+   */
+  | { kind: 'settings'; cmd: SettingsCommand }
   /** Read or change the terminal's settings (/config, /config key=value). */
   | { kind: 'config'; op: ConfigOp }
   /** What this session runs on, on one screen (/status). */
@@ -2707,7 +2712,7 @@ export function parseSlashCommand(
       return { kind: 'prompt', ...turn }
     }
     case 'settings':
-      return arg.trim() ? { kind: 'settings', page: arg.trim() } : { kind: 'settings' }
+      return { kind: 'settings', cmd: parseSettingsCommand(arg) }
     case 'config':
       return { kind: 'config', op: parseConfigArgs(arg, { settings, themes: themeNames(), resolveTheme }) }
     case 'status':
@@ -2964,6 +2969,12 @@ export const HELP_TEXT = [
   '  /config [key[=value]] pick and change a setting, or show or set one (/config --help lists them)',
   '  /status               version, model, approval, sandbox, network, MCP, settings sources, cost',
   '  /feedback, /bug       report an issue: shows what the report holds, then opens it or prints its link',
+  '  /settings get [key]   the settings /settings set changes, or one with what it takes',
+  '  /settings set k v     change one: /settings set <key> <value>; /settings unset <key> restores the default',
+  '  /settings add|remove  a folder the agent may use in every session: /settings add additionalRoots <path>',
+  '  /settings export p    save your preferences to a file; /settings import <path> loads one (asks first)',
+  '  /settings reset       every preference back to its default (asks first)',
+  "  /settings search-key  enter a web search provider's API key, hidden (optionally name the provider)",
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
@@ -4376,6 +4387,8 @@ export interface TuiDeps {
   fetchModels?: (provider: ProviderConfig) => Promise<ModelOption[]>
   /** Whether the host is macOS — filters the provider catalog (e.g. oMLX). Defaults to the current platform. */
   isMac?: boolean
+  /** The verification command a folder suggests, for /settings. Defaults to the real inference. */
+  inferVerifyCommand?: (cwd: string) => { command: string; source: string } | null
   /** Absolute path to settings.json, shown by /settings, /hooks, and /mcp. */
   settingsPath?: () => string
   /** What only the host knows for /status (install method, sandbox, this chat's network, managed policy). */
@@ -7008,6 +7021,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           },
           paint
         )
+        // Under the list: web reads, the extra folders, and the sandbox egress mode.
+        if (result.op.op === 'list') deps.io.out(`${renderAccessSummary(deps.getSettings(), paint)}\n`)
         continue
       }
       if (result.kind === 'fork') {
@@ -7076,10 +7091,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'settings') {
-        const text = result.page
-          ? renderSettingsPage(result.page, paint)
-          : renderSettingsOverview(deps.settingsPath?.() ?? '(unknown)', { reduceMotion, screenReader, notifyMode }, paint)
-        deps.io.out(`${text}\n`)
+        await runSettingsCommand(result.cmd, {
+          getSettings: deps.getSettings,
+          ...(deps.updateSettings ? { updateSettings: deps.updateSettings } : {}),
+          ...(deps.setKey ? { setKey: deps.setKey } : {}),
+          settingsPath: deps.settingsPath?.() ?? '(unknown)',
+          cwd: opts.cwd,
+          live: { reduceMotion, screenReader, notifyMode },
+          out: deps.io.out,
+          readLine: deps.io.readLine,
+          ...(deps.io.readSecret ? { readSecret: deps.io.readSecret } : {}),
+          inferVerifyCommand: deps.inferVerifyCommand ?? inferVerifyCommand,
+          paint
+        })
         continue
       }
       if (result.kind === 'config') {

@@ -45,7 +45,9 @@ describe('renderSettingsPage', () => {
   })
 
   it('says when a page is edited only in the desktop app', () => {
-    expect(renderSettingsPage('agent', plain)).toContain('Edited in the desktop app: turn limits')
+    // Agent Behavior is edited here with /settings set; Import still is not.
+    expect(renderSettingsPage('import', plain)).toContain('Edited in the desktop app: importing configuration')
+    expect(renderSettingsPage('agent', plain)).not.toContain('Edited in the desktop app')
   })
 
   it('lists the terminal commands a page has, and calls none of them desktop-only', () => {
