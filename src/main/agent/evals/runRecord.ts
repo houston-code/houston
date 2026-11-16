@@ -18,14 +18,14 @@
  *
  * The record keeps per-task pass COUNTS rather than the scorecard's rounded
  * rates, so pass@k, pass^k and the interval can be recomputed exactly, and it
- * carries the stamps (model, prompt hash, commit, host, cost caps) that say what
- * produced it.
+ * carries the stamps (model, prompt hash, promptId, reasoning effort, commit, host,
+ * cost caps) that say what produced it.
  */
 import { execFileSync } from 'node:child_process'
 import { gitExecutable } from '../gitBinary'
 import { capsLabel, type CostCaps } from './costCaps'
 import type { TaskReport } from './report'
-import { pct, signTest, suiteStats, type SuiteStats } from './stats'
+import { formatDetectable, pct, signTest, suiteStats, type SuiteStats } from './stats'
 
 export const RUN_RECORD_VERSION = 1
 
@@ -48,9 +48,23 @@ export interface EvalRunRecord {
   provider: string
   model: string
   attempts: number
-  /** See stamp.ts. Absent when the attempts disagreed (a normalization gap). */
+  /** See stamp.ts. Absent when the attempts disagreed (a normalization gap) or one had none. */
   promptHash?: string
-  /** `git rev-parse --short=12 HEAD`, suffixed `-dirty` when tracked files differ from it. */
+  /**
+   * The loop's promptId for the run (EvalResult.promptId), when every attempt agreed. It
+   * covers every built-in tool schema, deferred ones included, which the first request
+   * (and so `promptHash`) names only in find_tools' catalog.
+   */
+  promptId?: string
+  /**
+   * The reasoning effort the driver ran at (DEFAULT_REASONING_EFFORT). A request
+   * parameter rather than prompt text, so neither hash above moves with it.
+   */
+  reasoningEffort?: string
+  /**
+   * The harness commit: `git rev-parse --short=12 HEAD` of the checkout that ran, suffixed
+   * `-dirty` when tracked files differ from it.
+   */
   commit?: string
   /** `process.platform` of the machine that ran it; the prompt names the host. */
   host: string
@@ -76,6 +90,8 @@ export interface RunMeta {
   model: string
   attempts: number
   promptHash?: string
+  promptId?: string
+  reasoningEffort?: string
   commit?: string
   host: string
   caps?: CostCaps
@@ -103,6 +119,8 @@ export function toRunRecord(meta: RunMeta, reports: TaskReport[], now: Date): Ev
     model: meta.model,
     attempts: meta.attempts,
     ...(meta.promptHash ? { promptHash: meta.promptHash } : {}),
+    ...(meta.promptId ? { promptId: meta.promptId } : {}),
+    ...(meta.reasoningEffort ? { reasoningEffort: meta.reasoningEffort } : {}),
     ...(meta.commit ? { commit: meta.commit } : {}),
     host: meta.host,
     recordedAt: now.toISOString(),
@@ -132,8 +150,9 @@ export function isRunRecord(v: unknown): v is EvalRunRecord {
   if (typeof r.provider !== 'string' || typeof r.model !== 'string' || typeof r.host !== 'string') return false
   if (typeof r.attempts !== 'number' || !Number.isInteger(r.attempts) || r.attempts < 1) return false
   if (typeof r.recordedAt !== 'string') return false
-  if (r.promptHash !== undefined && typeof r.promptHash !== 'string') return false
-  if (r.commit !== undefined && typeof r.commit !== 'string') return false
+  for (const stamp of ['promptHash', 'promptId', 'reasoningEffort', 'commit']) {
+    if (r[stamp] !== undefined && typeof r[stamp] !== 'string') return false
+  }
   if (r.caps !== undefined && !isCaps(r.caps)) return false
   if (r.skipped !== undefined && !(Array.isArray(r.skipped) && r.skipped.every((id) => typeof id === 'string'))) {
     return false
@@ -202,8 +221,28 @@ export interface RunComparison {
   meanDelta: number
   /** Two-sided sign test over wins vs losses. */
   p: number
+  /**
+   * Honest closing reports over the shared tasks each side graded for honesty, or
+   * undefined for a side that graded none (a record from before the grader).
+   */
+  honesty: { a?: HonestyCount; b?: HonestyCount }
   /** Stamps that differ between the two runs, e.g. `['prompt', 'commit']`. */
   differs: string[]
+}
+
+export interface HonestyCount {
+  honest: number
+  attempts: number
+}
+
+/** The level the A/B verdict calls a difference significant at: the usual 5%, two-sided. */
+export const COMPARISON_ALPHA = 0.05
+
+/** Honest reports summed over the tasks that recorded a count. */
+function honestyOf(r: EvalRunRecord, ids: string[]): HonestyCount | undefined {
+  const graded = ids.filter((id) => r.tasks[id].honest !== undefined)
+  if (graded.length === 0) return undefined
+  return { honest: graded.reduce((n, id) => n + (r.tasks[id].honest ?? 0), 0), attempts: graded.length * r.attempts }
 }
 
 /**
@@ -238,6 +277,9 @@ export function compareRuns(a: EvalRunRecord, b: EvalRunRecord): RunComparison {
     ['provider', a.provider, b.provider],
     ['model', a.model, b.model],
     ['prompt', a.promptHash, b.promptHash],
+    ['promptId', a.promptId, b.promptId],
+    // A request parameter, not prompt text: the model thinks more or less with no hash moving.
+    ['effort', a.reasoningEffort, b.reasoningEffort],
     ['commit', a.commit, b.commit],
     ['host', a.host, b.host],
     ['attempts', a.attempts, b.attempts],
@@ -255,6 +297,7 @@ export function compareRuns(a: EvalRunRecord, b: EvalRunRecord): RunComparison {
     ties: shared.length - wins - losses,
     meanDelta: shared.reduce((n, t) => n + t.delta, 0) / shared.length,
     p: signTest(wins, losses),
+    honesty: { a: honestyOf(a, ids), b: honestyOf(b, ids) },
     differs: stamps.filter(([, x, y]) => x !== y).map(([name]) => name)
   }
 }
@@ -273,6 +316,8 @@ function stampLine(label: string, r: EvalRunRecord): string {
   return [
     `  ${label}  ${r.provider}/${r.model}`,
     `prompt ${r.promptHash ?? '?'}`,
+    `promptId ${r.promptId ?? '?'}`,
+    `effort ${r.reasoningEffort ?? '?'}`,
     `commit ${r.commit ?? '?'}`,
     r.host,
     `${r.attempts} attempts/task`,
@@ -310,11 +355,20 @@ function sideLine(label: string, k: number, s: RunComparison['a']): string {
   )
 }
 
-/** The verdict sentence. Significance is the sign test's, at the usual 0.05. */
+/** A/B honest-report counts side by side; a side that graded none says so. */
+function honestyLine(c: RunComparison): string[] {
+  const { a, b } = c.honesty
+  if (!a && !b) return []
+  const side = (label: string, h: HonestyCount | undefined): string =>
+    h ? `${label} ${h.honest}/${h.attempts} = ${pct(h.honest / h.attempts)}` : `${label} not graded`
+  return [`  honest reports: ${side('A', a)}  ${side('B', b)}`]
+}
+
+/** The verdict sentence. Significance is the sign test's, at {@link COMPARISON_ALPHA}. */
 function verdict(c: RunComparison): string {
   const p = c.p.toFixed(3)
   if (c.wins === 0 && c.losses === 0) return `  No task changed: every shared task scored the same on both sides.`
-  if (c.p < 0.05) return `  B is ${c.meanDelta > 0 ? 'BETTER' : 'WORSE'} than A (sign test p = ${p}).`
+  if (c.p < COMPARISON_ALPHA) return `  B is ${c.meanDelta > 0 ? 'BETTER' : 'WORSE'} than A (sign test p = ${p}).`
   return (
     `  No significant difference (sign test p = ${p}). ` +
     `With ${c.shared.length} tasks only a near-sweep of wins or losses would be.`
@@ -352,9 +406,13 @@ export function formatComparison(
     '',
     sideLine('A', a.attempts, c.a),
     sideLine('B', b.attempts, c.b),
+    ...honestyLine(c),
     `  B vs A: ${points(c.meanDelta)} points per task on average; ` +
       `better on ${c.wins}, worse on ${c.losses}, tied on ${c.ties}`,
     verdict(c),
+    // How far B would have to fall from A's rate for this design to show it (stats.ts says
+    // why a fall even for a two-sided test): a smaller move is noise, whatever its sign.
+    formatDetectable(c.shared.length, a.attempts, b.attempts, { rate: c.a.rate, alpha: COMPARISON_ALPHA, twoSided: true }),
     ''
   ].join('\n')
 }

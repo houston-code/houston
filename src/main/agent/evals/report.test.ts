@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { compareAggregate, type EvalBaseline, type TaskScore } from './baseline'
 import {
+  aggregateRegressionMessage,
   failureCauses,
   formatReport,
   headline,
@@ -140,6 +142,93 @@ describe('prompt stamp in the scorecard', () => {
     expect(formatReport({ driver: 'live', model: 'm', attempts: 3, baselinePromptHash: 'b' }, run)).not.toContain(
       'prompt'
     )
+  })
+
+  // sharedHash gives undefined for two causes; the scorecard says which one this was.
+  it('says why a run has no prompt hash', () => {
+    const header = { driver: 'live' as const, model: 'm', attempts: 3 }
+    expect(formatReport({ ...header, hashes: { attempts: 87, missing: 2, distinct: 1 } }, run)).toContain(
+      '  no prompt hash: 2 of 87 attempts made no model request to hash (the other 85 agree)'
+    )
+    expect(formatReport({ ...header, hashes: { attempts: 87, missing: 0, distinct: 2 } }, run)).toContain(
+      'the 87 attempts saw 2 different prompts (a normalization gap in stamp.ts)'
+    )
+    // With a hash, the census has nothing to explain.
+    const stamped = formatReport({ ...header, promptHash: 'aaaaaaaaaaaa', hashes: { attempts: 3, missing: 0, distinct: 1 } }, run)
+    expect(stamped).not.toContain('no prompt hash')
+  })
+})
+
+describe('reasoning effort in the scorecard', () => {
+  const run = [report('a', 1, result({ passed: true }))]
+  const header = { driver: 'live' as const, model: 'm', attempts: 3, reasoningEffort: 'high' }
+
+  it('names the effort the run drove the model at', () => {
+    expect(formatReport(header, run)).toContain('  reasoning effort: high')
+    expect(formatReport({ ...header, reasoningEffort: undefined }, run)).not.toContain('reasoning effort')
+  })
+
+  // The prompt hash can't see it: the effort is a request parameter, not prompt text.
+  it('says when the baseline was recorded at another effort', () => {
+    expect(formatReport({ ...header, baselineReasoningEffort: 'medium' }, run)).toContain(
+      '  reasoning effort changed since the baseline (recorded at medium, now high)'
+    )
+    expect(formatReport({ ...header, baselineReasoningEffort: 'high' }, run)).not.toContain('changed since')
+    // A baseline from before the stamp says nothing either way.
+    expect(formatReport(header, run)).not.toContain('changed since')
+  })
+})
+
+describe('the whole-run check in the scorecard', () => {
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']
+  const base: EvalBaseline = {
+    provider: 'anthropic',
+    model: 'm',
+    attempts: 3,
+    recordedAt: '2026-11-09',
+    tasks: Object.fromEntries(ids.map((id) => [id, 1]))
+  }
+  const scores = (down: number): TaskScore[] =>
+    ids.map((taskId, i) => ({ taskId, passRate: i < down ? 2 / 3 : 1, attempts: 3 }))
+  const rows = (down: number): TaskReport[] => ids.map((id, i) => report(id, i < down ? 2 / 3 : 1, result({ passed: true })))
+  const header = { driver: 'live' as const, model: 'm', attempts: 3 }
+
+  it('prints the run against the baseline, held', () => {
+    const aggregate = compareAggregate(base, scores(1))!
+    const out = formatReport({ ...header, aggregate }, rows(1))
+    expect(out).toContain('  vs baseline: attempts 29/30 = 97% against 30/30 = 100% on 10 tasks, stratified p = 0.250 (fails below 0.01): held')
+    expect(out).not.toContain('fell:')
+  })
+
+  // Seven single flakes: each within its tolerance, together past the gate.
+  it('prints a regression with the tasks behind it', () => {
+    const aggregate = compareAggregate(base, scores(7))!
+    expect(aggregate.kind).toBe('regressed')
+    const out = formatReport({ ...header, aggregate }, rows(7))
+    expect(out).toContain('attempts 23/30 = 77% against 30/30 = 100% on 10 tasks, stratified p = 0.004 (fails below 0.01): REGRESSED')
+    expect(out).toContain('    fell: a 3/3 to 2/3, b 3/3 to 2/3, c 3/3 to 2/3, d 3/3 to 2/3, e 3/3 to 2/3, f 3/3 to 2/3, g 3/3 to 2/3')
+  })
+
+  it('prints what the gate can detect, from the baseline’s rate and both sides’ attempts', () => {
+    const aggregate = compareAggregate(base, scores(0).map((s) => ({ ...s, attempts: 2 })))!
+    const out = formatReport({ ...header, attempts: 2, aggregate }, rows(0))
+    expect(out).toMatch(/ {2}smallest detectable change: about \d+ points \(80% power, one-sided 1%; 10 tasks, 3 and 2 attempts a side\)/)
+  })
+
+  // A recording has no baseline yet: the line says what a run like it could see against it.
+  it('prints what a run like a recording could detect, and nothing for a scripted run', () => {
+    expect(formatReport(header, rows(0))).toContain('smallest detectable change:')
+    expect(formatReport(header, rows(0))).toContain('one-sided 1%; 10 tasks, 3 attempts a side')
+    expect(formatReport({ ...header, driver: 'scripted' }, rows(0))).not.toContain('smallest detectable change')
+  })
+
+  it('fails the suite with a message that stands alone', () => {
+    const msg = aggregateRegressionMessage(compareAggregate(base, scores(7))!, base.recordedAt)
+    expect(msg).toContain('scored 23/30 = 77% of its attempts against a baseline of 30/30 = 100% (recorded 2026-11-09)')
+    expect(msg).toContain('over the 10 tasks both scored')
+    expect(msg).toContain('stratified p = 0.0039, below 0.01')
+    expect(msg).toContain('Tasks below their baseline: a 3/3 to 2/3,')
+    expect(msg).toContain('npm run eval:baseline')
   })
 })
 

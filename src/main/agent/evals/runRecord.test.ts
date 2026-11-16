@@ -64,9 +64,17 @@ describe('toRunRecord', () => {
     expect(isRunRecord(r)).toBe(true)
   })
 
+  it('stamps the loop’s promptId and the reasoning effort beside the prompt hash', () => {
+    const r = toRunRecord({ ...meta, promptId: 'bbbbbbbbbbbb', reasoningEffort: 'high' }, [report('a', 1)], new Date())
+    expect(r).toMatchObject({ promptHash: 'aaaaaaaaaaaa', promptId: 'bbbbbbbbbbbb', reasoningEffort: 'high' })
+    expect(isRunRecord(JSON.parse(JSON.stringify(r)))).toBe(true)
+  })
+
   it('leaves out stamps it does not have', () => {
     const r = toRunRecord({ ...meta, promptHash: undefined, commit: undefined }, [report('a', 1)], new Date())
     expect('promptHash' in r).toBe(false)
+    expect('promptId' in r).toBe(false)
+    expect('reasoningEffort' in r).toBe(false)
     expect('commit' in r).toBe(false)
     expect('caps' in r).toBe(false)
     expect('skipped' in r).toBe(false)
@@ -102,6 +110,9 @@ describe('isRunRecord', () => {
     ['an unknown driver', { driver: 'replay' }],
     ['zero attempts', { attempts: 0 }],
     ['a non-string prompt hash', { promptHash: 7 }],
+    ['a non-string promptId', { promptId: 7 }],
+    ['a non-string effort', { reasoningEffort: ['high'] }],
+    ['a non-string commit', { commit: 1 }],
     ['no host', { host: undefined }]
   ])('rejects %s', (_name, over) => {
     expect(isRunRecord({ ...run({ a: 3 }), ...over })).toBe(false)
@@ -212,6 +223,32 @@ describe('compareRuns', () => {
     expect(c.differs).toEqual(['prompt', 'commit'])
   })
 
+  // Neither changes the first request's hash: a deferred tool schema, a request parameter.
+  it('names a different promptId or reasoning effort as a difference', () => {
+    const stamped = { promptId: 'cccccccccccc', reasoningEffort: 'high' }
+    expect(compareRuns(run({ a: 3 }, stamped), run({ a: 3 }, stamped)).differs).toEqual([])
+    expect(compareRuns(run({ a: 3 }, stamped), run({ a: 3 }, { ...stamped, promptId: 'dddddddddddd' })).differs).toEqual([
+      'promptId'
+    ])
+    expect(compareRuns(run({ a: 3 }, stamped), run({ a: 3 }, { ...stamped, reasoningEffort: 'medium' })).differs).toEqual([
+      'effort'
+    ])
+    // A record from before the stamps can't be assumed to match one that has them.
+    expect(compareRuns(run({ a: 3 }), run({ a: 3 }, stamped)).differs).toEqual(['promptId', 'effort'])
+  })
+
+  it('counts each side’s honest reports over the shared tasks it graded', () => {
+    const a = run({ x: 3, y: 2, gone: 3 })
+    a.tasks.x.honest = 3
+    a.tasks.y.honest = 1
+    a.tasks.gone.honest = 0
+    const b = run({ x: 3, y: 3 })
+    b.tasks.x.honest = 2
+    expect(compareRuns(a, b).honesty).toEqual({ a: { honest: 4, attempts: 6 }, b: { honest: 2, attempts: 3 } })
+    // Neither side graded: nothing to count, not zero.
+    expect(compareRuns(run({ x: 3 }), run({ x: 3 })).honesty).toEqual({ a: undefined, b: undefined })
+  })
+
   // A cap can end an attempt as a failure, so runs under different caps differ.
   it('names different cost caps as a difference', () => {
     const capped = { caps: { attemptUsd: 20, runUsd: 5 } }
@@ -270,6 +307,40 @@ describe('formatComparison', () => {
     )
     expect(out).toContain('B STOPPED at its run cost cap; not run, so not compared: slow')
     expect(out).not.toMatch(/^ {2}A: attempts stopped/m)
+  })
+
+  it('names each side’s promptId and effort, or ? for a record from before them', () => {
+    const stamped = run({ fix: 3 }, { promptId: 'cccccccccccc', reasoningEffort: 'high' })
+    const out = formatComparison(compareRuns(a, stamped), a, stamped, { a: 'x', b: 'y' })
+    expect(out).toContain('promptId ?  effort ?')
+    expect(out).toContain('promptId cccccccccccc  effort high')
+    expect(out).toContain('differs: promptId, effort')
+  })
+
+  it('prints the honest-report counts side by side', () => {
+    const graded = (r: EvalRunRecord, honest: Record<string, number>): EvalRunRecord => ({
+      ...r,
+      tasks: Object.fromEntries(Object.entries(r.tasks).map(([id, t]) => [id, { ...t, honest: honest[id] }]))
+    })
+    const ga = graded(a, { fix: 3, rename: 2 })
+    const gb = graded(b, { fix: 3, rename: 3 })
+    expect(formatComparison(compareRuns(ga, gb), ga, gb, { a: 'x', b: 'y' })).toContain(
+      '  honest reports: A 5/6 = 83%  B 6/6 = 100%'
+    )
+    expect(formatComparison(compareRuns(a, gb), a, gb, { a: 'x', b: 'y' })).toContain(
+      '  honest reports: A not graded  B 6/6 = 100%'
+    )
+    // Neither side graded: no row at all.
+    expect(text).not.toContain('honest reports')
+  })
+
+  // The design's resolution next to the verdict, so "no significant difference" reads right.
+  it('prints the smallest change the two runs could show', () => {
+    expect(text).toContain('  smallest detectable change: none at 80% power, two-sided 5% (2 tasks, 3 attempts a side)')
+    const wide = Object.fromEntries(Array.from({ length: 29 }, (_, i) => [`t${i}`, i < 26 ? 3 : 1]))
+    const big = run(wide)
+    const out = formatComparison(compareRuns(big, big), big, big, { a: 'x', b: 'y' })
+    expect(out).toMatch(/ {2}smallest detectable change: about \d+ points \(80% power, two-sided 5%; 29 tasks, 3 attempts a side\)/)
   })
 
   it('says so when no task moved', () => {

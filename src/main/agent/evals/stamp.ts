@@ -79,9 +79,43 @@ export function abGateHash(firstRequestHash: string, runPromptId: string): strin
  * More than one distinct hash inside a single run means the normalization above
  * missed something machine- or task-specific, and a "prompt hash" that varies by
  * task would label nothing. Reporting none is better than reporting one of them.
+ * An attempt with no hash at all (it made no model request) leaves none too; see
+ * {@link hashCensus} for telling the two apart.
  */
 export function sharedHash(hashes: (string | undefined)[]): string | undefined {
   const distinct = new Set(hashes)
   if (distinct.size !== 1) return undefined
   return [...distinct][0]
+}
+
+/** What a run's attempts said about their prompt hash, for when they share none. */
+export interface HashCensus {
+  attempts: number
+  /** Attempts with no hash: they made no model request to take one from. */
+  missing: number
+  /** Different hashes among the attempts that had one. More than one is a normalization gap. */
+  distinct: number
+}
+
+export function hashCensus(hashes: (string | undefined)[]): HashCensus {
+  const present = hashes.filter((h): h is string => h !== undefined)
+  return { attempts: hashes.length, missing: hashes.length - present.length, distinct: new Set(present).size }
+}
+
+/**
+ * Why a run carries no prompt hash, or undefined when it does (or ran nothing). The two
+ * causes need different fixes: a missing hash is an attempt that never reached the model
+ * (look at its run error), while disagreeing hashes mean something task- or
+ * machine-specific got past the scrubbing above.
+ */
+export function hashGap(c: HashCensus): string | undefined {
+  if (c.attempts === 0 || (c.missing === 0 && c.distinct === 1)) return undefined
+  const gap = c.distinct > 1 ? `${c.distinct} different prompts (a normalization gap in stamp.ts)` : ''
+  if (c.missing === 0) return `no prompt hash: the ${c.attempts} attempts saw ${gap}`
+  const none =
+    c.missing === c.attempts
+      ? `none of the ${c.attempts} attempts made a model request to hash`
+      : `${c.missing} of ${c.attempts} attempts made no model request to hash`
+  if (c.distinct > 1) return `no prompt hash: ${none}, and the rest saw ${gap}`
+  return c.distinct === 1 ? `no prompt hash: ${none} (the other ${c.attempts - c.missing} agree)` : `no prompt hash: ${none}`
 }

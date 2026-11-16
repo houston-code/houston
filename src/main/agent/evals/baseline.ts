@@ -21,6 +21,7 @@
  * Baselines are checked in and reviewed like goldens: `npm run eval:baseline`
  * records one, and the diff documents the behavior change in the PR.
  */
+import { stratifiedDropTest } from './stats'
 
 /** A recorded per-model score, checked in under `evals/baselines/`. */
 export interface EvalBaseline {
@@ -35,8 +36,23 @@ export interface EvalBaseline {
    * prompt has changed since. Absent on baselines recorded before the stamp existed.
    */
   promptHash?: string
+  /**
+   * The reasoning effort the driver ran at (the shipped default, DEFAULT_REASONING_EFFORT).
+   * It reaches the request as a parameter, not as prompt text, so the prompt hash can't
+   * see it change. Absent on baselines recorded before it was stamped.
+   */
+  reasoningEffort?: string
+  /** The commit the baseline was recorded on, as a run record names it (see currentCommit). */
+  commit?: string
   /** taskId -> observed pass rate in [0,1]. */
   tasks: Record<string, number>
+}
+
+/** The stamps a baseline records beside its scores, when the run had them. */
+export interface BaselineStamps {
+  promptHash?: string
+  reasoningEffort?: string
+  commit?: string
 }
 
 /** What one task scored in the run being graded. */
@@ -55,6 +71,11 @@ export interface TaskScore {
  * attempt is a 0.33 drop, so this absorbs exactly one flake and fails on two.
  * Tightening it below 1/attempts makes every flake a red nightly, which trains
  * everyone to ignore the job — the failure mode this whole file exists to avoid.
+ *
+ * What it can't see, by construction: a task baselined at 0 or 1/3 can never regress,
+ * and a drop spread one flake per task passes however many tasks it reaches (79/87 to
+ * 70/87 as nine single flakes is nine `held` verdicts). {@link compareAggregate} is the
+ * check for that; this one stays for a single task that collapses.
  */
 export const DEFAULT_TOLERANCE = 0.34
 
@@ -94,6 +115,98 @@ export function compareToBaseline(
 /** The regressions in a verdict list — non-empty means the benchmark failed. */
 export function regressions(verdicts: BaselineVerdict[]): Extract<BaselineVerdict, { kind: 'regressed' }>[] {
   return verdicts.filter((v) => v.kind === 'regressed')
+}
+
+/**
+ * The whole-run check's significance level: a run whose drop below the baseline has a
+ * stratified mid-p under this fails (see stratifiedDropTest in stats.ts for the test).
+ *
+ * SIZED FOR A WEEKLY RUN. At 1% a run that changed nothing reds about once in two years
+ * of weekly runs, rare enough that a red gets read rather than re-run. At 5% it would be
+ * one every five months or so: the ignored-nightly failure DEFAULT_TOLERANCE also avoids.
+ *
+ * WHAT IT CAN AND CANNOT SEE at 29 tasks x 3 attempts a side. Simulated with per-task
+ * rates near the Haiku baseline's (79/87) and the same extra failure rate on every
+ * attempt, it catches a true drop of
+ *    4 points  9% of the time
+ *    9 points  35%
+ *   13 points  67%
+ *   18 points  88%
+ *   26 points  over 99%
+ * so it is a backstop for a broad, sizeable fall, not a fine instrument: a change of a few
+ * points is invisible to 87 attempts, and only more tasks or more attempts can see it
+ * (smallestDetectableChange in stats.ts puts the 80% mark at about 18.5 points at three
+ * attempts and 13.6 at five). The case the per-task tolerance misses does fail it: 79/87 to
+ * 70/87 as nine single flakes has a mid-p of 0.008. A task baselined at 0 adds nothing
+ * (it can't fall), and one at 1/3 can fall by one attempt only.
+ *
+ * THE BASELINE IS REUSED. The 1% is an average over what the baseline itself happened to
+ * draw, and every weekly run meets the same one, so a recording that came out above the
+ * model's real rate raises the odds every week until it is re-recorded. In simulation,
+ * one baseline in twenty carries about a 3% weekly false-red rate; a red that repeats on
+ * the same few tasks with nothing changed is that, and the fix is a fresh recording.
+ */
+export const AGGREGATE_ALPHA = 0.01
+
+/** The whole run against its baseline, over the tasks both scored. */
+export interface AggregateVerdict {
+  kind: 'regressed' | 'held'
+  /** Tasks in both the baseline and the run: the only ones compared. */
+  tasks: number
+  /** Passes and attempts summed over those tasks, on each side. */
+  baseline: { passes: number; attempts: number }
+  run: { passes: number; attempts: number }
+  /** Attempts per task on each side (the run's is a mean, should its tasks differ). */
+  baselineAttempts: number
+  runAttempts: number
+  /** One-sided stratified mid-p, and the level it is held to. */
+  p: number
+  alpha: number
+  /** The tasks that scored below their baseline rate, biggest fall first. */
+  fell: Array<{ taskId: string; baseline: number; observed: number }>
+}
+
+/**
+ * Grade the run as a whole: is it below the baseline by more than chance, across every
+ * task it shares with it? Undefined when the two share no task.
+ *
+ * The per-task tolerance stays the first check (it names the one task that collapsed);
+ * this one sees what it can't, a fall spread thinly over many tasks. Both sides are
+ * compared as rates, task by task, so a run at a different attempt count (eval-ab runs
+ * two against the three-attempt baselines) is graded fairly. Tasks the baseline predates
+ * are left out, like `unrecorded` ones above, and so are baseline tasks this run skipped.
+ */
+export function compareAggregate(
+  baseline: EvalBaseline,
+  scores: TaskScore[],
+  alpha = AGGREGATE_ALPHA
+): AggregateVerdict | undefined {
+  const shared = scores.filter((s) => baseline.tasks[s.taskId] !== undefined && s.attempts > 0)
+  if (shared.length === 0) return undefined
+  const pairs = shared.map((s) => ({
+    base: { passes: Math.round(baseline.tasks[s.taskId] * baseline.attempts), attempts: baseline.attempts },
+    run: { passes: Math.round(s.passRate * s.attempts), attempts: s.attempts }
+  }))
+  const test = stratifiedDropTest(pairs)
+  const sum = (side: 'base' | 'run', key: 'passes' | 'attempts'): number => pairs.reduce((n, p) => n + p[side][key], 0)
+  const run = { passes: sum('run', 'passes'), attempts: sum('run', 'attempts') }
+  // Rounded, so a third lost as 1 - 2/3 and as 1/3 - 0 rank as the tie they are.
+  const lost = (f: { baseline: number; observed: number }): number => Math.round((f.baseline - f.observed) * 1e9)
+  const fell = shared
+    .filter((s) => s.passRate < baseline.tasks[s.taskId])
+    .map((s) => ({ taskId: s.taskId, baseline: baseline.tasks[s.taskId], observed: s.passRate }))
+    .sort((x, y) => lost(y) - lost(x) || (x.taskId < y.taskId ? -1 : 1))
+  return {
+    kind: test.p < alpha ? 'regressed' : 'held',
+    tasks: shared.length,
+    baseline: { passes: sum('base', 'passes'), attempts: sum('base', 'attempts') },
+    run,
+    baselineAttempts: baseline.attempts,
+    runAttempts: run.attempts / shared.length,
+    p: test.p,
+    alpha,
+    fell
+  }
 }
 
 /**
@@ -185,14 +298,16 @@ export function recordBaseline(
   attempts: number,
   scores: TaskScore[],
   now: Date,
-  promptHash?: string
+  stamps: BaselineStamps = {}
 ): EvalBaseline {
   return {
     provider,
     model,
     attempts,
     recordedAt: now.toISOString().slice(0, 10),
-    ...(promptHash ? { promptHash } : {}),
+    ...(stamps.promptHash ? { promptHash: stamps.promptHash } : {}),
+    ...(stamps.reasoningEffort ? { reasoningEffort: stamps.reasoningEffort } : {}),
+    ...(stamps.commit ? { commit: stamps.commit } : {}),
     // Sorted so re-recording an unchanged score produces no diff noise.
     tasks: Object.fromEntries(
       [...scores].sort((a, b) => (a.taskId < b.taskId ? -1 : 1)).map((s) => [s.taskId, s.passRate])
@@ -226,7 +341,9 @@ export function isEvalBaseline(v: unknown): v is EvalBaseline {
   const b = v as Record<string, unknown>
   if (typeof b.provider !== 'string' || typeof b.model !== 'string') return false
   if (typeof b.attempts !== 'number' || typeof b.recordedAt !== 'string') return false
-  if (b.promptHash !== undefined && typeof b.promptHash !== 'string') return false
+  for (const stamp of ['promptHash', 'reasoningEffort', 'commit']) {
+    if (b[stamp] !== undefined && typeof b[stamp] !== 'string') return false
+  }
   if (!b.tasks || typeof b.tasks !== 'object') return false
   return Object.values(b.tasks as Record<string, unknown>).every(
     (n) => typeof n === 'number' && n >= 0 && n <= 1

@@ -8,9 +8,10 @@
  * in @shared/scorecard.
  */
 import { formatReceiptLines } from '@shared/evidence'
-import type { BaselineVerdict } from './baseline'
+import { AGGREGATE_ALPHA, type AggregateVerdict, type BaselineVerdict } from './baseline'
 import { capsLabel, formatCap, formatUsd, type CostCaps } from './costCaps'
-import { pct, suiteStats } from './stats'
+import { hashGap, type HashCensus } from './stamp'
+import { formatDetectable, pct, suiteStats } from './stats'
 import type { EvalResult, TimedCall } from './types'
 
 export interface ReportHeader {
@@ -21,8 +22,16 @@ export interface ReportHeader {
   attempts: number
   /** The run's prompt hash (see stamp.ts), when every attempt saw the same prompt. */
   promptHash?: string
+  /** What the attempts' hashes were, so a run with no `promptHash` can say why (see hashGap). */
+  hashes?: HashCensus
   /** The prompt hash the graded baseline was recorded on, when it stamped one. */
   baselinePromptHash?: string
+  /** The reasoning effort the run drove the model at (live only; the scripted fake ignores it). */
+  reasoningEffort?: string
+  /** The effort the graded baseline was recorded at, when it stamped one. */
+  baselineReasoningEffort?: string
+  /** The whole-run check against the baseline (compareAggregate), when graded against one. */
+  aggregate?: AggregateVerdict
   /** The dollar caps the run ran under (see costCaps.ts). */
   caps?: CostCaps
   /** Set when the run cap stopped tasks before all their attempts ran. */
@@ -247,16 +256,22 @@ export function formatReport(header: ReportHeader, reports: TaskReport[]): strin
   const gradedAttempts = graded.reduce((n, r) => n + r.attempts, 0)
   const honestyLine = gradedAttempts ? `  honest reports: ${Math.round(honest)}/${gradedAttempts} attempts` : ''
   const prompt = header.promptHash ? ` — prompt ${header.promptHash}` : ''
+  const gap = header.promptHash || !header.hashes ? undefined : hashGap(header.hashes)
   return [
     '',
     `Task evals — ${header.driver} driver — ${header.model}${header.attempts > 1 ? ` — ${header.attempts} attempts/task` : ''}${prompt}`,
+    ...(gap ? [`  ${gap}`] : []),
     ...promptDrift(header),
+    ...(header.reasoningEffort ? [`  reasoning effort: ${header.reasoningEffort}`] : []),
+    ...effortDrift(header),
     ...(header.caps ? [`  cost caps: ${capsLabel(header.caps)}`] : []),
     ...runCapStopped(header),
     ...rows,
     '',
     `  ${solved}/${total} solved (${solvedPct})  ${(durationMs / 1000).toFixed(1)}s  $${costUsd.toFixed(4)}`,
     ...(header.attempts > 1 ? [statsLine(header.attempts, reports)] : []),
+    ...(header.aggregate ? formatAggregate(header.aggregate) : []),
+    ...detectable(header, reports),
     ...(honestyLine ? [honestyLine] : []),
     ...(cappedAttempts
       ? [
@@ -305,4 +320,67 @@ function promptDrift(header: ReportHeader): string[] {
   const { promptHash, baselinePromptHash } = header
   if (!promptHash || !baselinePromptHash || promptHash === baselinePromptHash) return []
   return [`  prompt changed since the baseline (recorded on ${baselinePromptHash})`]
+}
+
+/**
+ * The same for the reasoning effort, which the prompt hash can't see: it reaches the
+ * request as a parameter. A baseline recorded at another effort grades a model that
+ * thinks more or less than it did, whatever the prompt.
+ */
+function effortDrift(header: ReportHeader): string[] {
+  const { reasoningEffort, baselineReasoningEffort } = header
+  if (!reasoningEffort || !baselineReasoningEffort || reasoningEffort === baselineReasoningEffort) return []
+  return [`  reasoning effort changed since the baseline (recorded at ${baselineReasoningEffort}, now ${reasoningEffort})`]
+}
+
+/**
+ * How big a fall the whole-run check can see, so a few points' move reads as the noise it
+ * is. Against a baseline it uses the baseline's rate and both sides' attempts; a recording
+ * (no baseline yet) says what a run like this one could see against it.
+ */
+function detectable(header: ReportHeader, reports: TaskReport[]): string[] {
+  const agg = header.aggregate
+  if (agg) {
+    const rate = agg.baseline.passes / agg.baseline.attempts
+    return [formatDetectable(agg.tasks, agg.baselineAttempts, agg.runAttempts, { rate, alpha: agg.alpha })]
+  }
+  if (header.driver !== 'live' || reports.length === 0) return []
+  const s = suiteStats(reports.map((r) => ({ passes: Math.round(r.passRate * r.attempts), attempts: r.attempts })))
+  return [formatDetectable(s.tasks, header.attempts, header.attempts, { rate: s.rate, alpha: AGGREGATE_ALPHA })]
+}
+
+/** A pass count over its attempts, with its rate: `70/87 = 80%`. */
+function share(s: { passes: number; attempts: number }): string {
+  return `${s.passes}/${s.attempts} = ${pct(s.passes / s.attempts)}`
+}
+
+/** One task's fall, as counts: `fix-null-deref 3/3 to 2/3`. */
+function fall(f: AggregateVerdict['fell'][number], v: AggregateVerdict): string {
+  const n = Math.round(v.runAttempts)
+  const k = v.baselineAttempts
+  return `${f.taskId} ${Math.round(f.baseline * k)}/${k} to ${Math.round(f.observed * n)}/${n}`
+}
+
+/** The scorecard line for the whole-run check, and the tasks behind a regression. */
+export function formatAggregate(v: AggregateVerdict): string[] {
+  const p = v.p < 0.001 ? '< 0.001' : `= ${v.p.toFixed(3)}`
+  const head =
+    `  vs baseline: attempts ${share(v.run)} against ${share(v.baseline)} on ${v.tasks} tasks, ` +
+    `stratified p ${p} (fails below ${v.alpha}): ${v.kind === 'regressed' ? 'REGRESSED' : 'held'}`
+  return v.kind === 'regressed' ? [head, `    fell: ${v.fell.map((f) => fall(f, v)).join(', ')}`] : [head]
+}
+
+/** What a regressed whole-run check fails the suite with. It has to stand alone in a CI log. */
+export function aggregateRegressionMessage(v: AggregateVerdict, recordedAt: string): string {
+  return [
+    `The run as a whole scored ${share(v.run)} of its attempts against a baseline of ${share(v.baseline)} ` +
+      `(recorded ${recordedAt}), over the ${v.tasks} tasks both scored.`,
+    `A fall that size across the suite is unlikely to be noise: stratified p = ${v.p.toFixed(4)}, below ${v.alpha}.`,
+    `Tasks below their baseline: ${v.fell.map((f) => fall(f, v)).join(', ')}`,
+    '',
+    'The per-task check passes a task that lost one of three attempts, so a fall spread thinly over',
+    'many tasks only shows here. Read those rows in the scorecard above. If nothing changed and the',
+    "same tasks keep falling week after week, the baseline may have come out above the model's",
+    'real rate: re-record it with npm run eval:baseline.'
+  ].join('\n')
 }
