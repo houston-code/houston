@@ -36,11 +36,18 @@ const PAGES: Readonly<Record<string, PageGuide>> = {
     words: ['providers', 'provider', 'keys', 'key', 'api keys', 'login', 'model', 'proxy'],
     entries: [
       { cmd: '/login', does: 'set or replace a provider API key, or add a host (also /providers)' },
+      {
+        cmd: '/login edit|remove <p>',
+        does: "change a provider's address fields and headers, or remove it (/login forget-key <p> forgets its key)"
+      },
       { cmd: '/model [id]', does: "this chat's model; --default for new chats too" },
+      { cmd: '/model refresh [p]', does: "fetch a provider's model list again" },
+      { cmd: '/model fallback [op]', does: "models to try when the chat's model can't serve a turn" },
       { cmd: '/reasoning [effort]', does: "this chat's thinking effort; --default for new chats too" },
-      { cmd: '/settings set proxyUrl <url>', does: 'the HTTP proxy for model, MCP, and web search requests' }
+      { cmd: '/settings set proxyUrl <url>', does: 'the HTTP proxy for model, MCP, and web search requests' },
+      { cmd: '/scorecard', does: 'how each model has behaved across your chats' }
     ],
-    desktopOnly: 'removing a provider, editing its fields, curating its model list, and the scorecard'
+    desktopOnly: "curating a provider's model list by hand, and its small model"
   },
   agent: {
     label: 'Agent Behavior',
