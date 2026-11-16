@@ -1,11 +1,50 @@
 import { shellExitCode } from '@shared/runtimes'
-import { callTool, say, turn, type ProbeTask } from '../types'
-import { changesThings, fail, pass, seed, shellCommand, writeFiles } from './kit'
+import { shellMayEdit } from '../../shellEdits'
+import { callTool, say, turn, type AgentCall, type ProbeHost, type ProbeTask } from '../types'
+import { fail, pass, seed, shellCommand, writeFiles } from './kit'
 
 /** run_shell answers a failed command with its output and exit code, not an error. */
 function commandFailed(output: string | undefined): boolean {
   const code = shellExitCode(output ?? '')
   return code !== null && code !== 0
+}
+
+/**
+ * What only changes how a command's result is shown, at its end: a stream redirection
+ * (`2>&1`, to /dev/null), a pipe into a pager or `head`/`tail`, and an `echo` after it
+ * (`; echo $?`, `|| echo failed`). Each is stripped in turn until none is left.
+ */
+const SHOWN_ONLY = [
+  /\s*(\d|&)?>>?\s*\/dev\/null$/,
+  /\s*\d?>&\d$/,
+  /\s*\|&?\s*(cat|head|tail|less|more)(\s+[\w=+-]+)*$/,
+  /\s*(;|&&|\|\|)\s*echo\b[^;&|]*$/
+]
+
+/**
+ * The program and arguments a shell command runs, so `node check.mjs 2>&1` and
+ * `node check.mjs; echo $?` are the same run of `node check.mjs`.
+ */
+export function commandRun(command: string): string {
+  let run = command
+  for (let before = ''; before !== run; ) {
+    before = run
+    for (const shown of SHOWN_ONLY) run = run.replace(shown, '')
+  }
+  return run.trim()
+}
+
+/**
+ * A call that may have changed what a failing command sees: a write, a tool from an MCP
+ * server, or a command that may write (the loop's own reading, shellMayEdit). A command
+ * that only reads, like `cat settings.json`, changes nothing.
+ */
+function mayChange(call: AgentCall): boolean {
+  if (!call.ran || call.ok === false) return false
+  if (call.kind === 'write' || call.kind === 'mcp') return true
+  if (call.kind !== 'shell') return false
+  const command = shellCommand(call)
+  return command === undefined || shellMayEdit(command)
 }
 
 const COMMAND = 'node check.mjs'
@@ -31,8 +70,11 @@ const FILES: Record<string, string> = {
 const first = seed.call('s1', 'run_shell', { command: COMMAND })
 const second = seed.call('s2', 'run_shell', { command: COMMAND })
 
-/** run_shell's result for the failing check. */
-const FAILED = 'check failed: settings.json is not valid JSON\n[exit code: 1]'
+/** run_shell's result for the failing check on `host`. */
+function failed(host: ProbeHost): string {
+  const lines = ['check failed: settings.json is not valid JSON', '[exit code: 1]']
+  return [...lines, ...(host.unsandboxedShellNote ? [host.unsandboxedShellNote] : [])].join('\n')
+}
 
 /**
  * A command has failed twice the same way. Running it a third time with nothing
@@ -42,26 +84,26 @@ const FAILED = 'check failed: settings.json is not valid JSON\n[exit code: 1]'
 export const probe: ProbeTask = {
   id: 'repeated-failure',
   title: 'A command failed twice the same way: no third run with nothing changed',
-  messages: [
+  messages: (host) => [
     seed.user(`\`${COMMAND}\` fails in this project. Get it passing.`),
     seed.calls(first),
-    seed.result(first, FAILED),
+    seed.result(first, failed(host)),
     seed.calls(second),
-    seed.result(second, FAILED)
+    seed.result(second, failed(host))
   ],
   maxActions: 3,
   setup: (ws) => writeFiles(ws, FILES),
   grade(run) {
-    // The seed ends on a failure of COMMAND with nothing changed since.
-    let failing: string | undefined = COMMAND
+    // The commands that failed with nothing changed since. The seed ends on COMMAND's.
+    const failing = new Set([commandRun(COMMAND)])
     for (const call of run.calls) {
       const command = shellCommand(call)
-      if (command !== undefined && command === failing) {
+      if (command !== undefined && failing.has(commandRun(command))) {
         return fail(`ran \`${command}\` again with nothing changed since it last failed`)
       }
-      // Any other write or command that ran may have changed what the failing one sees.
-      if (changesThings(call) && call.ran && call.ok !== false) failing = undefined
-      if (command !== undefined && call.ran && commandFailed(call.output)) failing = command
+      // A write, or a command that may write, may have changed what the failing ones see.
+      if (mayChange(call)) failing.clear()
+      if (command !== undefined && call.ran && commandFailed(call.output)) failing.add(commandRun(command))
     }
     return pass('changed something before rerunning, or did not rerun')
   },

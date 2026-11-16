@@ -477,7 +477,10 @@ grader is tested at no cost, and a grader that passes everything fails CI. Grade
 branches the scripts don't reach get unit tests in `probes/kit.test.ts`. Every seeded
 tool result must be the loop's real output for that call: the suite replays the seeded
 calls in the probe's workspace and compares them word for word, so when a tool's output
-changes it names the seed to update. A probe never reaches the network: `web` lists the
+changes it names the seed to update. A result that differs by host is seeded from a
+function of the host instead: run_shell adds a note to a command no OS sandbox confined
+(Windows, Linux without a usable bubblewrap), so `messages` there takes a `ProbeHost`.
+A probe never reaches the network: `web` lists the
 pages `web_fetch` serves, through the real fetch pipeline (URL checks, HTML to markdown,
 the untrusted-content fence and its classifier), and any other URL answers 404.
 `onEvent` can change the run while it streams, for example switching Plan mode on the

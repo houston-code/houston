@@ -70,6 +70,7 @@ describe('prompt visibility guard', () => {
     'main/agent/suggest.ts': { count: 1, why: 'the suggested-next-message request, never persisted' },
     'main/agent/untrusted.ts': { count: 2, why: 'the isolated reader request and its return type, never persisted' },
     'main/agent/workingMemory.ts': { count: 1, why: 'the pinned-memory block, spliced into requests only' },
+    'main/agent/evals/probes/kit.ts': { count: 1, why: "a behavior probe's seeded request, eval-only and never shown in a client" },
     'shared/agent.ts': { count: 1, why: 'systemNoteMessage, the one constructor for loop-injected notes' }
   }
 

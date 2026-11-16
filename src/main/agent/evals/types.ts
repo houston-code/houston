@@ -25,6 +25,7 @@
 import type {
   AgentEvent,
   ChatMessage,
+  PlanDecision,
   ProviderStreamEvent,
   RunLimitReason,
   ToolApprovalDecision,
@@ -199,8 +200,11 @@ export interface AgentRun {
   approvals: Array<{ callId: string; name: string; args?: Record<string, unknown>; decision: ToolApprovalDecision }>
   /** Each ask_user question and the answer it got. */
   questions: Array<{ callId: string; question: string; answer: string }>
+  /** Each present_plan review and the decision it got. */
+  plans: Array<{ callId: string; decision: PlanDecision }>
   /**
-   * The closing message: the text after the last tool call, including any reply the
+   * The closing message: the text after the last tool call that started, as headless
+   * reports it (text beside a call the loop refused stays), including any reply the
    * loop sent back for another round (the interactive clients keep it on screen).
    */
   finalText: string
@@ -263,8 +267,10 @@ export interface ProbeTask {
    * result the agent must react to). Every seeded tool result must be what the loop
    * really returns for that call: the scripted suite replays the seeded calls and
    * compares, so a change to a tool's output can't leave a seed describing the old one.
+   * A function when a result depends on the host (see {@link ProbeHost}); read it
+   * through {@link seededMessages}.
    */
-  messages?: ChatMessage[]
+  messages?: ChatMessage[] | ((host: ProbeHost) => ChatMessage[])
   /** Approval policy for the run. Defaults to `full-auto`, as tasks do. */
   policy?: ApprovalPolicy
   /**
@@ -288,6 +294,23 @@ export interface ProbeTask {
   passScript: ScriptedTurn[]
   /** A scripted run of the failure the probe exists to catch, which the grader must fail. */
   failScript: ScriptedTurn[]
+}
+
+/**
+ * What a seeded tool result may depend on about the host the eval runs on, so the seed
+ * is what the loop really returns there.
+ */
+export interface ProbeHost {
+  /**
+   * The note run_shell appends to a command no OS sandbox confined (Windows, a Linux
+   * host where bubblewrap can't build a user namespace). Absent where one does.
+   */
+  unsandboxedShellNote?: string
+}
+
+/** A probe's seeded conversation on `host`, or undefined for one that starts from `prompt`. */
+export function seededMessages(probe: ProbeTask, host: ProbeHost): ChatMessage[] | undefined {
+  return typeof probe.messages === 'function' ? probe.messages(host) : probe.messages
 }
 
 /** A page a probe serves to web_fetch. */
