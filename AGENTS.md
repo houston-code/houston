@@ -112,7 +112,10 @@ differs between the merge commit and its first parent), or that carries the `eva
 label, also gets a non-gating live A/B of the harder tasks from `eval-ab.yml`, posted as a
 comment. Its concurrency groups are per job and per pull request, never workflow-level
 (that cancelled a running A/B whenever another label was added) and never
-`eval-live.yml`'s. Every job below its `decide` job states its own `!cancelled()`
+`eval-live.yml`'s, whose group sits on its `evals` job, keyed on provider and model (not
+the event or record mode, so runs of one model wait rather than share its rate limit) with
+`cancel-in-progress: false` (one shared cancelling group let any dispatch kill another
+session's live run). Every job below its `decide` job states its own `!cancelled()`
 condition: the label path skips the hash jobs, and without one that skip would carry down
 and skip the A/B too.
 

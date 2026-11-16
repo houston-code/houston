@@ -32,6 +32,11 @@ on:
 
 jobs:
   alert:
+    # Callers skip a cancelled run, which is neither red nor green, except eval-live.yml: it
+    # reports a cancelled scheduled run as failed, and calls this from a cancelled run, where the
+    # default `success()` condition is false. So a cancelled run gets through only when it says
+    # failed; one reporting green must never close an open issue.
+    if: ${{ !cancelled() || inputs.failed }}
     timeout-minutes: 5
     runs-on: ubuntu-24.04
     # Narrower than the callers' `contents: read`: this job only ever touches issues, and can't

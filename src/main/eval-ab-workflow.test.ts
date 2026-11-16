@@ -373,7 +373,7 @@ describe('prompt A/B workflow', () => {
     expect(hashBase.concurrency).toEqual({ group: `eval-ab-${pr}-hash-base`, 'cancel-in-progress': true })
     expect(hashHead.concurrency).toEqual({ group: `eval-ab-${pr}-hash-head`, 'cancel-in-progress': true })
     expect(ab.concurrency).toEqual({ group: `eval-ab-${pr}-\${{ matrix.side }}`, 'cancel-in-progress': true })
-    // eval-live cancels in progress: sharing its group would let a PR kill the weekly run.
+    // These cancel in progress: joining one of eval-live's groups would let a PR kill the weekly run.
     for (const job of Object.values(doc.jobs) as any[]) {
       expect(String(job.concurrency?.group ?? '')).not.toMatch(/^eval-live/)
     }
