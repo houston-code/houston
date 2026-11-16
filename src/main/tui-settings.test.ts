@@ -65,6 +65,16 @@ describe('renderSettingsPage', () => {
     expect(renderSettingsPage('hooks', plain)).not.toContain('desktop app')
   })
 
+  it('covers the provider edits and the scorecard the terminal now has', () => {
+    const models = renderSettingsPage('models', plain)
+    for (const cmd of ['/login edit|remove <p>', '/login forget-key', '/model refresh', '/model fallback', '/scorecard']) {
+      expect(models, cmd).toContain(cmd)
+    }
+    const desktopOnly = models.split('In the desktop app only:')[1] ?? ''
+    expect(desktopOnly).toContain('model list')
+    expect(desktopOnly).not.toMatch(/scorecard|removing a provider|editing its fields/)
+  })
+
   it('lists the pages for an unknown word, without its control characters', () => {
     const out = renderSettingsPage('nope\x1b[2J', plain)
     expect(out).toContain('no settings page "nope[2J"')
@@ -87,7 +97,8 @@ describe('renderSettingsOverview', () => {
     for (const cmd of [
       '/login', '/model', '/reasoning', '/approval', '/permissions', '/trust', '/mcp', '/hooks', '/memory',
       '/add-dir', '/theme', '/thoughts', '/verbose', '/screen-reader', '/reduce-motion', '/vim', '/notify',
-      '/config', '/status', '/schedule', '/permissions add', '/trust list', '/mcp edit'
+      '/config', '/status', '/schedule', '/permissions add', '/trust list', '/mcp edit', '/login edit',
+      '/model fallback', '/scorecard'
     ]) {
       expect(out, cmd).toContain(cmd)
     }
