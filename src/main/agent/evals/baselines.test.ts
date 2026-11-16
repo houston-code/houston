@@ -11,7 +11,20 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { baselineFileName, isDeadBaseline, isEvalBaseline } from './baseline'
+import { defaultProviders } from '@shared/defaults'
+import {
+  assertRecordable,
+  baselineFileName,
+  compareAggregate,
+  compareToBaseline,
+  isDeadBaseline,
+  isEvalBaseline,
+  regressions
+} from './baseline'
+import { resolveEvalConfig, selectTasks } from './config'
+import { PROBES } from './probes'
+import { HARD_TASKS, TASKS } from './tasks'
+import { isProbeResultId, probeResultId } from './types'
 
 const BASELINES_DIR = fileURLToPath(new URL('./baselines', import.meta.url))
 const WORKFLOW = fileURLToPath(new URL('../../../../.github/workflows/eval-live.yml', import.meta.url))
@@ -71,5 +84,41 @@ describe('live eval baselines', () => {
     expect(baselineFileName(b.provider, b.model)).toBe(file)
     expect(isDeadBaseline(b), 'every task is 0, so nothing can ever regress').toBe(false)
     expect(Object.keys(b.tasks).length).toBeGreaterThan(0)
+    // Probes are an A/B instrument and never baselined.
+    expect(Object.keys(b.tasks).filter(isProbeResultId), 'a behavior probe was recorded').toEqual([])
+  })
+})
+
+/**
+ * A live run of the probes (HOUSTON_EVAL_TASKS=probes) loads the model's baseline like
+ * any live run, and then must grade nothing against it: every probe row is
+ * `unrecorded`, the whole-run check has nothing to compare, and a run that solved no
+ * probe at all still passes. No agent shell has a key to run it live, so this walks the
+ * same calls the driver makes, against the baseline the scheduled run loads.
+ */
+describe('a live run of the behavior probes', () => {
+  const model = /HOUSTON_EVAL_MODEL: \$\{\{ inputs\.model \|\|.*&& '([^']+)' \|\|/.exec(readFileSync(WORKFLOW, 'utf8'))![1]
+  const env = { HOUSTON_EVAL_LIVE: '1', HOUSTON_EVAL_MODEL: model, HOUSTON_EVAL_TASKS: 'probes' }
+
+  it('selects every probe and no task, and refuses to record them', () => {
+    const config = resolveEvalConfig(env, defaultProviders())
+    expect(selectTasks(TASKS, HARD_TASKS, config.tasks, PROBES)).toEqual({ tasks: [], probes: PROBES })
+    expect(() => resolveEvalConfig({ ...env, HOUSTON_EVAL_RECORD: '1' }, defaultProviders())).toThrow(/records every task/)
+  })
+
+  it('reports every probe unrecorded against the baseline, and never fails the gate', () => {
+    const baseline = load(baselineFileName('anthropic', model))
+    if (!isEvalBaseline(baseline)) throw new Error('the scheduled model has no well-formed baseline')
+    // The worst case: no probe passed a single attempt.
+    const probes = PROBES.map((p) => ({ taskId: probeResultId(p.id), passRate: 0, attempts: baseline.attempts }))
+    const verdicts = compareToBaseline(baseline, probes)
+    expect(verdicts.map((v) => v.kind)).toEqual(PROBES.map(() => 'unrecorded'))
+    expect(regressions(verdicts)).toEqual([])
+    expect(compareAggregate(baseline, probes), 'nothing for the whole-run check to grade').toBeUndefined()
+
+    // Beside tasks, the probes change nothing about how the tasks are graded.
+    const tasks = Object.entries(baseline.tasks).map(([taskId, passRate]) => ({ taskId, passRate, attempts: baseline.attempts }))
+    expect(compareAggregate(baseline, [...tasks, ...probes])).toEqual(compareAggregate(baseline, tasks))
+    expect(() => assertRecordable([...tasks, ...probes])).toThrow(/behavior probes/)
   })
 })

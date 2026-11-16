@@ -22,6 +22,7 @@
  * records one, and the diff documents the behavior change in the PR.
  */
 import { stratifiedDropTest } from './stats'
+import { isProbeResultId } from './types'
 
 /** A recorded per-model score, checked in under `evals/baselines/`. */
 export interface EvalBaseline {
@@ -95,6 +96,10 @@ export type BaselineVerdict =
  * Tasks present in the baseline but absent from `scores` are ignored rather than
  * failed: that is a task being deleted or renamed, which the suite's own
  * registration check already covers, and failing here would just duplicate it.
+ *
+ * A behavior probe (`probe:<id>`) is always `unrecorded`: probes are an A/B
+ * instrument, so no baseline records them and the gate never grades one, even if a
+ * hand-edited baseline carried its id.
  */
 export function compareToBaseline(
   baseline: EvalBaseline,
@@ -102,7 +107,7 @@ export function compareToBaseline(
   tolerance = DEFAULT_TOLERANCE
 ): BaselineVerdict[] {
   return scores.map((s) => {
-    const base = baseline.tasks[s.taskId]
+    const base = isProbeResultId(s.taskId) ? undefined : baseline.tasks[s.taskId]
     if (base === undefined) return { kind: 'unrecorded', taskId: s.taskId, observed: s.passRate }
     if (s.passRate < base - tolerance) {
       return { kind: 'regressed', taskId: s.taskId, baseline: base, observed: s.passRate }
@@ -174,14 +179,17 @@ export interface AggregateVerdict {
  * this one sees what it can't, a fall spread thinly over many tasks. Both sides are
  * compared as rates, task by task, so a run at a different attempt count (eval-ab runs
  * two against the three-attempt baselines) is graded fairly. Tasks the baseline predates
- * are left out, like `unrecorded` ones above, and so are baseline tasks this run skipped.
+ * are left out, like `unrecorded` ones above, and so are baseline tasks this run skipped
+ * and every behavior probe.
  */
 export function compareAggregate(
   baseline: EvalBaseline,
   scores: TaskScore[],
   alpha = AGGREGATE_ALPHA
 ): AggregateVerdict | undefined {
-  const shared = scores.filter((s) => baseline.tasks[s.taskId] !== undefined && s.attempts > 0)
+  const shared = scores.filter(
+    (s) => !isProbeResultId(s.taskId) && baseline.tasks[s.taskId] !== undefined && s.attempts > 0
+  )
   if (shared.length === 0) return undefined
   const pairs = shared.map((s) => ({
     base: { passes: Math.round(baseline.tasks[s.taskId] * baseline.attempts), attempts: baseline.attempts },
@@ -236,6 +244,10 @@ export function compareAggregate(
  * normal attempt, so one that reached it ran away, and was told to end, or ended on a
  * tools-off last step. Frozen as a failure, it would record a 0 for a task the model
  * can solve.
+ *
+ * A behavior probe never belongs in a baseline: probes are an A/B instrument, and the
+ * gate ignores them. config.ts already refuses a recording that names any tasks; this
+ * stops a probe row from reaching one some other way.
  */
 export function assertRecordable(
   scores: TaskScore[],
@@ -244,6 +256,13 @@ export function assertRecordable(
 ): void {
   if (scores.length === 0) {
     throw new Error('Refusing to record a baseline with no tasks — nothing ran.')
+  }
+  const probes = scores.filter((s) => isProbeResultId(s.taskId))
+  if (probes.length > 0) {
+    throw new Error(
+      `Refusing to record a baseline with behavior probes in it (${probes.map((s) => s.taskId).join(', ')}). ` +
+        'Probes are an A/B instrument and are never baselined: record with HOUSTON_EVAL_TASKS unset.'
+    )
   }
   if (errored.length > 0) {
     const attempts = errored.reduce((n, e) => n + e.attempts, 0)

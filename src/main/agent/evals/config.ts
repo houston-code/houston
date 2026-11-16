@@ -20,6 +20,7 @@
  */
 import type { ProviderConfig } from '@shared/types'
 import { DEFAULT_ATTEMPT_MAX_COST_USD } from './costCaps'
+import { isProbeResultId, PROBE_ID_PREFIX, probeResultId } from './types'
 
 /** The model the scripted driver reports; it never reaches a real adapter. */
 export const SCRIPTED_MODEL = 'claude-sonnet-5'
@@ -39,9 +40,10 @@ export interface EvalConfig {
   /** Print each attempt's tool calls, closing message, and receipt as it runs. */
   trace: boolean
   /**
-   * Which tasks to run (HOUSTON_EVAL_TASKS): `hard` for the harder subset, or a
-   * comma-separated list of task ids. Absent runs every task. Resolve it against the
-   * registry with {@link selectTasks}.
+   * Which tasks to run (HOUSTON_EVAL_TASKS): a comma-separated list of task ids, `hard`
+   * for the harder subset, `probes` for the behavior probes and `probe:<id>` for one.
+   * Absent runs every task and no probe. Resolve it against the registries with
+   * {@link selectTasks}.
    */
   tasks?: string
   /**
@@ -170,28 +172,54 @@ export function resolveEvalConfig(env: Env, providers: ProviderConfig[]): EvalCo
 /** The HOUSTON_EVAL_TASKS keyword for the harder subset (see `HARD_TASKS` in tasks/index.ts). */
 export const HARD_SUBSET = 'hard'
 
+/** The HOUSTON_EVAL_TASKS keyword for every behavior probe (see `PROBES` in probes/index.ts). */
+export const PROBES_SUBSET = 'probes'
+
+/** What a run covers: tasks and probes, each in registry order. */
+export interface Selection<T, P> {
+  tasks: T[]
+  probes: P[]
+}
+
 /**
- * The tasks a run covers, in registry order. No spec runs them all; `hard` runs
- * the harder subset; otherwise the spec is a comma-separated list of task ids.
+ * The tasks and probes a run covers. No spec runs every task and no probe: probes
+ * are an A/B instrument, never part of the scheduled run or a baseline. Otherwise the
+ * spec is a comma-separated list of `hard` (the harder subset), `probes` (every
+ * probe), `probe:<id>` (one probe) and task ids, each kept in registry order.
  *
  * Throws on an id that isn't registered rather than skipping it: a typo would
  * otherwise run fewer tasks than asked and still report green.
  */
-export function selectTasks<T extends { id: string }>(all: T[], hard: T[], spec: string | undefined): T[] {
-  if (spec === undefined || spec.trim() === '') return all
-  if (spec.trim() === HARD_SUBSET) return all.filter((t) => hard.some((h) => h.id === t.id))
-  const ids = spec
+export function selectTasks<T extends { id: string }, P extends { id: string }>(
+  all: T[],
+  hard: T[],
+  spec: string | undefined,
+  probes: P[] = []
+): Selection<T, P> {
+  if (spec === undefined || spec.trim() === '') return { tasks: all, probes: [] }
+  const tokens = spec
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-  const unknown = ids.filter((id) => !all.some((t) => t.id === id))
+  const taskIds = new Set<string>()
+  const probeIds = new Set<string>()
+  const unknown: string[] = []
+  for (const token of tokens) {
+    if (token === HARD_SUBSET) for (const t of hard) taskIds.add(t.id)
+    else if (token === PROBES_SUBSET) for (const p of probes) probeIds.add(p.id)
+    else if (isProbeResultId(token) && probes.some((p) => probeResultId(p.id) === token)) {
+      probeIds.add(token.slice(PROBE_ID_PREFIX.length))
+    } else if (all.some((t) => t.id === token)) taskIds.add(token)
+    else unknown.push(token)
+  }
   if (unknown.length) {
     throw new Error(
       `HOUSTON_EVAL_TASKS names tasks that aren't registered: ${unknown.join(', ')}. ` +
-        `Use "${HARD_SUBSET}" or ids from src/main/agent/evals/tasks.`
+        `Use "${HARD_SUBSET}", "${PROBES_SUBSET}", ${PROBE_ID_PREFIX}<id> for one probe, ` +
+        'or ids from src/main/agent/evals/tasks.'
     )
   }
-  const picked = all.filter((t) => ids.includes(t.id))
-  if (picked.length === 0) throw new Error('HOUSTON_EVAL_TASKS selects no tasks.')
+  const picked = { tasks: all.filter((t) => taskIds.has(t.id)), probes: probes.filter((p) => probeIds.has(p.id)) }
+  if (picked.tasks.length + picked.probes.length === 0) throw new Error('HOUSTON_EVAL_TASKS selects no tasks.')
   return picked
 }

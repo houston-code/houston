@@ -250,27 +250,45 @@ describe('selectTasks', () => {
   const t = (id: string): { id: string } => ({ id })
   const all = [t('a'), t('b'), t('c'), t('d')]
   const hard = [t('c'), t('d')]
+  const probes = [t('p1'), t('p2'), t('p3')]
+  const ids = (s: { tasks: { id: string }[]; probes: { id: string }[] }): string[][] => [
+    s.tasks.map((x) => x.id),
+    s.probes.map((x) => x.id)
+  ]
 
-  it('runs every task when no subset is named', () => {
-    expect(selectTasks(all, hard, undefined)).toEqual(all)
-    expect(selectTasks(all, hard, '  ')).toEqual(all)
+  // Probes are an A/B instrument: the scheduled run (no spec) and so a baseline never include them.
+  it('runs every task and no probe when no subset is named', () => {
+    expect(selectTasks(all, hard, undefined, probes)).toEqual({ tasks: all, probes: [] })
+    expect(selectTasks(all, hard, '  ', probes)).toEqual({ tasks: all, probes: [] })
   })
 
   it('runs the harder subset for "hard"', () => {
-    expect(selectTasks(all, hard, 'hard').map((x) => x.id)).toEqual(['c', 'd'])
+    expect(ids(selectTasks(all, hard, 'hard', probes))).toEqual([['c', 'd'], []])
   })
 
   it('runs named ids in registry order', () => {
-    expect(selectTasks(all, hard, ' d, a ,').map((x) => x.id)).toEqual(['a', 'd'])
+    expect(ids(selectTasks(all, hard, ' d, a ,', probes))).toEqual([['a', 'd'], []])
+  })
+
+  it('runs every probe for "probes", and one for probe:<id>, in registry order', () => {
+    expect(ids(selectTasks(all, hard, 'probes', probes))).toEqual([[], ['p1', 'p2', 'p3']])
+    expect(ids(selectTasks(all, hard, 'probe:p3, probe:p1', probes))).toEqual([[], ['p1', 'p3']])
+    // Keywords and ids combine, and a repeat runs once.
+    expect(ids(selectTasks(all, hard, 'probe:p2,hard,probes,c', probes))).toEqual([['c', 'd'], ['p1', 'p2', 'p3']])
   })
 
   // A typo must not shrink the run and still report green.
   it('rejects an id that is not registered', () => {
-    expect(() => selectTasks(all, hard, 'a,nope')).toThrow(/aren't registered: nope/)
+    expect(() => selectTasks(all, hard, 'a,nope', probes)).toThrow(/aren't registered: nope/)
+    // A probe is named with its prefix, and a task id never takes one.
+    expect(() => selectTasks(all, hard, 'p1', probes)).toThrow(/aren't registered: p1/)
+    expect(() => selectTasks(all, hard, 'probe:a,probe:nope', probes)).toThrow(/aren't registered: probe:a, probe:nope/)
   })
 
   it('rejects a spec that selects nothing', () => {
-    expect(() => selectTasks(all, hard, ',')).toThrow(/selects no tasks/)
+    expect(() => selectTasks(all, hard, ',', probes)).toThrow(/selects no tasks/)
+    // No probes registered: the keyword selects nothing rather than everything.
+    expect(() => selectTasks(all, hard, 'probes')).toThrow(/selects no tasks/)
   })
 })
 
@@ -280,6 +298,6 @@ describe('the harder subset', () => {
     expect(HARD_TASKS.length).toBeGreaterThan(0)
     expect(HARD_TASKS.length).toBeLessThan(TASKS.length)
     for (const task of HARD_TASKS) expect(TASKS).toContain(task)
-    expect(selectTasks(TASKS, HARD_TASKS, 'hard')).toEqual(HARD_TASKS)
+    expect(selectTasks(TASKS, HARD_TASKS, 'hard').tasks).toEqual(HARD_TASKS)
   })
 })

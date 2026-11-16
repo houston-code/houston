@@ -84,6 +84,17 @@ describe('compareToBaseline', () => {
     expect(DEFAULT_TOLERANCE).toBeGreaterThan(1 / 3)
     expect(DEFAULT_TOLERANCE).toBeLessThan(2 / 3)
   })
+
+  // Probes are an A/B instrument: even a baseline that somehow carried a probe's id
+  // must not let a probe row regress the gate.
+  it('reports a behavior probe as unrecorded, whatever the baseline holds', () => {
+    const v = compareToBaseline(baseline({ a: 1, 'probe:p': 1 }), [score('a', 1), score('probe:p', 0)])
+    expect(v).toEqual([
+      { kind: 'held', taskId: 'a', baseline: 1, observed: 1 },
+      { kind: 'unrecorded', taskId: 'probe:p', observed: 0 }
+    ])
+    expect(regressions(v)).toHaveLength(0)
+  })
 })
 
 describe('assertRecordable', () => {
@@ -138,6 +149,12 @@ describe('assertRecordable', () => {
 
   it('refuses an empty score set', () => {
     expect(() => assertRecordable([])).toThrow(/no tasks/)
+  })
+
+  it('refuses a score set with a behavior probe in it', () => {
+    expect(() => assertRecordable([score('a', 1), score('probe:p', 1)])).toThrow(
+      /behavior probes in it \(probe:p\).*HOUSTON_EVAL_TASKS unset/
+    )
   })
 
   // A model that genuinely can't do some tasks is a real, recordable baseline —
@@ -350,6 +367,13 @@ describe('compareAggregate', () => {
     expect(v).toMatchObject({ tasks: 2, baseline: { passes: 6, attempts: 6 }, run: { passes: 5, attempts: 6 } })
     expect(compareAggregate(b, [score('new', 0)])).toBeUndefined()
     expect(compareAggregate(b, [])).toBeUndefined()
+  })
+
+  // A probe-only run has nothing for the whole-run check to grade, and a probe in a mixed run counts for nothing.
+  it('leaves behavior probes out, even under an id the baseline holds', () => {
+    const b = baseline({ a: 1, 'probe:p': 1 })
+    expect(compareAggregate(b, [score('probe:p', 0), score('probe:q', 0)])).toBeUndefined()
+    expect(compareAggregate(b, [score('a', 1), score('probe:p', 0)])).toMatchObject({ tasks: 1, fell: [] })
   })
 
   it('honors an explicit level', () => {

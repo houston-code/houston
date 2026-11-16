@@ -175,9 +175,25 @@ how to author a task. The invariants to preserve when changing this code:
   still load.
 - Every task directory is registered exactly once, and fixtures stay dependency-free
   (plain `.mjs`, no install step).
+- **Behavior probes stay out of baselines, and every probe ships a passing and a failing
+  script.** Probes (`evals/probes/`, `ProbeTask` in `evals/types.ts`) grade what the agent
+  did over its next few actions and are an A/B instrument, not a gated score: only
+  `HOUSTON_EVAL_TASKS` (`probes`, `probe:<id>`) selects them, their rows are `probe:<id>`,
+  `compareToBaseline` reads every one as `unrecorded`, `compareAggregate` leaves them out,
+  and `assertRecordable` refuses a recording that holds one. The scripted suite runs each
+  probe's `passScript` (must pass) and `failScript` (must fail) through the real loop, and
+  checks every seeded tool result against the loop's real output for that call; a probe
+  without both scripts has an untested grader. A probe never reaches the network (`web`
+  serves its pages, any other URL is a 404), and it is stopped with the loop's `cancelRun`
+  once `maxActions` calls are answered, never with `maxIterations`, whose wrap-up reminder
+  would change what is measured. Every probe file is registered exactly once.
 - The driver cannot be factored into a shared helper: `startRun` takes no provider
   parameter, so injection depends on the eval file's own `vi.mock` plus a deferred
-  `await import('../loop')`, and `vi.mock` is file-scoped.
+  `await import('../loop')`, and `vi.mock` is file-scoped. `runAgent` in `evals.eval.ts` is
+  the one driver tasks and probes share; the probes and their graders import nothing that
+  reaches the loop. The eval's `agentHost` mock answers `getKey` for the live provider's
+  id only: other secrets go through the same call (web_search asks for a search key), and
+  a key returned for every id would be sent to the search provider.
 
 ## Product self-knowledge
 

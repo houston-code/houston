@@ -121,6 +121,18 @@ describe('reliability in the scorecard', () => {
   })
 })
 
+describe('baseline verdicts in the scorecard', () => {
+  // A task the baseline predates gets recorded next time; a probe never does.
+  it('tells an unrecorded task from a probe, which is never baselined', () => {
+    const out = formatReport({ driver: 'live', model: 'm', attempts: 3 }, [
+      { ...report('new-task', 1, result({ passed: true })), verdict: { kind: 'unrecorded', taskId: 'new-task', observed: 1 } },
+      { ...report('probe:p', 0), verdict: { kind: 'unrecorded', taskId: 'probe:p', observed: 0 } }
+    ])
+    expect(out).toMatch(/new-task .* unrecorded \(not in the baseline yet\)/)
+    expect(out).toMatch(/probe:p .* unrecorded \(a probe: never baselined\)/)
+  })
+})
+
 describe('prompt stamp in the scorecard', () => {
   const run = [report('a', 1, result({ passed: true }))]
 
