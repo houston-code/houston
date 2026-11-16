@@ -68,6 +68,27 @@ describe('toRunRecord', () => {
     const r = toRunRecord({ ...meta, promptHash: undefined, commit: undefined }, [report('a', 1)], new Date())
     expect('promptHash' in r).toBe(false)
     expect('commit' in r).toBe(false)
+    expect('caps' in r).toBe(false)
+    expect('skipped' in r).toBe(false)
+    expect('capped' in r.tasks.a).toBe(false)
+  })
+
+  it('stamps the caps, the tasks the run cap skipped, and each task’s capped attempts', () => {
+    const r = toRunRecord(
+      { ...meta, caps: { attemptUsd: 20, runUsd: 5 }, skipped: ['c', 'b'] },
+      [{ ...report('a', 1 / 3), cappedAttempts: 2 }, { ...report('d', 1), cappedAttempts: 0 }],
+      new Date()
+    )
+    expect(r.caps).toEqual({ attemptUsd: 20, runUsd: 5 })
+    // Kept in run order: the order the cap reached them.
+    expect(r.skipped).toEqual(['c', 'b'])
+    expect(r.tasks.a).toMatchObject({ passes: 1, capped: 2 })
+    expect('capped' in r.tasks.d).toBe(false)
+    expect(isRunRecord(r)).toBe(true)
+  })
+
+  it('writes no skipped list when the run cap skipped nothing', () => {
+    expect('skipped' in toRunRecord({ ...meta, skipped: [] }, [report('a', 1)], new Date())).toBe(false)
   })
 })
 
@@ -92,6 +113,32 @@ describe('isRunRecord', () => {
 
   it('rejects a fractional pass count (a rate written where a count belongs)', () => {
     expect(isRunRecord(run({ a: 0.67 }))).toBe(false)
+  })
+
+  // Records from before the caps existed carry none of these fields and stay valid.
+  it('accepts caps, a skipped list and capped counts when well-formed', () => {
+    const r = run({ a: 1 }, { caps: { attemptUsd: 20 }, skipped: ['b'] })
+    r.tasks.a.capped = 2
+    expect(isRunRecord(r)).toBe(true)
+  })
+
+  it.each([
+    ['caps with no per-attempt cap', { caps: { runUsd: 5 } }],
+    ['a zero cap', { caps: { attemptUsd: 0 } }],
+    ['a non-numeric run cap', { caps: { attemptUsd: 20, runUsd: '5' } }],
+    ['a skipped list that is not strings', { skipped: [1] }],
+    ['a skipped string instead of a list', { skipped: 'b' }]
+  ])('rejects %s', (_name, over) => {
+    expect(isRunRecord({ ...run({ a: 3 }), ...over })).toBe(false)
+  })
+
+  // A capped attempt is a failed one: passes and capped can't add up past the attempts.
+  it('rejects more capped attempts than failed ones', () => {
+    const r = run({ a: 2 })
+    r.tasks.a.capped = 2
+    expect(isRunRecord(r)).toBe(false)
+    r.tasks.a.capped = 1
+    expect(isRunRecord(r)).toBe(true)
   })
 
   it('rejects junk', () => {
@@ -165,6 +212,15 @@ describe('compareRuns', () => {
     expect(c.differs).toEqual(['prompt', 'commit'])
   })
 
+  // A cap can end an attempt as a failure, so runs under different caps differ.
+  it('names different cost caps as a difference', () => {
+    const capped = { caps: { attemptUsd: 20, runUsd: 5 } }
+    expect(compareRuns(run({ a: 3 }, capped), run({ a: 3 }, capped)).differs).toEqual([])
+    expect(compareRuns(run({ a: 3 }, capped), run({ a: 3 }, { caps: { attemptUsd: 20 } })).differs).toEqual(['caps'])
+    // A record from before the caps ran uncapped.
+    expect(compareRuns(run({ a: 3 }), run({ a: 3 }, capped)).differs).toEqual(['caps'])
+  })
+
   // Scripted passes by construction, so the "difference" would be the drivers.
   it('refuses to compare a scripted run with a live one', () => {
     expect(() => compareRuns(run({ a: 3 }), run({ a: 3 }, { driver: 'scripted' }))).toThrow(/scripted/)
@@ -200,6 +256,20 @@ describe('formatComparison', () => {
   it('says plainly when the difference is not significant', () => {
     expect(text).toContain('better on 1, worse on 1, tied on 0')
     expect(text).toContain('No significant difference (sign test p = 1.000)')
+  })
+
+  it('shows each side’s caps, and what they did to it', () => {
+    const capped = run({ fix: 1, rename: 3 }, { caps: { attemptUsd: 20, runUsd: 1 }, skipped: ['slow'] })
+    capped.tasks.fix.capped = 2
+    const out = formatComparison(compareRuns(a, capped), a, capped, { a: 'main.json', b: 'branch.json' })
+    expect(out).toContain('caps ?')
+    expect(out).toContain('caps $20/attempt, $1/run')
+    expect(out).toContain('differs: caps')
+    expect(out).toContain(
+      'B: attempts that reached the per-attempt cost cap or its wrap-up reminder, counted as failed: fix (2)'
+    )
+    expect(out).toContain('B STOPPED at its run cost cap; not run, so not compared: slow')
+    expect(out).not.toMatch(/^ {2}A: attempts stopped/m)
   })
 
   it('says so when no task moved', () => {

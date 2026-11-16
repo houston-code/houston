@@ -18,10 +18,12 @@
  *
  * The record keeps per-task pass COUNTS rather than the scorecard's rounded
  * rates, so pass@k, pass^k and the interval can be recomputed exactly, and it
- * carries the stamps (model, prompt hash, commit, host) that say what produced it.
+ * carries the stamps (model, prompt hash, commit, host, cost caps) that say what
+ * produced it.
  */
 import { execFileSync } from 'node:child_process'
 import { gitExecutable } from '../gitBinary'
+import { capsLabel, type CostCaps } from './costCaps'
 import type { TaskReport } from './report'
 import { pct, signTest, suiteStats, type SuiteStats } from './stats'
 
@@ -29,10 +31,12 @@ export const RUN_RECORD_VERSION = 1
 
 /** One task's outcome in a run record. */
 export interface RunRecordTask {
-  /** Attempts whose verify passed, out of the record's `attempts`. */
+  /** Attempts graded solved, out of the record's `attempts`. A cost-capped attempt never is. */
   passes: number
   /** Attempts whose closing report the honesty grader passed, when graded. */
   honest?: number
+  /** Attempts the per-attempt cost cap stopped or told to wrap up, when any. */
+  capped?: number
   costUsd: number
   durationMs: number
 }
@@ -52,6 +56,17 @@ export interface EvalRunRecord {
   host: string
   /** ISO timestamp the run finished. */
   recordedAt: string
+  /**
+   * The dollar caps the run ran under (costCaps.ts). A cap can end an attempt, so two
+   * runs under different caps differ in more than the change being compared. Absent on
+   * records written before the caps existed.
+   */
+  caps?: CostCaps
+  /**
+   * Tasks the run cap stopped before all their attempts ran. They are not in `tasks`,
+   * so a comparison names them instead of quietly comparing fewer.
+   */
+  skipped?: string[]
   tasks: Record<string, RunRecordTask>
 }
 
@@ -63,6 +78,8 @@ export interface RunMeta {
   promptHash?: string
   commit?: string
   host: string
+  caps?: CostCaps
+  skipped?: string[]
 }
 
 /** Build the record for a finished run, tasks sorted so re-runs diff cleanly. */
@@ -74,6 +91,7 @@ export function toRunRecord(meta: RunMeta, reports: TaskReport[], now: Date): Ev
       {
         passes: Math.round(r.passRate * r.attempts),
         ...(r.honestyRate === undefined ? {} : { honest: Math.round(r.honestyRate * r.attempts) }),
+        ...(r.cappedAttempts ? { capped: r.cappedAttempts } : {}),
         costUsd: r.costUsd,
         durationMs: r.durationMs
       }
@@ -88,8 +106,21 @@ export function toRunRecord(meta: RunMeta, reports: TaskReport[], now: Date): Ev
     ...(meta.commit ? { commit: meta.commit } : {}),
     host: meta.host,
     recordedAt: now.toISOString(),
+    ...(meta.caps ? { caps: meta.caps } : {}),
+    ...(meta.skipped?.length ? { skipped: [...meta.skipped] } : {}),
     tasks: Object.fromEntries(tasks)
   }
+}
+
+/** A cap amount as a record may carry one: a positive, finite number of dollars. */
+function isUsd(n: unknown): boolean {
+  return typeof n === 'number' && Number.isFinite(n) && n > 0
+}
+
+function isCaps(v: unknown): boolean {
+  if (!v || typeof v !== 'object') return false
+  const c = v as Record<string, unknown>
+  return isUsd(c.attemptUsd) && (c.runUsd === undefined || isUsd(c.runUsd))
 }
 
 /** Runtime shape check, so a hand-edited or truncated record fails with a reason. */
@@ -103,6 +134,10 @@ export function isRunRecord(v: unknown): v is EvalRunRecord {
   if (typeof r.recordedAt !== 'string') return false
   if (r.promptHash !== undefined && typeof r.promptHash !== 'string') return false
   if (r.commit !== undefined && typeof r.commit !== 'string') return false
+  if (r.caps !== undefined && !isCaps(r.caps)) return false
+  if (r.skipped !== undefined && !(Array.isArray(r.skipped) && r.skipped.every((id) => typeof id === 'string'))) {
+    return false
+  }
   if (!r.tasks || typeof r.tasks !== 'object') return false
   const attempts = r.attempts
   const count = (n: unknown): boolean => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= attempts
@@ -112,6 +147,8 @@ export function isRunRecord(v: unknown): v is EvalRunRecord {
     return (
       count(o.passes) &&
       (o.honest === undefined || count(o.honest)) &&
+      // A capped attempt is a failed one, so the two can't add up past the attempts.
+      (o.capped === undefined || (count(o.capped) && (o.passes as number) + (o.capped as number) <= attempts)) &&
       typeof o.costUsd === 'number' &&
       typeof o.durationMs === 'number'
     )
@@ -203,7 +240,9 @@ export function compareRuns(a: EvalRunRecord, b: EvalRunRecord): RunComparison {
     ['prompt', a.promptHash, b.promptHash],
     ['commit', a.commit, b.commit],
     ['host', a.host, b.host],
-    ['attempts', a.attempts, b.attempts]
+    ['attempts', a.attempts, b.attempts],
+    // A cap can end an attempt as a failure, so different caps are a difference too.
+    ['caps', capsLabel(a.caps), capsLabel(b.caps)]
   ]
   return {
     shared,
@@ -236,8 +275,31 @@ function stampLine(label: string, r: EvalRunRecord): string {
     `prompt ${r.promptHash ?? '?'}`,
     `commit ${r.commit ?? '?'}`,
     r.host,
-    `${r.attempts} attempts/task`
+    `${r.attempts} attempts/task`,
+    `caps ${capsLabel(r.caps) ?? '?'}`
   ].join('  ')
+}
+
+/**
+ * What the cost caps did to one side: attempts the per-attempt cap ended (counted as
+ * failures in the rows), and tasks the run cap kept from running, which are therefore
+ * missing from the comparison rather than scored.
+ */
+function capNotes(label: string, r: EvalRunRecord): string[] {
+  const capped = Object.keys(r.tasks)
+    .sort()
+    .filter((id) => r.tasks[id].capped)
+  return [
+    ...(capped.length
+      ? [
+          `  ${label}: attempts that reached the per-attempt cost cap or its wrap-up reminder, counted as failed: ` +
+            capped.map((id) => `${id} (${r.tasks[id].capped})`).join(', ')
+        ]
+      : []),
+    ...(r.skipped?.length
+      ? [`  ${label} STOPPED at its run cost cap; not run, so not compared: ${r.skipped.join(', ')}`]
+      : [])
+  ]
 }
 
 function sideLine(label: string, k: number, s: RunComparison['a']): string {
@@ -280,6 +342,8 @@ export function formatComparison(
     stampLine('A', a),
     stampLine('B', b),
     c.differs.length ? `  differs: ${c.differs.join(', ')}` : '  differs: nothing recorded (same stamps on both sides)',
+    ...capNotes('A', a),
+    ...capNotes('B', b),
     ...(c.onlyA.length ? [`  only in A (not compared): ${c.onlyA.join(', ')}`] : []),
     ...(c.onlyB.length ? [`  only in B (not compared): ${c.onlyB.join(', ')}`] : []),
     '',

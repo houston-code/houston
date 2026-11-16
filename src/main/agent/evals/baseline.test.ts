@@ -119,6 +119,21 @@ describe('assertRecordable', () => {
     expect(() => assertRecordable([score('a', 1), score('b', 0)], [])).not.toThrow()
   })
 
+  // A capped attempt is a runaway the cap cut short: frozen as a 0, it could never regress.
+  it('refuses a run where the per-attempt cost cap stopped an attempt', () => {
+    const scores = [score('a', 1), score('b', 2 / 3), score('c', 0)]
+    const capped = [
+      { taskId: 'b', attempts: 1 },
+      { taskId: 'c', attempts: 3 }
+    ]
+    expect(() => assertRecordable(scores, [], capped)).toThrow(
+      /4 attempt\(s\) across 2 task\(s\) reached the per-attempt cost cap or its wrap-up reminder/
+    )
+    expect(() => assertRecordable(scores, [], capped)).toThrow(/Tasks: b, c/)
+    expect(() => assertRecordable(scores, [], capped)).toThrow(/HOUSTON_EVAL_MAX_COST_USD/)
+    expect(() => assertRecordable(scores, [], [])).not.toThrow()
+  })
+
   it('refuses an empty score set', () => {
     expect(() => assertRecordable([])).toThrow(/no tasks/)
   })

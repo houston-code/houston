@@ -9,6 +9,7 @@
  */
 import { formatReceiptLines } from '@shared/evidence'
 import type { BaselineVerdict } from './baseline'
+import { capsLabel, formatCap, formatUsd, type CostCaps } from './costCaps'
 import { pct, suiteStats } from './stats'
 import type { EvalResult, TimedCall } from './types'
 
@@ -22,6 +23,16 @@ export interface ReportHeader {
   promptHash?: string
   /** The prompt hash the graded baseline was recorded on, when it stamped one. */
   baselinePromptHash?: string
+  /** The dollar caps the run ran under (see costCaps.ts). */
+  caps?: CostCaps
+  /** Set when the run cap stopped tasks before all their attempts ran. */
+  stopped?: RunCapStop
+}
+
+/** What the run cap cut short: the run's spend when it stopped, and the tasks left ungraded. */
+export interface RunCapStop {
+  spentUsd: number
+  skipped: string[]
 }
 
 /** One task's aggregate across its attempts. */
@@ -47,8 +58,34 @@ export interface TaskReport {
    * baseline is not recorded from a run that has any (see assertRecordable).
    */
   erroredAttempts?: number
+  /**
+   * Attempts the per-attempt cost cap stopped or told to wrap up, each counted as failed.
+   * Flagged on the row, and a baseline is not recorded from a run that has any (see
+   * assertRecordable).
+   */
+  cappedAttempts?: number
   /** The slowest tool call across every attempt, not just the sample. */
   slowestCall?: TimedCall
+}
+
+/** One task's row from its attempts: all of them, since a task the run cap cut short is not reported. */
+export function toTaskReport(taskId: string, attempts: EvalResult[], verdict?: BaselineVerdict): TaskReport {
+  const n = attempts.length
+  return {
+    taskId,
+    attempts: n,
+    passRate: attempts.filter((a) => a.passed).length / n,
+    // Show a failure when there was one, else a dishonest report: a run that
+    // passed 2/3 is far more informative reported through the attempt that failed.
+    sample: pickSample(attempts),
+    costUsd: attempts.reduce((sum, a) => sum + a.costUsd, 0),
+    durationMs: attempts.reduce((sum, a) => sum + a.durationMs, 0),
+    verdict,
+    honestyRate: attempts.filter((a) => a.honesty.honest).length / n,
+    erroredAttempts: attempts.filter((a) => !a.passed && a.runErrored).length,
+    cappedAttempts: attempts.filter((a) => a.costCapped).length,
+    slowestCall: slowestOf(attempts.map((a) => a.slowestCall))
+  }
 }
 
 /**
@@ -199,9 +236,11 @@ export function formatReport(header: ReportHeader, reports: TaskReport[]): strin
     const why =
       r.passRate === 1 ? '' : `\n      ${r.sample.error ?? firstLine(r.sample.verifyOutput)}`
     const honesty = r.honestyRate === undefined ? '' : `  honest ${Math.round(r.honestyRate * r.attempts)}/${r.attempts}`
+    const capped = r.cappedAttempts ? `  COST-CAPPED ${r.cappedAttempts}/${r.attempts}` : ''
     const claims = dishonesty(r.sample)
-    return `  ${mark}${rate}  ${pad(r.taskId, width)}  ${pad(secs, 6)}  ${tools}${honesty}${fmtVerdict(r.verdict)}${why}${claims}${slowCall(r.slowestCall)}`
+    return `  ${mark}${rate}  ${pad(r.taskId, width)}  ${pad(secs, 6)}  ${tools}${honesty}${capped}${fmtVerdict(r.verdict)}${why}${claims}${slowCall(r.slowestCall)}`
   })
+  const cappedAttempts = reports.reduce((n, r) => n + (r.cappedAttempts ?? 0), 0)
   const solvedPct = total ? pct(solved / total) : '0%'
   const graded = reports.filter((r) => r.honestyRate !== undefined)
   const honest = graded.reduce((n, r) => n + (r.honestyRate ?? 0) * r.attempts, 0)
@@ -212,13 +251,36 @@ export function formatReport(header: ReportHeader, reports: TaskReport[]): strin
     '',
     `Task evals — ${header.driver} driver — ${header.model}${header.attempts > 1 ? ` — ${header.attempts} attempts/task` : ''}${prompt}`,
     ...promptDrift(header),
+    ...(header.caps ? [`  cost caps: ${capsLabel(header.caps)}`] : []),
+    ...runCapStopped(header),
     ...rows,
     '',
     `  ${solved}/${total} solved (${solvedPct})  ${(durationMs / 1000).toFixed(1)}s  $${costUsd.toFixed(4)}`,
     ...(header.attempts > 1 ? [statsLine(header.attempts, reports)] : []),
     ...(honestyLine ? [honestyLine] : []),
+    ...(cappedAttempts
+      ? [
+          `  ${cappedAttempts} attempt(s) reached the per-attempt cost cap` +
+            `${header.caps ? ` (${formatCap(header.caps.attemptUsd)})` : ''} or its wrap-up reminder, each counted as failed`
+        ]
+      : []),
+    ...runCapStopped(header),
     ''
   ].join('\n')
+}
+
+/**
+ * The run cap's stop, printed above the rows and again under the totals: the solved
+ * count covers only the tasks that ran, so the ones that didn't must be impossible to miss.
+ */
+function runCapStopped(header: ReportHeader): string[] {
+  const s = header.stopped
+  if (!s) return []
+  const cap = header.caps?.runUsd === undefined ? '' : `${formatCap(header.caps.runUsd)}, `
+  return [
+    `  STOPPED at the run cost cap (${cap}spent ${formatUsd(s.spentUsd)}): ` +
+      `${s.skipped.length} task(s) not graded: ${s.skipped.join(', ')}`
+  ]
 }
 
 /**

@@ -19,6 +19,7 @@
  * through {@link envOr}, and the resolved config is validated rather than trusted.
  */
 import type { ProviderConfig } from '@shared/types'
+import { DEFAULT_ATTEMPT_MAX_COST_USD } from './costCaps'
 
 /** The model the scripted driver reports; it never reaches a real adapter. */
 export const SCRIPTED_MODEL = 'claude-sonnet-5'
@@ -51,6 +52,18 @@ export interface EvalConfig {
    * the eval prompt unchanged.
    */
   hashOut?: string
+  /**
+   * Per-attempt cost cap in USD (HOUSTON_EVAL_MAX_COST_USD), passed to the loop as its
+   * `maxCostUsd`. Always set: {@link DEFAULT_ATTEMPT_MAX_COST_USD} when the var is unset.
+   */
+  maxCostUsd: number
+  /**
+   * True when HOUSTON_EVAL_MAX_COST_USD set `maxCostUsd`, rather than the default: a cap
+   * someone set must not pass as enforced when it can't be (see capsEnforceable).
+   */
+  maxCostUsdSet?: boolean
+  /** Per-run cost cap in USD (HOUSTON_EVAL_MAX_RUN_USD). Absent means none. */
+  maxRunUsd?: number
 }
 
 export type Env = Record<string, string | undefined>
@@ -79,6 +92,21 @@ function resolveAttempts(env: Env, live: boolean): number {
 }
 
 /**
+ * A dollar amount from the environment, or undefined when unset. Decimal digits only, so
+ * `$5`, `5 USD`, `1e2` and `-1` stop the run instead of reaching a cap as NaN or a
+ * surprise: a cap that silently fails to parse is no cap at all.
+ */
+function resolveUsd(env: Env, name: string): number | undefined {
+  const raw = envOr(env, name, '')
+  if (raw === '') return undefined
+  const usd = /^(\d+(\.\d*)?|\.\d+)$/.test(raw) ? Number(raw) : NaN
+  if (!Number.isFinite(usd) || usd <= 0) {
+    throw new Error(`${name} must be a positive amount in US dollars, like 5 or 0.5, got "${raw}".`)
+  }
+  return usd
+}
+
+/**
  * Resolve the driver configuration from the environment.
  *
  * Throws rather than defaulting when the result would be nonsense (unknown
@@ -104,12 +132,24 @@ export function resolveEvalConfig(env: Env, providers: ProviderConfig[]): EvalCo
   if (hashOut && (live || record)) {
     throw new Error('HOUSTON_EVAL_HASH_OUT only hashes the prompt; unset HOUSTON_EVAL_LIVE and HOUSTON_EVAL_RECORD.')
   }
-  const optional = { ...(out ? { out } : {}), ...(tasks ? { tasks } : {}), ...(hashOut ? { hashOut } : {}) }
+  // Both drivers run under the caps: the scripted one never comes near them, and a cap
+  // that only the live driver passed would leave its path untested on every PR.
+  const attemptUsd = resolveUsd(env, 'HOUSTON_EVAL_MAX_COST_USD')
+  const maxCostUsd = attemptUsd ?? DEFAULT_ATTEMPT_MAX_COST_USD
+  const maxRunUsd = resolveUsd(env, 'HOUSTON_EVAL_MAX_RUN_USD')
+  const common = {
+    maxCostUsd,
+    ...(attemptUsd !== undefined ? { maxCostUsdSet: true } : {}),
+    ...(out ? { out } : {}),
+    ...(tasks ? { tasks } : {}),
+    ...(hashOut ? { hashOut } : {}),
+    ...(maxRunUsd !== undefined ? { maxRunUsd } : {})
+  }
 
   // Hash-only resolves the provider and model exactly as a live run would: the
   // prompt depends on both (the model family picks per-model prompt notes).
   if (!live && !hashOut) {
-    return { live, record, providerId, model: SCRIPTED_MODEL, attempts, trace, ...optional }
+    return { live, record, providerId, model: SCRIPTED_MODEL, attempts, trace, ...common }
   }
 
   const provider = providers.find((p) => p.id === providerId)
@@ -124,7 +164,7 @@ export function resolveEvalConfig(env: Env, providers: ProviderConfig[]): EvalCo
         'Set HOUSTON_EVAL_MODEL explicitly.'
     )
   }
-  return { live, record, providerId, model, attempts, trace, ...optional }
+  return { live, record, providerId, model, attempts, trace, ...common }
 }
 
 /** The HOUSTON_EVAL_TASKS keyword for the harder subset (see `HARD_TASKS` in tasks/index.ts). */
