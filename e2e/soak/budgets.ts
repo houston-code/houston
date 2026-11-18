@@ -17,7 +17,8 @@
  *                   the fix), page elements kept 7 (macOS laptop and runner, Linux)
  *   largeChat       opening +235 to +334, window heap open 74-75, 0.4-1.8 s, kept -5 to
  *                   107, window heap kept 2 (48 before the fix) (all three)
- *   cliSession      peak 316-562, growth turn 2 to 12 53-314, idle 117-468 (macOS,
+ *   cliSession      peak 316-562 (60 x 15: 550-804), growth turn 2 to 12 53-314 (to
+ *                   60: 177-421), idle 117-468 (60 x 15: 197-433) (macOS,
  *                   Windows; a runner may not have handed pages back 15 s after the run); Linux idle 446, since glibc keeps the freed heap and the
  *                   idle size stays at the peak. The save-buffer regression fixed earlier
  *                   grew ~65 MB per turn, over 600 MB across this session.
@@ -29,7 +30,9 @@
  * a steady or falling rate as the session goes on. Between collections up to as much
  * again is garbage not yet collected: 60 x 15 peaked at 1710-2367 MB but measured
  * 1115-1359 MB after GC with the chat still open. A buffer that grows every turn
- * would push either past this; a fixed limit cannot fit both session sizes.
+ * would push either past this; a fixed limit cannot fit both session sizes. The CLI's
+ * peak and its growth from turn 2 scale the same way: 799 and 452 MB for 12 x 12, 1003
+ * and 565 MB for 60 x 15. The save-buffer regression would add about 3.8 GB over 60.
  *
  * Window heap kept was 35-48 MB until App stopped letting its closures reach the
  * transcript: closures from the render where the chat was open kept that render's
@@ -51,9 +54,9 @@ const BUDGETS = {
     win32: { openTotalGrowthMB: 600, openRendererHeapMB: 150, openSeconds: 20, retainedMB: 400, rendererRetainedMB: 15 }
   },
   cliSession: {
-    darwin: { peakResidentMB: 800, lateGrowthMB: 450, idleResidentMB: 650 },
-    linux: { peakResidentMB: 800, lateGrowthMB: 450, idleResidentMB: 650 },
-    win32: { peakResidentMB: 800, lateGrowthMB: 450, idleResidentMB: 650 }
+    darwin: { peakBaseMB: 760, peakPerCallMB: 0.27, lateGrowthBaseMB: 430, lateGrowthPerCallMB: 0.15, idleResidentMB: 650 },
+    linux: { peakBaseMB: 760, peakPerCallMB: 0.27, lateGrowthBaseMB: 430, lateGrowthPerCallMB: 0.15, idleResidentMB: 650 },
+    win32: { peakBaseMB: 760, peakPerCallMB: 0.27, lateGrowthBaseMB: 430, lateGrowthPerCallMB: 0.15, idleResidentMB: 650 }
   }
 }
 
