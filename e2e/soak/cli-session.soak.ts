@@ -116,8 +116,8 @@ test('a long heavy CLI session keeps its memory flat and gives it back', async (
     // every turn as the allocator kept each save's freed buffers; a fix flattened it.
     const from = at[Math.min(2, TURNS)]
     const checks: Check[] = [
-      { name: 'peak resident during the session', value: Math.round(peak), limit: b.peakResidentMB, unit: 'MB' },
-      { name: 'growth from turn 2 to the last turn', value: Math.round(at[TURNS] - from), limit: b.lateGrowthMB, unit: 'MB' },
+      { name: 'peak resident during the session', value: Math.round(peak), limit: Math.round(b.peakBaseMB + b.peakPerCallMB * TURNS * STEPS), unit: 'MB' },
+      { name: 'growth from turn 2 to the last turn', value: Math.round(at[TURNS] - from), limit: Math.round(b.lateGrowthBaseMB + b.lateGrowthPerCallMB * TURNS * STEPS), unit: 'MB' },
       { name: 'resident once idle', value: Math.round(idle), limit: b.idleResidentMB, unit: 'MB' },
       { name: 'child processes left running', value: stray.length, limit: 0, unit: '' }
     ]

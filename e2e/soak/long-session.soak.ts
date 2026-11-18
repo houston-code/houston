@@ -44,7 +44,7 @@ test('a long heavy session stays within its memory budget and gives it back', as
     const b = budget('desktopSession')
     const peak = Math.max(...samples.map((x) => x.totalMB))
     const checks: Check[] = [
-      { name: 'peak total during the run', value: peak, limit: b.peakTotalMB, unit: 'MB' },
+      { name: 'peak total during the run', value: peak, limit: Math.round(b.peakBaseMB + b.peakPerCallMB * TURNS * STEPS), unit: 'MB' },
       { name: 'main heap after the run (GC)', value: ended.mainHeapMB, limit: b.mainHeapAfterGcMB, unit: 'MB' },
       { name: 'total kept after leaving the chat', value: settled.totalMB - baseline.totalMB, limit: b.retainedMB, unit: 'MB' },
       { name: 'window heap kept after leaving the chat', value: settled.rendererHeapMB - baseline.rendererHeapMB, limit: b.rendererRetainedMB, unit: 'MB' },
