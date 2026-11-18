@@ -112,12 +112,12 @@ describe('settings migration — model backfill', () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const ids = await loadOpenAIModelIds()
     expect(ids[0]).toBe('gpt-4o') // user's model kept, in place
-    expect(ids).toContain('gpt-6.1-sol') // new default appended
+    expect(ids).toContain('gpt-6.2-sol') // new default appended
   })
 
   it('treats a settings file with no schemaVersion as pre-v2 and backfills', async () => {
     writeSettings({ providers: [openaiProvider(['gpt-4o'])] })
-    expect(await loadOpenAIModelIds()).toContain('gpt-6.1-sol')
+    expect(await loadOpenAIModelIds()).toContain('gpt-6.2-sol')
   })
 
   it('does not re-add a default model a v2 install has already deleted', async () => {
@@ -127,7 +127,7 @@ describe('settings migration — model backfill', () => {
     writeSettings({ schemaVersion: 2, providers: [openaiProvider(['gpt-4o'])] })
     const ids = await loadOpenAIModelIds()
     expect(ids).not.toContain('gpt-5')
-    expect(ids).toContain('gpt-6.1-sol') // the v8 scoped add still runs
+    expect(ids).toContain('gpt-6.2-sol') // the v17 scoped add still runs
   })
 
   it('adds the GPT-6 line on the v8 bump without pruning the 5.x models', async () => {
@@ -135,20 +135,32 @@ describe('settings migration — model backfill', () => {
     expect(await loadOpenAIModelIds()).toEqual([
       'gpt-5.6-sol',
       'o3',
-      'gpt-6-astra',
-      'gpt-6.1-sol',
+      // gpt-6-astra and gpt-6.1-sol left the seed when 6.2 replaced them, so the v8 add no
+      // longer brings them in.
       'gpt-6-luna',
-      'gpt-6.1-terra' // the v15 add, appended after the v8 ones
+      'gpt-6.1-terra', // the v15 add, appended after the v8 ones
+      'gpt-6.2-astra', // the v17 adds
+      'gpt-6.2-sol'
     ])
   })
 
   it('adds gpt-6.1-terra on the v15 bump without re-adding defaults the user deleted', async () => {
     writeSettings({ schemaVersion: 14, providers: [openaiProvider(['gpt-6.1-sol'])] })
-    expect(await loadOpenAIModelIds()).toEqual(['gpt-6.1-sol', 'gpt-6.1-terra'])
+    expect(await loadOpenAIModelIds()).toEqual(['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6.2-astra', 'gpt-6.2-sol'])
   })
 
   it('leaves gpt-6.1-terra deleted once the v15 bump has run', async () => {
     writeSettings({ schemaVersion: 15, providers: [openaiProvider(['gpt-6.1-sol'])] })
+    expect(await loadOpenAIModelIds()).toEqual(['gpt-6.1-sol', 'gpt-6.2-astra', 'gpt-6.2-sol'])
+  })
+
+  it('adds GPT-6.2 Astra and Sol on the v17 bump and keeps the releases they replace', async () => {
+    writeSettings({ schemaVersion: 16, providers: [openaiProvider(['gpt-6-astra', 'gpt-6.1-sol'])] })
+    expect(await loadOpenAIModelIds()).toEqual(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.2-astra', 'gpt-6.2-sol'])
+  })
+
+  it('leaves GPT-6.2 deleted once the v17 bump has run', async () => {
+    writeSettings({ schemaVersion: 17, providers: [openaiProvider(['gpt-6.1-sol'])] })
     expect(await loadOpenAIModelIds()).toEqual(['gpt-6.1-sol'])
   })
 

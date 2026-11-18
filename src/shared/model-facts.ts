@@ -228,10 +228,12 @@ const OPENAI_FAMILIES: FamilyRule[] = [
 ]
 
 /** OpenAI's published standard-tier rates, most specific first (a `-mini` / `-pro` variant
- *  before its base id). A later 6.x release of a codename tier takes that tier's rate. From
+ *  before its base id). A later 6.x release of a codename tier takes that tier's rate unless
+ *  OpenAI repriced it (gpt-6.2-astra is below gpt-6-astra). From
  *  GPT-5.6 on, cache writes are billed; gpt-5.5 and earlier write to the cache for free.
  *  gpt-5.6-cyber's pricing lists no long-prompt tier, so it has none here. */
 const OPENAI_PRICES: Rows<ModelPricing> = [
+  [/gpt-6\.2-astra/, openaiLongPrompt(openaiPaidWrites(8, 40, 0.4))],
   [/gpt-6[\d.]*-astra/, openaiLongPrompt(openaiPaidWrites(10, 50, 1))],
   [/gpt-6-sol/, openaiLongPrompt(openaiPaidWrites(2, 10, 0.2))],
   [/gpt-6[\d.]*-terra/, openaiLongPrompt(openaiPaidWrites(1, 5, 0.05))],

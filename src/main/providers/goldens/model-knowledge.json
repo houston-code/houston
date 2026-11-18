@@ -958,6 +958,70 @@
         "geminiThinking": false
       }
     },
+    "gpt-6.2-astra": {
+      "window": 1050000,
+      "maxOutput": null,
+      "pricing": {
+        "input": 8,
+        "output": 40,
+        "cacheRead": 0.4,
+        "cacheWrite": 10,
+        "longContext": {
+          "above": 272000,
+          "input": 16,
+          "output": 60,
+          "cacheRead": 0.8,
+          "cacheWrite": 20
+        }
+      },
+      "caps": {
+        "vision": true,
+        "reasoning": true
+      },
+      "tools": true,
+      "gates": {
+        "anthropicThinking": false,
+        "anthropicLegacy": false,
+        "anthropicInterleaved": false,
+        "anthropicXhigh": false,
+        "anthropicPreserved": false,
+        "anthropicThinksByDefault": false,
+        "openaiReasoning": true,
+        "geminiThinking": false
+      }
+    },
+    "gpt-6.2-sol": {
+      "window": 1050000,
+      "maxOutput": null,
+      "pricing": {
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.1,
+        "cacheWrite": 2.5,
+        "longContext": {
+          "above": 272000,
+          "input": 4,
+          "output": 15,
+          "cacheRead": 0.2,
+          "cacheWrite": 5
+        }
+      },
+      "caps": {
+        "vision": true,
+        "reasoning": true
+      },
+      "tools": true,
+      "gates": {
+        "anthropicThinking": false,
+        "anthropicLegacy": false,
+        "anthropicInterleaved": false,
+        "anthropicXhigh": false,
+        "anthropicPreserved": false,
+        "anthropicThinksByDefault": false,
+        "openaiReasoning": true,
+        "geminiThinking": false
+      }
+    },
     "gpt-6-astra": {
       "window": 1050000,
       "maxOutput": null,
@@ -2744,11 +2808,13 @@
       "gpt-4.1-mini",
       "gpt-4-turbo",
       "gpt-3.5-turbo",
+      "gpt-6.2-astra",
       "gpt-6-astra",
       "gpt-6-luna",
       "gpt-5.6-luna",
       "gpt-4o",
       "gpt-4o-mini",
+      "gpt-6.2-sol",
       "gpt-6.1-sol",
       "gpt-6-sol",
       "gpt-5.6-sol",
@@ -2770,6 +2836,8 @@
       "qwen2.5-coder"
     ],
     "openai": [
+      "gpt-6.2-astra",
+      "gpt-6.2-sol",
       "gpt-6.1-sol",
       "openai/gpt-6.1-sol",
       "gpt-6.1-terra",
@@ -2954,11 +3022,13 @@
       "gpt-4.1-mini",
       "gpt-4-turbo",
       "gpt-3.5-turbo",
+      "gpt-6.2-astra",
       "gpt-6-astra",
       "gpt-6-luna",
       "gpt-5.6-luna",
       "gpt-4o",
       "gpt-4o-mini",
+      "gpt-6.2-sol",
       "gpt-6.1-sol",
       "gpt-6-sol",
       "gpt-5.6-sol",
@@ -2978,6 +3048,8 @@
       "qwen2.5-coder"
     ],
     "openai-compatible": [
+      "gpt-6.2-astra",
+      "gpt-6.2-sol",
       "gpt-6.1-sol",
       "openai/gpt-6.1-sol",
       "gpt-6.1-terra",
@@ -3160,11 +3232,13 @@
       "gpt-4.1-mini",
       "gpt-4-turbo",
       "gpt-3.5-turbo",
+      "gpt-6.2-astra",
       "gpt-6-astra",
       "gpt-6-luna",
       "gpt-5.6-luna",
       "gpt-4o",
       "gpt-4o-mini",
+      "gpt-6.2-sol",
       "gpt-6.1-sol",
       "gpt-6-sol",
       "gpt-5.6-sol",

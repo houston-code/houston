@@ -194,7 +194,7 @@ so its inputs may be the task; never pass issue or comment text to `prompt`.
 - uses: houston-code/houston/action@<commit SHA>
   with:
     provider: openai
-    model: gpt-6.1-sol
+    model: gpt-6.2-sol
     api-key: ${{ secrets.OPENAI_API_KEY }}
 
 - uses: houston-code/houston/action@<commit SHA>

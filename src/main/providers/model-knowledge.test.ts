@@ -66,6 +66,8 @@ const CORPUS = [
   'claude-sonnet-5-5@20260901',
   'anthropic/claude-sonnet-5',
   // OpenAI: GPT-6, GPT-5.x tiers and variants, GPT-4.x, o-series.
+  'gpt-6.2-astra',
+  'gpt-6.2-sol',
   'gpt-6-astra',
   'gpt-6.1-sol',
   'gpt-6.1-terra',

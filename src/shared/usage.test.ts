@@ -92,6 +92,8 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor('gpt-5.6')).toBe(1_000_000)
     expect(contextWindowFor('gpt-5.7')).toBe(1_000_000)
     // GPT-6 ships a 1.05M window on every tier.
+    expect(contextWindowFor('gpt-6.2-astra')).toBe(1_050_000)
+    expect(contextWindowFor('gpt-6.2-sol')).toBe(1_050_000)
     expect(contextWindowFor('gpt-6-astra')).toBe(1_050_000)
     expect(contextWindowFor('gpt-6.1-sol')).toBe(1_050_000)
     expect(contextWindowFor('gpt-6.1-terra')).toBe(1_050_000)
@@ -199,6 +201,8 @@ describe('modelPricing', () => {
     // [id, input, output, cached input, cache write]: OpenAI's standard-tier table. From
     // GPT-5.6 on a write bills at 1.25x input; gpt-5.5 and earlier write for free.
     const rows: Array<[string, number, number, number, number]> = [
+      ['gpt-6.2-astra', 8, 40, 0.4, 10], // repriced below gpt-6-astra
+      ['gpt-6.2-sol', 2, 10, 0.1, 2.5],
       ['gpt-6-astra', 10, 50, 1, 12.5],
       ['gpt-6.1-sol', 2, 10, 0.1, 2.5],
       ['gpt-6.1-terra', 1, 5, 0.05, 1.25],
@@ -240,6 +244,8 @@ describe('modelPricing', () => {
   it('prices OpenAI prompts over 272K tokens at the published long-context rates', () => {
     // [id, input, output, cached input, cache write] above 272K input tokens.
     const rows: Array<[string, number, number, number, number]> = [
+      ['gpt-6.2-astra', 16, 60, 0.8, 20],
+      ['gpt-6.2-sol', 4, 15, 0.2, 5],
       ['gpt-6-astra', 20, 75, 2, 25],
       ['gpt-6.1-sol', 4, 15, 0.2, 5],
       ['gpt-6.1-terra', 2, 7.5, 0.1, 2.5],
