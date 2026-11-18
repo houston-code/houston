@@ -3,7 +3,7 @@ import type { AppSettings, ApprovalPolicy, ProviderConfig, SelectedModel } from 
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 16
+export const SETTINGS_SCHEMA_VERSION = 17
 
 /**
  * The reasoning effort a fresh install starts at. Coding and long agentic turns are the
@@ -107,10 +107,11 @@ export function defaultProviders(): ProviderConfig[] {
       // The GPT-6 line, one model per codename tier: astra (flagship), sol (near-astra at a
       // fifth of the price, so the default), terra (half of sol's price, fast), luna
       // (efficient). The GPT-5.x and o-series models it supersedes still serve, so the
-      // v8 and v15 migrations only add these ids to existing installs. Starting points
+      // v8, v15 and v17 migrations only add these ids to existing installs (gpt-6-astra and
+      // gpt-6.1-sol, which 6.2 replaced in the seed, still serve). Starting points
       // only: the live list is a Fetch away, and the display name derives from the id.
-      models: [{ id: 'gpt-6-astra' }, { id: 'gpt-6.1-sol' }, { id: 'gpt-6.1-terra' }, { id: 'gpt-6-luna' }],
-      defaultModel: 'gpt-6.1-sol',
+      models: [{ id: 'gpt-6.2-astra' }, { id: 'gpt-6.2-sol' }, { id: 'gpt-6.1-terra' }, { id: 'gpt-6-luna' }],
+      defaultModel: 'gpt-6.2-sol',
       requiresKey: true,
       hasKey: false,
       builtIn: true

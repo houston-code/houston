@@ -292,6 +292,8 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
     ])
   }
   // v8: the GPT-6 line. Nothing is pruned: the GPT-5.x models it supersedes still serve.
+  // (Its gpt-6-astra and gpt-6.1-sol adds are no-ops since v17 replaced them in the seed
+  // with the 6.2 releases.)
   if (fromVersion < 8) {
     providers = backfillDefaultModels(providers, ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna'])
   }
@@ -329,6 +331,9 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   if (fromVersion < 15) providers = backfillDefaultModels(providers, ['gpt-6.1-terra'])
   // v16: Claude Fable 5.2. Scoped; Fable 5.1, which it replaces in the seed, still serves.
   if (fromVersion < 16) providers = backfillDefaultModels(providers, ['claude-fable-5-2'])
+  // v17: GPT-6.2 Astra and Sol. Scoped; gpt-6-astra and gpt-6.1-sol, which they replace in
+  // the seed, still serve.
+  if (fromVersion < 17) providers = backfillDefaultModels(providers, ['gpt-6.2-astra', 'gpt-6.2-sol'])
   const merged: AppSettings = {
     ...base,
     ...upgraded,
