@@ -1009,6 +1009,9 @@ describe('saving from the remembered write', () => {
     }
   }
 
+  // 600 real saves, each a write and a rename. That is about 150 ms on a fast disk and
+  // 0.8 s on the macOS Intel runner, which has stalled past 5 s under load (the nightly
+  // of 2026-11-17), so the default timeout would fail a correct run.
   it('leaves the same file as reading it back before every save', () => {
     const run = (forget: boolean): Record<string, unknown> => {
       const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
@@ -1024,7 +1027,7 @@ describe('saving from the remembered write', () => {
       return rest
     }
     expect(run(false)).toEqual(run(true))
-  })
+  }, 30_000)
 
   it('reads the file again when another process replaced it, keeping that process\'s changes', () => {
     const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
