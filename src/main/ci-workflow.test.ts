@@ -407,7 +407,7 @@ describe('CI alerts on a red main', () => {
     // `warm-caches` are named because nothing else reports them on a push.
     expect(alert).toContain('needs: [test, linux-sandbox, build, plan, warm-caches]')
     expect(alert).toContain("workflow: ${{ github.event_name == 'schedule' && 'CI nightly' || 'CI on main' }}")
-    expect(alert).toContain("failed: ${{ contains(needs.*.result, 'failure') }}")
+    expect(alert).toContain("failed: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'abandoned') }}")
   })
 
   it('grants the alert only issue access', () => {

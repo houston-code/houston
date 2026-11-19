@@ -208,4 +208,4 @@ jobs:
       issues: write
     with:
       workflow: Model drift
-      failed: ${{ contains(needs.*.result, 'failure') }}
+      failed: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'abandoned') }}
