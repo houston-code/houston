@@ -1843,9 +1843,10 @@ export async function startRun(
         ? getMcpToolDefs(
             mergeRunMcpServers(
               trustsProject(config.elevatedHash)
-                ? mergeProjectMcpServers(settings.mcpServers, config.elevated.mcpServers)
+                ? mergeProjectMcpServers(settings.mcpServers, config.elevated.mcpServers, workspace)
                 : settings.mcpServers,
-              req.extraMcpServers
+              req.extraMcpServers,
+              workspace
             ),
             runId,
             { signal: abort.signal, noticeKey: conversationId ?? runId, onNotice: (m) => mcpNotices.push(m) }

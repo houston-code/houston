@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   elevatedConfigHash,
   loadProjectConfig,
   mergeProjectMcpServers,
+  mergeRunMcpServers,
   parseProjectAllowRules,
   parseProjectHooks,
   parseProjectMcpServers,
@@ -235,7 +236,7 @@ describe('mergeProjectMcpServers', () => {
     const merged = mergeProjectMcpServers(user, [
       { id: 'docs', command: 'npx', enabled: true },
       { id: 'search', command: 'npx', enabled: true }
-    ])
+    ], '/work/app')
     expect(merged.map((s) => s.id)).toEqual(['linear', 'proj-docs', 'proj-search'])
     // The user's proj-docs won; the project's search came through marked.
     expect(merged.find((s) => s.id === 'proj-docs')!.command).toBe('mine')
@@ -244,8 +245,52 @@ describe('mergeProjectMcpServers', () => {
   })
 
   it('handles an absent user list', () => {
-    expect(mergeProjectMcpServers(undefined, [{ id: 'a', command: 'x', enabled: true }])).toEqual([
-      { id: 'proj-a', command: 'x', enabled: true, origin: 'project' }
+    expect(mergeProjectMcpServers(undefined, [{ id: 'a', command: 'x', enabled: true }], '/work/app')).toEqual([
+      { id: 'proj-a', command: 'x', enabled: true, origin: 'project', cwd: resolve('/work/app') }
+    ])
+  })
+
+  it("starts a project's stdio servers in its folder, not Houston's own working directory", () => {
+    const ws = resolve('/work/app')
+    const merged = mergeProjectMcpServers(
+      [{ id: 'mine', command: 'my-server', enabled: true }],
+      [
+        { id: 'uv', command: 'uv', args: ['run', 'server.py'], enabled: true },
+        { id: 'sub', command: 'node', args: ['index.js'], cwd: 'tools/mcp', enabled: true },
+        { id: 'abs', command: 'node', cwd: resolve('/opt/srv'), enabled: true },
+        { id: 'remote', command: '', url: 'https://example.com/mcp', enabled: true },
+        { id: 'sse', command: '', url: 'https://example.com/sse', transport: 'sse', enabled: true }
+      ],
+      ws
+    )
+    const cwd = (id: string): string | undefined => merged.find((s) => s.id === id)!.cwd
+    expect(cwd('proj-uv')).toBe(ws)
+    expect(cwd('proj-sub')).toBe(join(ws, 'tools', 'mcp'))
+    expect(cwd('proj-abs')).toBe(resolve('/opt/srv'))
+    // Remote servers have no working directory, and the user's own servers keep theirs.
+    expect(cwd('proj-remote')).toBeUndefined()
+    expect(cwd('proj-sse')).toBeUndefined()
+    expect(cwd('mine')).toBeUndefined()
+    // The same entry in two folders is two different servers.
+    const other = mergeProjectMcpServers(undefined, [{ id: 'uv', command: 'uv', enabled: true }], resolve('/work/other'))
+    expect(other[0].cwd).not.toBe(cwd('proj-uv'))
+  })
+})
+
+describe('mergeRunMcpServers', () => {
+  it("starts a run's stdio servers in the run's workspace", () => {
+    const ws = resolve('/work/app')
+    const merged = mergeRunMcpServers(
+      undefined,
+      [
+        { id: 'a', command: 'npx', args: ['server', '.'], enabled: true },
+        { id: 'b', command: 'node', cwd: 'mcp', enabled: true }
+      ],
+      ws
+    )!
+    expect(merged.map((s) => [s.id, s.cwd])).toEqual([
+      ['run-a', ws],
+      ['run-b', join(ws, 'mcp')]
     ])
   })
 })

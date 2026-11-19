@@ -816,7 +816,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     const s = getSettings()
     const trusted = await workspaceTrusted(tui.cwd, s.trustedFolders).catch(() => false)
     const servers = trusted
-      ? mergeProjectMcpServers(s.mcpServers, (await loadProjectConfig(tui.cwd)).elevated.mcpServers)
+      ? mergeProjectMcpServers(s.mcpServers, (await loadProjectConfig(tui.cwd)).elevated.mcpServers, tui.cwd)
       : (s.mcpServers ?? [])
     return servers.filter((c) => c.enabled)
   }

@@ -18,21 +18,21 @@ export async function workspaceMcpServers(
   extra?: McpServerConfig[]
 ): Promise<McpServerConfig[]> {
   let configs = settings.mcpServers ?? []
+  let path = workspace
+  try {
+    path = realpathSync(workspace)
+  } catch {
+    // Keep the raw path; trust records normalize the same way.
+  }
   try {
     const cfg = await loadProjectConfig(workspace)
-    let path = workspace
-    try {
-      path = realpathSync(workspace)
-    } catch {
-      // Keep the raw path; trust records normalize the same way.
-    }
     if (cfg.elevatedHash && folderTrustState(settings.trustedFolders, path, cfg.elevatedHash) === 'trusted') {
-      configs = mergeProjectMcpServers(configs, cfg.elevated.mcpServers)
+      configs = mergeProjectMcpServers(configs, cfg.elevated.mcpServers, path)
     }
   } catch {
     // An unreadable project config contributes no servers.
   }
-  const merged = mergeRunMcpServers(configs, extra) ?? []
+  const merged = mergeRunMcpServers(configs, extra, path) ?? []
   return merged.filter((c) => c.enabled && c.id && (c.command || c.url))
 }
 
