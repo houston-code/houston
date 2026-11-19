@@ -14,7 +14,7 @@ import { imageDataUrl } from '@shared/images'
 import { openaiResponsesReasoning } from './reasoning'
 import { parseToolArguments } from './tool-args'
 import { idleTimeoutFetch, StreamClosedEarlyError } from './idle-fetch'
-import { effectiveBaseUrl } from './env-base-url'
+import { effectiveBaseUrl, openaiUsesGateway } from './env-base-url'
 import { responsesWebSearch, type ResponsesCreateClient } from './native-search'
 import { SDK_MAX_RETRIES } from '../agent/retry'
 
@@ -226,7 +226,8 @@ function withoutSummary(reasoning: ResponsesReasoning): { effort: ResponsesReaso
 
 export function createResponsesProvider(apiKey: string | null, baseURL?: string): Provider {
   // A base URL from the environment is a gateway like a configured one: no
-  // prompt_cache_key, no hosted search.
+  // prompt_cache_key, no hosted search. OpenAI's own host given as a URL is not.
+  const gateway = openaiUsesGateway(baseURL)
   baseURL = effectiveBaseUrl(baseURL, 'OPENAI_BASE_URL')
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
@@ -278,7 +279,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         // Keeps a conversation's requests in one cache-routing bucket instead of every
         // chat sharing the one their common opening hashes to. OpenAI's own endpoint
         // only: a gateway speaking this wire format may reject a field it doesn't know.
-        ...(req.promptCacheKey && !baseURL ? { prompt_cache_key: req.promptCacheKey } : {})
+        ...(req.promptCacheKey && !gateway ? { prompt_cache_key: req.promptCacheKey } : {})
       }
 
       // Reasoning summaries are gated on organization verification, and that's a property of
@@ -430,7 +431,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
     },
     // OpenAI's hosted search tool runs only on its own endpoint; a custom base URL
     // (a gateway speaking the Responses wire format) gets no built-in search.
-    ...(baseURL
+    ...(gateway
       ? {}
       : {
           webSearch: async (req: ProviderWebSearchRequest) =>

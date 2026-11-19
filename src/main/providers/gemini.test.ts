@@ -615,6 +615,47 @@ describe('gemini stop reason', () => {
   })
 })
 
+describe('gemini blocked prompt', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  it('ends a prompt Gemini blocked as a refusal, not a cut stream to retry', async () => {
+    h.stream.mockImplementation(async () =>
+      (async function* () {
+        // A blocked prompt: HTTP 200, no candidates, only the feedback and the usage.
+        yield { promptFeedback: { blockReason: 'PROHIBITED_CONTENT' }, usageMetadata: { promptTokenCount: 12 } }
+      })()
+    )
+    const events: ProviderStreamEvent[] = []
+    for await (const ev of createGeminiProvider('k').streamChat({
+      model: 'gemini-2.5-flash',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest)) {
+      events.push(ev)
+    }
+    expect(events).toEqual([
+      { type: 'done', stopReason: 'end_turn', refusal: 'PROHIBITED_CONTENT', usage: { inputTokens: 12, outputTokens: 0 } }
+    ])
+    expect(h.stream).toHaveBeenCalledTimes(1)
+  })
+
+  it('still treats a stream with neither a finish reason nor feedback as cut', async () => {
+    h.stream.mockImplementation(async () =>
+      (async function* () {
+        yield { candidates: [{ content: { parts: [{ text: 'partial' }] } }] }
+      })()
+    )
+    const run = async (): Promise<void> => {
+      for await (const _ of createGeminiProvider('k').streamChat({
+        model: 'gemini-2.5-flash',
+        messages: [{ role: 'user', content: 'hi' }]
+      } as ChatRequest)) {
+        // drain
+      }
+    }
+    await expect(run()).rejects.toThrow()
+  })
+})
+
 describe('modelOptionFromGeminiListing', () => {
   it('strips the models/ prefix and captures inputTokenLimit as the context window', () => {
     expect(

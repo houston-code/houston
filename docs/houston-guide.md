@@ -761,7 +761,10 @@ model, move one up or down, remove one), or in the terminal:
 
 - `/model fallback` lists them, numbered, marking any a run would skip
 - `/model fallback add <model>` adds one at the end (a model id, `provider/model`, or a
-  provider for its default model)
+  provider for its default model). A model id may contain a slash, as aggregators' ids
+  do (`deepseek/deepseek-r1`). When the part before the slash isn't a provider you have
+  set up, or that provider doesn't list the rest, `/model` and the other commands that take
+  a model match the whole id against the providers' model lists
 - `/model fallback remove <n>`, `up <n>`, `down <n>` remove or move one
 
 Both write the same ordered list in settings.json:
@@ -791,7 +794,8 @@ search* (Tavily, Brave Search or Exa) when its API key is set. With no key, it f
 back to the model provider's own web search where the provider offers one:
 
 - **Claude API** (the Anthropic provider without a custom base URL).
-- **OpenAI** (the built-in OpenAI provider without a custom base URL).
+- **OpenAI** (the built-in OpenAI provider without a base URL on another host, whether set
+  in Settings or by `OPENAI_BASE_URL`; `https://api.openai.com/v1` still counts as OpenAI).
 
 The search runs as a short extra request on the provider's model for side tasks (see
 *A smaller model for side tasks*), or on the chat's current model when there is none or
