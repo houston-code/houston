@@ -253,8 +253,10 @@ export async function runPermissionsCommand(
     const ok = await deps.readLine('Save a rule that approves every call without asking? [y/N] ', { discardPending: true })
     if (!isYes(ok)) return void deps.out(paint('· not saved\n', 'dim'))
   }
-  deps.updateSettings({ permissionRules: next })
-  deps.out(paint(`· added as rule ${next.length}. Applies from the next tool call.\n`, 'dim'))
+  // Read again after the question: a rule saved meanwhile (another window) stays.
+  const saved = [...(deps.getSettings().permissionRules ?? []), rule]
+  deps.updateSettings({ permissionRules: saved })
+  deps.out(paint(`· added as rule ${saved.length}. Applies from the next tool call.\n`, 'dim'))
 }
 
 /** A rule line built with a plain painter has no escapes to strip; kept explicit for the removal note. */

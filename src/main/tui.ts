@@ -2135,6 +2135,16 @@ export function otherFolderNote(workspace: string, id: string): string {
 }
 
 /**
+ * Why a background session opened with /spawned takes no message here: it works in
+ * another folder. `/cd` there, or the command that opens it there. Pure.
+ */
+export function elsewhereNote(workspace: string, id: string): string {
+  return `· this session works in another folder (${stripControlChars(workspace)}); /cd there to continue it, or open it there with: ${stripControlChars(
+    comeBackCommand(workspace, id)
+  )}`
+}
+
+/**
  * One row of the arrow-key `/resume` picker: the label (number and title, which the
  * live filter matches) and the painted detail after it (when, unread state, folder,
  * and a mark on the chat you're in). Pure.
@@ -3810,8 +3820,7 @@ async function addHostInteractive(
     return null
   }
   const isMac = deps.isMac ?? process.platform === 'darwin'
-  const settings = deps.getSettings()
-  const configured = new Set(settings.providers.map((p) => p.id))
+  const configured = new Set(deps.getSettings().providers.map((p) => p.id))
   const catalog = catalogForPlatform(isMac).filter((e) => !configured.has(e.id))
 
   deps.io.out(`${renderCatalogMenu(catalog, paint)}\n`)
@@ -3831,7 +3840,8 @@ async function addHostInteractive(
     // work — long after the moment they knew the answer.
     const provider = await promptSetupFields(base, deps, paint)
     if (!provider) return null
-    deps.updateSettings({ providers: [...settings.providers, provider] })
+    // Read again after the questions: a host saved meanwhile (another window) stays.
+    deps.updateSettings({ providers: [...deps.getSettings().providers, provider] })
     const at = provider.baseUrl ?? provider.endpoint ?? provider.region ?? provider.resource
     deps.io.out(paint(`· Added ${entry.label} (${entry.id})${at ? ` at ${at}` : ''}.\n`, 'dim'))
     return { provider, keyUrl: entry.docsUrl }
@@ -3848,7 +3858,7 @@ async function addHostInteractive(
     return null
   }
   const provider = customEndpointToProvider(customProviderId(newId()), label.trim(), url.trim())
-  deps.updateSettings({ providers: [...settings.providers, provider] })
+  deps.updateSettings({ providers: [...deps.getSettings().providers, provider] })
   deps.io.out(paint(`· Added ${provider.label} (${provider.id}) at ${provider.baseUrl}.\n`, 'dim'))
   return { provider }
 }
@@ -4511,6 +4521,13 @@ export interface TuiDeps {
    * isn't available here.
    */
   backgroundSessions?: () => BackgroundSession[]
+  /**
+   * Whether a run is writing this chat now: a background session of this process, or
+   * another Houston process (the schedule daemon, another terminal). A message sent to
+   * it would replace what that run saves with this session's copy, so it isn't sent.
+   * Absent: never.
+   */
+  chatRunning?: (conversationId: string) => boolean
   /**
    * The background shell registry (`run_shell` background mode) and the subagent stop
    * handles, for `/tasks`. Absent ⇒ /tasks lists the subagents it saw and says shells
@@ -5616,6 +5633,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // in the empty composer until a turn is sent or another chat takes its place.
   let suggestion: string | null = null
   let redrawSuggestion: (() => void) | null = null
+  // A chat opened while something else was writing it (/spawned, /resume): the copy
+  // read then can be behind by the time a message is sent, so it is read again first.
+  let staleChatId: string | null = null
+  // A background session opened with /spawned that works in another folder (its own
+  // worktree, usually): it can be read here, but its turns belong to its folder.
+  let chatElsewhere: { id: string; workspace: string } | null = null
   const resetChatState = (): void => {
     suggestion = null
     pendingImages = []
@@ -5729,6 +5752,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.io.out(paint('· could not fork this session\n', 'dim'))
       return
     }
+    leaveChatDraft()
     conversationId = forked.id
     // The fork is a fresh conversation whose stored model we don't track; mark it
     // stale so the next turn re-syncs the meta to the active model.
@@ -6895,6 +6919,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         messages = conv.messages
         resetChatState()
         loadSavedDraft()
+        if (deps.chatRunning?.(id)) staleChatId = id
         deps.io.out(paint(`· resumed: ${plural(messages.length, 'message')}\n`, 'dim'))
         const recap = renderRecap(messages, paint, { width: columns() })
         if (recap) deps.io.out(`${recap}\n`)
@@ -6983,6 +7008,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         // Continue in the imported chat, as the desktop app opens it.
+        leaveChatDraft()
         conversationId = imported.id
         messages = imported.messages
         resetChatState()
@@ -7319,13 +7345,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // Opening a still-running session is deliberately allowed: you see its work
         // so far while its own run keeps going and keeps persisting. That is how you
         // check on parallel work without stopping it.
-        const stillRunning = list.find((x) => x.id === id)?.running
+        const stillRunning = list.find((x) => x.id === id)?.running === true || deps.chatRunning?.(id) === true
         leaveChatDraft()
         conversationId = id
         messages = conv.messages
         resetChatState()
         adoptChatSettings(conv)
         loadSavedDraft()
+        if (stillRunning) staleChatId = id
+        // Its own folder (spawn_session gives each its own worktree by default): a turn
+        // sent from here would read and edit this folder's files under its history.
+        chatElsewhere =
+          conv.workspace && resolvePath(conv.workspace) !== resolvePath(opts.cwd) ? { id, workspace: conv.workspace } : null
         deps.io.out(
           paint(
             stillRunning
@@ -7334,6 +7365,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             'dim'
           )
         )
+        if (chatElsewhere) deps.io.out(paint(`${elsewhereNote(chatElsewhere.workspace, id)}\n`, 'yellow'))
         continue
       }
       if (result.kind === 'output') {
@@ -8070,6 +8102,42 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           customCommands
         )
         continue
+      }
+    }
+
+    // A chat something else is writing, or one that works in another folder, takes no
+    // message from here. Checked before anything is saved: the message would replace the
+    // chat's log with this session's copy, wiping what the other run wrote since.
+    if (conversationId) {
+      const elsewhere =
+        chatElsewhere?.id === conversationId && resolvePath(chatElsewhere.workspace) !== resolvePath(opts.cwd)
+          ? chatElsewhere.workspace
+          : null
+      const busy = !elsewhere && deps.chatRunning?.(conversationId) === true
+      if (elsewhere || busy) {
+        if (busy) staleChatId = conversationId
+        // The typed message goes back in the prompt (a command's expanded text doesn't).
+        const kept = !invokedAs && !wakeTurn && Boolean(deps.io.readComposer)
+        if (kept) halfDraft = [halfDraft, text].filter(Boolean).join('\n\n')
+        deps.io.out(
+          paint(
+            elsewhere
+              ? `· not sent: ${elsewhereNote(elsewhere, conversationId).slice(2)}\n`
+              : `· not sent: this chat is still running in the background; send it once that run finishes${kept ? ' (it is back in the prompt)' : ''}\n`,
+            'yellow'
+          )
+        )
+        continue
+      }
+      // Opened while it was running: pick up what it saved since, so this turn adds to it.
+      if (staleChatId === conversationId && deps.persist) {
+        staleChatId = null
+        try {
+          const fresh = deps.persist.get(conversationId)
+          if (fresh) messages = fresh.messages
+        } catch {
+          /* unreadable now: carry on from the copy already open */
+        }
       }
     }
 

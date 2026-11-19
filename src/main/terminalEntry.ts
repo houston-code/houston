@@ -30,6 +30,7 @@ import {
   activeRunForConversation
 } from './agent/loop'
 import { createDraftStore } from './tui-drafts'
+import { conversationRunningElsewhere } from './runMarkers'
 import { killAllShells, killShell, listShells, shellTail } from './agent/shells'
 import { stopSubagent } from './agent/subagentStops'
 import { backgroundForegroundShells } from './agent/foregroundShells'
@@ -187,6 +188,7 @@ import {
   getConversation,
   conversationRunOutcome,
   peekConversation,
+  peekConversationHeader,
   searchConversations,
   forkConversation,
   forkConversationAt,
@@ -1039,6 +1041,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       saveMemory: (scope, text) => saveMemory(tui.cwd, scope, text),
       memoryStore: () => memoryStore({ workspace: tui.cwd }),
       backgroundSessions: () => sessions.backgroundSessions(),
+      // A chat a background session of this process, or another Houston process, is writing.
+      chatRunning: (id) => activeRunForConversation(id) !== null || conversationRunningElsewhere(id) !== null,
       backgroundTasks: {
         shells: () => listShells(),
         shellTail: (id, maxLines) => shellTail(id, maxLines),
@@ -1339,8 +1343,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           return forked ? { id: forked.id } : null
         },
         // Read from the chat itself, so a chat outside the folder's newest 20 (or in
-        // another folder) still shows its title.
-        title: (id) => peekConversation(id)?.title,
+        // another folder) still shows its title. Asked on every pass of the prompt loop,
+        // so only the header: this process's own chat answers without reading its file.
+        title: (id) => peekConversationHeader(id)?.title,
         pin: (id, pinned) => organizeConversation(id, { pinned }),
         archive: (id) => organizeConversation(id, { archived: true }),
         // /cd: the chat now lives in the new folder, for the app's sidebar and /resume.

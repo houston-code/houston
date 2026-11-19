@@ -3349,7 +3349,12 @@ it runs in the background, often on its own branch and worktree.
 what branch each one is on. Pick a number to open one.
 
 - **Opening doesn't interrupt.** You see a running session's work so far while it
-  keeps going.
+  keeps going. A message you send to it while it runs is not sent (it stays in the
+  prompt): send it once the session finishes, and it continues from everything the
+  session saved.
+- **Its folder is its own.** A session working in its own worktree can be read from
+  here, but a message to it is sent only from that folder: `/cd` there, or open it
+  there with the command Houston prints.
 - **Not the same as `/resume`,** which reopens any saved chat in this folder, whether
   or not this session started it.
 
