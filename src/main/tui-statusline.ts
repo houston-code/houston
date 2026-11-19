@@ -164,6 +164,7 @@ export class StatusLineRunner {
   private queued: string | null = null
   private lastInput: string | null = null
   private failure: StatusLineFailure = null
+  private disposed = false
 
   constructor(
     readonly config: ResolvedStatusLine,
@@ -184,6 +185,7 @@ export class StatusLineRunner {
 
   /** Run it with `payload`; resolves when this refresh (or the one it joined) is done. */
   refresh(payload: StatusLinePayload): Promise<void> {
+    if (this.disposed) return Promise.resolve()
     const input = JSON.stringify(payload)
     if (this.running) {
       this.queued = input
@@ -197,7 +199,7 @@ export class StatusLineRunner {
 
   private async runLoop(first: string): Promise<void> {
     let input: string | null = first
-    while (input !== null) {
+    while (input !== null && !this.disposed) {
       this.queued = null
       await this.runOnce(input)
       input = this.queued
@@ -233,6 +235,17 @@ export class StatusLineRunner {
     const changed = rows.join('\n') !== this.rows.join('\n')
     this.rows = rows
     if (changed) this.onChange()
+  }
+
+  /**
+   * Retire this runner: a queued refresh is dropped and no new one starts. The command
+   * runs in the session's current folder, so once the folder or its trust changes, a
+   * runner resolved for the old one must never run again (a project's relative command
+   * would otherwise run the new folder's file there).
+   */
+  dispose(): void {
+    this.disposed = true
+    this.queued = null
   }
 
   /** The payload of the last run, as sent (for tests). */
