@@ -16,10 +16,18 @@ name: Memory soak
 # artifact, and a table to the job summary.
 
 on:
+  # The crons are set well before the time we want the runs. GitHub starts scheduled runs
+  # late under load, and in November 2026 every schedule here started 7 to 10 hours late: the
+  # 08:41 UTC soak ran at 15:00-19:00 UTC, the busiest hours for the hosted macOS pool. On
+  # that delay 23:41 UTC lands it around 06:40-09:40 UTC, quiet hours for macOS, and about
+  # 90 minutes after ci.yml's nightly (22:17 UTC) so the two don't wait on the same macOS
+  # runners. If GitHub catches up and starts them on time, retune both against the actual
+  # start times (`gh run list -w memory-soak.yml --event schedule`).
   schedule:
-    - cron: '41 8 * * *'
-    # The long session: Sunday, after that night's standard run.
-    - cron: '11 10 * * 0'
+    - cron: '41 23 * * *'
+    # The long session: early Sunday, after Saturday's standard run. Both share one
+    # concurrency group that cancels in progress, so keep them well apart.
+    - cron: '11 1 * * 0'
   workflow_dispatch:
     inputs:
       turns:
@@ -68,7 +76,7 @@ jobs:
           - { target: mac-arm64, os: macos-15 }
           - { target: win-x64, os: windows-2025 }
     env:
-      LONG: ${{ github.event.schedule == '11 10 * * 0' }}
+      LONG: ${{ github.event.schedule == '11 1 * * 0' }}
       INPUT_TURNS: ${{ inputs.turns }}
       INPUT_STEPS: ${{ inputs.steps }}
     steps:
