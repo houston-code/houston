@@ -30,23 +30,46 @@ describe('compareToBaseline', () => {
     expect(v).toEqual([{ kind: 'held', taskId: 'a', baseline: 1, observed: 1 }])
   })
 
-  it('regresses a task that drops past the tolerance', () => {
-    const v = compareToBaseline(baseline({ a: 1 }), [score('a', 1 / 3)])
-    expect(v[0].kind).toBe('regressed')
+  it('regresses a task that collapses from every attempt passing to none', () => {
+    const v = compareToBaseline(baseline({ a: 1 }), [score('a', 0)])
+    expect(v).toEqual([{ kind: 'regressed', taskId: 'a', baseline: 1, observed: 0 }])
     expect(regressions(v)).toHaveLength(1)
   })
 
   // The whole point of the tolerance: a live model that flakes one attempt out of
-  // three must NOT red the nightly, or the job gets ignored and catches nothing.
-  it('absorbs a single flaked attempt at the default tolerance', () => {
+  // three is not even worth a mention.
+  it('holds a single flaked attempt at the default tolerance', () => {
     const v = compareToBaseline(baseline({ a: 1 }), [score('a', 2 / 3)])
     expect(v[0].kind).toBe('held')
     expect(regressions(v)).toHaveLength(0)
   })
 
-  // ...but two flakes out of three is a real drop, not noise.
-  it('fails two flaked attempts out of three', () => {
-    expect(regressions(compareToBaseline(baseline({ a: 1 }), [score('a', 1 / 3)]))).toHaveLength(1)
+  /**
+   * REGRESSION (issue 967, the 2026-11-16 weekly Haiku run). semver-ranges fell 3/3 to
+   * 1/3 and extraction-job-stuck 2/3 to 0/3 with no product change since the baseline
+   * was recorded that morning, and the run as a whole held (76/87 against 77/87). Both
+   * are ordinary at three attempts a side; failing them reded about one week in four.
+   */
+  it('reports two flaked attempts out of three as dropped, not regressed', () => {
+    const v = compareToBaseline(baseline({ 'semver-ranges': 1, 'extraction-job-stuck': 2 / 3 }), [
+      score('semver-ranges', 1 / 3),
+      score('extraction-job-stuck', 0)
+    ])
+    expect(v.map((x) => x.kind)).toEqual(['dropped', 'dropped'])
+    expect(regressions(v)).toEqual([])
+  })
+
+  // Only a baseline where every attempt passed can collapse: 1/3 to 0 is one attempt.
+  it('never regresses a task whose baseline had a failed attempt', () => {
+    for (const base of [2 / 3, 1 / 3]) {
+      expect(regressions(compareToBaseline(baseline({ a: base }), [score('a', 0)]))).toEqual([])
+    }
+  })
+
+  // A run at another attempt count (eval-ab runs two) collapses the same way.
+  it('regresses a collapse at any attempt count', () => {
+    const v = compareToBaseline(baseline({ a: 1 }), [{ taskId: 'a', passRate: 0, attempts: 2 }])
+    expect(v[0].kind).toBe('regressed')
   })
 
   it('reports a score above its baseline as improved, not a failure', () => {
@@ -66,18 +89,16 @@ describe('compareToBaseline', () => {
     expect(compareToBaseline(baseline({ a: 1, gone: 1 }), [score('a', 1)])).toHaveLength(1)
   })
 
-  it('grades a total collapse to zero as a regression', () => {
-    expect(regressions(compareToBaseline(baseline({ a: 1 }), [score('a', 0)]))).toHaveLength(1)
-  })
-
   // A task that was already failing can't regress further — it holds at 0.
   it('holds a task whose baseline is already zero', () => {
     expect(compareToBaseline(baseline({ a: 0 }), [score('a', 0)])[0].kind).toBe('held')
   })
 
-  it('honors an explicit tolerance', () => {
-    // 2/3 is within the default tolerance, but not within a strict zero.
-    expect(regressions(compareToBaseline(baseline({ a: 1 }), [score('a', 2 / 3)], 0))).toHaveLength(1)
+  it('honors an explicit tolerance for what counts as dropped', () => {
+    // 2/3 is within the default tolerance, but not within a strict zero; still no regression.
+    const v = compareToBaseline(baseline({ a: 1 }), [score('a', 2 / 3)], 0)
+    expect(v[0].kind).toBe('dropped')
+    expect(regressions(v)).toEqual([])
   })
 
   it('defaults the tolerance to one flaked attempt out of three', () => {

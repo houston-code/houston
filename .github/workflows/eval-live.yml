@@ -13,10 +13,10 @@ name: Task evals (live)
 #
 # Only a real model solving a real task measures quality. This job runs the identical fixtures with
 # the script ignored, several attempts per task, and GRADES the result against the per-model baseline
-# checked in under src/main/agent/evals/baselines/. A task that drops materially below its baseline
-# reds this job, and so does a run that falls below it as a whole (compareAggregate in
-# evals/baseline.ts: a stratified test at 1%, for the fall spread one flake per task that no single
-# task's check can see). A live score with nothing to compare it against would just be a log line, so
+# checked in under src/main/agent/evals/baselines/. A task that collapses (every baseline attempt
+# passed, none does now) reds this job, and so does a run that falls below its baseline as a whole
+# (compareAggregate in evals/baseline.ts: a stratified test at 1%, for any fall short of a collapse,
+# which no single task's check can tell from noise at three attempts). A live score with nothing to compare it against would just be a log line, so
 # a missing baseline reds the job too, with the command to record one.
 #
 # WHICH MODELS. Three scheduled legs, each on a provider's low-cost model rather than its default:
@@ -38,8 +38,8 @@ name: Task evals (live)
 #
 # WHY IT STILL NEVER GATES A PR. The result is non-deterministic (a model can fail a task it passed
 # yesterday) and metered. A flaky, billed gate on every PR would train everyone to re-run it until
-# green, which is worse than no signal. Hence: scheduled runs, weekly at most, with a tolerance sized
-# to absorb one flaked attempt. A task that regresses HERE is a quality/model signal; a task that
+# green, which is worse than no signal. Hence: scheduled runs, weekly at most, failing a single task
+# only on a collapse and the run only on a significant fall. A task that regresses HERE is a quality/model signal; a task that
 # fails SCRIPTED is a harness regression and reds the PR that caused it.
 #
 # THIS WORKFLOW NEVER PUBLISHES ANYTHING (it only uploads Actions artifacts: every run's run

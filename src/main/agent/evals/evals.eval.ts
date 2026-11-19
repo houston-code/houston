@@ -1660,7 +1660,7 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
       attempts: r.attempts
     }))
     // The whole run against the baseline, beside each task's own verdict: the per-task
-    // tolerance passes a task that lost one attempt, however many tasks did.
+    // check fails only a collapse, however many tasks lost an attempt or two.
     const aggregate = BASELINE ? compareAggregate(BASELINE, scores) : undefined
     console.log(
       formatReport(
@@ -1804,16 +1804,17 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
       // model does today, including the tasks it can't do.
       if (RECORD) return
 
-      // LIVE grades quality against the recorded baseline, with a tolerance that
-      // absorbs one flaked attempt (see DEFAULT_TOLERANCE). The flakes it absorbs are
-      // added up across the run in afterAll (compareAggregate). A probe is always
-      // unrecorded, so it reports its rate and never fails here.
+      // LIVE grades quality against the recorded baseline. A single task fails only
+      // when it collapses (every baseline attempt passed, none does now; see
+      // compareToBaseline): a smaller fall is reported as `dropped` and added up across
+      // the run in afterAll (compareAggregate). A probe is always unrecorded, so it
+      // reports its rate and never fails here.
       expect(
         verdict?.kind,
         [
           `Task "${row.id}" scored ${passes}/${ATTEMPTS} against a baseline of ` +
             `${(BASELINE?.tasks[row.id] ?? NaN).toFixed(2)} (recorded ${BASELINE?.recordedAt}).`,
-          'A drop this size is a QUALITY regression, not model noise.',
+          'Every baseline attempt passed and none did now: a collapse this complete is a QUALITY regression, not model noise.',
           detail
         ].join('\n')
       ).not.toBe('regressed')
