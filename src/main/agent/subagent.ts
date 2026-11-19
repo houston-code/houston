@@ -296,7 +296,8 @@ export interface SubAgentOptions {
     name: string,
     kind: ToolKind,
     args: Record<string, unknown>,
-    run: () => Promise<string>
+    /** Runs the call; `extra` adds what the gate decided to its tool context. */
+    run: (extra?: Pick<ToolContext, 'protectedWriteApproved'>) => Promise<string>
   ) => Promise<string>
   /**
    * Report what the subagent's tools executed to the dispatching run's evidence ledger
@@ -1093,11 +1094,11 @@ async function runSubAgentSteps(opts: SubAgentOptions): Promise<string> {
         const targets = cpRunId ? writeTargets(call.name, call.arguments) : []
         let ran = false
         const written = tool.kind === 'write' ? writeTargets(call.name, call.arguments) : []
-        const runLocal = async (): Promise<string> => {
+        const runLocal = async (extra?: Pick<ToolContext, 'protectedWriteApproved'>): Promise<string> => {
           admit()
           for (const t of targets) await recordOriginal(cpRunId!, roots, t.path)
           for (const t of written) await revertTracker.before(resolve(workspace, t.path))
-          const out = await tool.execute(call.arguments, toolCtx)
+          const out = await tool.execute(call.arguments, extra ? { ...toolCtx, ...extra } : toolCtx)
           for (const t of targets) {
             await recordResult(cpRunId!, roots, t.path, { expectAbsent: t.deleted })
           }

@@ -335,6 +335,13 @@ export interface ToolContext {
    */
   askGitGuard?: (q: AgentQuestion) => Promise<string>
   /**
+   * The approval gate cleared this call as a protected write (see isProtectedWrite):
+   * the user approved it at its prompt, or an allow rule for its path covered it. The
+   * git guard then takes what it wrote at its git exec paths as kept instead of asking
+   * about them again; anything else that changed is still asked about.
+   */
+  protectedWriteApproved?: boolean
+  /**
    * Report what a tool executed (a shell command's exit code, from the runner itself)
    * to the run's evidence ledger, which the turn's receipt is built from (injected by
    * the loop; see evidence.ts). The model reads a tool's text result; this is the
@@ -2309,12 +2316,13 @@ async function gitGuardBefore(ctx: ToolContext): Promise<void> {
 }
 
 /** Check the run's git state after a shell command (see gitGuard.ts); '' when nothing to say. */
-async function gitGuardAfter(ctx: ToolContext): Promise<string> {
+async function gitGuardAfter(ctx: ToolContext, approvedPaths?: string[]): Promise<string> {
   if (!ctx.gitGuard) return ''
   try {
     return await reviewGitChanges(ctx.gitGuard, {
       workspace: ctx.workspace,
-      ...(ctx.askGitGuard ? { ask: ctx.askGitGuard } : {})
+      ...(ctx.askGitGuard ? { ask: ctx.askGitGuard } : {}),
+      ...(approvedPaths?.length ? { approvedPaths } : {})
     })
   } catch {
     return ''
@@ -2358,12 +2366,15 @@ function withGitGuard(tool: ToolDef): ToolDef {
       if (!guard) return tool.execute(args, ctx)
       await gitGuardBefore(ctx)
       const after = async (): Promise<string> => {
+        const paths = writtenPaths(tool.schema.name, args, rootsOf(ctx))
         try {
-          if (!(await guard.touchesGitData(writtenPaths(tool.schema.name, args, rootsOf(ctx))))) return ''
+          if (!(await guard.touchesGitData(paths))) return ''
         } catch {
           return ''
         }
-        return gitGuardAfter(ctx)
+        // The user already approved writing these git exec paths: what this call put
+        // there isn't asked about again (see ToolContext.protectedWriteApproved).
+        return gitGuardAfter(ctx, ctx.protectedWriteApproved === true ? paths : undefined)
       }
       let out: string
       try {

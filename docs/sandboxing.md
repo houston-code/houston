@@ -128,7 +128,10 @@ when a background shell's output is read, it is waited on with `wait_for`, it is
 stopped, or the user moves a running command to the background; after each
 verify-on-stop command, which runs the project's scripts outside the tool-approval gate;
 and after a file-tool write whose path, as written or with symlinks resolved, lies in git
-exec data or in a git dir the baseline found), it compares again:
+exec data or in a git dir the baseline found), it compares again. For a file-tool write
+the approval gate cleared as a protected write (the user approved its prompt, or an allow
+rule for the path covered it), the changes at the git exec paths it wrote are kept
+without a second question, like a Keep; anything else that changed is still asked about:
 
 - Settings that run nothing (`user.*`, remotes, upstreams, `core.fsmonitor=true`, which
   selects git's built-in daemon) are never reported.

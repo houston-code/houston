@@ -2615,7 +2615,8 @@ stops) Houston checks for those and nothing else:
   an `allow` rule for the path. That holds through a symlink too, so editing `g/config`
   where `g` points at `.git` asks. A file edit that lands in `.git` (by that path, or
   through a link that leads there) is also checked afterwards the same way as a shell
-  command.
+  command. What an edit you approved wrote isn't asked about a second time, but anything
+  else that changed in `.git` meanwhile is.
 - **Undo puts back only what it listed.** Anything that appears while the question is
   open (from a background command, say) is asked about at the next check.
 

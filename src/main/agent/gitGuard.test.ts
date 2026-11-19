@@ -840,6 +840,38 @@ describe('GitGuard on real repositories', () => {
       expect(ask).toHaveBeenCalledTimes(1)
     })
 
+    it('keeps a change at an approved path without asking, and still asks about the rest', async () => {
+      const guard = await guarded()
+      const approved = join(ws, '.git/hooks/post-checkout')
+      const planted = join(ws, '.git/hooks/pre-push')
+      writeFileSync(approved, '#!/bin/sh\necho hi\n')
+      writeFileSync(planted, '#!/bin/sh\necho evil\n')
+      const ask = vi.fn(async (_q: AgentQuestion) => GIT_GUARD_UNDO)
+      await reviewGitChanges(guard, { workspace: ws, ask, approvedPaths: [approved] })
+      expect(ask).toHaveBeenCalledTimes(1)
+      expect(ask.mock.calls[0]![0].question).toContain('pre-push')
+      expect(ask.mock.calls[0]![0].question).not.toContain('post-checkout')
+      expect(existsSync(planted)).toBe(false)
+      expect(existsSync(approved)).toBe(true)
+      expect(await reviewGitChanges(guard, { workspace: ws, ask })).toBe('')
+      expect(ask).toHaveBeenCalledTimes(1)
+    })
+
+    it('still asks about an approved path that reaches git data only through a git dir with another name', async () => {
+      const sep = join(tmp, 'sep')
+      const store = join(tmp, 'store')
+      git(tmp, 'init', '-q', '--separate-git-dir', store, sep)
+      const guard = new GitGuard([sep])
+      await guard.ensureBaseline()
+      // A junction works on Windows without the symlink privilege.
+      symlinkSync(store, join(sep, 'meta'), 'junction')
+      writeFileSync(join(store, 'hooks/post-checkout'), '#!/bin/sh\necho evil\n')
+      const ask = vi.fn(async () => GIT_GUARD_UNDO)
+      await reviewGitChanges(guard, { workspace: sep, ask, approvedPaths: [join(sep, 'meta/hooks/post-checkout')] })
+      expect(ask).toHaveBeenCalledTimes(1)
+      expect(existsSync(join(store, 'hooks/post-checkout'))).toBe(false)
+    })
+
     it('after an undo, does not ask again about what it undid or what it only noted', async () => {
       const hook = join(ws, '.git/hooks/pre-commit')
       writeFileSync(hook, '#!/bin/sh\necho ok\n')

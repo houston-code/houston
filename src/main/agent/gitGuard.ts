@@ -1067,26 +1067,54 @@ export function answerKeeps(answer: string): boolean {
 }
 
 /**
- * After an agent shell command: compare against the baseline, ask about exec-capable
- * changes (or undo them when nobody can be asked), and return a note for the tool
- * result, empty when nothing relevant changed. A known installer's setting (husky's
- * hooksPath) is noted without asking.
+ * The changes at a git exec path among `paths` (see {@link isGitExecPath}), matched by
+ * real path: what a write the user approved put there. A path that reaches git data
+ * only through a git dir with another name isn't one, so a change there is still asked
+ * about.
+ */
+async function changesAtApprovedPaths(changes: GitChange[], paths: string[]): Promise<Set<GitChange>> {
+  const approved = new Set<string>()
+  for (const p of paths) {
+    const real = await realpathNearest(p)
+    if (real && (isGitExecPath(p) || isGitExecPath(real))) approved.add(real)
+  }
+  const out = new Set<GitChange>()
+  if (approved.size === 0) return out
+  for (const c of changes) {
+    const real = await realpathNearest(c.file)
+    if (real && approved.has(real)) out.add(c)
+  }
+  return out
+}
+
+/**
+ * After an agent shell command or file write: compare against the baseline, ask about
+ * exec-capable changes (or undo them when nobody can be asked), and return a note for
+ * the tool result, empty when nothing relevant changed. A known installer's setting
+ * (husky's hooksPath) is noted without asking. A change at one of `approvedPaths` (the
+ * git exec paths of a write the user just approved through its protected-write prompt,
+ * or an allow rule for that path covered) is kept without asking again, like a Keep;
+ * anything else that changed meanwhile is still asked about.
  */
 export async function reviewGitChanges(
   guard: GitGuard,
-  opts: { workspace: string; ask?: (q: AgentQuestion) => Promise<string> }
+  opts: { workspace: string; ask?: (q: AgentQuestion) => Promise<string>; approvedPaths?: string[] }
 ): Promise<string> {
   const { changes, current } = await guard.check()
   if (changes.length === 0) {
     guard.accept(current)
     return ''
   }
-  const notes = changes.filter((c) => c.kind === 'config' && c.known)
-  const flagged = changes.filter((c) => !(c.kind === 'config' && c.known))
+  const approved = opts.approvedPaths?.length ? await changesAtApprovedPaths(changes, opts.approvedPaths) : new Set<GitChange>()
+  // Shared like a kept change, so another chat's guard doesn't ask about it either.
+  rememberKept([...approved])
+  const notes = changes.filter((c) => c.kind === 'config' && c.known && !approved.has(c))
+  const flagged = changes.filter((c) => !(c.kind === 'config' && c.known) && !approved.has(c))
   const out: string[] = []
   if (notes.length) {
     out.push(`[git: ${notes.map((c) => describeChange(c, opts.workspace)).join('; ')} (a known hook installer's setting).]`)
   }
+  // An undo below puts back only `flagged`, so the approved items stay as `current` has them.
   if (flagged.length === 0) {
     guard.accept(current)
     return out.join('\n')
