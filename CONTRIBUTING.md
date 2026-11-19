@@ -251,7 +251,10 @@ fresh recording.
 
 A recording is also refused when any failed attempt ended in a run error (the
 provider refused the call, the account ran out of credit) rather than a result:
-that is not a score, and a task frozen at 0 can never regress.
+that is not a score, and a task frozen at 0 can never regress. So is one missing a
+score for any task the run set out to score (its test threw or ran out of time before
+it was scored): the gate never grades a task its baseline lacks, and `baselines.test.ts`
+checks that each scheduled leg's baseline scores every registered task.
 
 Every attempt runs under a **cost cap**, $20 unless `HOUSTON_EVAL_MAX_COST_USD` sets
 another (a positive amount in dollars, like `40` or `0.5`). It is the loop's own cost
@@ -433,7 +436,9 @@ and a `task.ts`, then register it in `tasks/index.ts`. Keep fixtures dependency-
 (plain `.mjs` that plain `node` can run: no install step), and make sure the verify
 command **fails** on the untouched fixture. The suite asserts both the registration
 and that starting-red precheck, since a task whose verify is already green would
-grade every future regression as a pass.
+grade every future regression as a pass. A new task also needs a score in each scheduled
+leg's baseline (`baselines.test.ts` fails until it has one), so re-record those
+baselines in the same PR, or the scheduled runs would never grade it.
 
 **Write the prompt as a symptom, never as an instruction.** Say that the test
 fails; do not say why, which file is at fault, or what the fix is. A prompt like

@@ -1720,7 +1720,8 @@ describe.skipIf(HASH_ONLY)(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, 
         assertRecordable(
           scores,
           reports.flatMap((r) => (r.erroredAttempts ? [{ taskId: r.taskId, attempts: r.erroredAttempts }] : [])),
-          reports.flatMap((r) => (r.cappedAttempts ? [{ taskId: r.taskId, attempts: r.cappedAttempts }] : []))
+          reports.flatMap((r) => (r.cappedAttempts ? [{ taskId: r.taskId, attempts: r.cappedAttempts }] : [])),
+          RUN_TASKS.map((t) => t.id)
         )
       } catch (e) {
         const causes = failureCauses(reports)
