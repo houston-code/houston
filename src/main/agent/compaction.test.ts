@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { systemNoteMessage, type ChatMessage } from '@shared/agent'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
-import { APPROVAL_DENIED, denialText } from '@shared/promptOutcome'
+import { APPROVAL_ALLOW_NOTE_LEAD, APPROVAL_DENIED, denialText, withApprovalNote } from '@shared/promptOutcome'
 import {
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_WINDOW_FRACTION,
@@ -959,6 +959,25 @@ describe('evictStaleToolResults', () => {
     expect(out.slice(0, 8)).toEqual(msgs.slice(0, 8)) // the user's words stay verbatim
     // …and they never move the eviction watermark on their own.
     expect(hasEvictableToolResults(msgs, 0, 8)).toBe(false)
+  })
+
+  it('keeps the note a call was allowed with when its large result is stubbed', () => {
+    // "Go ahead, but keep the old file": the note follows the output, so stubbing the
+    // output used to drop the user's guidance with it.
+    const note = 'keep the old config file around until the migration ships'
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'q0' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 's', name: 'run_shell', arguments: { command: 'make migrate' } }] },
+      { role: 'tool', content: withApprovalNote('m'.repeat(EVICT_MIN_BYTES + 500), note), toolCallId: 's', toolName: 'run_shell' },
+      { role: 'assistant', content: 'a0' }
+    ]
+    for (let t = 1; t <= EVICT_KEEP_RECENT_TURNS; t++) {
+      msgs.push({ role: 'user', content: `q${t}` }, { role: 'assistant', content: `a${t}` })
+    }
+    const out = evictStaleToolResults(msgs)
+    expect(out[2].content.startsWith('[earlier run_shell result on make migrate')).toBe(true)
+    expect(out[2].content).not.toContain('mmmm')
+    expect(out[2].content.endsWith(`\n\n${APPROVAL_ALLOW_NOTE_LEAD} ${note}`)).toBe(true)
   })
 
   it('stubs exactly what lies before an explicit boundary', () => {
