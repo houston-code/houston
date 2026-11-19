@@ -171,10 +171,34 @@ describe('deleting and changing', () => {
     expect(cursor(r)).toBe('1:0')
   })
 
+  // As in vim, `cw` on a word acts as `ce`: the blank after it stays.
   it('cw changes a word and leaves you typing', () => {
     const r = keys(at('foo bar', 0, 0), 'c', 'w', 'X')
-    expect(r.text).toBe('Xbar')
+    expect(r.text).toBe('X bar')
     expect(r.vim.mode).toBe('insert')
+    expect(keys(at('fix the bug', 0, 4), 'c', 'w', 'a').text).toBe('fix a bug')
+    expect(keys(at('fix the bug', 0, 4), 'c', 'W', 'a').text).toBe('fix a bug')
+    // On a word's last letter it changes just that letter, not on to the next word.
+    expect(keys(at('ab cd', 0, 1), 'c', 'w', 'X').text).toBe('aX cd')
+    // A count reaches the end of that many words.
+    expect(keys(at('one two three', 0, 0), '2', 'c', 'w', 'X').text).toBe('X three')
+    // On a blank, cw is dw: the blanks up to the next word.
+    expect(keys(at('a   b', 0, 1), 'c', 'w', 'X').text).toBe('aXb')
+  })
+
+  // An operator's `w` stopped at the next line's first word, taking the line break.
+  it('dw and cw on the last word of a line keep the line break', () => {
+    expect(keys(at('foo\nbar', 0, 0), 'd', 'w').text).toBe('\nbar')
+    expect(keys(at('foo\nbar', 0, 0), 'c', 'w', 'X').text).toBe('X\nbar')
+    expect(keys(at('a foo\nbar', 0, 2), 'y', 'w', 'P').text).toBe('a foofoo\nbar')
+    expect(keys(at('one two\nbar', 0, 0), '2', 'd', 'w').text).toBe('\nbar')
+    // Plain `w` (no operator) still goes on to the next line.
+    expect(cursor(keys(at('foo\nbar', 0, 0), 'w'))).toBe('1:0')
+  })
+
+  it('a count on s stops at the end of the line', () => {
+    const r = keys(at('ab\ncd', 0, 1), '3', 's', 'X')
+    expect(r.text).toBe('aX\ncd')
   })
 
   it('d$ and d0 cut to the ends of the line', () => {
