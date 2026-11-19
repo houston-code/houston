@@ -377,11 +377,22 @@ describe('fireViaSpawn', () => {
   afterEach(() => resetSpawnBackend())
 
   const stored = (over: Partial<ScheduledRunInfo> = {}): ScheduledRunInfo => ({
-    ...input(),
+    ...input({ workspace: dir }),
     id: 'sch-1',
     nextRunAt: null,
     createdAt: 0,
     ...over
+  })
+
+  it('records a missing folder on the schedule without starting a chat', async () => {
+    const gone = join(dir, 'deleted-project')
+    await expect(fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)(stored({ workspace: gone }))).rejects.toThrow(
+      `Couldn't start: the folder ${gone} no longer exists.`
+    )
+    // A file where the folder was is no folder either.
+    writeFileSync(gone, '')
+    await expect(fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)(stored({ workspace: gone }))).rejects.toThrow(/no longer exists/)
+    expect(spawned).toEqual([])
   })
 
   it("starts each occurrence on the schedule's stored effort and policy", async () => {
@@ -666,7 +677,7 @@ describe('fireViaSpawn run outcome', () => {
       }
     })
     const outcomes: Record<string, RunOutcome> = { 'c-9': { outcome: 'limit', limit: 'max-output' } }
-    const handle = await fireViaSpawn((id) => outcomes[id], FULL_AUTO_DEFAULT)({ ...input(), id: 'sch-1', nextRunAt: null, createdAt: 0 })
+    const handle = await fireViaSpawn((id) => outcomes[id], FULL_AUTO_DEFAULT)({ ...input({ workspace: dir }), id: 'sch-1', nextRunAt: null, createdAt: 0 })
     expect(handle.conversationId).toBe('c-9')
     let settled: RunOutcome | undefined
     void handle.ended!.then((o) => (settled = o))
@@ -684,7 +695,7 @@ describe('fireViaSpawn run outcome', () => {
         return { conversationId: 'c-gone', title: '', workspace: i.workspace }
       }
     })
-    const handle = await fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)({ ...input(), id: 'sch-1', nextRunAt: null, createdAt: 0 })
+    const handle = await fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)({ ...input({ workspace: dir }), id: 'sch-1', nextRunAt: null, createdAt: 0 })
     expect(await handle.ended).toEqual({ outcome: 'stopped' })
   })
 })

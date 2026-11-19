@@ -3449,7 +3449,10 @@ The agent manages the same list:
 
 **When they fire.** Schedules survive restarts and fire while Houston (the desktop
 app or the terminal) is running. An occurrence missed while Houston was closed fires
-once at the next launch, unless the schedule daemon below is on.
+once at the next launch, unless the schedule daemon below is on. If a schedule's folder
+has been deleted or moved, each occurrence is recorded as its last run ("the folder ...
+no longer exists") without starting a chat; the schedule keeps its place until you
+delete it.
 
 ### When Houston is closed
 
