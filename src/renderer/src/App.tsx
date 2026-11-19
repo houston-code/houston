@@ -610,6 +610,23 @@ export default function App(): JSX.Element {
     })
   }, [])
 
+  // The stored settings changed elsewhere (another window, a run, another process):
+  // re-read them, so a new chat here starts from the current approval mode and model
+  // and the theme follows. A copy that already matches is kept as is; before the first
+  // read lands there is nothing to refresh.
+  useEffect(() => {
+    return window.api.onSettingsChanged?.(() => {
+      void window.api.getSettings().then((fresh) => {
+        setSettings((s) => (!s || JSON.stringify(s) === JSON.stringify(fresh) ? s : fresh))
+      })
+    })
+  }, [])
+
+  // Another window created, deleted, forked, imported, reordered or organized a chat.
+  useEffect(() => {
+    return window.api.onConversationsChanged?.(() => void refreshConversations())
+  }, [refreshConversations])
+
   // A model-generated title lands a few seconds into the first run — patch it straight into
   // the list (and the header, which derives from it) rather than waiting for a refetch.
   useEffect(() => {

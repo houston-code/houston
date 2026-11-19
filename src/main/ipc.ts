@@ -61,6 +61,7 @@ import {
   dismissGitInit,
   folderTrustFor,
   forgetFolderTrust,
+  onSettingsSaved,
   setFolderTrust
 } from './store'
 import { loadProjectConfig } from './agent/projectConfig'
@@ -356,6 +357,20 @@ function updateAppBadge(status: ChatStatusMap): void {
  * that ends out of view leaves its chat unread.
  */
 let attention: ChatAttention | null = null
+
+/** The settings-change broadcast registerIpc installs (once, however often it runs). */
+let unwatchSettings: (() => void) | undefined
+
+/**
+ * Tell every chat window except `sender` (which already has the result) that something
+ * it shows changed, so it re-reads it. With one window this sends nothing.
+ */
+function notifyOtherWindows(channel: string, sender?: WebContents): void {
+  for (const win of chatWindows()) {
+    const wc = win.webContents
+    if (!wc.isDestroyed() && wc.id !== sender?.id) wc.send(channel)
+  }
+}
 
 /**
  * The renderers a run's output goes to: the window that started it, then every other
@@ -852,7 +867,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
 
   // Settings > Notifications: a sample notification (which is what makes macOS ask
   // for permission) and a shortcut to the OS page that allows or blocks them.
-  handle(IPC.notificationTest, () => sendTestNotification())
+  // Whether agent notifications are on, as Settings shows it (perhaps not saved yet).
+  handle(IPC.notificationTest, (_event, on: unknown) => sendTestNotification(on !== false))
   handle(IPC.notificationOpenSettings, () => openNotificationSettings())
   handle(IPC.notificationSettingsAvailable, () => notificationSettingsUrl() !== null)
   handle(IPC.updateWhatsNew, () => takePendingWhatsNew())
@@ -1260,6 +1276,11 @@ export function registerIpc(ready?: Promise<unknown>): void {
   registerCustomizeIpc(handle)
 
   handle(IPC.settingsGet, () => getSettings())
+  // Every window reads the settings once and keeps a copy (new chats start from its
+  // approval mode, model and theme), so any save, from a window, a run (a model marked
+  // unavailable, an "Always allow" rule) or another process, tells all of them to re-read.
+  unwatchSettings?.()
+  unwatchSettings = onSettingsSaved(() => notifyOtherWindows(IPC.settingsChanged))
 
   handle(IPC.settingsSave, (_event, next: AppSettings) => {
     const saved = saveSettings(next)
@@ -1484,7 +1505,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(
     IPC.conversationCreate,
     async (
-      _event,
+      event,
       input: {
         workspace: string
         providerId: string
@@ -1510,20 +1531,24 @@ export function registerIpc(ready?: Promise<unknown>): void {
         // dir: the worktree is per-chat and gets torn down, so remembering its path
         // would leave a dead default that seeds the next new chat with a phantom repo.
         rememberWorkspace(wt.repoRoot)
-        return createConversation({
+        const conv = createConversation({
           workspace: wt.path,
           providerId: input.providerId,
           model: input.model,
           ...chatSettings,
           worktree: wt
         })
+        notifyOtherWindows(IPC.conversationsChanged, event.sender)
+        return conv
       }
-      return createConversation({
+      const conv = createConversation({
         workspace: input.workspace,
         providerId: input.providerId,
         model: input.model,
         ...chatSettings
       })
+      notifyOtherWindows(IPC.conversationsChanged, event.sender)
+      return conv
     }
   )
   handle(IPC.conversationSetSettings, (_event, id: string, patch: ConversationSettingsPatch) => {
@@ -1533,13 +1558,15 @@ export function registerIpc(ready?: Promise<unknown>): void {
     if (meta) retargetQueue(id, patch)
     return meta
   })
-  handle(IPC.conversationFork, (_event, id: string) => {
+  handle(IPC.conversationFork, (event, id: string) => {
     const fork = forkConversation(id)
+    if (fork) notifyOtherWindows(IPC.conversationsChanged, event.sender)
     return fork ? conversationForView(fork, fork.id) : null
   })
   // "Fork from here" on a message: the point is checked here, at the IPC boundary.
-  handle(IPC.conversationForkAt, (_event, id: string, point: unknown) => {
+  handle(IPC.conversationForkAt, (event, id: string, point: unknown) => {
     const fork = typeof id === 'string' && isForkPoint(point) ? forkConversationAt(id, point) : null
+    if (fork) notifyOtherWindows(IPC.conversationsChanged, event.sender)
     return fork ? conversationForView(fork, fork.id) : null
   })
   // /compact runs under an overall deadline and can be cancelled by chat id; retries
@@ -1637,6 +1664,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       if (!action.delete) return { deleted: false }
       const result = await deleteChat(id, plan, action.removeWorktree)
       attention?.forget(id)
+      notifyOtherWindows(IPC.conversationsChanged, event.sender)
       return result
     }
   )
@@ -1647,7 +1675,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(
     IPC.conversationOrganize,
     async (
-      _event,
+      event,
       id: string,
       patch: {
         title?: string
@@ -1658,7 +1686,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       }
     ) => {
       organizeConversation(id, patch)
-      if (patch.archived !== true) return
+      if (patch.archived !== true) return notifyOtherWindows(IPC.conversationsChanged, event.sender)
       await removeWorktreeOnArchive(id, {
         peek: (cid) => peekConversation(cid) ?? undefined,
         sharedCount: otherConversationsInWorktree,
@@ -1674,13 +1702,15 @@ export function registerIpc(ready?: Promise<unknown>): void {
         remove: (wt) => removeWorktree(wt),
         detach: detachConversationWorktree
       })
+      notifyOtherWindows(IPC.conversationsChanged, event.sender)
     }
   )
   // Drag-to-reorder within a sidebar section. Also does not affect recency.
   handle(
     IPC.conversationReorder,
-    (_event, orderedIds: string[], move?: { id: string; groupId: string | null }) => {
+    (event, orderedIds: string[], move?: { id: string; groupId: string | null }) => {
       reorderConversations(orderedIds, move)
+      notifyOtherWindows(IPC.conversationsChanged, event.sender)
     }
   )
 
@@ -1772,6 +1802,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       model: settings.selected?.model ?? ''
     })
     const { messages: _messages, ...meta } = conv
+    notifyOtherWindows(IPC.conversationsChanged, event.sender)
     return { meta, textOnly }
   })
 

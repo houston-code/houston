@@ -140,7 +140,7 @@ export function AppearanceSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
  * block Houston's notifications without Houston being told (macOS asks once, the
  * first time one is shown), so this is how the user finds out and fixes it.
  */
-function NotificationCheck(): JSX.Element {
+function NotificationCheck({ enabled }: { enabled: boolean }): JSX.Element {
   const [hasOsPage, setHasOsPage] = useState(false)
   const [status, setStatus] = useState<'sent' | 'unsupported' | 'error' | null>(null)
   useEffect(() => {
@@ -151,7 +151,7 @@ function NotificationCheck(): JSX.Element {
   }, [])
   const sendTest = async (): Promise<void> => {
     try {
-      setStatus((await window.api.sendTestNotification()) ? 'sent' : 'unsupported')
+      setStatus((await window.api.sendTestNotification(enabled)) ? 'sent' : 'unsupported')
     } catch {
       setStatus('error')
     }
@@ -173,6 +173,9 @@ function NotificationCheck(): JSX.Element {
         )}
       </div>
       <p className="field__hint notification-check__status" role="status">
+        {status === 'sent' &&
+          !enabled &&
+          'Agent notifications are off: turn on the setting above to get them. '}
         {status === 'sent' &&
           (hasOsPage
             ? `Sent. If nothing appeared, your system is blocking Houston’s notifications: allow Houston in system notification settings, and check that Focus or Do Not Disturb isn’t holding them back.${
@@ -206,7 +209,7 @@ export function NotificationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
           window. On by default.
         </span>
       </label>
-      <NotificationCheck />
+      <NotificationCheck enabled={settings.desktopNotifications ?? true} />
       <label className="field field--checkbox">
         <input
           type="checkbox"

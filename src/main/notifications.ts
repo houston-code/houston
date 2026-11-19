@@ -174,13 +174,15 @@ export async function restoreNotificationClicks(): Promise<number> {
  * when the platform can't show notifications at all. A `true` only means Houston
  * handed it to the OS: nothing reports back when the OS has notifications turned off.
  */
-export function sendTestNotification(): boolean {
+export function sendTestNotification(agentNotificationsOn = true): boolean {
   if (!Notification.isSupported()) return false
   const id = randomUUID()
   const n = new Notification({
     id,
     title: 'Houston',
-    body: 'Notifications are working. You’ll see these when the agent needs you.',
+    body: agentNotificationsOn
+      ? 'Notifications are working. You’ll see these when the agent needs you.'
+      : 'Notifications are working, but agent notifications are off. Turn them on in Settings, Notifications.',
     ...STAY_ON_SCREEN
   })
   n.on('click', () => {
@@ -190,6 +192,22 @@ export function sendTestNotification(): boolean {
   keep(id, n)
   n.show()
   return true
+}
+
+/**
+ * The identity Windows shows Houston's notifications under: electron-builder.yml's
+ * `appId`, which the installer gives the Start menu shortcut. Windows drops a toast
+ * from an app identity no shortcut carries, and Electron's default identity isn't this
+ * one, so without it no agent notification ever appears on an installed Windows build.
+ */
+export const APP_USER_MODEL_ID = 'com.houston.app'
+
+/** Name the process by {@link APP_USER_MODEL_ID} on Windows, before any notification. */
+export function applyAppUserModelId(
+  target: { setAppUserModelId(id: string): void },
+  platform: NodeJS.Platform = process.platform
+): void {
+  if (platform === 'win32') target.setAppUserModelId(APP_USER_MODEL_ID)
 }
 
 /**

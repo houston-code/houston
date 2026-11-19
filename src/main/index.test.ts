@@ -27,6 +27,8 @@ const crashStart = vi.fn()
 vi.mock('electron', () => ({
   app: {
     setName,
+    // Called on Windows only (the notification identity), before whenReady.
+    setAppUserModelId: vi.fn(),
     whenReady,
     on,
     quit,

@@ -1884,3 +1884,56 @@ describe('agent events to a window that is hidden', () => {
     ])
   })
 })
+
+/**
+ * Each window keeps its own copy of the settings and of the chat list, so a change
+ * one window makes (or a run makes) must reach the others, or a new chat there starts
+ * in a stale approval mode and its sidebar misses the change.
+ */
+describe('changes other windows follow', () => {
+  registerIpc()
+  const call = (ch: string, sender: object, ...args: unknown[]): unknown => h.handlers.get(ch)!({ sender }, ...args)
+  function chatWindow(id: number) {
+    const send = vi.fn()
+    registerAppWindow({
+      id,
+      isDestroyed: () => false,
+      isFocused: () => false,
+      on: () => {},
+      webContents: { id, send, isDestroyed: () => false }
+    } as never)
+    return { sender: { id, send, isDestroyed: () => false, once: () => {} }, send }
+  }
+  const a = chatWindow(611)
+  const b = chatWindow(612)
+  const sent = (send: ReturnType<typeof vi.fn>, channel: string): number => send.mock.calls.filter((c) => c[0] === channel).length
+  beforeEach(() => {
+    configureHasKey(() => false)
+    a.send.mockClear()
+    b.send.mockClear()
+  })
+
+  it('tells every window to re-read the settings after any save', () => {
+    const current = updateSettings({})
+    b.send.mockClear()
+    a.send.mockClear()
+    call(IPC.settingsSave, a.sender, { ...current, approvalPolicy: 'ask' })
+    expect(sent(b.send, IPC.settingsChanged)).toBe(1)
+    // A save main makes on its own (a run marking a model unavailable) too.
+    updateSettings({ desktopNotifications: false })
+    expect(sent(b.send, IPC.settingsChanged)).toBe(2)
+    expect(sent(a.send, IPC.settingsChanged)).toBe(2)
+  })
+
+  it('tells the other windows, not the one that asked, when the chat list changes', async () => {
+    const conv = (await call(IPC.conversationCreate, a.sender, { workspace: tmpdir(), providerId: 'p', model: 'm' })) as { id: string }
+    expect(sent(b.send, IPC.conversationsChanged)).toBe(1)
+    await call(IPC.conversationOrganize, a.sender, conv.id, { pinned: true })
+    expect(sent(b.send, IPC.conversationsChanged)).toBe(2)
+    await call(IPC.conversationReorder, a.sender, [conv.id])
+    expect(sent(b.send, IPC.conversationsChanged)).toBe(3)
+    expect(await call(IPC.conversationFork, a.sender, conv.id)).not.toBeNull()
+    expect(sent(b.send, IPC.conversationsChanged)).toBe(4)
+    expect(sent(a.send, IPC.conversationsChanged)).toBe(0)
+  })
+})

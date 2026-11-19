@@ -92,7 +92,9 @@ import type { RegistrySearchResult } from '@shared/mcpRegistry'
 const api = {
   getVersion: (): Promise<string> => ipcRenderer.invoke(IPC.appGetVersion),
   /** Show a sample desktop notification now; false when the OS can't show any. */
-  sendTestNotification: (): Promise<boolean> => ipcRenderer.invoke(IPC.notificationTest),
+  /** `agentNotificationsOn` (the setting as Settings shows it) words the sample to match. */
+  sendTestNotification: (agentNotificationsOn?: boolean): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.notificationTest, agentNotificationsOn),
   /** Open the OS notification settings page; false where there is none. */
   openNotificationSettings: (): Promise<boolean> => ipcRenderer.invoke(IPC.notificationOpenSettings),
   /** Whether the OS has a notification settings page Houston can open. */
@@ -266,6 +268,12 @@ const api = {
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.settingsGet),
   saveSettings: (next: AppSettings): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.settingsSave, next),
+  /** Subscribe to changes of the stored settings (re-read them). Returns an unsubscribe fn. */
+  onSettingsChanged: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on(IPC.settingsChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.settingsChanged, listener)
+  },
   /** Tidy a permission-rule list (re-generalize run_shell allows + dedupe) for the panel. */
   cleanupPermissionRules: (rules: PermissionRule[]): Promise<PermissionRule[]> =>
     ipcRenderer.invoke(IPC.permissionsCleanup, rules),
@@ -362,6 +370,12 @@ const api = {
 
   // Conversations
   listConversations: (): Promise<ConversationMeta[]> => ipcRenderer.invoke(IPC.conversationList),
+  /** Subscribe to chat-list changes made in another window (re-list). Returns an unsubscribe fn. */
+  onConversationsChanged: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on(IPC.conversationsChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.conversationsChanged, listener)
+  },
   searchConversations: (query: string): Promise<ConversationMeta[]> =>
     ipcRenderer.invoke(IPC.conversationSearch, query),
   getConversation: (id: string): Promise<Conversation | null> =>
