@@ -176,6 +176,10 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
  */
 export const GEMINI_API_VERSION = 'v1beta'
 
+// Both clients below pass `vertexai: false` explicitly: left unset, the SDK reads
+// GOOGLE_GENAI_USE_VERTEXAI (and GOOGLE_GENAI_USE_ENTERPRISE) from the environment, and a
+// shell set up for Vertex would send the Gemini API key to Vertex AI instead.
+
 export function createGeminiProvider(apiKey: string): Provider {
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
@@ -185,7 +189,12 @@ export function createGeminiProvider(apiKey: string): Provider {
   let aiPromise: Promise<GoogleGenAI> | undefined
   const getAi = (): Promise<GoogleGenAI> =>
     (aiPromise ??= import('@google/genai').then(
-      (m) => new m.GoogleGenAI({ apiKey, httpOptions: { apiVersion: GEMINI_API_VERSION, fetch: idleTimeoutFetch() } })
+      (m) =>
+        new m.GoogleGenAI({
+          apiKey,
+          vertexai: false,
+          httpOptions: { apiVersion: GEMINI_API_VERSION, fetch: idleTimeoutFetch() }
+        })
     ))
 
   return {
@@ -231,6 +240,8 @@ export function createGeminiProvider(apiKey: string): Provider {
         let outputTokens: number | undefined
         let cacheReadTokens: number | undefined
         let finishReason: string | undefined
+        // Set when Gemini blocked the prompt itself: no candidates come back, only this.
+        let blockReason: string | undefined
         // Function-call thought signatures, carried on the turn as reasoning blocks keyed
         // by call id so the next request can return each one (see toGeminiContents).
         const signatures: ReasoningBlock[] = []
@@ -248,6 +259,7 @@ export function createGeminiProvider(apiKey: string): Provider {
             // promptTokenCount, billed below the input rate; implicit writes are free.
             cacheReadTokens = usage.cachedContentTokenCount
           }
+          if (chunk.promptFeedback?.blockReason) blockReason = chunk.promptFeedback.blockReason
           const cand = chunk.candidates?.[0]
           // Keep the latest finishReason so a truncated response is reported as such
           // instead of a clean end_turn (the loop's max-output handling depends on it).
@@ -291,8 +303,11 @@ export function createGeminiProvider(apiKey: string): Provider {
 
         // Every finished Gemini reply names a finish reason in its last chunk; a stream
         // that ended without one was cut (a proxy or a dropped connection), so the text
-        // so far is not the whole answer and the turn is retried rather than saved.
-        if (!finishReason) throw new StreamClosedEarlyError()
+        // so far is not the whole answer and the turn is retried rather than saved. A
+        // blocked prompt also has no finish reason, but its promptFeedback says why: that
+        // is a refusal, and asking again would be billed and blocked the same way.
+        if (!finishReason && !blockReason) throw new StreamClosedEarlyError()
+        const refusal = finishReason && GEMINI_BLOCKED.has(finishReason) ? finishReason : blockReason
 
         yield {
           type: 'done',
@@ -301,7 +316,7 @@ export function createGeminiProvider(apiKey: string): Provider {
           // seen. Otherwise a tool call means tool_use, and a plain finish is end_turn.
           stopReason:
             finishReason === 'MAX_TOKENS' ? 'max_tokens' : sawToolCall ? 'tool_use' : 'end_turn',
-          ...(finishReason && GEMINI_BLOCKED.has(finishReason) ? { refusal: finishReason } : {}),
+          ...(refusal ? { refusal } : {}),
           usage: {
             inputTokens,
             outputTokens,
@@ -343,6 +358,7 @@ export async function listGeminiModels(apiKey: string): Promise<ModelOption[]> {
   // aborts each page request at the deadline; the idle fetch bounds a body that stalls.
   const ai = new GoogleGenAI({
     apiKey,
+    vertexai: false,
     httpOptions: {
       apiVersion: GEMINI_API_VERSION,
       fetch: idleTimeoutFetch(LIST_MODELS_TIMEOUT_MS),
