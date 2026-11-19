@@ -1,4 +1,4 @@
-import { Notification, type BrowserWindow } from 'electron'
+import { Notification, shell, type BrowserWindow } from 'electron'
 import { IPC } from '@shared/constants'
 import type { AgentEvent } from '@shared/agent'
 import { notificationFor, workspaceLabel, type NotifySpec } from '@shared/notify'
@@ -45,4 +45,40 @@ export function notifyAgentEvent(
       win.webContents.send(IPC.chatOpenRequest, opts.conversationId)
   })
   n.show()
+}
+
+/**
+ * Show a sample notification now, focused window or not, from Settings. On macOS the
+ * first notification an app posts is what makes the OS ask for permission, and
+ * agent notifications only fire while Houston is in the background, so without this
+ * that one-time prompt appears while the user is looking elsewhere. Returns false
+ * when the platform can't show notifications at all. A `true` only means Houston
+ * handed it to the OS: nothing reports back when the OS has notifications turned off.
+ */
+export function sendTestNotification(): boolean {
+  if (!Notification.isSupported()) return false
+  new Notification({
+    title: 'Houston',
+    body: 'Notifications are working. You’ll see these when the agent needs you.'
+  }).show()
+  return true
+}
+
+/**
+ * The OS page where the user allows or blocks Houston's notifications, or null where
+ * there is no standard one (Linux desktops each have their own). Fixed URLs only:
+ * nothing here comes from the renderer.
+ */
+export function notificationSettingsUrl(platform: NodeJS.Platform = process.platform): string | null {
+  if (platform === 'darwin') return 'x-apple.systempreferences:com.apple.Notifications-Settings.extension'
+  if (platform === 'win32') return 'ms-settings:notifications'
+  return null
+}
+
+/** Open the OS notification settings page. Returns false where there is none. */
+export async function openNotificationSettings(): Promise<boolean> {
+  const url = notificationSettingsUrl()
+  if (!url) return false
+  await shell.openExternal(url)
+  return true
 }

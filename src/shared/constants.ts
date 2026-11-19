@@ -277,6 +277,12 @@ export const IPC = {
   windowOpenChat: 'window:openChat',
   /** main → renderer: play an attention sound (the window is not focused). */
   attentionSound: 'attention:sound',
+  /** Renderer → main: show a sample desktop notification (Settings). */
+  notificationTest: 'notification:test',
+  /** Renderer → main: open the OS notification settings page (Settings). */
+  notificationOpenSettings: 'notification:openSettings',
+  /** Renderer → main: whether the OS has a notification settings page to open. */
+  notificationSettingsAvailable: 'notification:settingsAvailable',
   agentEvent: 'agent:event',
   /** Main → renderer: several run events at once, in order (a window that was hidden). */
   agentEvents: 'agent:events',
