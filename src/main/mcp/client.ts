@@ -31,6 +31,14 @@ import {
   type ListedPages,
   type McpListKind
 } from './protocol'
+import {
+  listenFilter,
+  modernDiscoverError,
+  readDiscoverResult,
+  runWithInputs,
+  withRequestMeta,
+  type ClientDeclaration
+} from './stateless'
 import { withTraceContext } from './trace'
 
 /**
@@ -212,6 +220,8 @@ export function parseMcpResourceList(result: unknown): McpResourceInfo[] {
 
 const INIT_TIMEOUT_MS = 15_000
 const CALL_TIMEOUT_MS = 120_000
+/** Wait before reopening a `subscriptions/listen` stream the server ended. */
+const RELISTEN_DELAY_MS = 1_000
 /** stderr kept from a stdio server, so its exit can name the reason. */
 const STDERR_TAIL_CHARS = 4_000
 /** How long an exit waits for the rest of stderr before reporting without it. */
@@ -361,6 +371,10 @@ export class McpClient {
   /** Answers `elicitation/create`; its presence declares the capability. */
   /** The version agreed at initialize; set once the handshake answers. */
   private protocolVersion?: McpProtocolVersion
+  /** The server speaks 2026-07-28 (see handshake): requests carry `_meta`, no initialize. */
+  private modern = false
+  /** The id of the open `subscriptions/listen` request (2026-07-28 only). */
+  private listenId?: number
   private onElicit?: (params: unknown) => Promise<ElicitationWireResult>
 
   /** Spawn the server, perform the initialize handshake, and list its tools. */
@@ -431,16 +445,7 @@ export class McpClient {
     })
     child.on('error', (e: Error) => this.failAll(`MCP server failed to start: ${e.message}`))
 
-    const init = await this.request(
-      'initialize',
-      initializeParams({ elicitation: !!this.onElicit }),
-      INIT_TIMEOUT_MS
-    )
-    this.protocolVersion = negotiatedProtocolVersion(init)
-    // A server that negotiated down to a version without elicitation never gets
-    // an elicitation answer: its requests fall through to the -32601 decline.
-    if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
-    this.notify('notifications/initialized', {})
+    const init = await this.handshake()
 
     const listed = await this.fetchList('tools')
     this.setTools(listed)
@@ -465,29 +470,156 @@ export class McpClient {
         this.prompts = []
       }
     }
+    if (this.modern) this.listen()
+  }
+
+  /**
+   * Learn which era the server is, and set up for it. A 2026-07-28 server answers
+   * `server/discover` and needs no handshake; an older one answers `initialize`. stdio
+   * gives no status code to tell them apart, and an older server may never answer a
+   * request it doesn't know, so both go out at once, discovery first: whichever the
+   * server answers decides. A server answering both is treated as 2026-07-28. One that
+   * answers discovery with the revision's own errors is modern and is not asked to
+   * initialize instead (UnsupportedProtocolVersion fails the connection). Returns what
+   * the server declared (its capabilities are read from it).
+   */
+  private async handshake(): Promise<unknown> {
+    const decl = this.declaration()
+    const stopDiscover = new AbortController()
+    let discovered: { ok: true; value: unknown } | { ok: false; error: unknown } | undefined
+    const discover = this.request('server/discover', withRequestMeta({}, decl), INIT_TIMEOUT_MS, {
+      signal: stopDiscover.signal,
+      quietCancel: true
+    }).then(
+      (value) => (discovered = { ok: true, value }),
+      (error) => (discovered = { ok: false, error })
+    )
+    const init = this.request('initialize', initializeParams({ elicitation: !!this.onElicit }), INIT_TIMEOUT_MS)
+    // Neither may go unheard: the one that loses is settled (or ignored) on its own.
+    void init.catch(() => {})
+    const readDiscovered = (): unknown | null | undefined => {
+      if (!discovered) return undefined
+      if (discovered.ok) return readDiscoverResult(discovered.value) ? discovered.value : null
+      const modern = modernDiscoverError(discovered.error)
+      if (modern) throw modern
+      return null
+    }
+    const settledInit = await Promise.race([
+      init.then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error })
+      ),
+      discover.then(() => null)
+    ])
+    if (settledInit === null) {
+      // Discovery answered first.
+      const modern = readDiscovered()
+      if (modern) return this.becomeModern(modern)
+      return this.finishLegacy(await init)
+    }
+    // initialize answered first. A server's replies come in order, so a discovery it
+    // answered before initialize has been read already; give the line handler a turn.
+    await new Promise((r) => setImmediate(r))
+    if (!settledInit.ok) {
+      // A 2026-07-28 server rejects initialize: its discovery answer decides.
+      await discover
+      const modern = readDiscovered()
+      if (modern) return this.becomeModern(modern)
+      throw settledInit.error
+    }
+    const modern = readDiscovered()
+    if (modern) return this.becomeModern(modern)
+    stopDiscover.abort()
+    return this.finishLegacy(settledInit.value)
+  }
+
+  /** Speak 2026-07-28 from now on: every request carries its `_meta`, and no handshake follows. */
+  private becomeModern(discovered: unknown): unknown {
+    this.modern = true
+    return discovered
+  }
+
+  /** Finish the `initialize` handshake with an older server. */
+  private finishLegacy(init: unknown): unknown {
+    this.protocolVersion = negotiatedProtocolVersion(init)
+    // A server that negotiated down to a version without elicitation never gets
+    // an elicitation answer: its requests fall through to the -32601 decline.
+    if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
+    this.notify('notifications/initialized', {})
+    return init
+  }
+
+  /** What each 2026-07-28 request declares about this client. */
+  private declaration(): ClientDeclaration {
+    return { elicitation: !!this.onElicit }
+  }
+
+  /**
+   * Send a request that may need input on a 2026-07-28 server (see runWithInputs). An
+   * older server's request goes out once, as before.
+   */
+  private requestWithInputs(
+    method: string,
+    params: Record<string, unknown>,
+    opts: { progress?: boolean; signal?: AbortSignal } = {}
+  ): Promise<unknown> {
+    if (!this.modern) return this.request(method, params, CALL_TIMEOUT_MS, opts)
+    return runWithInputs((p) => this.request(method, p, CALL_TIMEOUT_MS, opts), params, {
+      method,
+      onElicit: this.onElicit,
+      signal: opts.signal
+    })
+  }
+
+  /**
+   * Open the 2026-07-28 change-notification stream (`subscriptions/listen`) for the
+   * lists the server declared. On stdio it is a request that stays pending: its
+   * notifications arrive on the shared channel and drive the same re-fetches as before.
+   * When the server ends it cleanly it is reopened; an error ends listening.
+   */
+  private listen(): void {
+    if (this.closed || !this.modern) return
+    const id = this.nextId++
+    this.listenId = id
+    try {
+      this.send({
+        jsonrpc: '2.0',
+        id,
+        method: 'subscriptions/listen',
+        params: withRequestMeta({ notifications: listenFilter(this.capable) }, this.declaration())
+      })
+    } catch {
+      // A broken pipe surfaces via 'exit'/'error'.
+    }
+  }
+
+  /** The listen request was answered: a clean end is reopened, an error is not. */
+  private onListenEnded(msg: { error?: unknown }): void {
+    this.listenId = undefined
+    if (msg.error || this.closed) return
+    const timer = setTimeout(() => this.listen(), RELISTEN_DELAY_MS)
+    timer.unref?.()
   }
 
   /** Call a tool and return its flattened text result. */
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, images?: McpImageOptions): Promise<string> {
-    const res = (await this.request(
-      'tools/call',
-      { name, arguments: args ?? {} },
-      CALL_TIMEOUT_MS,
-      { progress: true, signal }
-    )) as { content?: unknown; isError?: boolean }
+    const res = (await this.requestWithInputs('tools/call', { name, arguments: args ?? {} }, { progress: true, signal })) as {
+      content?: unknown
+      isError?: boolean
+    }
     const text = flattenMcpContent(res?.content, images)
     return res?.isError ? `${text}\n[the MCP tool reported an error]`.trim() : text || '[no output]'
   }
 
   /** Read a resource's contents by uri, flattened to text. */
   async readResource(uri: string, signal?: AbortSignal): Promise<string> {
-    const res = await this.request('resources/read', { uri }, CALL_TIMEOUT_MS, { signal })
+    const res = await this.requestWithInputs('resources/read', { uri }, { signal })
     return flattenMcpResourceContents(res) || '[no content]'
   }
 
   /** Fetch a prompt template by name, flattened to text. */
   async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<string> {
-    const res = await this.request('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, { signal })
+    const res = await this.requestWithInputs('prompts/get', { name, arguments: args ?? {} }, { signal })
     return flattenMcpPromptMessages(res) || '[no content]'
   }
 
@@ -507,6 +639,15 @@ export class McpClient {
   }
 
   close(): void {
+    if (this.listenId !== undefined && !this.closed) {
+      // Ending a stdio subscription is a cancel of its listen request.
+      try {
+        this.send(cancelledNotification(this.listenId))
+      } catch {
+        // The process is being stopped anyway.
+      }
+      this.listenId = undefined
+    }
     this.closed = true
     this.failAll('MCP client closed')
     if (!this.child || this.stopped) return
@@ -558,6 +699,7 @@ export class McpClient {
     const msg = parseIncoming(raw)
     if (!msg) return
     if (kindOf(msg) === 'response') {
+      if (this.listenId !== undefined && msg.id === this.listenId) return this.onListenEnded(msg)
       this.pending.settle(msg.id as number | string, msg)
       return
     }
@@ -601,7 +743,7 @@ export class McpClient {
     method: string,
     params: unknown,
     timeoutMs: number,
-    opts: { progress?: boolean; signal?: AbortSignal } = {}
+    opts: { progress?: boolean; signal?: AbortSignal; quietCancel?: boolean } = {}
   ): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error('MCP client is closed'))
     // Stopped before it went out: nothing to send, and nothing to cancel.
@@ -609,13 +751,20 @@ export class McpClient {
     const id = this.nextId++
     // Ask for progress on long calls: a server that reports it keeps the call's
     // inactivity clock (see PendingRequests) from expiring mid-work.
-    const sent = opts.progress
-      ? { ...(params as Record<string, unknown>), _meta: { progressToken: id } }
+    const withProgress = opts.progress
+      ? {
+          ...(params as Record<string, unknown>),
+          _meta: { ...((params as { _meta?: Record<string, unknown> })?._meta ?? {}), progressToken: id }
+        }
       : params
+    // A 2026-07-28 server reads the version and capabilities from every request.
+    const sent = this.modern ? withRequestMeta(withProgress, this.declaration()) : withProgress
     const result = this.pending.wait(id, method, timeoutMs, undefined, {
       signal: opts.signal,
       onCancel: () => {
-        if (!this.closed) this.send(cancelledNotification(id))
+        // quietCancel: a request withdrawn locally (an unneeded discovery) is not
+        // announced, since an older server has not been initialized yet.
+        if (!this.closed && !opts.quietCancel) this.send(cancelledNotification(id))
       }
     })
     try {

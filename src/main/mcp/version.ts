@@ -16,7 +16,9 @@ import { version as APP_VERSION } from '../../../package.json'
  */
 
 /**
- * Versions Houston can speak, newest first. Dates compare lexically.
+ * Versions Houston negotiates with the `initialize` handshake, newest first. Dates
+ * compare lexically. The stateless 2026-07-28 revision has no handshake; it is chosen
+ * through `server/discover` instead (see stateless.ts).
  *
  * What 2025-11-25 changed for a client like this one, and how it is met:
  * - Streams the server closes at will (SSE polling): resumed with `Last-Event-ID`
