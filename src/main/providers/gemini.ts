@@ -163,6 +163,14 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
   return out
 }
 
+/**
+ * The Gemini API version every client calls. SDK 3 changed its default from `v1beta` to
+ * `v1`, and also reads GOOGLE_GENAI_API_VERSION when no version is set in code. Thinking
+ * config, thought signatures and preview models are served on `v1beta`, so pin it here:
+ * an SDK upgrade or a stray environment variable must not move the endpoint.
+ */
+export const GEMINI_API_VERSION = 'v1beta'
+
 export function createGeminiProvider(apiKey: string): Provider {
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
@@ -172,7 +180,7 @@ export function createGeminiProvider(apiKey: string): Provider {
   let aiPromise: Promise<GoogleGenAI> | undefined
   const getAi = (): Promise<GoogleGenAI> =>
     (aiPromise ??= import('@google/genai').then(
-      (m) => new m.GoogleGenAI({ apiKey, httpOptions: { fetch: idleTimeoutFetch() } })
+      (m) => new m.GoogleGenAI({ apiKey, httpOptions: { apiVersion: GEMINI_API_VERSION, fetch: idleTimeoutFetch() } })
     ))
 
   return {
@@ -330,7 +338,11 @@ export async function listGeminiModels(apiKey: string): Promise<ModelOption[]> {
   // aborts each page request at the deadline; the idle fetch bounds a body that stalls.
   const ai = new GoogleGenAI({
     apiKey,
-    httpOptions: { fetch: idleTimeoutFetch(LIST_MODELS_TIMEOUT_MS), timeout: LIST_MODELS_TIMEOUT_MS }
+    httpOptions: {
+      apiVersion: GEMINI_API_VERSION,
+      fetch: idleTimeoutFetch(LIST_MODELS_TIMEOUT_MS),
+      timeout: LIST_MODELS_TIMEOUT_MS
+    }
   })
   const out: ModelOption[] = []
   try {
