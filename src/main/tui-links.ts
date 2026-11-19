@@ -85,8 +85,11 @@ export function isLinkableFile(abs: string, platform: NodeJS.Platform = process.
 /**
  * Path-shaped words in prose: at least one `/` and a file extension, optionally a
  * `:line`. Only these are looked up, so ordinary words never cost a file check.
+ * A match never starts inside another path-shaped word (the lookbehind holds every
+ * character a path word can hold): restarting after each `+` of a long `x+y/` run
+ * made the scan quadratic.
  */
-export const PROSE_PATH = /(?<![\w./@-])((?:\.{1,2}\/)?(?:[\w@.+-]+\/)+[\w@.+-]*\w\.[A-Za-z0-9]+(?::\d+(?::\d+)?)?)(?![\w/])/g
+export const PROSE_PATH = /(?<![\w./@+-])((?:\.{1,2}\/)?(?:[\w@.+-]+\/)+[\w@.+-]*\w\.[A-Za-z0-9]+(?::\d+(?::\d+)?)?)(?![\w/])/g
 
 /** The links a session's replies get: web links, and files that exist in `cwd`. Lookups are cached per path. */
 export function markdownLinks(cwd: string, isFile: (abs: string) => boolean = (abs) => isLinkableFile(abs)): MarkdownLinks {
