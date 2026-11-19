@@ -8,8 +8,9 @@
  * in isolation — a draft left in one chat never shows up in another, and every
  * chat's draft survives a restart. The not-yet-created "new chat" composer gets
  * its own slot. The text and the context chips (a folded paste, an attached or
- * dropped file, a folder listing, the diff, a link) are persisted; pending image
- * attachments are not (they can be large and would risk the localStorage quota).
+ * dropped file, a folder listing, the diff, a link) are persisted here; pending
+ * image attachments can be large, so they live in IndexedDB instead (see
+ * composerImageDraft.ts).
  * Context chips are plain text but can add up: past MAX_SAVED_CONTEXT_CHARS (or
  * when storage refuses them) their content is folded into the saved text instead,
  * exactly as it would have been sent, so a restored draft never loses it.

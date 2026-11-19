@@ -119,7 +119,8 @@ import { deliverMidRunMessage } from './lib/midRunMessage'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
 import { usePrStatus } from './hooks/usePrStatus'
 import type { ShipAction } from '@shared/shipAction'
-import { loadComposerDraft, saveComposerDraft } from './lib/composerDraft'
+import { loadComposerContext, loadComposerDraft, saveComposerDraft } from './lib/composerDraft'
+import { appendComposerImages, saveComposerImages } from './lib/composerImageDraft'
 import type { ForkPoint } from '@shared/conversation-io'
 import {
   endsWithRecordedError,
@@ -918,7 +919,8 @@ export default function App(): JSX.Element {
       return
     }
     const draft = loadComposerDraft(cid)
-    saveComposerDraft(cid, draft ? `${draft}\n\n${text}` : text)
+    saveComposerDraft(cid, draft ? `${draft}\n\n${text}` : text, loadComposerContext(cid))
+    if (images?.length) void appendComposerImages(cid, images)
   }, [])
 
   // Start a turn immediately with the given text/images, creating a conversation
@@ -1244,6 +1246,7 @@ export default function App(): JSX.Element {
       const res = await window.api.deleteConversation(id)
       if (!res.deleted) return
       saveComposerDraft(id, '') // drop the deleted conversation's lingering draft
+      void saveComposerImages(id, [])
       if (res.worktree?.message) alert(res.worktree.message)
       if (id === currentId) {
         // Land on a new chat in the deleted chat's project, never its worktree
