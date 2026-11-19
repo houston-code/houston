@@ -247,7 +247,8 @@ Open source under the [Apache License 2.0](LICENSE).
   more permissive). Schedules persist across restarts, fire while Houston (the
   desktop app or the TUI) is running, and catch up an occurrence missed while it
   was closed; `list_scheduled_runs` and `cancel_scheduled_run` manage them, and
-  creating or cancelling is approval-gated. In the desktop app, **Settings >
+  creating or cancelling asks like a file edit (and creating always asks once the
+  chat has read outside text). In the desktop app, **Settings >
   Scheduled Runs** lists them with their next and last run, pauses and resumes
   them, runs one now, deletes them, and creates one from a form (task, schedule,
   folder, model, approval mode).
@@ -439,8 +440,8 @@ Open source under the [Apache License 2.0](LICENSE).
   fn)`, for logging, metrics, or notifications. Plugins are executable code, so they
   load only after you set `"projectPlugins": true` in settings.json and trust the
   folder for its current plugin files (a plugin added or edited later asks again).
-  Each runs in an isolated context
-  with no `require`/`process`/network, hooks can't block or alter a call, and a
+  A plugin is ordinary code that runs with your permissions and network (its
+  separate context only guards against accidents), hooks can't block or alter a call, and a
   throwing or slow plugin is caught and ignored. To *block* a tool, use a
   *PreToolUse* shell hook instead.
 - **Format on save (optional).** Turn on *Format on save* (Settings → *Tools*)
@@ -768,7 +769,7 @@ Houston -p "Now add tests for it" --continue
 Houston -i   # /resume picks up the same conversation
 ```
 
-Flags: `--cwd <dir>` (project folder, default the current directory),
+Flags: `-C, --cwd <dir>` (project folder, default the current directory),
 `--provider <id>` / `--model <id>` (default: your default model), `--approval
 <plan|ask|auto-edit|full-auto>` (default `plan`), `--on-approval
 <allow|deny|fail>` (below), `--allow-shell-network` (below), `--json`,
@@ -923,17 +924,20 @@ a script can tell the run needed more than it was granted. The default is
 `deny`, except under `full-auto` (which already opts into everything) where it
 is `allow`; an unrecognized value is treated as `deny`.
 
-**Shell network.** Shell commands run in a sandbox with network off until the run
-is granted it, because the sandbox can read your whole filesystem.
+**Shell network.** Shell commands run in a sandbox that can read your whole
+filesystem, so their network is bounded. Under `full-auto` they reach the network from
+the start, but only through the per-domain egress allowlist. Under `ask` and
+`auto-edit` (and in the "All domains" egress mode, which has no allowlist) they start
+offline until the run is granted network.
 Interactively that grant is **Allow network for this chat** on the card Houston
-shows, in every mode, once a command fails for lack of network (commands that need
+shows once a command fails for lack of network (commands that need
 no network never ask; Houston doesn't re-run the failed command itself). Approving a
 shell command, even for the whole chat, never grants it. `--on-approval allow`
 approves each command the way "Allow once" does, so under `ask` or `auto-edit` those
 commands still run offline. Pass `--allow-shell-network` to grant shell network for the run under
 any policy; granted traffic still goes through the egress allowlist. Under
-`full-auto`, `--on-approval allow` (its default) also answers that card with yes
-when a command fails without network.
+`full-auto` in the "All domains" mode, `--on-approval allow` (its default) also
+answers that card with yes when a command fails without network.
 
 ## Interactive terminal
 
@@ -959,7 +963,8 @@ and any nested subagents), and a per-turn plus running session token/cost meter.
 line above the composer keeps the model, approval policy, working directory,
 session cost, and context-window fill in view at all times. When a tool needs approval
 you answer with an **arrow-key picker** (or a key: `y` allow, `n` deny, `a` allow for
-the run, `!` always allow, `x` always deny, or type a reason to deny with guidance).
+this chat, `c` allow with a note, `!` always allow, `x` always deny, or type a reason to
+deny with guidance).
 A file edit shows its **diff** before you approve, and a shell command with no OS
 sandbox is flagged. When the agent asks a question (`ask_user`) the options are
 listed and you pick a number or type your own answer. In **plan mode**, once the
@@ -984,8 +989,10 @@ tips, `/help` lists them under **Keys**, and the
 above the composer carries the model, approval mode, folder, git branch, cost and
 context use; while a turn runs, the model, branch and context stay on the spinner line.
 
-Slash commands adjust the session without restarting (the desktop app accepts the
-same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
+Slash commands adjust the session without restarting. Most work in the desktop app
+too, and some are terminal-only; short aliases such as `/diff` and `/think` work in
+both. The most used are below, and the
+[guide](docs/houston-guide.md#slash-commands) lists every command and which client has it:
 
 | Command | Effect |
 | --- | --- |
@@ -999,14 +1006,14 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/retry` | run your last message again after a turn that failed |
 | `/rewind` | go back to an earlier message: the conversation, the code, or both |
 | `/resume [query]` | list (or search by title) and reopen a saved session |
-| `/fork` | branch the current session into a copy, leaving the original intact |
+| `/fork [n]` | branch the current session into a copy, leaving the original intact (from before message `n` with a number) |
 | `/rename <title>` | give this chat a title |
-| `/export [md\|json] [path]` | write this chat to a Markdown (default) or JSON file in the working folder |
+| `/export [md\|json\|html] [path]` | write this chat to a Markdown (default), JSON, or HTML file in the working folder, secrets masked; `--copy` puts it on the clipboard, `--no-reasoning` and `--no-tools` leave those out |
 | `/delete` | delete this chat, after asking |
-| `/permissions [remove n]` | list the saved permission rules, or remove one |
+| `/permissions` | list every permission rule that applies and recent denials; `add`, `remove n`, or `allow n` (save an allow for a recent denial) |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
 | `/changes` (`/diff`) | summarize what is different in the working tree; `/diff last [n]` shows the diff of this session's last edit (or `n` back) |
-| `/review` | adversarial review of your uncommitted changes |
+| `/review [base-branch\|pr#\|path]` | adversarial review of your uncommitted changes, a branch, a pull request, or a path |
 | `/init` | write or improve AGENTS.md, the project's instructions file |
 | `/cost` | session token + cost totals, per model |
 | `/context` | what fills the context now: instructions, tools, memories, conversation, tool results |
@@ -1017,14 +1024,14 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/skills`, `/agents`, `/agent <name> <task>` | list the workspace's skills / custom agents, or hand a task to one |
 | `/mcp`, `/hooks` | list (and edit) MCP servers / hooks; `/mcp login <n>` signs in |
 | `/trust` | show this folder's project-config trust (`/trust forget` re-decides) |
-| `/settings` | summary of your current settings |
-| `/theme [name]` | list or switch color theme (`default` / `dark` / `light` / `colorblind` / `mono`) |
+| `/settings [page]` | summary of your current settings; `get`, `set`, `unset`, `add`/`remove`, `export`/`import`, `reset`, and `search-key` change them |
+| `/theme [name]` | list the color themes (yours from `~/.houston/themes` too), or switch to one |
 | `/vim [on\|off]` | vim keys in the composer |
-| `/image [path]` | attach the image on your clipboard, or a file (PNG/JPEG/GIF/WebP) |
+| `/image [path\|clear]` | attach the image on your clipboard, or a file (PNG/JPEG/GIF/WebP); `/image clear` drops the attached ones |
 | `/cwd` | show the working directory |
 | `/share` | copy an invite to Houston to send a friend |
 | `/help` | list commands |
-| `/exit`, `/quit` | leave |
+| `/exit`, `/quit` (`/q`) | leave |
 
 Each session is saved as an ordinary conversation, so it survives restarts and
 shows up in the desktop app's sidebar: one history across both clients. `/resume`
@@ -1224,15 +1231,20 @@ none is found.
 Houston also runs in GitHub Actions, on your own runners with your own model API key and
 no hosted service: the [Houston action](action/README.md) downloads the standalone CLI,
 verifies it against the signed `SHA256SUMS` (see [Verifying downloads](#verifying-downloads)),
-and runs it in the job. It has three modes:
+and runs it in the job. It has five modes:
 
 - **respond:** answers an `@houston` mention on an issue or pull request, from someone
   with write access, in a reply.
-- **review:** posts one review comment on each same-repository pull request, from
-  Houston's multi-agent `review_changes`.
+- **review:** posts one review on each same-repository pull request, from Houston's
+  multi-agent `review_changes`, with each finding on a diff line as an inline comment.
 - **fix-ci:** when a workflow run fails, fixes the cause in a sandbox, pushes the fix to a
   new `houston/` branch, and opens a pull request. It never pushes to the failed branch or
   the default branch.
+- **implement:** makes the change an issue asks for (or a scheduled or manual run's
+  prompt) in a sandbox, pushes it to a new branch, and opens a pull request. A workflow
+  opts in to it by setting `mode: implement`.
+- **task:** works on a scheduled or manual run's prompt read-only and writes its report
+  to the job summary.
 
 ```yaml
 - uses: houston-code/houston/action@<commit SHA> # v0.10.0
@@ -1463,10 +1475,11 @@ the agent loop and UI never depend on a specific provider.
 
 - **Tool execution is sandboxed where the OS allows it.** `run_shell` runs under
   Seatbelt (`sandbox-exec`) on macOS and bubblewrap on Linux: filesystem reads
-  allowed, writes restricted to the project + temp dirs, network denied until you
-  grant it (a once-per-chat question after a command first fails for lack of network,
-  in every mode; approving a shell command never grants network; or
-  `--allow-shell-network` on a headless run). Granted network is confined to a
+  allowed, writes restricted to the project + temp dirs, network only through the
+  egress allowlist from the start in full auto, and otherwise denied until you grant
+  it (a once-per-chat question after a command first fails for lack of network;
+  approving a shell command never grants network; or `--allow-shell-network` on a
+  headless run). Granted network is confined to a
   per-domain egress allowlist: direct sockets stay blocked and traffic flows through
   a local proxy that permits package registries, VCS hosts, and domains you add in
   Settings. Windows has no equivalent, so shell commands there run unconfined and

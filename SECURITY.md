@@ -84,9 +84,11 @@ directly from the tool's purpose and are gated by explicit user consent:
 
 Even so, *full auto* is defended in depth rather than treated as a blank cheque, because
 the sandbox can read your whole filesystem: network egress is granted **per destination**
-(not all-or-nothing), shell commands run **offline until you allow network** for the
-chat (Houston asks the first time a command fails without it, so blanket outbound access
-is never automatic, and a decline keeps commands offline), and
+(not all-or-nothing), shell commands reach the network **only through the per-domain
+allowlist** (in *ask* and *auto-edit*, and in the "All domains" egress mode, they start
+offline until you allow network for the chat; Houston asks the first time a command
+fails without it, so unrestricted outbound access is never automatic, and a decline
+keeps commands offline), and
 Houston's own network tools (`web_fetch`, `web_search`, and the GitHub tools) **refuse to send**
 a URL, query, title, body, or comment that carries a recognized credential. In *full auto*
 the GitHub calls that only read (lists, views, check and run status) run without asking;
