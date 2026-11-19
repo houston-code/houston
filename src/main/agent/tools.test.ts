@@ -1337,6 +1337,28 @@ describe('apply_patch', () => {
     expect(existsSync(join(workspace, 'old.ts'))).toBe(false)
   })
 
+  it('refuses a hunk that only matches part of a line, leaving the file alone', async () => {
+    const original = 'export const config = {\n  timeout: 3000,\n}\n'
+    await run('write_file', { path: 'cfg.ts', content: original })
+    // Context that is the tail of a line, and a removed line that is the start of one.
+    await expect(
+      run('apply_patch', {
+        patch: patch('*** Update File: cfg.ts', ' const config = {', '-  timeout: 30', '+  timeout: 60')
+      })
+    ).rejects.toThrow(/Update File: cfg\.ts, hunk 1: old_string was not found/)
+    await expect(
+      run('apply_patch', {
+        patch: patch('*** Update File: cfg.ts', ' export const config = {', '-  timeout: 30', '+  timeout: 60')
+      })
+    ).rejects.toThrow(/hunk 1: old_string was not found/)
+    expect(fileText('cfg.ts')).toBe(original)
+    // The whole line applies.
+    await run('apply_patch', {
+      patch: patch('*** Update File: cfg.ts', ' export const config = {', '-  timeout: 3000,', '+  timeout: 6000,')
+    })
+    expect(fileText('cfg.ts')).toBe(original.replace('3000', '6000'))
+  })
+
   it('renames a file with Move to', async () => {
     await run('write_file', { path: 'a.ts', content: 'hello\nworld\n' })
     await run('apply_patch', {

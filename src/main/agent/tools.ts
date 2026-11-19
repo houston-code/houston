@@ -1659,7 +1659,11 @@ const applyPatch: ToolDef = {
         const original = data
         op.hunks.forEach((hunk, h) => {
           try {
-            data = resolveEdit(data, hunk.oldText, hunk.newText, false, { showCandidate: !isSensitivePath(op.path) }).content
+            // A hunk names whole lines: its text must not land on part of one.
+            data = resolveEdit(data, hunk.oldText, hunk.newText, false, {
+              showCandidate: !isSensitivePath(op.path),
+              wholeLines: true
+            }).content
           } catch (e) {
             // Name the file and hunk: the matcher's message alone doesn't say which of
             // the patch's changes failed. A closest-region listing counts this file's

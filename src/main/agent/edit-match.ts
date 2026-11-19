@@ -152,15 +152,31 @@ function splitLines(body: string): { lines: string[]; starts: number[] } {
   return { lines, starts }
 }
 
-/** Exact, verbatim occurrences of `needle`, left to right, non-overlapping. */
-function exactSpans(body: string, needle: string): Span[] {
+/**
+ * Exact, verbatim occurrences of `needle`, left to right, non-overlapping. With
+ * `wholeLines`, only occurrences that start at the start of a line and end at the end
+ * of one (or of the file) count, so `const x` never matches the tail of `export const x`.
+ */
+function exactSpans(body: string, needle: string, wholeLines = false): Span[] {
   const spans: Span[] = []
   let from = 0
   for (;;) {
     const idx = body.indexOf(needle, from)
     if (idx === -1) break
-    spans.push({ start: idx, end: idx + needle.length })
-    from = idx + needle.length
+    const end = idx + needle.length
+    if (
+      wholeLines &&
+      !(
+        (idx === 0 || body[idx - 1] === '\n') &&
+        (needle.endsWith('\n') || end === body.length || body[end] === '\n')
+      )
+    ) {
+      // Not on line boundaries; a later, overlapping occurrence still might be.
+      from = idx + 1
+      continue
+    }
+    spans.push({ start: idx, end })
+    from = end
   }
   return spans
 }
@@ -321,7 +337,8 @@ function locate(
   p: Prepared,
   oldString: string,
   newString: string,
-  replaceAll: boolean
+  replaceAll: boolean,
+  wholeLines = false
 ): Omit<EditResult, 'strippedLineNumbers'> | null {
   const { body, normalized, crlf } = p
   const oldLf = normalized ? oldString.replace(/\r\n/g, '\n') : oldString
@@ -344,7 +361,7 @@ function locate(
   for (const strategy of STRATEGIES) {
     let spans: Span[]
     if (strategy === 'exact') {
-      spans = exactSpans(body, oldLf)
+      spans = exactSpans(body, oldLf, wholeLines)
     } else if (oldAllBlank) {
       // Whitespace-only old text can't be fuzzily located without false positives.
       continue
@@ -408,19 +425,24 @@ function locate(
  * naming the closest region, when one is close enough to be worth showing and
  * `showCandidate` isn't false (a caller editing a credential file turns it off, so
  * a deliberately wrong old_string can't read the file out through the error).
+ *
+ * `wholeLines` makes a match cover whole lines only (the fuzzy tiers always do; this
+ * holds the exact tier to it too). A patch hunk names whole lines, so `-  timeout: 30`
+ * must not match the start of `  timeout: 3000,`; edit_file's old_string may be any
+ * substring and leaves it off.
  */
 export function resolveEdit(
   content: string,
   oldString: string,
   newString: string,
   replaceAll = false,
-  opts: { showCandidate?: boolean } = {}
+  opts: { showCandidate?: boolean; wholeLines?: boolean } = {}
 ): EditResult {
   if (oldString === '') throw new Error('old_string must not be empty.')
   if (oldString === newString) throw identicalError()
 
   const p = prepare(content)
-  const hit = locate(p, oldString, newString, replaceAll)
+  const hit = locate(p, oldString, newString, replaceAll, opts.wholeLines)
   if (hit) return hit
 
   // Not found as written. If every line carries a read_file prefix, the model copied
@@ -432,7 +454,7 @@ export function resolveEdit(
     const strippedNew = stripLineNumbers(newString)
     const retryNew = strippedNew ?? newString
     if (strippedOld === retryNew) throw identicalError()
-    const retry = locate(p, strippedOld, retryNew, replaceAll)
+    const retry = locate(p, strippedOld, retryNew, replaceAll, opts.wholeLines)
     if (retry) return { ...retry, strippedLineNumbers: strippedNew !== null ? 'both' : 'old' }
   }
   if (opts.showCandidate === false) {

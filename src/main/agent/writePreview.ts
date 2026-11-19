@@ -42,6 +42,8 @@ export const MAX_PREVIEW_DIFF_LINES = 400
  * hundreds of milliseconds on a large file). The tool itself still reports it.
  */
 const PREVIEW_ONLY = { showCandidate: false } as const
+/** {@link PREVIEW_ONLY} for a patch hunk, which matches whole lines as apply_patch does. */
+const PATCH_PREVIEW = { showCandidate: false, wholeLines: true } as const
 
 /**
  * Current contents of a file, or null when it does not exist / cannot be read (a FIFO,
@@ -178,7 +180,7 @@ export async function previewWrite(
           const before = await readOrNull(resolveInRoots(roots, op.path))
           if (before === null) return null
           let after = before
-          for (const hunk of op.hunks) after = resolveEdit(after, hunk.oldText, hunk.newText, false, PREVIEW_ONLY).content
+          for (const hunk of op.hunks) after = resolveEdit(after, hunk.oldText, hunk.newText, false, PATCH_PREVIEW).content
           if (op.moveTo && op.moveTo !== op.path) {
             // A move is one change to the reader ("this file became that file"), not
             // a delete plus an unrelated add, so it is previewed as the destination

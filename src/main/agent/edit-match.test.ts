@@ -38,6 +38,42 @@ describe('resolveEdit — exact', () => {
   })
 })
 
+describe('resolveEdit — wholeLines (patch hunks)', () => {
+  const lines = { wholeLines: true }
+
+  it('never lands on part of a line', () => {
+    const file = 'export const config = {\n  timeout: 3000,\n}\n'
+    expect(() => resolveEdit(file, 'const config = {\n  timeout: 30', 'x', false, lines)).toThrow(/not found/)
+    expect(() => resolveEdit(file, '  timeout: 30', '  timeout: 60', false, lines)).toThrow(/not found/)
+    // edit_file keeps substring semantics.
+    expect(resolveEdit(file, 'timeout: 30', 'timeout: 60').content).toBe(file.replace('3000', '6000'))
+  })
+
+  it('matches whole lines anywhere in the file, including the last line without a newline', () => {
+    const file = 'a\nb\nc'
+    expect(resolveEdit(file, 'a\nb', 'A\nB', false, lines).content).toBe('A\nB\nc')
+    expect(resolveEdit(file, 'c', 'C', false, lines).content).toBe('a\nb\nC')
+    expect(resolveEdit(file, 'b\n', 'B\n', false, lines).content).toBe('a\nB\nc')
+  })
+
+  it('finds the whole-line occurrence past a partial one that overlaps it', () => {
+    // "x\nx" first occurs at offset 1 ("xx\nx..."), which starts mid-line.
+    const file = 'xx\nx\nx\n'
+    expect(resolveEdit(file, 'x\nx', 'y\ny', false, lines).content).toBe('xx\ny\ny\n')
+  })
+
+  it('counts only whole-line occurrences when deciding a match is ambiguous', () => {
+    const file = 'let total = 1\ntotal = 1\n'
+    expect(resolveEdit(file, 'total = 1', 'total = 2', false, lines).content).toBe('let total = 1\ntotal = 2\n')
+  })
+
+  it('keeps CRLF, a BOM, and whitespace drift working', () => {
+    expect(resolveEdit('\ufeffa\r\nb\r\n', 'b', 'B', false, lines).content).toBe('\ufeffa\r\nB\r\n')
+    // Indent drift: the fuzzy tier matches whole lines and re-bases the replacement.
+    expect(resolveEdit('  a\n  b\n', 'a\nb', 'a\nB', false, lines).content).toBe('  a\n  B\n')
+  })
+})
+
 describe('resolveEdit — line-trimmed (whitespace/indent drift)', () => {
   it('matches despite different leading indentation and re-adapts to the file', () => {
     // File line has no indent; model supplied a 4-space indent. Not an exact
