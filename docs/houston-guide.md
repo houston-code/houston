@@ -2716,8 +2716,11 @@ the answered prompt reads "Always allowed (rule saved)" or "Always denied (rule
 saved)"; `/permissions` lists the rule and `/permissions remove <n>` removes it.
 
 **What you approve is what runs.** A shell command is shown in full under the prompt,
-never cut to fit, and a memory about to be saved shows its description and body.
-Characters that don't display on their own (a carriage return, a terminal escape, a
+never cut to fit, and a memory about to be saved shows its description and body. A new
+session, a scheduled run, or a writable subagent shows the prompt it will start from
+(and a scheduled run, when it runs), and an MCP tool call shows the arguments it sends.
+A prompt or argument list longer than 10,000 characters ends with a line saying how many
+more characters there are. Characters that don't display on their own (a carriage return, a terminal escape, a
 right-to-left override, a zero-width space) are shown as their code, like `<U+202E>`,
 so a command can't pass for something else. In the terminal, a multi-line command has
 numbered lines, a run of blank lines folds to one "(N blank lines)" row, and a command
