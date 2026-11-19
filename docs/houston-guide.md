@@ -1908,6 +1908,8 @@ steps, either:
 
 and it hasn't been caught looping. Going back over calls it already made doesn't
 count, and neither does an edit that puts a file back to a version it already had.
+Putting a file back the way the turn found it (taking out a temporary debug line)
+isn't a revert, and neither is an edit that leaves a file unchanged.
 
 ### Getting caught in a loop
 
@@ -1918,7 +1920,8 @@ Houston watches for an agent that is going in circles:
 - hitting the same error over and over, including an edit that keeps missing
 - rerunning a command (a test suite, a build) that keeps failing the same way while
   it tweaks things in between
-- editing a file back and forth between the same versions
+- editing a file back and forth between the same versions (returning it to how the
+  turn found it doesn't count)
 
 The first time, it tells the agent to change approach. If the loop continues, the
 turn ends: the agent gets one last step with tools off to tell you what it tried and
@@ -3692,13 +3695,13 @@ hook's globs the agent's name (a custom agent's name, else `research` or `writab
 | **UserPromptSubmit** | when you submit a message, before the turn runs | block the prompt or inject extra context |
 | **SessionStart** | once when a run begins | add context to the system prompt |
 | **Stop** | when the agent would end its turn | force another turn with the reason fed back ("run the tests before you stop"), bounded so a hook can't keep the agent going forever. On the turn's last step there is no step left: the reply stays the answer, the reason is shown as a notice, and the turn ends at its step limit |
-| **PreCompact** | before the conversation is compacted | fold context into the material being summarized, so it survives compaction |
+| **PreCompact** | before the conversation is compacted (automatically, by `/compact`, or by **Summarize from here** or **up to here**) | fold context into the material being summarized, so it survives compaction |
 | **Notification** | when the agent stops to wait for you: an approval, a question, a plan to review, or an MCP server asking for input | observe only, e.g. play a sound or send yourself a desktop alert. It runs alongside the wait and can't answer it |
 | **SessionEnd** | once when a run ends, however it ended | observe only, e.g. log the session or clean up. Its `reason` is `completed`, `aborted`, `error`, or `limit` |
 
 | **SubagentStart** | when a dispatched subagent starts | add context to the subagent's task |
 | **SubagentStop** | when a dispatched subagent ends, however it ended (a report, a limit, a stop, an error) | add context to the report the agent gets back |
-| **PostCompact** | after a compaction lands | add context to the new summary, so it carries into the rest of the run |
+| **PostCompact** | after a compaction lands (any of the three) | add context to the new summary, so it carries into the rest of the run |
 
 SubagentStart, SubagentStop, and PostCompact hooks can add context and show a
 `systemMessage`, but they can't block, approve, or rewrite anything, and a non-zero exit
@@ -4488,9 +4491,12 @@ window:
   sizing set it.
 - **`/compact` on demand.** It shows progress (including when it retries a slow or
   overloaded model) and can be cancelled: **Cancel** in the desktop app, **Esc** or
-  **Ctrl-C** in the terminal. It gives up after 3 minutes. A cancelled or failed
-  compaction changes nothing, and it never overwrites the chat if a turn started or a
-  new message arrived while it was summarizing; run it again instead.
+  **Ctrl-C** in the terminal. A long chat is summarized in parts, and it gives up if
+  one part takes more than 3 minutes. It continues from the summary Houston already
+  keeps for the chat when that still applies (not when you give it a focus). A
+  cancelled or failed compaction changes nothing, and it never overwrites the chat if
+  a turn started or a new message arrived while it was summarizing; run it again
+  instead.
 - **Steer what it keeps.** Text after the command tells the summarizer what to keep in
   full detail: `/compact keep the database migration decisions`. The summary still
   carries the goal, the current state, and the next steps. It works the same in the

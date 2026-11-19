@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatMessage, Provider } from '@shared/agent'
+import type { Hook } from '@shared/types'
+import type { SandboxRunOptions, SandboxRunResult } from '../sandbox'
 import { COMPACTION_SUMMARY_PREFIX, estimateTokens, summaryMaxTokens } from './compaction'
 
 // Hoisted holders the mocks read, so each test can swap conversation/provider.
 const h = vi.hoisted(() => ({
-  conv: null as { id: string; workspace: string; messages: ChatMessage[] } | null,
+  conv: null as { id: string; workspace: string; messages: ChatMessage[]; compaction?: unknown } | null,
   saved: null as ChatMessage[] | null,
   // Arguments of every setCompaction call, so tests can assert the stored
   // loop-compaction state was cleared when (and only when) the log is rewritten.
@@ -15,13 +17,32 @@ const h = vi.hoisted(() => ({
   // The live run on the chat, if any (the loop's activeRunForConversation).
   activeRun: null as string | null,
   // The last writeRewind, for the part summaries saved as a rewind.
-  rewound: null as { messages: ChatMessage[]; compaction: unknown; lastError: unknown; backup: unknown } | null
+  rewound: null as { messages: ChatMessage[]; compaction: unknown; lastError: unknown; backup: unknown } | null,
+  // The user's hooks, and what each hook command prints (the sandbox runner is faked).
+  hooks: [] as Hook[],
+  hookOut: {} as Record<string, string>,
+  hookCalls: [] as SandboxRunOptions[]
 }))
 
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
 vi.mock('../agentHost', () => ({
-  getProvider: () => h.cfg ?? { id: 'anthropic', kind: 'anthropic', models: [] }
+  getProvider: () => h.cfg ?? { id: 'anthropic', kind: 'anthropic', models: [] },
+  getSettings: () => ({ hooks: h.hooks }),
+  collectSecrets: () => []
 }))
+// No project config on disk to read: the user's own hooks are the only ones.
+vi.mock('./projectConfig', () => ({ loadProjectConfig: async () => ({ elevatedHash: '', elevated: { hooks: [] } }) }))
+// Hooks never spawn here: the runner records the call and prints what the test set.
+vi.mock('../sandbox', async (importActual) => {
+  const actual = await importActual<typeof import('../sandbox')>()
+  return {
+    ...actual,
+    runSandboxed: async (o: SandboxRunOptions): Promise<SandboxRunResult> => {
+      h.hookCalls.push(o)
+      return { stdout: h.hookOut[o.command] ?? '', stderr: '', exitCode: 0, timedOut: false, sandboxed: true }
+    }
+  }
+})
 vi.mock('./loop', () => ({ activeRunForConversation: () => h.activeRun }))
 vi.mock('../logger', () => ({ log: { warn: () => {}, info: () => {}, error: () => {} } }))
 vi.mock('../conversations', () => ({
@@ -51,6 +72,9 @@ afterEach(() => {
   h.provider = null
   h.cfg = null
   h.rewound = null
+  h.hooks = []
+  h.hookOut = {}
+  h.hookCalls = []
   vi.restoreAllMocks()
 })
 
@@ -571,5 +595,100 @@ describe('compactConversationNow', () => {
       expect(res.ok).toBe(true)
       expect(seen.map((r) => r.model)).toEqual(['claude-test'])
     })
+  })
+
+  it('gives a large chat as long as it keeps making progress, a deadline per chunk', async () => {
+    // Three chunks of 3 seconds each against a 5-second deadline: one budget for the
+    // whole compaction gave up on exactly the chat /compact has to rescue.
+    vi.useFakeTimers()
+    h.conv = { id: 'p1', workspace: '/w', messages: bigConversation(3, 80_000) }
+    let calls = 0
+    h.provider = {
+      async *streamChat() {
+        calls++
+        await new Promise((r) => setTimeout(r, 3_000))
+        yield { type: 'text', text: 'SUMMARY' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const p = compactConversationNow('p1', 'anthropic', 'claude-test', { deadlineMs: 5_000 })
+    await vi.advanceTimersByTimeAsync(20_000)
+    const res = await p
+    expect(calls).toBeGreaterThan(1)
+    expect(res).toMatchObject({ ok: true, summarized: 6 })
+  })
+
+  it("continues from the loop's saved summary instead of re-summarizing the whole head", async () => {
+    const messages = bigConversation(3, 30_000)
+    const conv = { id: 'r1', workspace: '/w', messages, compaction: { cut: 2, summary: 'LOOP SUMMARY' } }
+    h.conv = conv
+    const seen: ChatMessage[][] = []
+    h.provider = {
+      async *streamChat(req) {
+        seen.push(req.messages)
+        yield { type: 'text', text: 'NEW SUMMARY' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const res = await compactConversationNow('r1', 'anthropic', 'claude-test')
+    expect(res).toMatchObject({ ok: true, summarized: 6 })
+    const sent = seen.map((r) => JSON.stringify(r)).join('\n')
+    expect(sent).toContain('LOOP SUMMARY')
+    expect(sent).not.toContain('q0 ') // the head the saved summary already covers
+    expect(sent).toContain('q1 ')
+    expect(res.messages![0].content).toContain('NEW SUMMARY')
+
+    // A focus asks for detail the saved summary never kept: summarize from the start.
+    h.conv = { ...conv, messages }
+    h.saved = null
+    seen.length = 0
+    await compactConversationNow('r1', 'anthropic', 'claude-test', { focus: 'the parser' })
+    expect(seen.map((r) => JSON.stringify(r)).join('\n')).toContain('q0 ')
+  })
+
+  it('runs PreCompact and PostCompact hooks around the summary, context only', async () => {
+    h.hooks = [
+      { event: 'PreCompact', matcher: '*', command: 'pre' },
+      { event: 'PostCompact', matcher: '*', command: 'post' }
+    ]
+    h.hookOut = {
+      pre: JSON.stringify({ additionalContext: 'PRE: remember the freeze' }),
+      post: JSON.stringify({ additionalContext: 'POST: deploy is frozen', decision: 'block' })
+    }
+    h.conv = { id: 'k1', workspace: '/w', messages: bigConversation(2, 30_000) }
+    const seen: ChatMessage[][] = []
+    h.provider = {
+      async *streamChat(req) {
+        seen.push(req.messages)
+        yield { type: 'text', text: 'SUMMARY' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const res = await compactConversationNow('k1', 'anthropic', 'claude-test')
+    // A block decision can't undo the compaction.
+    expect(res.ok).toBe(true)
+    expect(JSON.stringify(seen[0])).toContain('PRE: remember the freeze')
+    expect(res.messages![0].content).toContain('SUMMARY\n\nPOST: deploy is frozen')
+    const payload = (cmd: string): Record<string, unknown> =>
+      JSON.parse(h.hookCalls.find((c) => c.command === cmd)?.stdin ?? '{}')
+    expect(payload('pre')).toMatchObject({ hook_event_name: 'PreCompact', session_id: 'k1' })
+    expect(payload('post')).toMatchObject({ hook_event_name: 'PostCompact', summary: 'SUMMARY', session_id: 'k1' })
+
+    // Summarize from here is a compaction too.
+    h.hookCalls = []
+    h.conv = {
+      id: 'k2',
+      workspace: '/w',
+      messages: [
+        { role: 'user', content: 'one' },
+        { role: 'assistant', content: 'r1' },
+        { role: 'user', content: 'two' },
+        { role: 'assistant', content: 'r2' }
+      ]
+    }
+    const part = await summarizeConversationPart('k2', 'anthropic', 'claude-test', { turn: 1, text: 'two', side: 'from' })
+    expect(part.ok).toBe(true)
+    expect(h.hookCalls.map((c) => c.command)).toEqual(['pre', 'post'])
+    expect(h.rewound?.messages[2].content).toContain('POST: deploy is frozen')
   })
 })

@@ -11,7 +11,7 @@ import {
   hasUserCompactionLimit,
   type CompactionLimit
 } from '@shared/compactionThreshold'
-import { APPROVAL_DENIED } from '@shared/promptOutcome'
+import { APPROVAL_ALLOW_NOTE_LEAD, APPROVAL_DENIED } from '@shared/promptOutcome'
 
 // Re-exported from shared so existing main-process imports/tests keep their path.
 export { COMPACTION_SUMMARY_PREFIX }
@@ -805,6 +805,17 @@ function carriesUserWords(m: ChatMessage): boolean {
 }
 
 /**
+ * The note the user allowed a call with, as it ends the call's result ("\n\nAllowed by
+ * the user. Note from the user: ..."; see withApprovalNote), or '' when there is none.
+ * A stub keeps it: the result is the tool's output, but the note is the user's own
+ * guidance for what comes next, and nothing else in the window carries it.
+ */
+function allowNoteOf(content: string): string {
+  const at = content.lastIndexOf(`\n\n${APPROVAL_ALLOW_NOTE_LEAD} `)
+  return at === -1 ? '' : content.slice(at)
+}
+
+/**
  * Whether a tool result would be replaced by a stub: large by text, or carrying an
  * attachment (images/documents have a big real token cost even when the text is
  * short). An already-stubbed result (recall/eviction output) never is, so recall
@@ -851,7 +862,7 @@ export function evictableTokens(
   for (let i = Math.max(0, from); i < Math.min(to, messages.length); i++) {
     const m = messages[i]
     if (!isEvictable(m, minBytes)) continue
-    const stub = evictionStub(m.toolName, '', 0).length
+    const stub = evictionStub(m.toolName, '', 0).length + allowNoteOf(m.content).length
     tokens += Math.max(0, Math.ceil((m.content.length - stub) / 4)) + messageAttachmentTokens(m)
   }
   return tokens
@@ -874,7 +885,8 @@ export function evictableTokens(
  * "Stale" = before `keepFrom`, which defaults to {@link evictionBoundary} (older
  * than the recent turns or the recent iterations). "Large" = the result text is at
  * least `minBytes` bytes, or it carries an attachment. A result holding the user's
- * own words (an `ask_user` answer, a plan decision, a denial) is never stubbed.
+ * own words (an `ask_user` answer, a plan decision, a denial) is never stubbed, and
+ * the note the user allowed a call with survives its result's stub.
  */
 export function evictStaleToolResults(
   window: ChatMessage[],
@@ -899,7 +911,7 @@ export function evictStaleToolResults(
     const subject = subjectFor(m.toolCallId ? callById.get(m.toolCallId) : undefined)
     const stub: ChatMessage = {
       role: 'tool',
-      content: evictionStub(m.toolName, subject, byteLength(m.content)),
+      content: evictionStub(m.toolName, subject, byteLength(m.content)) + allowNoteOf(m.content),
       ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
       ...(m.toolName ? { toolName: m.toolName } : {})
     }

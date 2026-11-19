@@ -60,6 +60,7 @@ describe('prompt visibility guard', () => {
     'main/headless.ts': { count: 1, why: 'the headless CLI prompt, which the user wrote' },
     'main/acp.ts': { count: 1, why: "an ACP editor's session/prompt: the user's words, or a slash command's turn carrying its invokedAs" },
     'main/agent/loop.ts': { count: 2, why: "the user's own mid-run steers, and PreCompact context sent only to the summarizer" },
+    'main/agent/compact.ts': { count: 1, why: "PreCompact context for /compact and Summarize from here, sent only to the summarizer" },
     'main/agent/compaction.ts': {
       count: 4,
       why: 'summarizer request (its instruction, adjacent user turns merged into one for it, and the line bridging a chunk that opens on an assistant iteration), and the summary turn the transcript labels itself'

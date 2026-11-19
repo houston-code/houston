@@ -4,8 +4,17 @@ import { compactionAfterTruncate, rewindableTurnIndices, turnText } from '@share
 import { smallModelFor, withSmallModel } from '@shared/smallModel'
 import { resolveContextWindow } from '@shared/usage'
 import { createProvider } from '../providers'
-import { getProvider } from '../agentHost'
-import { getConversation, peekConversation, setCompaction, setMessages, writeRewind } from '../conversations'
+import { folderTrustState, type Hook } from '@shared/types'
+import { collectSecrets, getProvider, getSettings } from '../agentHost'
+import {
+  conversationFilePath,
+  flushConversation,
+  getConversation,
+  peekConversation,
+  setCompaction,
+  setMessages,
+  writeRewind
+} from '../conversations'
 import { withRewindLock } from './rewindLock'
 import { compactionController, compactionInProgress, holdCompaction, releaseCompaction } from './compactionLock'
 import { log } from '../logger'
@@ -13,6 +22,9 @@ import { activeRunForConversation } from './loop'
 import { memoryTaintSource } from './memoryTools'
 import { getTool } from './tools'
 import { describeProviderError, providerStreamError, withProviderRetry } from './retry'
+import { runHooks, type HookSession } from './hooks'
+import { loadProjectConfig } from './projectConfig'
+import { createSecretRedactor } from './redact'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_TRUNCATED_MESSAGE,
@@ -21,6 +33,7 @@ import {
   estimateTokens,
   findCompactionCutByBudget,
   findSummaryChunkCut,
+  isValidCompactionState,
   summarizationSystemPrompt,
   summaryChunkBudget,
   summaryFits,
@@ -37,9 +50,12 @@ const KEEP_TAIL_FRACTION = 0.3
 const DEFAULT_KEEP_TAIL_BUDGET = 50_000
 
 /**
- * Longest a manual compaction may take overall, retries and every chunk included.
- * Past it the attempt is abandoned with a clear error rather than leaving the user
- * staring at "Compacting" while a struggling provider is retried in silence.
+ * Longest a manual compaction may go without finishing a summary chunk, retries
+ * included. Past it the attempt is abandoned with a clear error rather than leaving
+ * the user staring at "Compacting" while a struggling provider is retried in silence.
+ * Per chunk, not overall: a chat large enough to need many chunks is exactly the one
+ * `/compact` must rescue, and one fixed budget for all of them gave up on it while
+ * it was still making progress.
  */
 export const COMPACT_DEADLINE_MS = 3 * 60_000
 
@@ -74,7 +90,7 @@ export interface CompactRetryInfo {
 export interface CompactOptions {
   /** Aborting it cancels the compaction; nothing is written. */
   signal?: AbortSignal
-  /** Overall deadline; defaults to {@link COMPACT_DEADLINE_MS}. */
+  /** How long a chunk may take; defaults to {@link COMPACT_DEADLINE_MS}. */
   deadlineMs?: number
   /** Called before each retry of a failed summarization request. */
   onRetry?: (info: CompactRetryInfo) => void
@@ -92,7 +108,7 @@ export const COMPACT_ERR_BUSY = 'This chat is already being compacted.'
 function timeoutMessage(ms: number): string {
   const mins = Math.round(ms / 60_000)
   const span = mins >= 1 ? `${mins} minute${mins === 1 ? '' : 's'}` : `${Math.round(ms / 1000)} seconds`
-  return `Compaction took longer than ${span} and was stopped. Nothing was changed; try again later.`
+  return `Summarizing part of the chat took longer than ${span}, so the compaction was stopped. Nothing was changed; try again later.`
 }
 
 export { compactionInProgress }
@@ -144,20 +160,21 @@ export function compactConversationNow(
   model: string,
   opts: CompactOptions = {}
 ): Promise<CompactResult> {
-  return underCompactionGuard(id, opts, (signal) =>
-    compactUnderSignal(id, providerId, model, signal, opts.onRetry, opts.focus)
+  return underCompactionGuard(id, opts, (signal, progress) =>
+    compactUnderSignal(id, providerId, model, signal, progress, opts.onRetry, opts.focus)
   )
 }
 
 /**
  * Run a summarizing rewrite of chat `id` the way `/compact` runs: one per chat at a
- * time, cancelled by `opts.signal`, abandoned past the deadline, and settled the
+ * time, cancelled by `opts.signal`, abandoned once a chunk runs past the deadline
+ * (`work` calls `progress` as each one lands, which restarts it), and settled the
  * moment either fires even when a provider stream ignores the abort.
  */
 async function underCompactionGuard(
   id: string,
   opts: CompactOptions,
-  work: (signal: AbortSignal) => Promise<CompactResult>
+  work: (signal: AbortSignal, progress: () => void) => Promise<CompactResult>
 ): Promise<CompactResult> {
   if (compactionInProgress(id)) return { ok: false, summarized: 0, reason: 'busy', error: COMPACT_ERR_BUSY }
   if (opts.signal?.aborted) return { ok: false, summarized: 0, reason: 'cancelled', error: COMPACT_ERR_CANCELLED }
@@ -167,10 +184,16 @@ async function underCompactionGuard(
   opts.signal?.addEventListener('abort', onOuterAbort, { once: true })
   const deadlineMs = opts.deadlineMs ?? COMPACT_DEADLINE_MS
   let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    ctl.abort()
-  }, deadlineMs)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const arm = (): void => {
+    clearTimeout(timer)
+    if (ctl.signal.aborted) return
+    timer = setTimeout(() => {
+      timedOut = true
+      ctl.abort()
+    }, deadlineMs)
+  }
+  arm()
   // Settle the moment the signal fires, even when a provider stream ignores it:
   // the work keeps nothing it hasn't written, and it never writes once aborted.
   let release: () => void = () => {}
@@ -185,7 +208,7 @@ async function underCompactionGuard(
     release = () => ctl.signal.removeEventListener('abort', done)
   })
   try {
-    return await Promise.race([stopped, work(ctl.signal)])
+    return await Promise.race([stopped, work(ctl.signal, arm)])
   } finally {
     release()
     clearTimeout(timer)
@@ -199,6 +222,7 @@ async function compactUnderSignal(
   providerId: string,
   model: string,
   signal: AbortSignal,
+  progress: () => void,
   onRetry: CompactOptions['onRetry'],
   focus: string | undefined
 ): Promise<CompactResult> {
@@ -231,17 +255,42 @@ async function compactUnderSignal(
     return { ok: true, summarized: 0, reason: userTurns === 0 ? 'empty' : 'single-turn' }
   }
 
+  // The loop's own summary of the head, when it still holds for this log, stands in
+  // for messages[0..cut): start from it rather than re-summarizing a head that a long
+  // chat may hold hundreds of thousands of tokens of. Not with a focus, which asks for
+  // detail the loop's summary was never written to keep.
+  const saved = conv.compaction
+  const resume =
+    !focus &&
+    saved &&
+    saved.cut > 0 &&
+    saved.anchor === undefined &&
+    saved.cut < target &&
+    isValidCompactionState(saved, conv.messages)
+      ? saved
+      : null
+  const from = resume ? resume.cut : 0
+  const prior = resume ? buildSummaryMessages(resume.summary, headTaint(conv.messages, resume.cut)) : []
+
   let summaryMsgs: ChatMessage[]
   try {
-    summaryMsgs = await summarizeSpan(conv.messages, 0, target, {
-      cfg,
-      provider: createProvider(cfg),
-      model,
-      window,
-      signal,
-      onRetry,
-      focus
-    })
+    summaryMsgs = await summarizeSpan(
+      conv.messages,
+      from,
+      target,
+      {
+        cfg,
+        provider: createProvider(cfg),
+        model,
+        window,
+        signal,
+        progress,
+        onRetry,
+        focus,
+        hooks: { conversationId: id, workspace: conv.workspace }
+      },
+      prior
+    )
   } catch (e) {
     return { ok: false, summarized: 0, error: (e as Error).message }
   }
@@ -266,6 +315,39 @@ async function compactUnderSignal(
   return { ok: true, summarized: target, messages }
 }
 
+/**
+ * The hooks a manual compaction runs, resolved as the loop resolves them for a run
+ * (see startRun): the user's own, then a trusted folder's project hooks. A folder
+ * whose elevating config drifted from what the user trusted contributes none.
+ */
+async function compactionHooks(workspace: string): Promise<Hook[]> {
+  const settings = getSettings()
+  const own = settings.hooks ?? []
+  try {
+    const config = await loadProjectConfig(workspace)
+    const trusted =
+      config.elevatedHash !== '' && folderTrustState(settings.trustedFolders, workspace, config.elevatedHash) === 'trusted'
+    return trusted ? [...own, ...config.elevated.hooks] : own
+  } catch {
+    return own
+  }
+}
+
+/** The chat a compaction hook fires for, as the loop describes a run's (session_id, transcript_path). */
+function hookSessionFor(id: string): HookSession {
+  try {
+    return { id, transcriptPath: conversationFilePath(id), flushTranscript: () => flushConversation(id) }
+  } catch {
+    return { id }
+  }
+}
+
+/** Where a compaction's PreCompact and PostCompact hooks run. */
+interface CompactHookScope {
+  conversationId: string
+  workspace: string
+}
+
 /** What summarizing a span needs: the provider and model, and how to stop or report. */
 interface SpanSummarizer {
   cfg: NonNullable<ReturnType<typeof getProvider>>
@@ -273,13 +355,25 @@ interface SpanSummarizer {
   model: string
   window: number | null | undefined
   signal: AbortSignal
+  /** Called as each chunk's summary lands, restarting the per-chunk deadline. */
+  progress: () => void
   onRetry: CompactOptions['onRetry']
   focus: string | undefined
+  /** The chat whose compaction hooks fire around the summary. */
+  hooks: CompactHookScope
 }
 
 /**
  * Summarize `messages[from..to)` into the synthetic summary exchange that stands in for
  * it (see buildSummaryMessages). Throws with the reason when it can't.
+ *
+ * `prior` is the summary pair standing in for `messages[0..from)` when the span
+ * continues one (see compactUnderSignal); it is folded into the first chunk, and the
+ * result then stands in for everything from message 0.
+ *
+ * PreCompact and PostCompact hooks fire around it as they do around the loop's own
+ * compactions: PreCompact context is folded into the material being summarized, and
+ * PostCompact may only add context to the finished summary.
  *
  * The span goes in budget-bounded chunks, each result folded into a running summary.
  * Chunking keeps any single summarization request from itself overflowing the window,
@@ -290,7 +384,8 @@ async function summarizeSpan(
   messages: ChatMessage[],
   from: number,
   to: number,
-  s: SpanSummarizer
+  s: SpanSummarizer,
+  prior: ChatMessage[] = []
 ): Promise<ChatMessage[]> {
   const { cfg, provider, model, window, signal, onRetry, focus } = s
   // Each chunk stays well under the window (see summaryChunkBudget), which is what
@@ -301,7 +396,28 @@ async function summarizeSpan(
   // own model taking over when it doesn't, or when the small model fails.
   const small = smallModelFor(cfg, model)
   const smallWindow = small ? resolveContextWindow(small, cfg.models?.find((m) => m.id === small)?.caps) : null
-  let summaryMsgs: ChatMessage[] = []
+  const hooks = await compactionHooks(s.hooks.workspace)
+  const session = hookSessionFor(s.hooks.conversationId)
+  const redact = createSecretRedactor(hooks.length ? collectSecrets() : [])
+  const noteHookMessage = (message: string | undefined): void => {
+    if (message) log.info(`compact: hook message: ${redact(message)}`)
+  }
+  const preCompact = await runHooks(
+    hooks,
+    'PreCompact',
+    { tool: 'PreCompact', input: {}, session },
+    s.hooks.workspace,
+    signal
+  )
+  noteHookMessage(preCompact.systemMessage)
+  if (signal.aborted) throw new Error(COMPACT_ERR_CANCELLED)
+  // A PreCompact hook's context rides in front of the span, so the first chunk's
+  // summary carries it (adjacent user messages merge in the request).
+  let summaryMsgs: ChatMessage[] = preCompact.additionalContext
+    ? [...prior, { role: 'user', content: redact(preCompact.additionalContext) }]
+    : prior
+  const taintFrom = prior.length ? 0 : from
+  let summary = ''
   let cut = from
   while (cut < to) {
     const next = findSummaryChunkCut(messages, cut, to, budget)
@@ -339,12 +455,30 @@ async function summarizeSpan(
     const smallFits = small !== null && summaryFits(estimateTokens(summarizationSystemPrompt, request), smallWindow)
     const text = await withSmallModel(smallFits ? small : null, model, summarizeOn, signal)
     if (signal.aborted) throw new Error(COMPACT_ERR_CANCELLED)
-    const summary = text.trim()
+    summary = text.trim()
     if (!summary) throw new Error('The model returned an empty summary.')
-    // Everything from `from` up to `next` is now stood in for by this summary, so it
-    // carries the taint of all of it.
-    summaryMsgs = buildSummaryMessages(summary, headTaint(messages, next, from))
+    // Everything from `from` (or message 0, under a prior summary) up to `next` is now
+    // stood in for by this summary, so it carries the taint of all of it.
+    summaryMsgs = buildSummaryMessages(summary, headTaint(messages, next, taintFrom))
     cut = next
+    s.progress()
+  }
+  // PostCompact: the summary is written. A hook sees it and may add context to it,
+  // nothing more; whatever it says, the compaction stands.
+  const postCompact = await runHooks(
+    hooks,
+    'PostCompact',
+    { tool: 'PostCompact', input: {}, summary, session },
+    s.hooks.workspace,
+    signal
+  )
+  noteHookMessage(postCompact.systemMessage)
+  if (signal.aborted) throw new Error(COMPACT_ERR_CANCELLED)
+  if (postCompact.additionalContext) {
+    summaryMsgs = buildSummaryMessages(
+      `${summary}\n\n${redact(postCompact.additionalContext)}`,
+      headTaint(messages, to, taintFrom)
+    )
   }
   return summaryMsgs
 }
@@ -378,7 +512,9 @@ export function summarizeConversationPart(
   part: SummaryPart,
   opts: CompactOptions = {}
 ): Promise<CompactResult> {
-  return underCompactionGuard(id, opts, (signal) => summarizePartUnderSignal(id, providerId, model, part, signal, opts))
+  return underCompactionGuard(id, opts, (signal, progress) =>
+    summarizePartUnderSignal(id, providerId, model, part, signal, progress, opts)
+  )
 }
 
 async function summarizePartUnderSignal(
@@ -387,6 +523,7 @@ async function summarizePartUnderSignal(
   model: string,
   part: SummaryPart,
   signal: AbortSignal,
+  progress: () => void,
   opts: CompactOptions
 ): Promise<CompactResult> {
   if (activeRunForConversation(id)) {
@@ -413,8 +550,10 @@ async function summarizePartUnderSignal(
       model,
       window,
       signal,
+      progress,
       onRetry: opts.onRetry,
-      focus: opts.focus
+      focus: opts.focus,
+      hooks: { conversationId: id, workspace: conv.workspace }
     })
   } catch (e) {
     return { ok: false, summarized: 0, error: (e as Error).message }
