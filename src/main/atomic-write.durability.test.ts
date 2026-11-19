@@ -106,9 +106,21 @@ describe('Windows rename retry', () => {
   it('gives up after a few hundred ms and cleans up the temp', () => {
     setPlatform('win32')
     fsState.renameFailures = Array(10).fill('EBUSY')
-    const started = Date.now()
-    expect(() => writeFileAtomicSync(join(dir, 'f.json'), 'x')).toThrow(/EBUSY/)
-    expect(Date.now() - started).toBeLessThan(2000)
+    // Check the backoff the code asks for, not wall-clock time: on a loaded CI runner with
+    // coverage on, the real sleeps plus the writes once took 2.5 s for 300 ms of backoff.
+    const waits: number[] = []
+    const wait = vi.spyOn(Atomics, 'wait').mockImplementation((_a, _i, _v, ms) => {
+      waits.push(ms ?? Infinity)
+      return 'timed-out'
+    })
+    try {
+      expect(() => writeFileAtomicSync(join(dir, 'f.json'), 'x')).toThrow(/EBUSY/)
+    } finally {
+      wait.mockRestore()
+    }
+    expect(fsState.calls.filter((c) => c === 'rename')).toHaveLength(waits.length + 1)
+    expect(waits.length).toBeGreaterThan(0)
+    expect(waits.reduce((a, b) => a + b, 0)).toBeLessThan(1000)
     expect(readdirSync(dir)).toEqual([])
   })
 
