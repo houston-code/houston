@@ -69,6 +69,22 @@ export function schedulesFilePath(): string {
   return join(getUserDataDir(), 'schedules.json')
 }
 
+/**
+ * The providers the saved schedules name, read without touching the store (no lock,
+ * and an unreadable store is not moved aside): for `houston schedule-daemon install`,
+ * which checks the daemon will have their keys.
+ */
+export function scheduledProviderIds(file: string = schedulesFilePath()): string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<PersistedSchedules>
+    if (!Array.isArray(parsed.schedules)) return []
+    const ids = parsed.schedules.map((s) => s?.providerId).filter((id): id is string => typeof id === 'string' && id !== '')
+    return [...new Set(ids)]
+  } catch {
+    return []
+  }
+}
+
 export interface SchedulerServiceDeps {
   /** Absolute path of the JSON store (schedulesFilePath() in production). */
   file: string
@@ -635,6 +651,14 @@ export function firedPolicy(stored: unknown, currentDefaultPolicy: () => Approva
   return leastPermissivePolicy(base, isApprovalPolicy(cap) ? cap : 'ask')
 }
 
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 /**
  * The production `fire`: start the occurrence as a background session through
  * the spawn seam — the same path `spawn_session` takes, so fired runs get the
@@ -650,6 +674,12 @@ export function fireViaSpawn(
   return async (s) => {
     if (!isSpawnBackendConfigured()) {
       throw new Error('no spawn backend wired — cannot start the scheduled session')
+    }
+    // A folder deleted or moved since the schedule was made: say so on the schedule
+    // instead of starting a chat that fails at once, which would leave a new failed
+    // chat behind at every occurrence.
+    if (!isDirectory(s.workspace)) {
+      throw new Error(`Couldn't start: the folder ${s.workspace} no longer exists.`)
     }
     let runEnded!: () => void
     const settled = new Promise<void>((resolve) => (runEnded = resolve))

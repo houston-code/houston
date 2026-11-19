@@ -21,6 +21,7 @@ import {
 } from '../main/loginAgent'
 import { runningDaemonPid } from '../main/scheduleDaemon'
 import { runScheduleDaemonCommand } from './scheduleDaemon'
+import { scheduledProviderIds } from '../main/schedulerService'
 import { configureAgentHost } from '../main/agentHost'
 import {
   addPermissionRule,
@@ -50,6 +51,7 @@ import {
   cliGetKey,
   cliGetMcpOAuth,
   cliHasKey,
+  cliKeyOnlyInEnv,
   cliRemoveKey,
   cliSetKey,
   cliSetMcpOAuth
@@ -215,6 +217,17 @@ export async function runCli(argv: string[], { version, usage, argvProblem }: Ru
       uninstall: () => disableScheduleDaemon(loginDeps, () => runningDaemonPid()),
       state: () => scheduleDaemonState(loginDeps, () => runningDaemonPid()),
       command: () => cliDaemonCommand(),
+      envOnlyKeys: () => {
+        const settings = getSettings()
+        // What the daemon will call: each saved schedule's provider, and the default
+        // model's, which new schedules start from.
+        const needed = new Set(scheduledProviderIds())
+        if (settings.selected) needed.add(settings.selected.providerId)
+        return settings.providers.flatMap((p) => {
+          const envVar = p.requiresKey ? cliKeyOnlyInEnv(p.id) : null
+          return envVar ? [{ id: p.id, envVar, needed: needed.has(p.id) }] : []
+        })
+      },
       out: (s) => void process.stdout.write(s),
       err: (s) => void process.stderr.write(s)
     })

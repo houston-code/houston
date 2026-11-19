@@ -23,6 +23,7 @@ function deps(over: Partial<ScheduleDaemonCliDeps> = {}, state: Partial<Schedule
     },
     state: async () => ({ supported: true, installed: false, byApp: false, pid: null, ...state }),
     command: () => ({ program: '/usr/bin/node', args: ['/opt/houston/cli.js', 'schedule-daemon', 'run'] }),
+    envOnlyKeys: () => [],
     out: (s) => out.push(s),
     err: (s) => err.push(s),
     ...over
@@ -65,6 +66,36 @@ describe('houston schedule-daemon', () => {
     const own = deps({}, { installed: true, byApp: false })
     expect(await runScheduleDaemonCommand(['install'], own.d)).toBe(0)
     expect(own.installed.length).toBe(1)
+  })
+
+  it('refuses to install while a key scheduled runs need is only in the shell environment, and names the fix', async () => {
+    const t = deps({
+      envOnlyKeys: () => [
+        { id: 'anthropic', envVar: 'ANTHROPIC_API_KEY', needed: true },
+        { id: 'openrouter', envVar: 'HOUSTON_API_KEY_OPENROUTER', needed: true },
+        { id: 'openai', envVar: 'OPENAI_API_KEY', needed: false }
+      ]
+    })
+    expect(await runScheduleDaemonCommand(['install'], t.d)).toBe(1)
+    expect(t.installed).toEqual([])
+    const err = t.err.join('')
+    expect(err).toMatch(/starts at login without your shell's environment/)
+    expect(err).toContain('  anthropic (from ANTHROPIC_API_KEY)\n')
+    expect(err).toContain('  printf %s "$ANTHROPIC_API_KEY" | houston providers set-key anthropic\n')
+    expect(err).toContain('  printf %s "$HOUSTON_API_KEY_OPENROUTER" | houston providers set-key openrouter\n')
+    // A provider nothing scheduled uses isn't part of the refusal.
+    expect(err).not.toContain('openai')
+  })
+
+  it('installs with only a warning when an env-only key belongs to a provider no schedule uses', async () => {
+    const t = deps({ envOnlyKeys: () => [{ id: 'openai', envVar: 'OPENAI_API_KEY', needed: false }] })
+    expect(await runScheduleDaemonCommand(['install'], t.d)).toBe(0)
+    expect(t.installed).toHaveLength(1)
+    expect(t.err.join('')).toBe(
+      "houston: note: the key for openai comes only from OPENAI_API_KEY, which the daemon won't see. No saved schedule uses it now; store it before scheduling runs on it:\n" +
+        '  printf %s "$OPENAI_API_KEY" | houston providers set-key openai\n'
+    )
+    expect(t.out.join('')).toMatch(/^Installed:/)
   })
 
   it('uninstalls, and reports status', async () => {

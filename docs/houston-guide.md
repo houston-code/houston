@@ -3465,7 +3465,10 @@ The agent manages the same list:
 
 **When they fire.** Schedules survive restarts and fire while Houston (the desktop
 app or the terminal) is running. An occurrence missed while Houston was closed fires
-once at the next launch, unless the schedule daemon below is on.
+once at the next launch, unless the schedule daemon below is on. If a schedule's folder
+has been deleted or moved, each occurrence is recorded as its last run ("the folder ...
+no longer exists") without starting a chat; the schedule keeps its place until you
+delete it.
 
 ### When Houston is closed
 
@@ -3484,7 +3487,12 @@ to have them fire on time anyway.
 - **Turning it off** stops the process and removes it from login. After an update
   moves the app, Houston points the login item at the new copy the next time it opens.
 
-From the terminal, with keys from environment variables or `cli-credentials.json`:
+From the terminal, the daemon reads keys from `cli-credentials.json`. It starts at
+login without your shell, so a key you only export there (`ANTHROPIC_API_KEY`,
+`HOUSTON_API_KEY_<ID>`, ...) never reaches it. `install` refuses while a provider your
+saved schedules use, or your default model's provider, has its key only there, and
+names the `houston providers set-key <id>` command that stores it; for any other
+provider it only warns. A key is never copied into the login item itself.
 
 | Command | Does |
 | --- | --- |

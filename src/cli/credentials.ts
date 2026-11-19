@@ -294,6 +294,19 @@ export function cliGetKey(id: string, deps: CredentialDeps = {}): string | null 
   return keyFromFile(id, deps.dataDir ?? getUserDataDir(), warn)
 }
 
+/**
+ * The environment variable a key for `id` comes from when cli-credentials.json holds
+ * none, else null. A process started without the user's shell (a login agent) would
+ * have no key for it.
+ */
+export function cliKeyOnlyInEnv(id: string, deps: CredentialDeps = {}): string | null {
+  const env = deps.env ?? process.env
+  const name = envVarCandidates(id).find((n) => Boolean(env[n]))
+  if (!name) return null
+  const warn = deps.warn ?? ((m: string) => process.stderr.write(m))
+  return keyFromFile(id, deps.dataDir ?? getUserDataDir(), warn) === null ? name : null
+}
+
 /** True when `cliGetKey` would resolve a credential for this id. */
 export function cliHasKey(id: string, deps: CredentialDeps = {}): boolean {
   return cliGetKey(id, deps) !== null
