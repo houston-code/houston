@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, realpath
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Provider, ProviderStreamEvent } from '@shared/agent'
-import { GIT_ENV } from './gitRead'
+import { GIT_ENV, withScope } from './gitRead'
 import { collectWorkingTreeChanges } from './workingTree'
 
 const host = vi.hoisted(() => ({
@@ -100,6 +100,13 @@ describe('repoFilterDrivers', () => {
       ''
     ].join('\0')
     expect(repoFilterDrivers(out)).toEqual(['vault', 'a.b'])
+  })
+
+  it('reads the records built on git older than 2.26 the same way', () => {
+    // Without --show-scope only the repository's own files are listed, all of them untrusted.
+    const out = withScope('local', 'filter.vault.clean\nx\0gpg.program\nx\0user.name\nme\0') + withScope('worktree', 'filter.wt.smudge\ny\0')
+    expect(repoFilterDrivers(out)).toEqual(['vault', 'wt'])
+    expect(riskyRepoConfig(out)).toEqual(['gpg.program'])
   })
 })
 
