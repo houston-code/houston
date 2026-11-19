@@ -83,7 +83,7 @@ export function watchRendererCrashes(win: CrashWatchedWindow, deps: CrashWatchDe
     if (details.reason === 'clean-exit' || !alive()) return
     if (!allowReload()) {
       log.error(
-        `renderer crashed ${RELOAD_LIMIT} times within ${RELOAD_WINDOW_MS / 1000}s; not reloading it again. ` +
+        `renderer crashed again after ${RELOAD_LIMIT} reloads within ${RELOAD_WINDOW_MS / 1000}s; not reloading it again. ` +
           'Reopen the window or restart Houston.'
       )
       return

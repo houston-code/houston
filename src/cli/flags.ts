@@ -83,7 +83,11 @@ export const CLI_FLAGS: readonly CliFlag[] = [
     names: ['--allow-shell-network'],
     kind: 'switch',
     label: '--allow-shell-network',
-    help: ['(-p) let shell commands reach the network this run', '(default: offline, except under full-auto with', '--on-approval allow)']
+    help: [
+      '(-p) let shell commands reach the network this run',
+      '(default: offline; under full-auto, network through',
+      'the egress allowlist from the start)'
+    ]
   },
   {
     names: ['--json'],

@@ -95,6 +95,16 @@ describe('watchRendererCrashes', () => {
     expect(logged.lines.filter((l) => l.includes('not reloading it again'))).toHaveLength(2)
   })
 
+  it('names the reloads it allowed when the default guard gives up on the fourth crash', () => {
+    const win = fakeWindow()
+    watchRendererCrashes(win as never)
+    for (let i = 0; i < 4; i++) win.webContents.emit('render-process-gone', {}, { reason: 'oom', exitCode: 1 })
+    expect(win.webContents.reload).toHaveBeenCalledTimes(3)
+    expect(logged.lines.filter((l) => l.includes('not reloading it again'))).toEqual([
+      'ERROR renderer crashed again after 3 reloads within 60s; not reloading it again. Reopen the window or restart Houston.'
+    ])
+  })
+
   it('restarts a renderer that stays unresponsive past the grace period', () => {
     const win = fakeWindow()
     const t = fakeTimers()

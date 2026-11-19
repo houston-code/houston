@@ -214,6 +214,7 @@ with code 2 before anything runs.
 
 | Flag | Effect |
 | --- | --- |
+| `-C, --cwd <dir>` | the project folder to work in (default: the current directory) |
 | `--effort <off\|low\|medium\|high\|xhigh>` | the chat's starting reasoning effort (interactive: `/reasoning` still changes it) |
 | `--allowed-tools <list>` / `--disallowed-tools <list>` | restrict the session's tools (see "Automation flags") |
 | `--append-system-prompt <text\|@file>` | adds instructions in their own marked section of the system prompt |
@@ -402,14 +403,19 @@ desktop app and no browser engine.
 runners, with your own model key from a repository secret. There is no Houston
 service.
 
-It has three modes:
+It has five modes:
 
 - **`respond`** answers an `@houston` mention from someone with write access, as a
   reply.
-- **`review`** posts one review comment on a same-repository pull request, from
-  `review_changes`.
+- **`review`** posts one review on a same-repository pull request, from
+  `review_changes`, with each finding on a line of the diff as an inline comment.
 - **`fix-ci`** fixes a failed workflow run, pushes the fix to a new `houston/` branch,
   and opens a pull request.
+- **`implement`** makes the change an issue asks for (or a scheduled or manual run's
+  prompt), pushes it to a new branch, and opens a pull request. It runs only when a
+  workflow opts in by setting `mode: implement`.
+- **`task`** works on a scheduled or manual run's prompt read-only and writes its
+  report to the job summary.
 
 For safety, the action verifies the downloaded CLI's signature first, gives the
 model only read access to GitHub and no web access, and does all posting and
@@ -469,9 +475,7 @@ and cost as usage.
   (with the history replayed, or resumed without it), close one it no longer shows,
   and delete one. Deleting works as in the desktop app: a running prompt and the
   chat's background commands stop first. They also show up in the desktop app, and in
-  the terminal's `/resume` (Ctrl-A lists every folder). `houston -i --resume <id>`
-  finds one only when started in the session's folder and the chat is among that
-  folder's 20 most recent.
+  the terminal's `/resume` (Ctrl-A lists every folder).
 - **Extra folders** the editor adds to a session (`additionalDirectories`) can be
   read and written by that session's runs, like the folders under Settings >
   Workspace, but only for that session and never saved. Each must be an existing
@@ -951,7 +955,7 @@ the model.
   - Enter opens the highlighted chat, and 1-9 open that row (so digits don't go into
     the filter)
   - Ctrl-R renames the chat (type the title, Enter saves)
-  - Ctrl-D, or `x` while the filter is empty, deletes it after a y/N question; deleting
+  - Ctrl-D deletes it after a y/N question (letters always go into the filter); deleting
     the chat you're in says so first, and you carry on in a new chat. A worktree that
     holds work is kept (use `/delete` inside the chat to remove it), and so is the
     worktree the session itself runs in, by the picker and by `/delete`
@@ -981,8 +985,9 @@ the model.
 - `/open-in-app` opens this chat in the Houston desktop app.
 
 **Terminal settings (/config).** `/config` opens a list of the settings the terminal
-understands, each with its value: `theme`, `vim`, `verbose`, `thoughts`, `notify`,
-`reduce-motion`, `screen-reader`, the defaults new chats start with (`model`, `effort`,
+understands, each with its value: `theme`, `vim`, `verbose`, `focus`, `thoughts`,
+`notify`, `turn-clock`, `progress`, `reduce-motion`, `screen-reader`, the defaults new
+chats start with (`model`, `effort`,
 `approval`), `desktop-notifications`, `background-wake`, `memory`, and `usage-limit-wait`
 (whether a turn stopped at a usage limit waits for the reset and continues). Enter changes the
 highlighted one to its next value (for `model`, it opens the model list) and saves it;
@@ -1058,7 +1063,8 @@ Any Markdown file at `.houston/commands/<name>.md` becomes a `/name` command.
 - **Namespaces:** a subfolder groups commands: `.houston/commands/git/commit.md` is
   `/git:commit`, and folders nest up to three levels (`a/b/c.md` is `/a:b:c`). The menus
   show the full name. A built-in command wins a name clash, then a custom command, then
-  a skill.
+  a skill. The exceptions are `/commit`, `/push`, `/ship`, and `/pr`: your own command
+  of that name runs in place of the built-in.
 - **Arguments:** the file body is a prompt template. `$ARGUMENTS` is replaced with
   everything typed after the command name, and `$1`, `$2`, … with the individual
   words. So `/deploy staging v2` can fill a template that says
@@ -1070,7 +1076,8 @@ Any Markdown file at `.houston/commands/<name>.md` becomes a `/name` command.
   command with frontmatter options (below) or dynamic context runs at once in both.
 - **Names:** a command named like a built-in in either client (`/vim`, `/usage`) or
   one of their second names (`/diff`, `/q`) is ignored in both, so a name always means
-  the same command in the desktop app and the terminal.
+  the same command in the desktop app and the terminal. `/commit`, `/push`, `/ship`,
+  and `/pr` are the exceptions above.
 
 ```markdown
 ---
@@ -1185,8 +1192,8 @@ long as it needs to be.
   model, branch and context stay on the spinner line. Your own command can replace it:
   see "Custom status line".
 - **Turn time:** after each turn a dim line says how long it took (`done in 1m 6s`).
-  Set `"tuiTurnClock": true` in settings.json to add the time it finished
-  (`done in 1m 6s at 3:42 PM`).
+  Turn on `/config turn-clock` (or set `"tuiTurnClock": true` in settings.json) to
+  add the time it finished (`done in 1m 6s at 3:42 PM`).
 
 ### Custom status line
 
@@ -1593,8 +1600,10 @@ only you can run). It's one note per turn, built from what already ran, with no 
 commands. Nothing is sent when there is no gap, or on the turn's last step (the one
 where the agent writes its summary with tools off): there is no step left to close a
 gap in, so the summary stands as the answer, and the receipt still lists what it
-found. The verification command is skipped on that step for the same reason. Turn it off with **Check before
-finishing** in Settings (Loop control), or `"doneEvidenceNote": false` in settings.
+found. The verification command is skipped on that step for the same reason. To turn
+it off, clear the checkbox that starts "Before the model finishes after changing files"
+in Settings > Agent Behavior > Loop control, or set `"doneEvidenceNote": false` in
+settings.
 
 ### An accepted plan's progress
 
@@ -1616,7 +1625,8 @@ These show as unknown rather than passed:
 
 - an HTTP request made without `curl -f` (so an error page still exits 0)
 - a test whose exit code is hidden by what follows it (`pytest | tail`,
-  `pytest; echo done`)
+  `pytest; echo done`), when its output has no test summary Houston can read (a
+  summary it can read decides the outcome)
 - a page that loaded with nothing on it checked
 
 ### Where it lives
@@ -2201,8 +2211,9 @@ waiting. The interactive terminal tells you, two ways:
   Windows Terminal, Ghostty, WezTerm, ConEmu and iTerm2 3.6 or later, and the
   working, waiting, done or error state (OSC 7501) to any terminal that reads it. A
   failed turn shows the error state. Not sent inside tmux or screen, nor in
-  screen-reader mode. Set `"tuiProgress"` in settings.json to `"off"` to stop it, or
-  to `"passthrough"` to send it through tmux (with tmux's `allow-passthrough` on).
+  screen-reader mode. Set `/config progress` (or `"tuiProgress"` in settings.json) to
+  `off` to stop it, or to `passthrough` to send it through tmux (with tmux's
+  `allow-passthrough` on).
 - **A bell and a notification** fire when a run needs you or finishes, but only when
   you've switched away from the terminal. (Houston asks the terminal to report focus.
   If your terminal doesn't, they fire either way rather than staying silent.)
@@ -2239,6 +2250,12 @@ approval, a question, a plan to review, or a server's form). Sounds are off by
 default, play only while Houston isn't the focused window, and work independently of
 notifications. Turning the setting on plays the chime once so you know what to
 expect.
+
+The same page has **Send test notification**, which shows one right away even while
+Houston is focused. On macOS the system asks once whether Houston may notify, the
+first time it shows one, so this is a way to answer that while you're watching. On
+macOS and Windows, **Open system notification settings** opens the system page where
+Houston's notifications can be allowed, in case nothing appeared.
 
 ## How hard the model thinks (/reasoning)
 
@@ -2564,9 +2581,10 @@ The sandbox can read your whole filesystem, so a few controls hold even in full 
   count. A change of directory whose target the command doesn't spell out (a bare
   `cd`, `cd -`, `popd`, `cd "$DIR"`) asks too, as does a path climbing out through
   `$PWD` or a glob (`$PWD/..`, `.[.]/x`), and so does every command while the shell's
-  working directory, which carries over between commands, is outside the project. An
-  `allow` rule skips this only when it names the outside path itself, or is exact for
-  the command.
+  working directory, which carries over between commands, is outside the project. For
+  a command that names an outside path, an `allow` rule skips this only when it names
+  that path itself, or is exact for the command. While the working directory is
+  outside the project, no `allow` rule skips it.
 - **Reading a credential file** (a `.env`, a private key, `.aws/credentials`, and the
   like) asks, even though reads otherwise never do. "Allow for this chat" on that prompt
   stops it asking about credential reads for the rest of the conversation, and an
@@ -2582,7 +2600,7 @@ The sandbox can read your whole filesystem, so a few controls hold even in full 
   sandbox later (an editor task, a direnv script, a git hook, a Houston plugin, a CI
   job) or change Houston's own settings for the folder. A file edit or a shell command
   that writes one (`echo x > .envrc`, `cp t.json .vscode/tasks.json`) asks in every
-  mode, and "Allow for run" doesn't cover it. Only an `allow` rule for that path skips
+  mode, and "Allow for this chat" doesn't cover it. Only an `allow` rule for that path skips
   the prompt ("Always allow" on the prompt saves one for the exact file).
 - **Git hooks and settings that run programs.** See "Git hooks and settings" below.
 
@@ -3461,7 +3479,10 @@ The agent manages the same list:
 - `list_scheduled_runs` shows what's configured, with next and last fire times (or
   "paused") and how the last run went.
 - `cancel_scheduled_run` removes one.
-- Creating or cancelling a schedule asks for approval.
+- Creating or cancelling a schedule is a change like a file edit: it asks in ask mode
+  and runs without asking in auto-edit and full auto. Creating one always asks, in
+  every mode, once the chat has read text from outside (a web page, a GitHub body, an
+  MCP result).
 
 **When they fire.** Schedules survive restarts and fire while Houston (the desktop
 app or the terminal) is running. An occurrence missed while Houston was closed fires
@@ -3596,11 +3617,14 @@ console output.
 
 **Safety:**
 
-- Every call asks for approval. A call with steps is approved separately from plain
-  views, and the approval lists each step (never the text being typed).
+- Each host asks once per chat, since a page can load from the internet. A call with
+  steps asks once more per host, and that approval lists each step (never the text
+  being typed).
 - Text typed into a password field is never shown back to the agent.
 - Steps can't download or upload files, or use your camera, microphone, or location.
-- The page can't leave localhost.
+- The page itself can't navigate away from localhost. What it loads (images, scripts,
+  fonts) may still come from public hosts, so pages render as they do in your browser;
+  private network addresses are blocked.
 
 ### Testing a flow step by step
 
@@ -3714,10 +3738,10 @@ have chosen "Allow for this chat" on such a prompt.
 | Variable | Holds |
 | --- | --- |
 | `$HOUSTON_HOOK_EVENT` | the event name |
-| `$HOUSTON_TOOL_NAME` | the tool name |
+| `$HOUSTON_TOOL_NAME` | the tool name for tool events; for Notification, what Houston is waiting on (such as `tool_approval`); for SubagentStart and SubagentStop, the subagent's name; for the other events, the event name |
 | `$HOUSTON_TOOL_INPUT` | the tool's arguments |
 | `$HOUSTON_TOOL_RESULT` | the tool result (PostToolUse) |
-| `$HOUSTON_USER_PROMPT` | your message (UserPromptSubmit) |
+| `$HOUSTON_USER_PROMPT` | your message (UserPromptSubmit), or the subagent's task (SubagentStart) |
 
 **Large payloads.** A payload over 16 KB (a large write, a long tool output, a long
 pasted prompt) is too big for an environment variable, so it's written to a private
@@ -3765,7 +3789,9 @@ logging, metrics, or notifications:
   clone, never runs its plugins. Adding or editing a plugin file turns the folder's
   trust off until you trust it again, and the agent changing one always asks first.
   Settings lists the open project's plugins on the Hooks page.
-- **Isolated.** Each runs in its own context with no `require`, `process`, or network.
+- **Not a sandbox.** A plugin is ordinary code that runs with your permissions and
+  network. Its separate context only guards against accidents, not a hostile plugin,
+  which is why it needs both the setting and folder trust.
 - **Observe only.** A plugin can't block or change a call; use a PreToolUse shell hook
   for that.
 - **Can't break a run.** A plugin that throws or runs slowly is caught and ignored.
@@ -4229,8 +4255,8 @@ with a warning naming the signals:
 
 ## GitHub tools
 
-When the `gh` CLI is installed and signed in, Houston offers dedicated tools for the
-GitHub loop.
+Houston offers dedicated tools for the GitHub loop. They use the `gh` CLI, so it needs
+to be installed and signed in.
 
 | Area | Tools |
 | --- | --- |
@@ -4252,12 +4278,13 @@ GitHub loop.
 **How they run:**
 
 - **Your own `gh`.** They drive your local `gh`, so no token is stored in the app.
-- **Approval.** Each call is network-gated (it always asks), and the ones that change
-  something are refused in plan mode.
+- **Approval.** Each call is network-gated and asks, except that in full auto the ones
+  that only read (lists, views, check and run status) run without asking. The ones that
+  change something are refused in plan mode.
 - **Network on approval.** They run `gh` outside the shell sandbox, so they reach the
   network once approved, unlike a raw `gh` in `run_shell`.
-- **Optional.** If `gh` isn't installed, these tools aren't offered, and everything
-  else still works.
+- **Optional.** If `gh` isn't installed, a call to one of these tools fails with a hint
+  to install it and sign in, and everything else still works.
 
 ## Remembering an instruction (#)
 
@@ -4567,7 +4594,8 @@ The desktop app's **Help** menu is last in the menu bar on every platform.
   log more or less.
 - **If the window crashes or stops responding,** Houston logs it and reloads the window
   (after 15 seconds for one that stopped responding); a run that was going keeps going
-  and reappears. A window that crashes three times within a minute is left as it is.
+  and reappears. It reloads at most three times a minute: a fourth crash within a minute
+  leaves the window as it is.
   A crash also saves a crash dump on your computer. Crash dumps are never uploaded.
 - **Report an Issue…** first shows the text a new GitHub issue will start with: your
   Houston version, platform, and a summary of the diagnostics (each check's name and

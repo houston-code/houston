@@ -70,7 +70,7 @@ ${renderOptions().trimEnd()}
 
 One-shot exit codes:
   0  the agent finished              1  error, stall, or --on-approval fail
-  2  bad flag value or empty prompt  3  hit a budget (step cap or output limit)
+  2  bad flag value or empty prompt  3  hit a budget (steps, --max-cost, or output)
   4  the answer did not match --output-schema
   5  the last --verify check still failed
   129/130/143  stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM
