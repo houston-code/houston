@@ -4,7 +4,7 @@
 #   curl -fsSL https://houstoncode.ai/install.sh | sh
 #
 # Downloads houston-cli.cjs from the latest GitHub Release, checks it against the
-# release's SHA256SUMS, and installs it as `houston` in ~/.local/bin. Needs Node 22+.
+# release's SHA256SUMS, and installs it as `houston` in ~/.local/bin. Needs Node 22.19+.
 #
 # Environment:
 #   HOUSTON_VERSION        install this version (e.g. 0.3.0) instead of the latest
@@ -45,12 +45,19 @@ sha256_of() {
 }
 
 main() {
-  min_node=22
+  min_major=22
+  min_minor=19
+  min_node="$min_major.$min_minor"
   command -v node >/dev/null 2>&1 \
     || fail "Node $min_node or newer is required, and node was not found. Install it from https://nodejs.org and re-run."
-  node_major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+  node_ver=$(node -p 'process.versions.node' 2>/dev/null || echo 0.0)
+  node_major=${node_ver%%.*}
+  node_minor=${node_ver#*.}
+  node_minor=${node_minor%%.*}
   case "$node_major" in *[!0-9]*|'') node_major=0 ;; esac
-  [ "$node_major" -ge "$min_node" ] \
+  case "$node_minor" in *[!0-9]*|'') node_minor=0 ;; esac
+  { [ "$node_major" -gt "$min_major" ] \
+    || { [ "$node_major" -eq "$min_major" ] && [ "$node_minor" -ge "$min_minor" ]; }; } \
     || fail "Node $min_node or newer is required (found $(node --version 2>/dev/null || echo unknown)). Upgrade Node and re-run."
 
   command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
