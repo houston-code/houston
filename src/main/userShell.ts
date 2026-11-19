@@ -58,9 +58,14 @@ export interface ShellCapture {
   truncated: boolean
 }
 
+/** How long after a timeout's kill a capture waits for its pipes to close before giving up on them. */
+export const CAPTURE_KILL_GRACE_MS = 200
+
 /**
  * Run a command and collect its output, bounded in time and size: a command that
- * hangs is stopped (its whole process group) at `timeoutMs`, and output past
+ * hangs is stopped (its whole process group) at `timeoutMs`, and the capture settles
+ * at most {@link CAPTURE_KILL_GRACE_MS} later even if something it started still holds
+ * its output open. Output past
  * `maxBytes` is dropped rather than held. `input`, when given, is written to its
  * stdin, which is then closed (the custom status line's JSON).
  */
@@ -90,9 +95,26 @@ export function captureUserShell(
         // Already gone.
       }
     }
+    let settled = false
+    let grace: ReturnType<typeof setTimeout> | undefined
+    const finish = (code: number | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (grace) clearTimeout(grace)
+      resolve({ exitCode: code ?? (timedOut ? 124 : 1), stdout, stderr, timedOut, truncated })
+    }
     const timer = setTimeout(() => {
       timedOut = true
       stop()
+      // 'close' waits for the pipes to close, and a process that left the group (a
+      // daemonizing helper, setsid) or a Windows orphan can hold them open long after
+      // the kill. The limit is meant to be hard: drop the pipes and settle anyway.
+      grace = setTimeout(() => {
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+        finish(null)
+      }, CAPTURE_KILL_GRACE_MS)
     }, opts.timeoutMs)
     child.stdout?.setEncoding('utf8')
     child.stderr?.setEncoding('utf8')
@@ -112,12 +134,12 @@ export function captureUserShell(
       stderr = (stderr + d).slice(-4000)
     })
     child.on('error', (e) => {
+      if (settled) return
+      settled = true
       clearTimeout(timer)
+      if (grace) clearTimeout(grace)
       reject(e)
     })
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      resolve({ exitCode: code ?? (timedOut ? 124 : 1), stdout, stderr, timedOut, truncated })
-    })
+    child.on('close', (code) => finish(code))
   })
 }

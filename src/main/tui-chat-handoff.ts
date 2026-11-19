@@ -6,7 +6,8 @@ import { shellQuote } from './sessionWorktree'
 /**
  * The model a reopened chat runs on, reconciled the way the desktop app does
  * (`chatSettingsFor`): the chat's own model while it is still set up, else another
- * model of the same provider, else the session's current one. `note` says what
+ * model of the same provider, else the session's current one. A provider that lists no
+ * models keeps the chat's model, since there is nothing to check it against. `note` says what
  * changed so the user is told instead of the chat quietly running on something else.
  * Null when the chat records no model (nothing to reconcile). Pure.
  */
@@ -17,6 +18,10 @@ export function reconcileChatModel(
 ): { providerId: string; model: string; note?: string } | null {
   if (!own.providerId || !own.model) return null
   const wanted = { providerId: own.providerId, model: own.model }
+  // A provider that lists no models (a local Ollama or LM Studio server, run with
+  // --model) has no list to reconcile against: its chats name models the settings
+  // never held, so the chat's model stays, as headless --continue keeps it.
+  if (providers.find((p) => p.id === wanted.providerId)?.models.length === 0) return wanted
   const reconciled = reconcileSelectedModel(providers, wanted)
   if (reconciled && reconciled.providerId === wanted.providerId && reconciled.model === wanted.model) {
     return wanted
