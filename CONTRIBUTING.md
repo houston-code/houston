@@ -626,7 +626,9 @@ PR runs for most of an hour. A `plan` job decides the legs (the policy is
 So nothing reaches `main` without the macOS and Windows legs, but a PR finds out about a
 macOS- or Windows-only failure in the queue rather than on the PR. If your change is
 platform-sensitive (the sandbox backends, paths, packaging, native modules), add the
-`full-ci` label to run every leg on the PR itself. Adding a label re-runs CI.
+`full-ci` label to run every leg on the PR itself. Adding a label re-runs CI. Use it
+sparingly and never on a batch of PRs at once: `full-ci` runs share the small macOS pool
+with queue candidates, whose macOS leg is required.
 
 `build` is a single required check that passes only when `plan` succeeded, every planned
 `package` leg succeeded (a skipped `package` counts only when `plan` planned none), and
