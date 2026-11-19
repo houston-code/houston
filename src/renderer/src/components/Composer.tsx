@@ -17,6 +17,7 @@ import { ComposerPrBar } from './ComposerPrBar'
 import type { PrStatus } from '@shared/gitActions'
 import type { WorkingTreeStats } from '../hooks/useWorkingTreeStats'
 import { loadComposerContext, loadComposerDraft, saveComposerDraft } from '../lib/composerDraft'
+import { loadComposerImages, saveComposerImages } from '../lib/composerImageDraft'
 import { applyMention, mentionBeforeCursor, type MentionToken } from '../lib/mentions'
 import {
   appendPromptHistory,
@@ -324,6 +325,8 @@ export function Composer({
     context: ContextAttachment[]
     images: ImageAttachment[]
   } | null>(null)
+  const editStashRef = useRef(editStash)
+  editStashRef.current = editStash
   const [mention, setMention] = useState<MentionToken | null>(null)
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [mentionIndex, setMentionIndex] = useState(0)
@@ -383,16 +386,48 @@ export function Composer({
   // edit is open, the draft is the one it set aside, not the message being edited.
   const draftText = editStash ? editStash.text : text
   const draftContext = editStash ? editStash.context : context
-  const draftRef = useRef({ conversationId, text: draftText, context: draftContext })
-  draftRef.current = { conversationId, text: draftText, context: draftContext }
+  const draftImages = editStash ? editStash.images : images
+  const draftRef = useRef({ conversationId, text: draftText, context: draftContext, images: draftImages })
+  draftRef.current = { conversationId, text: draftText, context: draftContext, images: draftImages }
   useEffect(() => {
     const t = setTimeout(() => saveComposerDraft(conversationId, draftText, draftContext), DRAFT_SAVE_MS)
     return () => clearTimeout(t)
   }, [conversationId, draftText, draftContext])
+  // Staged images are kept the same way, in IndexedDB (see composerImageDraft.ts).
+  // Their load is async, so an empty list is not written until it has finished: an
+  // early save of it would wipe the very images being restored. Images staged before
+  // then are saved at once, since they win over the saved set anyway.
+  const [imagesRestored, setImagesRestored] = useState(false)
+  const imagesRestoredRef = useRef(false)
+  imagesRestoredRef.current = imagesRestored
+  useEffect(() => {
+    let cancelled = false
+    void loadComposerImages(conversationId).then((saved) => {
+      if (cancelled) return
+      setImagesRestored(true)
+      if (!saved.length) return
+      // Anything staged while the load ran (a paste, a prefill) wins over the saved
+      // set. An edit opened meanwhile set the draft aside, so they belong with it.
+      if (editStashRef.current) {
+        setEditStash((prev) => (prev && !prev.images.length ? { ...prev, images: saved } : prev))
+      } else {
+        setImages((prev) => (prev.length ? prev : saved))
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [conversationId])
+  useEffect(() => {
+    if (!imagesRestored && draftImages.length === 0) return
+    const t = setTimeout(() => void saveComposerImages(conversationId, draftImages), DRAFT_SAVE_MS)
+    return () => clearTimeout(t)
+  }, [conversationId, draftImages, imagesRestored])
   useEffect(
     () => () => {
-      const { conversationId: cid, text: txt, context: ctx } = draftRef.current
+      const { conversationId: cid, text: txt, context: ctx, images: imgs } = draftRef.current
       saveComposerDraft(cid, txt, ctx)
+      if (imagesRestoredRef.current || imgs.length > 0) void saveComposerImages(cid, imgs)
     },
     []
   )

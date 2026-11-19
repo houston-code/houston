@@ -3,6 +3,7 @@ import { ULTRATHINK_HINT, ULTRATHINK_HINT_ALREADY, ULTRATHINK_HINT_NONE } from '
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Command } from '@shared/commands'
 import { Composer } from './Composer'
+import { loadComposerImages, setImageDraftStore, type ImageDraftStore } from '../lib/composerImageDraft'
 
 const COMMANDS: Command[] = [
   { name: 'new', description: 'Start a new chat' },
@@ -844,6 +845,85 @@ describe('Composer rewind (Esc Esc picker, edit and resend)', () => {
     expect(onEditModeChange).toHaveBeenCalledWith('conversation')
     fireEvent.click(within(bar).getByRole('button', { name: 'Cancel edit' }))
     expect(onCancelEdit).toHaveBeenCalled()
+  })
+})
+
+describe('Composer image draft persistence', () => {
+  // jsdom has no IndexedDB; a Map stands in for it.
+  let saved: Map<string, unknown>
+  const memoryStore = (): ImageDraftStore => ({
+    get: async (k) => saved.get(k),
+    put: async (k, v) => {
+      saved.set(k, v)
+    },
+    delete: async (k) => {
+      saved.delete(k)
+    }
+  })
+  const img = { mediaType: 'image/png', data: 'AA==' }
+  beforeEach(() => {
+    saved = new Map()
+    setImageDraftStore(memoryStore())
+  })
+  afterEach(() => setImageDraftStore(undefined))
+
+  it('keeps a staged image across a chat switch or restart (unmount + remount)', async () => {
+    const { unmount } = render(
+      <Composer {...baseProps({ conversationId: 'c1', prefill: { text: 'see this', images: [img], seq: 1 } })} />
+    )
+    expect(screen.getAllByAltText('attachment')).toHaveLength(1)
+    unmount()
+    await waitFor(async () => expect(await loadComposerImages('c1')).toEqual([img]))
+
+    // Another chat doesn't get it…
+    const other = render(<Composer {...baseProps({ conversationId: 'c2' })} />)
+    await waitFor(() => expect(saved.has('c2')).toBe(false))
+    expect(screen.queryByAltText('attachment')).toBeNull()
+    other.unmount()
+
+    // …and coming back to the first chat restores it, ready to send.
+    const props = baseProps({ conversationId: 'c1' })
+    render(<Composer {...props} />)
+    expect(await screen.findByAltText('attachment')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(props.onSend).toHaveBeenCalledWith('see this', [img])
+    // Sending clears the saved images, so they don't come back a second time.
+    await waitFor(() => expect(saved.has('c1')).toBe(false))
+  })
+
+  it('keeps the new-chat composer’s images in its own slot', async () => {
+    const { unmount } = render(
+      <Composer {...baseProps({ prefill: { text: '', images: [img], seq: 1 } })} />
+    )
+    unmount()
+    await waitFor(() => expect(saved.get('new')).toEqual([img]))
+    render(<Composer {...baseProps()} />)
+    expect(await screen.findByAltText('attachment')).toBeInTheDocument()
+  })
+
+  it('does not wipe the saved images before they have loaded', async () => {
+    saved.set('c1', [img])
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const put = vi.fn(async (k: string, v: unknown) => void saved.set(k, v))
+    const del = vi.fn(async (k: string) => void saved.delete(k))
+    setImageDraftStore({ get: async (k) => (await gate, saved.get(k)), put, delete: del })
+
+    const { unmount } = render(<Composer {...baseProps({ conversationId: 'c1' })} />)
+    type('typing while it loads')
+    await new Promise((r) => setTimeout(r, 400)) // past the save debounce
+    expect(del).not.toHaveBeenCalled()
+    release()
+    expect(await screen.findByAltText('attachment')).toBeInTheDocument()
+    unmount()
+    expect(saved.get('c1')).toEqual([img])
+  })
+
+  it('drops a restored image when the model can\'t see images, and says so', async () => {
+    saved.set('c1', [img])
+    render(<Composer {...baseProps({ conversationId: 'c1', vision: false })} />)
+    expect(await screen.findByText("Removed 1 image: this model can't see images.")).toBeInTheDocument()
+    expect(screen.queryByAltText('attachment')).toBeNull()
   })
 })
 
