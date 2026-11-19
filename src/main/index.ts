@@ -45,6 +45,7 @@ import { configureOutboundProxy } from './outbound-proxy'
 import { flushRuleUsage } from './ruleUsage'
 import { flushOpenConversations } from './conversations'
 import { windowBackground } from './windowBackground'
+import { runDetached, wireDaemonAppEvents } from './daemonAppEvents'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
 // don't force-exit: in a GUI app a stray async error shouldn't kill the window.
@@ -320,6 +321,19 @@ if (acp) {
 } else if (scheduleDaemon) {
   // Background-only: no Dock icon for a process with no window.
   app.dock?.hide()
+  // On macOS the daemon is the app's own bundle, so a Dock or Finder launch and a
+  // houston:// link reach it instead of starting the app: pass them on to a new
+  // instance of the window app (daemonAppEvents.ts). Before ready: a link can arrive
+  // during startup.
+  const relay = (message: string): void => log.info(message)
+  wireDaemonAppEvents({
+    platform: process.platform,
+    execPath: process.execPath,
+    // One listener shape for the three events; 'open-url' stands in for the overloads.
+    on: (event, listener) => void app.on(event as 'open-url', listener),
+    run: runDetached(relay),
+    log: relay
+  })
   app.whenReady().then(async () => {
     trustSystemCertificates()
     await initSecrets()
