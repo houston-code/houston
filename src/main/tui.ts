@@ -83,6 +83,7 @@ import { buildElicitationContent } from '@shared/mcp'
 import { MAX_ATTACHMENTS, type ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { quotaIsLow, quotaStatusText, resetClock, type ProviderQuota } from '@shared/rateLimit'
+import { openaiUsesGateway } from './providers/env-base-url'
 import { providerQuota, providerQuotas } from './providers/quota'
 import { noteThrottle, rateLimitSnapshot } from './rateLimitStore'
 import { newestRateLimits, type RateLimitState } from '@shared/rateLimitState'
@@ -4701,7 +4702,7 @@ function activeModelReasons(deps: TuiDeps, providerId: string | null, model: str
 function activeModelSendsXhigh(deps: TuiDeps, providerId: string | null, model: string | null): boolean {
   if (!providerId || !model) return false
   const p = deps.getSettings().providers.find((x) => x.id === providerId)
-  return p ? providerSendsXhigh(p.kind, model, Boolean(p.baseUrl)) : false
+  return p ? providerSendsXhigh(p.kind, model, openaiUsesGateway(p.baseUrl)) : false
 }
 
 /** `/reasoning` with no argument: what it is now, and what it can be. */

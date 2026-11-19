@@ -789,7 +789,8 @@ search* (Tavily, Brave Search or Exa) when its API key is set. With no key, it f
 back to the model provider's own web search where the provider offers one:
 
 - **Claude API** (the Anthropic provider without a custom base URL).
-- **OpenAI** (the built-in OpenAI provider without a custom base URL).
+- **OpenAI** (the built-in OpenAI provider without a base URL on another host, whether set
+  in Settings or by `OPENAI_BASE_URL`; `https://api.openai.com/v1` still counts as OpenAI).
 
 The search runs as a short extra request on the provider's model for side tasks (see
 *A smaller model for side tasks*), or on the chat's current model when there is none or

@@ -402,6 +402,16 @@ describe('responses prompt_cache_key', () => {
     }
     expect(createResponsesProvider('k').webSearch).toBeTypeOf('function')
   })
+
+  it("keeps the first-party gates when OPENAI_BASE_URL names OpenAI's own host", async () => {
+    vi.stubEnv('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+    try {
+      expect(await paramsFor({ promptCacheKey: 'abc123' })).toMatchObject({ prompt_cache_key: 'abc123' })
+      expect(createResponsesProvider('k').webSearch).toBeTypeOf('function')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })
 
 describe('responses usage reporting', () => {

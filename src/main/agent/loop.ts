@@ -87,6 +87,7 @@ import { RUNNING_ELSEWHERE_MESSAGE, conversationRunningElsewhere, recordRunningC
 import { runQuarantineExtraction } from './untrusted'
 import { smallModelFor, withSmallModel } from '@shared/smallModel'
 import { createProvider } from '../providers'
+import { openaiUsesGateway } from '../providers/env-base-url'
 import { needsExplicitCacheControl, promptCacheKeyFor } from '../providers/caching'
 import { isOllamaProvider, ollamaContextLengthCached, ollamaContextNotice } from '../providers/ollama'
 
@@ -1734,10 +1735,12 @@ export async function startRun(
         provider,
         caps,
         reasoningCapable: caps?.reasoning,
-        sendsXhigh: providerSendsXhigh(cfg.kind, model, Boolean(cfg.baseUrl)),
+        // The OpenAI gates follow where requests really go (createProvider's routing):
+        // OPENAI_BASE_URL counts like a configured URL, OpenAI's own host doesn't.
+        sendsXhigh: providerSendsXhigh(cfg.kind, model, openaiUsesGateway(cfg.baseUrl)),
         sees: {
           images: resolveCapabilities(model, caps).vision,
-          documents: providerAcceptsPdf(cfg.kind, model, Boolean(cfg.baseUrl))
+          documents: providerAcceptsPdf(cfg.kind, model, openaiUsesGateway(cfg.baseUrl))
         },
         // Opt explicit-caching routes (Claude/Qwen/Gemini via an aggregator host)
         // into prompt caching on the iterative loops. One-shot calls (title,

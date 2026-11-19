@@ -14,3 +14,20 @@ export function effectiveBaseUrl(
 ): string | undefined {
   return configured || process.env[envVar]?.trim() || undefined
 }
+
+/**
+ * Whether the built-in OpenAI provider goes through a gateway: a base URL, configured or
+ * from `OPENAI_BASE_URL`, on any host but OpenAI's own. A gateway gets the Chat Completions
+ * adapter (no PDFs, no `xhigh`, no hosted search, no `prompt_cache_key`); OpenAI's own host
+ * keeps the Responses API, whichever way its URL was given. An unparseable URL counts as a
+ * gateway, since the SDK would send to it as given.
+ */
+export function openaiUsesGateway(configured: string | undefined): boolean {
+  const url = effectiveBaseUrl(configured, 'OPENAI_BASE_URL')
+  if (!url) return false
+  try {
+    return new URL(url).hostname !== 'api.openai.com'
+  } catch {
+    return true
+  }
+}

@@ -6,7 +6,7 @@ import { getKey, getSecretHeaders, hasStoredKey } from '../agentHost'
 import { createAnthropicProvider, listAnthropicModels } from './anthropic'
 import { createOpenAIProvider, listOpenAIModels } from './openai'
 import { createResponsesProvider } from './responses'
-import { effectiveBaseUrl } from './env-base-url'
+import { openaiUsesGateway } from './env-base-url'
 import { createGeminiProvider, listGeminiModels } from './gemini'
 import { createBedrockProvider, listBedrockModels } from './bedrock'
 import { createVertexProvider, listVertexModels } from './vertex'
@@ -131,13 +131,14 @@ function buildProvider(config: ProviderConfig): Provider {
     case 'anthropic':
       return createAnthropicProvider(key ?? '', config.baseUrl, headers)
     case 'openai':
-      // Native OpenAI uses the Responses API (GPT-5/o-series path). A custom base
-      // URL means a proxy/gateway that may only speak Chat Completions, so fall
+      // Native OpenAI uses the Responses API (GPT-5/o-series path). A base URL on
+      // another host means a proxy/gateway that may only speak Chat Completions, so fall
       // back to the Chat Completions adapter there, whether the URL is configured or
-      // comes from OPENAI_BASE_URL (the SDK would send to it either way).
-      return effectiveBaseUrl(config.baseUrl, 'OPENAI_BASE_URL')
+      // comes from OPENAI_BASE_URL (the SDK would send to it either way). The gates in
+      // the loop and the TUI read the same test (openaiUsesGateway), so they match.
+      return openaiUsesGateway(config.baseUrl)
         ? createOpenAIProvider(key, config.baseUrl, headers)
-        : createResponsesProvider(key)
+        : createResponsesProvider(key, config.baseUrl)
     case 'openai-compatible':
       return createOpenAIProvider(key, config.baseUrl, headers)
     case 'gemini':
