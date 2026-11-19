@@ -1905,6 +1905,8 @@ steps, either:
 
 and it hasn't been caught looping. Going back over calls it already made doesn't
 count, and neither does an edit that puts a file back to a version it already had.
+Putting a file back the way the turn found it (taking out a temporary debug line)
+isn't a revert, and neither is an edit that leaves a file unchanged.
 
 ### Getting caught in a loop
 
@@ -1915,7 +1917,8 @@ Houston watches for an agent that is going in circles:
 - hitting the same error over and over, including an edit that keeps missing
 - rerunning a command (a test suite, a build) that keeps failing the same way while
   it tweaks things in between
-- editing a file back and forth between the same versions
+- editing a file back and forth between the same versions (returning it to how the
+  turn found it doesn't count)
 
 The first time, it tells the agent to change approach. If the loop continues, the
 turn ends: the agent gets one last step with tools off to tell you what it tried and
