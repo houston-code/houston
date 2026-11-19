@@ -1722,7 +1722,8 @@ describe('sub-prompts and the picker after the composer', () => {
     await expect(answer).resolves.toBe('y')
   })
 
-  it('Ctrl-Z at a sub-prompt suspends, and after fg the prompt is redrawn and still answers', async () => {
+  // readline only treats Ctrl-Z as a stop where the OS has job control (not Windows).
+  it.skipIf(process.platform === 'win32')('Ctrl-Z at a sub-prompt suspends, and after fg the prompt is redrawn and still answers', async () => {
     // readline handled Ctrl-Z itself: it stopped the process and, on fg, paused its
     // own input, so the question stayed on screen with nothing reading the keyboard.
     const stdin = fakeTty()
