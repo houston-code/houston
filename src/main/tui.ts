@@ -98,7 +98,7 @@ import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { assertNever } from '@shared/assert'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
-import { parseShellEscape, renderShellEscapeRecord } from '@shared/shellEscape'
+import { isShellEscapeRecord, parseShellEscape, renderShellEscapeRecord } from '@shared/shellEscape'
 import type { ConversationSettingsPatch, DeleteConversationResult, ProposalState } from '@shared/agent'
 import type { DeletePlan } from './deleteChat'
 import { comeBackCommand } from './sessionWorktree'
@@ -5308,9 +5308,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           return
         }
         deps.updateSettings(change.patch)
+        followNotifySettings(change.patch)
         deps.io.out(paint(`· ${change.note}\n`, 'dim'))
       }
     }
+  }
+  /**
+   * The bell and notification follow the saved settings, not just /notify: once
+   * `/config desktop-notifications` or `/settings set` changes what they resolve to,
+   * this terminal follows at once, as those commands say.
+   */
+  const followNotifySettings = (patch: Partial<AppSettings>): void => {
+    if ('desktopNotifications' in patch || 'tuiNotify' in patch) notifyMode = resolveNotifyMode(deps.getSettings())
   }
   /** /status: the session's facts, the host's, and this folder's project config, on one screen. */
   const statusReport = async (): Promise<string> => {
@@ -5698,6 +5707,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     } else {
       deps.io.out(paint(`· couldn't summarize: ${stripControlChars(res.error ?? 'unknown error')}\n`, 'yellow'))
     }
+    // As after /compact: a line sent while it summarized was queued (there was no run
+    // to steer), so send it next; a cancel hands it back as the draft instead, and a
+    // line still being typed stays a draft.
+    const typedWhile = deps.io.takeQueued?.() ?? []
+    const halfTyped = deps.io.takeDraft?.() ?? ''
+    if (res.reason === 'cancelled') {
+      restoreDraft = [restoreDraft, ...typedWhile, halfTyped].filter(Boolean).join('\n\n')
+    } else {
+      pendingQueued = [...pendingQueued, ...typedWhile]
+      if (halfTyped) halfDraft = [halfDraft, halfTyped].filter(Boolean).join('\n\n')
+    }
+    saveHeldDraft()
   }
   // `/fork <n>` and the rewind picker's "Fork from here": a new chat holding the chat
   // up to before message `turn`, with that message back in the prompt to edit or send,
@@ -7152,7 +7173,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (result.kind === 'settings') {
         await runSettingsCommand(result.cmd, {
           getSettings: deps.getSettings,
-          ...(deps.updateSettings ? { updateSettings: deps.updateSettings } : {}),
+          ...(deps.updateSettings
+            ? {
+                updateSettings: (patch: Partial<AppSettings>) => {
+                  deps.updateSettings?.(patch)
+                  followNotifySettings(patch)
+                }
+              }
+            : {}),
           ...(deps.setKey ? { setKey: deps.setKey } : {}),
           settingsPath: deps.settingsPath?.() ?? '(unknown)',
           cwd: opts.cwd,
@@ -7988,7 +8016,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // The desktop's Retry: a history that ends in the user's own message means
         // its turn produced nothing (it failed or was stopped). Send that message
         // again; appendUserTurn swaps it in place rather than stacking a copy.
-        const last = messages.at(-1)
+        // A `!cmd` record is the user's own shell output, not a turn: skip past any
+        // run since, to the message whose turn failed (resending the record would
+        // start a turn about the command's output).
+        let end = messages.length
+        while (end > 0 && messages[end - 1].role === 'user' && isShellEscapeRecord(messages[end - 1].content)) end--
+        const last = messages[end - 1]
         if (!last || last.role !== 'user' || last.content.startsWith(SYSTEM_NOTE_PREFIX)) {
           deps.io.out(paint('· nothing to retry: /retry runs your last message again after a turn fails\n', 'dim'))
           continue
@@ -8420,8 +8453,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // terminal without touching the renderer below.
       const sig = signalFor(e, workspaceName, tabChatTitle)
       // Progress follows the run: blocked on a question or approval, then working again.
+      // Other events (a parallel subagent's tool row, a usage tick) don't unblock it: an
+      // approval or question still waiting keeps it blocked until it is answered (see
+      // enqueue, which sets it back to working once none waits).
       const progress = progressForEvent(e)
-      if (progress && progress !== progressState) {
+      if (progress && progress !== progressState && (progress !== 'working' || pendingPrompts === 0)) {
         progressState = progress
         deps.io.progress?.(progress, progressLabel())
       }

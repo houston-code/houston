@@ -28,6 +28,14 @@ describe('reconcileChatModel', () => {
     expect(r?.note).toBe("this chat's model (gone) is no longer set up, so it now uses a2")
   })
 
+  it('keeps the model of a provider that lists none (a local server run with --model), silently', () => {
+    const local = [...providers, provider('ollama', [])]
+    expect(reconcileChatModel(local, { providerId: 'ollama', model: 'llama3.2' }, session)).toEqual({
+      providerId: 'ollama',
+      model: 'llama3.2'
+    })
+  })
+
   it('falls back to the session model when the provider is gone, and says so', () => {
     const r = reconcileChatModel(providers, { providerId: 'zz', model: 'z1' }, session)
     expect(r).toMatchObject({ providerId: 'b', model: 'b1' })
