@@ -77,6 +77,46 @@ describe('revertChange, working tree', () => {
   )
 
   maybe(
+    'reverts a hunk that only adds or removes the final newline',
+    async () => {
+      const ws = repo()
+      const b = join(ws, 'b.txt')
+      // Committed with a final newline; the hunk removes it.
+      writeFileSync(b, 'keep')
+      expect(await revertChange(await treeReq(ws, 'b.txt', 0), deps([ws]))).toEqual({ ok: true })
+      expect(readFileSync(b, 'utf8')).toBe('keep\n')
+
+      // Committed without one; the hunk adds it.
+      writeFileSync(b, 'x\nlast')
+      git(ws, 'commit', '-qam', 'no final newline')
+      writeFileSync(b, 'x\nlast\n')
+      expect(await revertChange(await treeReq(ws, 'b.txt', 0), deps([ws]))).toEqual({ ok: true })
+      expect(readFileSync(b, 'utf8')).toBe('x\nlast')
+
+      // An edit to the last line of a file without a final newline keeps it without one.
+      writeFileSync(b, 'x\nLAST')
+      expect(await revertChange(await treeReq(ws, 'b.txt', 0), deps([ws]))).toEqual({ ok: true })
+      expect(readFileSync(b, 'utf8')).toBe('x\nlast')
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    'refuses a final-newline hunk once the file\'s ending changed since the list was loaded',
+    async () => {
+      const ws = repo()
+      const b = join(ws, 'b.txt')
+      writeFileSync(b, 'keep')
+      const req = await treeReq(ws, 'b.txt', 0)
+      // Saved again with the newline back and a line added: the view is stale.
+      writeFileSync(b, 'keep\nmore')
+      expect(await revertChange(req, deps([ws]))).toMatchObject({ ok: false })
+      expect(readFileSync(b, 'utf8')).toBe('keep\nmore')
+    },
+    TIMEOUT
+  )
+
+  maybe(
     'refuses a hunk revert in a file that is not UTF-8, rather than rewriting its other characters',
     async () => {
       const ws = repo()

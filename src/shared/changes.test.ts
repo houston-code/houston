@@ -118,6 +118,37 @@ describe('revertHunkText', () => {
     expect(revertHunkText('a\nb', gone.hunks[0])).toBe('a\nb\n')
   })
 
+  it('honors git\'s "No newline at end of file" markers on a hunk', () => {
+    const gitDiff = (...hunk: string[]): DiffHunk =>
+      parseUnifiedDiff(['diff --git a/f b/f', '--- a/f', '+++ b/f', ...hunk].join('\n'))[0].hunks[0]
+    // The newline removed: reverting puts it back.
+    const removed = gitDiff('@@ -1,2 +1,2 @@', ' a', '-b', '+b', '\\ No newline at end of file')
+    expect(revertHunkText('a\nb', removed)).toBe('a\nb\n')
+    // The newline added: reverting takes it away again.
+    const added = gitDiff('@@ -1,2 +1,2 @@', ' a', '-b', '\\ No newline at end of file', '+b')
+    expect(revertHunkText('a\nb\n', added)).toBe('a\nb')
+    // A changed last line in a file that never had one stays without one.
+    const neither = gitDiff('@@ -1,2 +1,2 @@', ' a', '-b', '\\ No newline at end of file', '+B', '\\ No newline at end of file')
+    expect(revertHunkText('a\nB', neither)).toBe('a\nb')
+    // Context at the end without a newline marks both sides.
+    const ctx = gitDiff('@@ -1,2 +1,2 @@', '-a', '+A', ' b', '\\ No newline at end of file')
+    expect(ctx).toMatchObject({ oldNoEol: true, newNoEol: true })
+    expect(revertHunkText('A\nb', ctx)).toBe('a\nb')
+    // An emptied file whose old content had no final newline gets none back.
+    const emptied = gitDiff('@@ -1 +0,0 @@', '-x', '\\ No newline at end of file')
+    expect(revertHunkText('', emptied)).toBe('x')
+  })
+
+  it('refuses a marked hunk once the file\'s final newline no longer matches it', () => {
+    const removed = parseUnifiedDiff(
+      ['diff --git a/f b/f', '--- a/f', '+++ b/f', '@@ -1,2 +1,2 @@', ' a', '-b', '+b', '\\ No newline at end of file'].join('\n')
+    )[0].hunks[0]
+    // The new side says no final newline; this file has one again.
+    expect(revertHunkText('a\nb\n', removed)).toBeNull()
+    // Or lines were added after it, so the hunk no longer reaches the end.
+    expect(revertHunkText('a\nb\nc', removed)).toBeNull()
+  })
+
   it('keeps the bytes of context lines in a file with mixed line endings', () => {
     const before = 'a\nb\nc\nd\r\ne\n'
     const after = 'a\nB\nc\nd\r\ne\n'
