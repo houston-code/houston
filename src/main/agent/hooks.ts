@@ -37,6 +37,11 @@ import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../
  *   a plan to review, an MCP server's request). Observational. Matcher globs the
  *   wait's type (`tool_approval`, `tool_question`, `plan_ready`, `elicitation`).
  * - SessionEnd: once when a run ends, however it ended. Observational.
+ * - SubagentStart / SubagentStop: when a dispatched subagent starts, and when it ends
+ *   by any path. Matcher globs the agent's name. Context only: injected context is
+ *   added to the subagent's task (Start) or to the report the parent gets (Stop).
+ * - PostCompact: after a compaction lands. Context only: injected context is added
+ *   to the new summary.
  *
  * Beyond the exit code, a hook may print a single JSON object on stdout to steer
  * the loop (see {@link HookDirective}). A non-JSON stdout is treated as plain
@@ -50,13 +55,19 @@ export type HookEvent = Hook['event']
  * Events with a subject their matcher globs: the tool name for the tool events, the
  * wait's type for Notification.
  */
-const SUBJECT_EVENTS = new Set<HookEvent>(['PreToolUse', 'PostToolUse', 'Notification'])
+const SUBJECT_EVENTS = new Set<HookEvent>(['PreToolUse', 'PostToolUse', 'Notification', 'SubagentStart', 'SubagentStop'])
 
 /**
  * Events a hook only observes. Nothing it prints or returns is read back into the
  * run: no block, no approval, no rewrite, no context.
  */
 const OBSERVATIONAL_EVENTS = new Set<HookEvent>(['Notification', 'SessionEnd'])
+
+/**
+ * Events a hook may add context to, and nothing else: a `block` or `approve` decision,
+ * a rewrite, or a non-zero exit decides nothing for them.
+ */
+const CONTEXT_ONLY_EVENTS = new Set<HookEvent>(['SubagentStart', 'SubagentStop', 'PostCompact'])
 
 /** Events a hook can veto — a block stops the action (or, for Stop, forces another turn). */
 const BLOCKING_EVENTS = new Set<HookEvent>(['PreToolUse', 'UserPromptSubmit', 'Stop'])
@@ -114,6 +125,13 @@ export interface HookContext {
   notification?: { type: string; message: string; toolName?: string; toolInput?: Record<string, unknown> }
   /** SessionEnd: how the run ended (`completed`, `aborted`, `error`, `limit`). */
   reason?: string
+  /**
+   * SubagentStart / SubagentStop: the agent's name (its custom agent name, else
+   * `research` or `writable`), and for Stop how it ended and the report it returns.
+   */
+  subagent?: { name: string; status?: string; report?: string }
+  /** PostCompact: the summary that now stands in for the compacted messages. */
+  summary?: string
 }
 
 /**
@@ -225,7 +243,11 @@ export function hookStdinPayload(event: HookEvent, ctx: HookContext, workspace: 
     ...(ctx.result !== undefined ? { tool_response: ctx.result } : {}),
     ...(ctx.prompt !== undefined ? { prompt: ctx.prompt } : {}),
     ...(n ? { notification_type: n.type, message: n.message } : {}),
-    ...(ctx.reason !== undefined ? { reason: ctx.reason } : {})
+    ...(ctx.reason !== undefined ? { reason: ctx.reason } : {}),
+    ...(ctx.subagent ? { agent_name: ctx.subagent.name } : {}),
+    ...(ctx.subagent?.status !== undefined ? { agent_status: ctx.subagent.status } : {}),
+    ...(ctx.subagent?.report !== undefined ? { agent_report: ctx.subagent.report } : {}),
+    ...(ctx.summary !== undefined ? { summary: ctx.summary } : {})
   })
 }
 
@@ -333,6 +355,7 @@ export async function runHooks(
 
   const blocking = BLOCKING_EVENTS.has(event)
   const observational = OBSERVATIONAL_EVENTS.has(event)
+  const contextOnly = CONTEXT_ONLY_EVENTS.has(event)
   const reasons: string[] = []
   const contexts: string[] = []
   const systemMsgs: string[] = []
@@ -410,14 +433,17 @@ export async function runHooks(
         if (directive.reason) reasons.push(directive.reason)
         if (directive.additionalContext) contexts.push(directive.additionalContext)
         if (directive.systemMessage) systemMsgs.push(directive.systemMessage)
-        if (directive.updatedInput) {
-          updatedInput = directive.updatedInput
-          rewrittenBy = hook
-        }
-        if (directive.decision === 'block') blocked = true
-        else if (directive.decision === 'approve') {
-          approved = true
-          approvedBy.push(hook)
+        // A context-only event reads the context and the note, never a decision.
+        if (!contextOnly) {
+          if (directive.updatedInput) {
+            updatedInput = directive.updatedInput
+            rewrittenBy = hook
+          }
+          if (directive.decision === 'block') blocked = true
+          else if (directive.decision === 'approve') {
+            approved = true
+            approvedBy.push(hook)
+          }
         }
       } else {
         // Backward-compatible plain-text feedback (stdout + stderr).

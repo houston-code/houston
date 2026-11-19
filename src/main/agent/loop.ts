@@ -3023,7 +3023,33 @@ export async function startRun(
       const ownStop = new AbortController()
       const subSignal = AbortSignal.any([dispatchSignal, ownStop.signal])
       let unregisterStop: (() => void) | undefined
+      // SubagentStart / SubagentStop hooks, matched on the agent's name. They may add
+      // context (to the agent's task, or to the report this run gets back) and nothing
+      // else; their notes show like any hook's.
+      const subagentName = agentName ?? (writable ? 'writable' : 'research')
+      const subagentHook = async (
+        event: 'SubagentStart' | 'SubagentStop',
+        subagent: { name: string; status?: string; report?: string }
+      ): Promise<string | undefined> => {
+        const outcome = await runHooks(
+          hooks,
+          event,
+          { tool: subagentName, input: {}, ...(event === 'SubagentStart' ? { prompt: opts.prompt } : {}), subagent, session: hookSession },
+          workspace,
+          abort.signal
+        )
+        emitHookNotice(outcome)
+        return outcome.additionalContext ? redact(outcome.additionalContext) : undefined
+      }
+      const lifecycleHooks = hooks.some((h) => h.event === 'SubagentStart' || h.event === 'SubagentStop')
+        ? {
+            start: () => subagentHook('SubagentStart', { name: subagentName }),
+            stop: ({ status, report }: { status: string; report: string }) =>
+              subagentHook('SubagentStop', { name: subagentName, status, report })
+          }
+        : undefined
       const result = await runSubAgent({
+        ...(lifecycleHooks ? { lifecycleHooks } : {}),
         // Pinned to the run's configured provider, not the fallback route: a
         // dispatch's `model` override is validated against `req.providerId`'s
         // model list (see resolveDispatchModel), so re-pointing the provider
@@ -4271,8 +4297,19 @@ export async function startRun(
         // Messages folded into the summary *this round* (a count, which is what the
         // renderer shows) — not the absolute tail-start index.
         const compactedNow = newCut - cut
-        summary = text
-        summaryMsgs = buildSummaryMessages(text, memoryTaintSource(messages.slice(0, newCut), (n) => lookupTool(n)?.kind))
+        // PostCompact: the summary is written. A hook sees it and may add context to
+        // it, nothing more; whatever it says, the compaction stands.
+        const postCompact = await runHooks(
+          hooks,
+          'PostCompact',
+          { tool: 'PostCompact', input: {}, summary: text, session: hookSession },
+          workspace,
+          abort.signal
+        )
+        emitHookNotice(postCompact)
+        const landed = postCompact.additionalContext ? `${text}\n\n${redact(postCompact.additionalContext)}` : text
+        summary = landed
+        summaryMsgs = buildSummaryMessages(landed, memoryTaintSource(messages.slice(0, newCut), (n) => lookupTool(n)?.kind))
         anchor = compactionAnchor(messages, newCut, turnStart)
         cut = newCut
         lastInputTokens = 0
