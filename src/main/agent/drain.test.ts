@@ -3,8 +3,15 @@ import type { AgentEvent, StopReason } from '@shared/agent'
 import type { QueuedInputMeta } from '@shared/queue'
 import { addToQueue, clearQueue, listQueue } from './queue'
 import { drainQueue, runAndDrain, startWakeTurn, type DrainIO } from './drain'
-import { hasBackgroundNews, pushBackgroundEvent, resetBackgroundEventsForTest } from './backgroundEvents'
+import {
+  WAKE_DEBOUNCE_MS,
+  hasBackgroundNews,
+  pushBackgroundEvent,
+  resetBackgroundEventsForTest,
+  setWakeHost
+} from './backgroundEvents'
 import { withRewindLock } from './rewindLock'
+import { holdCompaction, releaseCompaction } from './compactionLock'
 
 // Mock the run loop and the conversation store; use the real queue manager so the
 // drain path is exercised end-to-end against actual queue state.
@@ -469,6 +476,30 @@ describe('startWakeTurn', () => {
     expect(h.startRun).not.toHaveBeenCalled()
     expect(h.takeChildReports).not.toHaveBeenCalled()
     expect(hasBackgroundNews('c')).toBe(true)
+  })
+
+  it('starts nothing mid-compaction, and asks for the wake again once it ends', async () => {
+    // A turn started while /compact (or Summarize from here) is writing its summary
+    // makes that summary unwritable, so it was thrown away.
+    vi.useFakeTimers()
+    try {
+      setWakeHost({ enabled: () => true, start: (id) => startWakeTurn(io(), id) })
+      pushBackgroundEvent('c', exit, { wake: false })
+      holdCompaction('c', new AbortController())
+      expect(startWakeTurn(io(), 'c')).toBe(false)
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS * 2)
+      expect(h.startRun).not.toHaveBeenCalled()
+      expect(hasBackgroundNews('c')).toBe(true)
+
+      releaseCompaction('c')
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS * 2)
+      expect(h.startRun).toHaveBeenCalledTimes(1)
+      expect(h.startRun.mock.calls[0]![0]).toMatchObject({ conversationId: 'c', wake: true })
+    } finally {
+      releaseCompaction('c')
+      setWakeHost(null)
+      vi.useRealTimers()
+    }
   })
 
   it('starts nothing for a running chat, a missing chat, or no news', () => {

@@ -7,6 +7,7 @@ import { createProvider } from '../providers'
 import { getProvider } from '../agentHost'
 import { getConversation, peekConversation, setCompaction, setMessages, writeRewind } from '../conversations'
 import { withRewindLock } from './rewindLock'
+import { compactionController, compactionInProgress, holdCompaction, releaseCompaction } from './compactionLock'
 import { log } from '../logger'
 import { activeRunForConversation } from './loop'
 import { memoryTaintSource } from './memoryTools'
@@ -21,18 +22,10 @@ import {
   findCompactionCutByBudget,
   findSummaryChunkCut,
   summarizationSystemPrompt,
+  summaryChunkBudget,
   summaryFits,
   summaryMaxTokens
 } from './compaction'
-
-/**
- * Fraction of the model's context window a single summarization request's input
- * chunk may use. The rest is headroom for the prior summary, the instruction, the
- * system prompt, and the summary output. Keeping each chunk well under the window
- * is what lets `/compact` rescue a conversation that is *already* over the limit.
- */
-const SUMMARY_CHUNK_FRACTION = 0.6
-const DEFAULT_SUMMARY_CHUNK_BUDGET = 100_000
 
 /**
  * Fraction of the context window the kept (verbatim) tail may occupy after a manual
@@ -102,17 +95,11 @@ function timeoutMessage(ms: number): string {
   return `Compaction took longer than ${span} and was stopped. Nothing was changed; try again later.`
 }
 
-/** Compactions in flight, by conversation id, so the UI can cancel one. */
-const inFlight = new Map<string, AbortController>()
-
-/** Whether a compaction of the conversation is in flight. */
-export function compactionInProgress(id: string): boolean {
-  return inFlight.has(id)
-}
+export { compactionInProgress }
 
 /** Cancel the conversation's in-flight compaction. False when there was none. */
 export function cancelCompaction(id: string): boolean {
-  const ctl = inFlight.get(id)
+  const ctl = compactionController(id)
   if (!ctl) return false
   ctl.abort()
   return true
@@ -172,10 +159,10 @@ async function underCompactionGuard(
   opts: CompactOptions,
   work: (signal: AbortSignal) => Promise<CompactResult>
 ): Promise<CompactResult> {
-  if (inFlight.has(id)) return { ok: false, summarized: 0, reason: 'busy', error: COMPACT_ERR_BUSY }
+  if (compactionInProgress(id)) return { ok: false, summarized: 0, reason: 'busy', error: COMPACT_ERR_BUSY }
   if (opts.signal?.aborted) return { ok: false, summarized: 0, reason: 'cancelled', error: COMPACT_ERR_CANCELLED }
   const ctl = new AbortController()
-  inFlight.set(id, ctl)
+  holdCompaction(id, ctl)
   const onOuterAbort = (): void => ctl.abort()
   opts.signal?.addEventListener('abort', onOuterAbort, { once: true })
   const deadlineMs = opts.deadlineMs ?? COMPACT_DEADLINE_MS
@@ -203,7 +190,7 @@ async function underCompactionGuard(
     release()
     clearTimeout(timer)
     opts.signal?.removeEventListener('abort', onOuterAbort)
-    inFlight.delete(id)
+    releaseCompaction(id)
   }
 }
 
@@ -306,7 +293,9 @@ async function summarizeSpan(
   s: SpanSummarizer
 ): Promise<ChatMessage[]> {
   const { cfg, provider, model, window, signal, onRetry, focus } = s
-  const budget = window ? Math.floor(window * SUMMARY_CHUNK_FRACTION) : DEFAULT_SUMMARY_CHUNK_BUDGET
+  // Each chunk stays well under the window (see summaryChunkBudget), which is what
+  // lets `/compact` rescue a conversation that is *already* over the limit.
+  const budget = summaryChunkBudget(window)
   // The summaries are written the way the loop's automatic compaction writes them: by
   // the provider's small model when a chunk's request fits its window, with the chat's
   // own model taking over when it doesn't, or when the small model fails.

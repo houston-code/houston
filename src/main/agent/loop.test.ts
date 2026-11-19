@@ -3802,7 +3802,15 @@ describe('context management inside a long turn', () => {
    */
   function longTurn(
     reads: number,
-    opts: { limitChars?: number; summaryStop?: 'end_turn' | 'max_tokens'; tag?: string } = {}
+    opts: {
+      limitChars?: number
+      summaryStop?: 'end_turn' | 'max_tokens'
+      tag?: string
+      /** Refuse any summary request over this many characters, as an overflowing window does. */
+      summaryLimitChars?: number
+      /** Fail every summary request with this (non-retryable) error. */
+      summaryError?: string
+    } = {}
   ): LongTurn {
     const t: LongTurn = { provider: null as unknown as Provider, sends: [], rejected: [], summaries: [], summaryCaps: [] }
     t.provider = {
@@ -3811,6 +3819,14 @@ describe('context management inside a long turn', () => {
         if (req.maxTokens != null) {
           t.summaries.push(req.messages)
           t.summaryCaps.push(req.maxTokens)
+          if (opts.summaryError) {
+            yield { type: 'error', message: opts.summaryError, status: 400 }
+            return
+          }
+          if (chars(req.messages) > (opts.summaryLimitChars ?? Infinity)) {
+            yield { type: 'error', message: 'prompt is too long: 370000 tokens > 200000 maximum', status: 400 }
+            return
+          }
           yield { type: 'text', text: `SUMMARY ${t.summaries.length}` }
           yield { type: 'done', stopReason: opts.summaryStop ?? 'end_turn' }
           return
@@ -4177,6 +4193,66 @@ describe('context management inside a long turn', () => {
     expect(last.some((m) => m.content.startsWith('[earlier ')) || t.summaries.length > 0).toBe(true)
     expect(Math.ceil(chars(last) / 4)).toBeLessThan(100_000)
     expectValidWindow(last)
+  })
+
+  it('summarizes what the window carried, not the reads eviction already stubbed', async () => {
+    // Eviction keeps the window small long before summarizing is needed, so by the
+    // time a summary is, the raw span holds every stale read in full: far more than
+    // the summarizer accepts. The summary must be written from the stubbed view.
+    const overhead = await fixedOverheadTokens()
+    h.probeTools = [bigReadFile(6_000)]
+    h.settings.compactionThreshold = overhead + 10_000
+    const t = longTurn(40, { summaryLimitChars: 60_000 })
+    const r = await run({ provider: t.provider, userText: REQUEST, policy: 'full-auto' })
+
+    expect(types(r).at(-1)).toBe('done')
+    expect(types(r)).toContain('compaction')
+    expect(t.summaries.length).toBeGreaterThan(0)
+    for (const req of t.summaries) {
+      expect(chars(req)).toBeLessThanOrEqual(60_000)
+      expectValidWindow(req)
+    }
+    // The stale reads went in as their stubs.
+    expect(t.summaries[0].some((m) => m.role === 'tool' && m.content.startsWith('[earlier read_file result on src/f1.ts'))).toBe(true)
+    expect(r.events.some((e) => e.type === 'notice' && e.message.startsWith("Couldn't summarize"))).toBe(false)
+  })
+
+  it('splits a forced summary of one long turn into chunks the model accepts', async () => {
+    // A 10K-token window: the overflow path summarizes a span bigger than the chunk
+    // budget, inside one turn with no user boundary to split at. Each chunk must fit,
+    // and keep every tool call next to its result.
+    h.providerModels = [{ id: 'claude-test', caps: { contextWindow: 10_000 } }]
+    try {
+      h.probeTools = [bigReadFile(20_000)]
+      const t = longTurn(8, { limitChars: 70_000, summaryLimitChars: 40_000 })
+      const r = await run({ provider: t.provider, userText: REQUEST, policy: 'full-auto' })
+      expect(types(r)).toContain('compaction')
+      expect(types(r).at(-1)).toBe('done')
+      expect(t.summaries.length).toBeGreaterThan(1)
+      for (const req of t.summaries) {
+        expect(chars(req)).toBeLessThanOrEqual(40_000)
+        expectValidWindow(req)
+      }
+    } finally {
+      h.providerModels = []
+    }
+  })
+
+  it('says when a compaction fails, and waits for the head to grow before retrying', async () => {
+    const overhead = await fixedOverheadTokens()
+    h.probeTools = [bigReadFile(6_000)]
+    h.settings.compactionThreshold = overhead + 10_000
+    const t = longTurn(40, { summaryError: 'invalid_request_error: summaries are unavailable' })
+    const r = await run({ provider: t.provider, userText: REQUEST, policy: 'full-auto' })
+
+    expect(types(r).at(-1)).toBe('done')
+    expect(types(r)).not.toContain('compaction')
+    const notices = r.events.filter((e) => e.type === 'notice' && e.message.startsWith("Couldn't summarize"))
+    expect(notices.length).toBeGreaterThan(0)
+    expect((notices[0] as { message: string }).message).toContain('summaries are unavailable')
+    // Far fewer attempts than steps over the threshold: one per real growth of the head.
+    expect(t.summaries.length).toBe(notices.length)
+    expect(t.summaries.length).toBeLessThan(10)
   })
 
   it('treats a summary cut off at its output cap as a failed compaction', async () => {
