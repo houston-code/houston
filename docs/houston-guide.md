@@ -2570,7 +2570,8 @@ The sandbox can read your whole filesystem, so a few controls hold even in full 
 - **Reading a credential file** (a `.env`, a private key, `.aws/credentials`, and the
   like) asks, even though reads otherwise never do. "Allow for this chat" on that prompt
   stops it asking about credential reads for the rest of the conversation, and an
-  `allow` permission rule opts a path in permanently.
+  `allow` permission rule opts a path in permanently. A file reached through a symlink
+  counts by where the link leads, so reading `notes.txt` that points at `.env` asks too.
 - **Changing a credential file** asks too: a file edit that writes one, or a shell
   command that redirects into, copies over, edits in place, or removes one
   (`> .env`, `cp .env.example .env`, `sed -i … .env`, `rm .env`). Templates such as
@@ -2609,8 +2610,10 @@ stops) Houston checks for those and nothing else:
   says how to remove it by hand later.
 - **Headless runs and runs nobody is watching** undo the change and say so, since
   nobody can approve it.
-- **File edits** to `.git/hooks/…`, `.git/config`, or similar ask first, like
-  credential files do.
+- **File edits** to `.git/hooks/…`, `.git/config`, or similar ask every time, like
+  project control files do: full auto and "Allow for this chat" don't cover them, only
+  an `allow` rule for the path. That holds through a symlink too, so editing `g/config`
+  where `g` points at `.git` asks.
 
 The check runs after the command, so a program that a shell prompt ran in the moment
 between the command finishing and the question appearing has already run. A background

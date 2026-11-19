@@ -1116,13 +1116,13 @@ async function runSubAgentSteps(opts: SubAgentOptions): Promise<string> {
             // The dispatcher's permission rules and sensitive-read prompt, the same
             // checks the main loop runs before any call of its own.
             output = await opts.gateLocal(call.name, tool.kind, call.arguments, runLocal)
-          } else if (isSensitiveRead(tool.kind, call.arguments)) {
+          } else if (isSensitiveRead(tool.kind, call.arguments, roots)) {
             output =
               `Reading ${String(call.arguments.path)} needs the user's approval because it looks like a ` +
               'credential or secret file, and this subagent cannot ask for it. Do not retry; note in ' +
               'your report that the main agent can read it with approval if it is needed.'
           } else if (
-            isSensitiveWrite(tool.kind, call.name, call.arguments) ||
+            isSensitiveWrite(tool.kind, call.name, call.arguments, roots) ||
             isProtectedWrite(tool.kind, call.name, call.arguments, roots)
           ) {
             output =

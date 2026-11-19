@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs'
+import { readlinkSync, realpathSync } from 'node:fs'
 import { basename as pathBasename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { parsePatch } from './apply-patch'
 import type { ToolKind } from './tools'
@@ -129,14 +129,70 @@ export function isGitExecPath(path: string): boolean {
 }
 
 /**
- * Whether a tool call is a read of a credential / secret file: a read-kind call
- * whose `path` argument {@link isSensitivePath}. The one definition shared by the
- * loop's approval gate, its parallel-read scheduler, and the subagent gate, so no
- * path can judge the same call benign that another would have prompted for.
+ * A path with the Windows-only respellings of one file removed from each segment: a
+ * data stream suffix (`config::$DATA`, `.git::$INDEX_ALLOCATION`) and trailing dots
+ * and spaces (`.env.`), each of which Windows opens as the plain name. Only for
+ * matching a name against the lists here, never for opening a file: elsewhere those
+ * spellings are different files, and over-matching one only asks.
  */
-export function isSensitiveRead(kind: ToolKind, args: Record<string, unknown>): boolean {
+const STREAM_SUFFIX = /:[^:]*:\$[a-z_]+$|:\$[a-z_]+$/i
+function plainSpelling(path: string): string {
+  return path
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((seg) => (/^\.+$/.test(seg) ? seg : seg.replace(STREAM_SUFFIX, '').replace(/[. ]+$/, '') || seg))
+    .join('/')
+}
+
+/**
+ * The real location of `path` (as a tool names it: relative to the first root, or
+ * absolute): symlinks resolved, a dangling one followed, Windows 8.3 short names
+ * expanded. Null when a relative path has no root to anchor it, or it can't be
+ * resolved (a link loop).
+ */
+function realLocationOf(path: string, roots: readonly string[]): string | null {
+  const spelled = process.platform === 'win32' ? plainSpelling(path) : path
+  if (isAbsolute(spelled)) return realLocation(resolve(spelled))
+  return roots.length === 0 ? null : realLocation(resolve(roots[0]!, spelled))
+}
+
+/**
+ * {@link isSensitivePath}, judged both as written and at the path's real location, so
+ * a link `notes.txt -> .env` (a cloned repository can carry one) is a credential file
+ * too. The real location is read relative to the innermost root that holds it, as a
+ * written path is, and as an absolute path outside every root.
+ */
+export function isSensitivePathAt(path: string, roots: readonly string[]): boolean {
+  if (!path) return false
+  if (isSensitivePath(path) || isSensitivePath(plainSpelling(path))) return true
+  const real = realLocationOf(path, roots)
+  if (real === null) return false
+  const realRoots = roots.map((r) => realLocation(resolve(r)) ?? resolve(r))
+  return isSensitivePath(relativeToInnermostRoot(real, realRoots) ?? real)
+}
+
+/**
+ * {@link isGitExecPath}, judged both as written and at the path's real location (as
+ * an absolute path, since a linked worktree's git dirs are roots of their own), so a
+ * link `g -> .git` doesn't hide `g/config`, nor a Windows short name `GIT~1\config`.
+ */
+export function isGitExecPathAt(path: string, roots: readonly string[]): boolean {
+  if (!path) return false
+  if (isGitExecPath(path) || isGitExecPath(plainSpelling(path))) return true
+  const real = realLocationOf(path, roots)
+  return real !== null && isGitExecPath(real)
+}
+
+/**
+ * Whether a tool call is a read of a credential / secret file: a read-kind call
+ * whose `path` argument {@link isSensitivePathAt} (as written or where it really
+ * leads). The one definition shared by the loop's approval gate, its parallel-read
+ * scheduler, the subagent gate, and the side chat's, so no path can judge the same
+ * call benign that another would have prompted for.
+ */
+export function isSensitiveRead(kind: ToolKind, args: Record<string, unknown>, roots: readonly string[]): boolean {
   if (kind !== 'read') return false
-  if (typeof args.path === 'string' && isSensitivePath(args.path)) return true
+  if (typeof args.path === 'string' && isSensitivePathAt(args.path, roots)) return true
   // show_images reads one path per entry. It only attaches files that sniff as
   // images, but a path naming a credential store still prompts, as read_file does.
   return (
@@ -144,23 +200,28 @@ export function isSensitiveRead(kind: ToolKind, args: Record<string, unknown>): 
     args.images.some((img) => {
       if (typeof img !== 'object' || img === null) return false
       const o = img as Record<string, unknown>
-      return [o.path, o.compareWith].some((p) => typeof p === 'string' && isSensitivePath(p))
+      return [o.path, o.compareWith].some((p) => typeof p === 'string' && isSensitivePathAt(p, roots))
     })
   )
 }
 
 /**
  * Whether a file-writing tool call targets a credential / secret file (see
- * {@link isSensitivePath}) or git's exec-capable data (see {@link isGitExecPath}):
- * `path` for the single-file tools, every added, updated, deleted, or moved-to path
- * for `apply_patch`. Writes to these files prompt even in full-auto: they are rarely
- * edited, overwriting a secret (a build check that resets `.env`, a write-back of a
- * masked value) silently destroys something only the user can restore, and a hook or
- * git setting runs code outside the sandbox later. A patch that doesn't parse names
- * no targets; the tool itself rejects it.
+ * {@link isSensitivePathAt}) or git's exec-capable data (see {@link isGitExecPathAt}),
+ * as written or where a symlink leads: `path` for the single-file tools, every added,
+ * updated, deleted, or moved-to path for `apply_patch`. Writes to these files prompt
+ * even in full-auto: they are rarely edited, and overwriting a secret (a build check
+ * that resets `.env`, a write-back of a masked value) silently destroys something
+ * only the user can restore. Git's exec-capable data is a protected write too (see
+ * {@link writesProtectedPath}), so a chat-wide grant doesn't clear it. A patch that
+ * doesn't parse names no targets; the tool itself rejects it.
  */
-export function writesSensitivePath(toolName: string, args: Record<string, unknown>): boolean {
-  const sensitive = (p: string): boolean => isSensitivePath(p) || isGitExecPath(p)
+export function writesSensitivePath(
+  toolName: string,
+  args: Record<string, unknown>,
+  roots: readonly string[]
+): boolean {
+  const sensitive = (p: string): boolean => isSensitivePathAt(p, roots) || isGitExecPathAt(p, roots)
   if (toolName === 'apply_patch') {
     if (typeof args.patch !== 'string') return false
     try {
@@ -219,8 +280,7 @@ const PROTECTED_FILES = new Set(['.envrc', '.mcp.json'])
  */
 export function isProtectedControlRelPath(rel: string): boolean {
   if (!rel) return false
-  const segments = rel
-    .replace(/\\/g, '/')
+  const segments = plainSpelling(rel)
     .toLowerCase()
     .split('/')
     .filter((s) => s && s !== '.')
@@ -261,20 +321,34 @@ function realpathLong(p: string): string {
   }
 }
 
+/** Dangling links {@link realLocation} follows by hand before giving up (a loop). */
+const MAX_DANGLING_HOPS = 40
+
 /**
  * The real location of `abs`: its deepest existing ancestor realpath'd with the
- * not-yet-existing rest re-attached (a write may create the file). Null when it
- * can't be resolved for another reason (a symlink loop).
+ * not-yet-existing rest re-attached (a write may create the file). A dangling link on
+ * the way is followed to where it points, since a write through it creates the
+ * target. Null when it can't be resolved for another reason (a symlink loop).
  */
-function realLocation(abs: string): string | null {
+function realLocation(abs: string, hops = 0): string | null {
   let dir = abs
   const tail: string[] = []
   for (;;) {
     try {
-      return join(realpathLong(dir), ...tail.reverse())
+      return join(realpathLong(dir), ...[...tail].reverse())
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code
       if (code !== 'ENOENT' && code !== 'ENOTDIR') return null
+      let target: string | null = null
+      try {
+        target = readlinkSync(dir)
+      } catch {
+        // not a link (or gone): keep walking up
+      }
+      if (target !== null) {
+        if (hops >= MAX_DANGLING_HOPS) return null
+        return realLocation(join(resolve(dirname(dir), target), ...[...tail].reverse()), hops + 1)
+      }
       const parent = dirname(dir)
       if (parent === dir) return null
       tail.push(pathBasename(dir))
@@ -310,16 +384,21 @@ export function isProtectedControlPath(path: string, roots: string[]): boolean {
 
 /**
  * Whether a file-writing tool call targets an in-project control file (see
- * {@link isProtectedControlPath}): `path` for the single-file tools, every added,
- * updated, deleted, or moved-to path for `apply_patch`. A patch that doesn't parse
- * names no targets; the tool itself rejects it.
+ * {@link isProtectedControlPath}) or git's exec-capable data (a hook, the repo's
+ * config, a `commondir` redirect, the `.git` pointer; see {@link isGitExecPathAt}), as
+ * written or where a symlink leads: `path` for the single-file tools, every added,
+ * updated, deleted, or moved-to path for `apply_patch`. Like a control file, a git
+ * hook or setting runs code outside the sandbox later, so a chat-wide grant doesn't
+ * cover the write; only an `allow` rule for the path does. A shell command's writes
+ * into `.git` are the git guard's to catch (see gitGuard.ts), so this is file tools
+ * only. A patch that doesn't parse names no targets; the tool itself rejects it.
  */
 export function writesProtectedPath(
   toolName: string,
   args: Record<string, unknown>,
   roots: string[]
 ): boolean {
-  const hit = (p: string): boolean => isProtectedControlPath(p, roots)
+  const hit = (p: string): boolean => isProtectedControlPath(p, roots) || isGitExecPathAt(p, roots)
   if (toolName === 'apply_patch') {
     if (typeof args.patch !== 'string') return false
     try {

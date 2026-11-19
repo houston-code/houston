@@ -152,9 +152,14 @@ a parse is reused only for a file with those same bytes, by SHA-256) or to list 
 entries when the index changed (through the hardened runner).
 
 Separately, the file tools treat `.git/hooks/…`, `.git/config`, `config.worktree`,
-`commondir`, and a `.git` pointer file as sensitive writes (`isGitExecPath` in
-[`src/main/agent/sensitive-paths.ts`](../src/main/agent/sensitive-paths.ts)), so they ask
-even in full auto.
+`commondir`, and a `.git` pointer file as protected writes (`isGitExecPathAt` in
+[`src/main/agent/sensitive-paths.ts`](../src/main/agent/sensitive-paths.ts)), like the
+project's control files: they ask in every mode, full auto included, and "Allow for this
+chat" doesn't cover them; only an `allow` rule for the path does. The path is judged as
+written and at its real location (symlinks resolved, a dangling one followed, Windows
+8.3 short names expanded, `::$DATA` stream suffixes and trailing dots ignored), so a link
+`g -> .git` that a cloned repository carries doesn't turn `g/config` into an ordinary
+file. Credential files get the same real-location check for reads and writes.
 
 ### Options weighed
 
