@@ -160,7 +160,11 @@ export function parseProjectMcpServers(raw: unknown): McpServerConfig[] {
       ...(typeof v.name === 'string' ? { name: v.name } : {}),
       ...(transport ? { transport } : {}),
       command,
-      ...(Array.isArray(v.args) && v.args.every((a) => typeof a === 'string') ? { args: v.args as string[] } : {}),
+      // Numbers and booleans are written as text (`"--port", 3000`); dropping them would
+      // start the server with none of its arguments.
+      ...(Array.isArray(v.args) && v.args.every((a) => typeof a === 'string' || typeof a === 'number' || typeof a === 'boolean')
+        ? { args: v.args.map((a) => String(a)) }
+        : {}),
       ...(url ? { url } : {}),
       ...(stringMap(v.headers) ? { headers: stringMap(v.headers) } : {}),
       ...(stringMap(v.env) ? { env: stringMap(v.env) } : {}),

@@ -3906,7 +3906,9 @@ connected (after the chat's first turn, or `/mcp reconnect`).
   (`<required> [optional]`): words fill them in order, and the last takes any words
   left over, so `/mcp__docs__summarize the release notes` passes the whole phrase.
   `name=value` sets one by name; quote a value with spaces (`tone="very formal"`). A
-  missing required argument says what the command takes.
+  quote counts only at the start of a word or right after `name=`, so an apostrophe
+  (`doesn't`) stays part of its word. A missing required argument says what the
+  command takes.
 - **Names** are cleaned: anything in a prompt's name other than letters, digits, `_`
   and `-` becomes `_`.
 - The prompt the server returns is sent as your turn, shown as the command you ran.
@@ -4742,6 +4744,8 @@ What it looks for, and where a copy goes:
 `~/.claude/CLAUDE.md` is imported the way its own notice does it: one
 `@~/.claude/CLAUDE.md` line in `~/.houston/AGENTS.md`, so later edits to it apply too.
 Houston already reads a project's `CLAUDE.md`, so that one isn't listed.
+A server in a Gemini CLI `settings.json` is read as Gemini CLI reads it: `url` is an
+SSE server and `httpUrl` a streamable HTTP one.
 
 - **Nothing is selected until you pick it.** Tick what you want and choose **Import
   selected**; **Select all new** ticks everything not yet imported.

@@ -335,6 +335,21 @@ describe('htmlToMarkdown fixes', () => {
     expect(md(cols).split('\n')).toEqual(['| Name | | Age |', '| --- | --- | --- |', '| Ada | Lovelace | 36 |'])
   })
 
+  it('restores every code block on a line, not only the first', () => {
+    const out = md('<h2>Run <pre>a</pre> and <pre>b</pre></h2>')
+    expect(out).not.toContain('\u0002')
+    expect(out).not.toContain('\u0003')
+    expect(out).toContain('a')
+    expect(out).toContain('b')
+  })
+
+  it("keeps a table's caption as a line above it", () => {
+    const html = '<table><caption>Exit <b>codes</b></caption><tr><th>Code</th><th>Meaning</th></tr><tr><td>0</td><td>ok</td></tr></table>'
+    expect(md(html).split('\n')).toEqual(['Exit **codes**', '', '| Code | Meaning |', '| --- | --- |', '| 0 | ok |'])
+    // A layout table keeps it too.
+    expect(md('<table><caption>Note</caption><tr><td>Just text</td></tr></table>')).toBe('Note\n\nJust text')
+  })
+
   it('resolves relative links against <base href>', () => {
     const page = 'https://example.com/docs/guide/intro'
     const abs = '<head><base href="https://example.com/"></head><body><p><a href="api/foo.html">foo</a></p></body>'

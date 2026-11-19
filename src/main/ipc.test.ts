@@ -1050,6 +1050,15 @@ describe('custom command preparation IPC', () => {
     deleteConversation(conv.id)
   })
 
+  it('runs a custom command whose name starts with mcp__ as that command, not as an MCP prompt', async () => {
+    writeFileSync(join(ws, '.houston/commands/mcp__notes.md'), '---\ndescription: Notes\neffort: low\n---\nTake notes on $ARGUMENTS')
+    const res = await prepare(ws, 'mcp__notes', 'the call')
+    if (!res.ok) throw new Error(res.error)
+    expect(res.turn.text).toBe('Take notes on the call')
+    // A prompt name no custom command takes still reads as a missing MCP prompt.
+    expect(await prepare(ws, 'mcp__gone__x')).toEqual({ ok: false, error: "/mcp__gone__x isn't offered by a connected MCP server any more." })
+  })
+
   it("runs a worktree chat's first command on the options prepared for its repository", async () => {
     const res = await prepare(ws, 'quick')
     if (!res.ok) throw new Error(res.error)

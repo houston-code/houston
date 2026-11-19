@@ -123,6 +123,15 @@ describe('scanImportables', () => {
     expect(scan.candidates[1].note).toBe('Also found in ~/.cursor/mcp.json')
   })
 
+  it("reads a Gemini settings file's url as an SSE server", async () => {
+    put(home, '.gemini/settings.json', JSON.stringify({ mcpServers: { feed: { url: 'https://h/sse' }, api: { httpUrl: 'https://h/mcp' } } }))
+    const scan = await scanImportables(deps())
+    expect(scan.candidates.map((c) => [c.name, c.detail])).toEqual([
+      ['feed', 'sse https://h/sse'],
+      ['api', 'http https://h/mcp']
+    ])
+  })
+
   it('skips project files and folders that link outside the project', async () => {
     const secret = put(home, 'secret.md', 'private')
     symlinkSync(secret, join(ws, 'GEMINI.md'))

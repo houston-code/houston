@@ -264,7 +264,9 @@ async function serversIn(path: string, within: string | null, workspace: string 
   } catch {
     return []
   }
-  const servers = mcpServersFromJson(raw).servers
+  // Gemini CLI's settings give `url` and `httpUrl` meanings of their own (see McpJsonDialect).
+  const dialect = path.endsWith(join('.gemini', 'settings.json')) ? 'gemini' : undefined
+  const servers = mcpServersFromJson(raw, dialect).servers
   // A file that also keeps per-project servers: add the open project's.
   if (workspace && raw && typeof raw === 'object') {
     const projects = (raw as { projects?: unknown }).projects
@@ -277,7 +279,7 @@ async function serversIn(path: string, within: string | null, workspace: string 
       }
       const entry = (projects as Record<string, unknown>)[workspace] ?? (projects as Record<string, unknown>)[real]
       if (entry && typeof entry === 'object' && 'mcpServers' in entry) {
-        for (const s of mcpServersFromJson({ mcpServers: (entry as { mcpServers: unknown }).mcpServers }).servers) {
+        for (const s of mcpServersFromJson({ mcpServers: (entry as { mcpServers: unknown }).mcpServers }, dialect).servers) {
           if (!servers.some((x) => x.id === s.id)) servers.push(s)
         }
       }

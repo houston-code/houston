@@ -1118,6 +1118,15 @@ describe('ACP server: slash commands, config options and session info', () => {
     await h.end()
   })
 
+  it("answers a prompt command whose server isn't connected instead of sending it to the model", async () => {
+    const h = harness({ run: done, deps: { commands: async () => [], mcpPrompt: () => async () => 'x' } })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('/mcp__gone__summarize the notes') })
+    expect(h.loop.requests).toHaveLength(0)
+    expect(replies(h, sessionId).at(-1)).toBe("/mcp__gone__summarize isn't offered by a connected MCP server.")
+    await h.end()
+  })
+
   it('offers the skills after the commands and runs one as an invoked turn', async () => {
     const skill = (name: string, description: string, extra: Partial<Skill> = {}): Skill => ({
       name,

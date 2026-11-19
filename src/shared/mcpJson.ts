@@ -37,19 +37,30 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
 }
 
+/**
+ * Whose file a server map came from, where its fields mean something of their own:
+ * Gemini CLI settings name an SSE endpoint `url` and a streamable HTTP one `httpUrl`.
+ * Without one, any of the URL fields is streamable HTTP unless `type` says SSE.
+ */
+export type McpJsonDialect = 'gemini'
+
 /** One entry of a server map (or array) as a config, or a reason it can't be. */
-export function mcpServerFromJson(name: string, raw: unknown): McpServerConfig | string {
+export function mcpServerFromJson(name: string, raw: unknown, dialect?: McpJsonDialect): McpServerConfig | string {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'not an object'
   const v = raw as Record<string, unknown>
   const id = sanitizeServerId(name)
   if (!id) return 'needs a name made of letters, digits, - or _'
   const command = str(v.command)
   // Remote endpoints appear as `url`, `serverUrl` or `httpUrl` depending on who wrote the file.
-  const url = str(v.url) || str(v.serverUrl) || str(v.httpUrl)
+  // Gemini CLI prefers its `httpUrl` (streamable HTTP) over its `url` (SSE).
+  const geminiHttp = dialect === 'gemini' && !!str(v.httpUrl)
+  const url = geminiHttp ? str(v.httpUrl) : str(v.url) || str(v.serverUrl) || str(v.httpUrl)
   if (!command && !url) return 'needs a "command" or a "url"'
   if (url && !command && !/^https?:\/\//i.test(url)) return 'the url must start with http:// or https://'
   const type = str(v.type ?? v.transport).toLowerCase()
-  const transport: McpServerConfig['transport'] = command ? 'stdio' : type === 'sse' ? 'sse' : 'http'
+  const remote: McpServerConfig['transport'] =
+    type === 'sse' ? 'sse' : type === 'http' || type === 'streamable-http' ? 'http' : dialect === 'gemini' && !geminiHttp ? 'sse' : 'http'
+  const transport: McpServerConfig['transport'] = command ? 'stdio' : remote
   // Numbers and booleans are written as text (`"--port", 3000`), as `env` values are;
   // dropping one would start the server with a flag and no value.
   const rawArgs: unknown[] = command && Array.isArray(v.args) ? v.args : []
@@ -95,7 +106,7 @@ function serverEntries(raw: unknown): Array<[string, unknown]> | null {
 }
 
 /** Servers from an already-parsed JSON value. Duplicate ids keep the first. */
-export function mcpServersFromJson(raw: unknown): McpJsonResult {
+export function mcpServersFromJson(raw: unknown, dialect?: McpJsonDialect): McpJsonResult {
   const entries = serverEntries(raw)
   if (!entries) return { servers: [], problems: [] }
   const servers: McpServerConfig[] = []
@@ -105,7 +116,7 @@ export function mcpServersFromJson(raw: unknown): McpJsonResult {
       problems.push(`only the first ${MAX_MCP_JSON_SERVERS} servers are read`)
       break
     }
-    const parsed = mcpServerFromJson(name, value)
+    const parsed = mcpServerFromJson(name, value, dialect)
     if (typeof parsed === 'string') problems.push(`${name}: ${parsed}`)
     else if (servers.some((s) => s.id === parsed.id)) problems.push(`${name}: the name "${parsed.id}" is used twice`)
     else servers.push(parsed)
