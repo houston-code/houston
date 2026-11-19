@@ -7,6 +7,7 @@ import { createProvider } from '../providers'
 import { getProvider } from '../agentHost'
 import { getConversation, peekConversation, setCompaction, setMessages, writeRewind } from '../conversations'
 import { withRewindLock } from './rewindLock'
+import { compactionController, compactionInProgress, holdCompaction, releaseCompaction } from './compactionLock'
 import { log } from '../logger'
 import { activeRunForConversation } from './loop'
 import { memoryTaintSource } from './memoryTools'
@@ -94,17 +95,11 @@ function timeoutMessage(ms: number): string {
   return `Compaction took longer than ${span} and was stopped. Nothing was changed; try again later.`
 }
 
-/** Compactions in flight, by conversation id, so the UI can cancel one. */
-const inFlight = new Map<string, AbortController>()
-
-/** Whether a compaction of the conversation is in flight. */
-export function compactionInProgress(id: string): boolean {
-  return inFlight.has(id)
-}
+export { compactionInProgress }
 
 /** Cancel the conversation's in-flight compaction. False when there was none. */
 export function cancelCompaction(id: string): boolean {
-  const ctl = inFlight.get(id)
+  const ctl = compactionController(id)
   if (!ctl) return false
   ctl.abort()
   return true
@@ -164,10 +159,10 @@ async function underCompactionGuard(
   opts: CompactOptions,
   work: (signal: AbortSignal) => Promise<CompactResult>
 ): Promise<CompactResult> {
-  if (inFlight.has(id)) return { ok: false, summarized: 0, reason: 'busy', error: COMPACT_ERR_BUSY }
+  if (compactionInProgress(id)) return { ok: false, summarized: 0, reason: 'busy', error: COMPACT_ERR_BUSY }
   if (opts.signal?.aborted) return { ok: false, summarized: 0, reason: 'cancelled', error: COMPACT_ERR_CANCELLED }
   const ctl = new AbortController()
-  inFlight.set(id, ctl)
+  holdCompaction(id, ctl)
   const onOuterAbort = (): void => ctl.abort()
   opts.signal?.addEventListener('abort', onOuterAbort, { once: true })
   const deadlineMs = opts.deadlineMs ?? COMPACT_DEADLINE_MS
@@ -195,7 +190,7 @@ async function underCompactionGuard(
     release()
     clearTimeout(timer)
     opts.signal?.removeEventListener('abort', onOuterAbort)
-    inFlight.delete(id)
+    releaseCompaction(id)
   }
 }
 

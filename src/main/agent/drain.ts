@@ -10,6 +10,7 @@ import { getSettings } from '../agentHost'
 import { activeRunForConversation } from './loop'
 import { rewindInProgress } from './rewindLock'
 import { conversationRunningElsewhere } from '../runMarkers'
+import { compactionInProgress } from './compactionLock'
 import { clearChildReportFlag, takeBackgroundEvents, wakeNote } from './backgroundEvents'
 
 /** How the run orchestrator talks back to the renderer (provided by the IPC layer). */
@@ -194,10 +195,12 @@ export function startWakeTurn(io: DrainIO, conversationId: string): boolean {
   // Mid-rewind the log is about to be replaced: the news waits (the rewind's end asks
   // for a wake again) rather than being taken into a turn that can't start. Likewise
   // while another Houston process runs the chat: its saves would overwrite the note, and
-  // startRun would refuse the turn, so the news stays held rather than lost.
+  // startRun would refuse the turn, so the news stays held rather than lost. And
+  // mid-compaction: a turn started now would make the finished summary unwritable.
   if (
     activeRunForConversation(conversationId) ||
     rewindInProgress(conversationId) ||
+    compactionInProgress(conversationId) ||
     conversationRunningElsewhere(conversationId) !== null
   )
     return false
