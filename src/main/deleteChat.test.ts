@@ -10,7 +10,7 @@ const wt: ConversationWorktree = { path: '/repo/.houston/worktrees/feat', branch
 function fake(
   over: Partial<DeleteChatDeps> & { conv?: { title?: string; worktree?: ConversationWorktree } | null } = {}
 ) {
-  const calls = { deleted: [] as string[], removed: [] as ConversationWorktree[] }
+  const calls = { deleted: [] as string[], removed: [] as ConversationWorktree[], order: [] as string[] }
   const { conv, ...rest } = over
   const deps: DeleteChatDeps = {
     peek: () => (conv === undefined ? { title: 'Feat', worktree: wt } : conv),
@@ -18,10 +18,17 @@ function fake(
     isDisposable: async () => false,
     removeWorktree: async (w) => {
       calls.removed.push(w)
+      calls.order.push('remove')
       return { removed: true, branchDeleted: true }
+    },
+    stopAndWait: async () => {
+      // Shells take a moment to end after they are signalled.
+      await new Promise((r) => setTimeout(r, 5))
+      calls.order.push('stopped')
     },
     stopAndDelete: (id) => {
       calls.deleted.push(id)
+      calls.order.push('deleted')
     },
     ...rest
   }
@@ -70,6 +77,20 @@ describe('deleteChat', () => {
     const res = await deleteChat('c', plan, true, deps)
     expect(res.worktree).toEqual({ removed: true, branchDeleted: true })
     expect(calls.removed).toEqual([wt])
+  })
+
+  it("waits for the chat's shells to end before removing the worktree", async () => {
+    const { deps, calls } = fake()
+    const plan = await planChatDelete('c', deps)
+    await deleteChat('c', plan, true, deps)
+    expect(calls.order).toEqual(['stopped', 'deleted', 'remove'])
+  })
+
+  it('does not wait for shells when the worktree stays', async () => {
+    const { deps, calls } = fake()
+    const plan = await planChatDelete('c', deps)
+    await deleteChat('c', plan, false, deps)
+    expect(calls.order).toEqual(['deleted'])
   })
 
   it('never removes a shared worktree, even when asked', async () => {

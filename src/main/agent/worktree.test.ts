@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync, mkdirSync, existsSync, rmSync, symlinkSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
 import { runGitCapture, runReadGit } from './gitRead'
+import { lspManager } from './lsp/manager'
 import {
   autoBranchFor,
   houstonWorktreeHome,
@@ -24,8 +25,11 @@ function fakeGit(
 ): GitRun {
   return async (args, cwd) => {
     calls.push(args)
-    const key = `${args[0]} ${args[1] ?? ''}`.trim()
-    const h = handlers[key] ?? handlers[args[0]]
+    // Leading `-c key=value` pairs are options, not the command.
+    let i = 0
+    while (args[i] === '-c') i += 2
+    const key = `${args[i]} ${args[i + 1] ?? ''}`.trim()
+    const h = handlers[key] ?? handlers[args[i]!]
     if (!h) throw new Error(`unexpected git: ${args.join(' ')}`)
     return h(args, cwd)
   }
@@ -413,26 +417,36 @@ describe('createWorktree with planted links', () => {
 
 describe('removeWorktree', () => {
   const wt = { path: '/repo/.houston/worktrees/x', branch: 'feat/x', repoRoot: '/repo' }
+  const SHA = 'b'.repeat(40)
+  /** The worktree's HEAD, which is on its branch. */
+  const headOnBranch = {
+    'rev-parse --verify': (): string => `${SHA}\n`,
+    'merge-base --is-ancestor': (): string => ''
+  }
+  const REMOVE = ['-c', 'status.showUntrackedFiles=all', 'worktree', 'remove', wt.path]
 
   it('removes a clean worktree and its merged branch', async () => {
     const calls: string[][] = []
-    const exec = fakeGit({ 'worktree remove': () => '', 'branch -d': () => '' }, calls)
+    const exec = fakeGit({ ...headOnBranch, 'worktree remove': () => '', 'branch -d': () => '' }, calls)
     const res = await removeWorktree(wt, {}, exec)
     expect(res).toEqual({ removed: true, branchDeleted: true, message: undefined })
-    expect(calls).toContainEqual(['worktree', 'remove', wt.path])
+    expect(calls).toContainEqual(REMOVE)
     expect(calls).toContainEqual(['branch', '-d', 'feat/x'])
   })
 
   it('decides the branch on its own when asked: force-delete it, or keep unmerged commits under force', async () => {
     const calls: string[][] = []
-    const exec = fakeGit({ 'worktree remove': () => '', 'branch -D': () => '', 'branch -d': () => '' }, calls)
+    const exec = fakeGit(
+      { ...headOnBranch, 'worktree remove': () => '', 'branch -D': () => '', 'branch -d': () => '' },
+      calls
+    )
     await removeWorktree(wt, { branch: 'force' }, exec)
     // The checkout removal stays safe (no --force), the branch goes regardless.
-    expect(calls).toContainEqual(['worktree', 'remove', wt.path])
+    expect(calls).toContainEqual(REMOVE)
     expect(calls).toContainEqual(['branch', '-D', 'feat/x'])
     calls.length = 0
     await removeWorktree(wt, { force: true, branch: 'safe' }, exec)
-    expect(calls).toContainEqual(['worktree', 'remove', wt.path, '--force'])
+    expect(calls).toContainEqual([...REMOVE, '--force'])
     expect(calls).toContainEqual(['branch', '-d', 'feat/x'])
     expect(calls).not.toContainEqual(['branch', '-D', 'feat/x'])
   })
@@ -441,7 +455,8 @@ describe('removeWorktree', () => {
     const calls: string[][] = []
     const exec: GitRun = async (args) => {
       calls.push(args)
-      if (args[1] === 'remove') {
+      if (args[0] === 'rev-parse') return `${SHA}\n`
+      if (args.includes('remove')) {
         throw new Error(
           `fatal: '${wt.path}' contains modified or untracked files, use --force to delete it`
         )
@@ -461,7 +476,9 @@ describe('removeWorktree', () => {
   })
 
   it('strips git’s fatal: prefix from other removal failures', async () => {
-    const exec: GitRun = async () => {
+    const exec: GitRun = async (args) => {
+      if (args[0] === 'rev-parse') return `${SHA}\n`
+      if (args[0] === 'merge-base') return ''
       throw new Error(`fatal: '${wt.path}' is not a working tree`)
     }
     const res = await removeWorktree(wt, {}, exec)
@@ -474,6 +491,7 @@ describe('removeWorktree', () => {
   it('keeps an unmerged branch but still removes the worktree', async () => {
     const exec: GitRun = async (args) => {
       if (args[0] === 'branch') throw new Error('not fully merged')
+      if (args[0] === 'rev-parse') return `${SHA}\n`
       return ''
     }
     const res = await removeWorktree(wt, {}, exec)
@@ -486,11 +504,11 @@ describe('removeWorktree', () => {
     const calls: string[][] = []
     const exec = fakeGit(
       {
+        ...headOnBranch,
         'worktree remove': () => '',
         'branch -d': () => {
           throw new Error('not fully merged')
         },
-        'merge-base --is-ancestor': () => '',
         'branch -D': () => ''
       },
       calls
@@ -505,11 +523,14 @@ describe('removeWorktree', () => {
     const calls: string[][] = []
     const exec = fakeGit(
       {
+        'rev-parse --verify': () => `${SHA}\n`,
         'worktree remove': () => '',
         'branch -d': () => {
           throw new Error('not fully merged')
         },
-        'merge-base --is-ancestor': () => {
+        // The checked-out commit is on the branch; the branch is in neither HEAD nor origin.
+        'merge-base --is-ancestor': (args) => {
+          if (args[2] === SHA && args[3] === 'refs/heads/feat/x') return ''
           throw new Error('')
         }
       },
@@ -525,7 +546,7 @@ describe('removeWorktree', () => {
     const exec = fakeGit({ 'worktree remove': () => '', 'branch -D': () => '' }, calls)
     const res = await removeWorktree(wt, { force: true }, exec)
     expect(res.removed).toBe(true)
-    expect(calls).toContainEqual(['worktree', 'remove', wt.path, '--force'])
+    expect(calls).toContainEqual([...REMOVE, '--force'])
     expect(calls).toContainEqual(['branch', '-D', 'feat/x'])
   })
 
@@ -535,6 +556,72 @@ describe('removeWorktree', () => {
     }
     const res = await removeWorktree(wt, {}, exec)
     expect(res.removed).toBe(false)
+  })
+
+  it('keeps a worktree whose checked-out commit is on no branch (a detached HEAD), even when its branch is merged', async () => {
+    const calls: string[][] = []
+    const exec = fakeGit(
+      {
+        'rev-parse --verify': () => `${SHA}\n`,
+        'merge-base --is-ancestor': (args) => {
+          if (args[2] === SHA) throw new Error('')
+          return ''
+        },
+        'worktree remove': () => '',
+        'branch -d': () => ''
+      },
+      calls
+    )
+    for (const opts of [{}, { force: true, branch: 'safe' as const }]) {
+      calls.length = 0
+      const res = await removeWorktree(wt, opts, exec)
+      expect(res.removed).toBe(false)
+      expect(res.branchDeleted).toBe(false)
+      expect(res.message).toMatch(/commits that are not on that branch/)
+      expect(res.message).toContain(wt.path)
+      expect(calls.some((a) => a.includes('remove') || a[0] === 'branch')).toBe(false)
+    }
+    // Checked against the branch, the main checkout's HEAD and origin's default branch.
+    expect(calls).toContainEqual(['merge-base', '--is-ancestor', SHA, 'refs/heads/feat/x'])
+    expect(calls).toContainEqual(['merge-base', '--is-ancestor', SHA, 'HEAD'])
+    expect(calls).toContainEqual(['merge-base', '--is-ancestor', SHA, 'refs/remotes/origin/HEAD'])
+  })
+
+  it('keeps the worktree when it cannot read what is checked out there', async () => {
+    const calls: string[][] = []
+    const exec = fakeGit(
+      {
+        'rev-parse --verify': () => {
+          throw new Error('fatal: bad HEAD')
+        },
+        'worktree remove': () => ''
+      },
+      calls
+    )
+    const res = await removeWorktree(wt, {}, exec)
+    expect(res.removed).toBe(false)
+    expect(calls.some((a) => a.includes('remove'))).toBe(false)
+  })
+
+  it("stops the worktree's language servers before removing it", async () => {
+    const order: string[] = []
+    const stop = vi.spyOn(lspManager, 'stopForRoot').mockImplementation(async (p) => {
+      order.push(`stop ${p}`)
+    })
+    try {
+      const exec = fakeGit({
+        ...headOnBranch,
+        'worktree remove': () => {
+          order.push('remove')
+          return ''
+        },
+        'branch -d': () => ''
+      })
+      await removeWorktree(wt, {}, exec)
+      expect(order).toEqual([`stop ${wt.path}`, 'remove'])
+    } finally {
+      stop.mockRestore()
+    }
   })
 })
 
@@ -830,6 +917,51 @@ describe('worktree integration (real git)', () => {
       // Once merged into the main checkout, nothing would be lost.
       g(repo, 'merge', '--ff-only', 'brave-falcon')
       expect(await isWorktreeDisposable(wt)).toBe(true)
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  }, TIMEOUT)
+
+  maybe('sees untracked files when the user hides them with status.showUntrackedFiles=no', async () => {
+    const repo = initRepo()
+    try {
+      execFileSync('git', ['-C', repo, 'config', 'status.showUntrackedFiles', 'no'])
+      const wt = await createWorktree({ workspace: repo, branch: 'hidden-untracked' })
+      writeFileSync(join(wt.path, 'new-work.txt'), 'only copy\n')
+      expect(await isWorktreeDisposable(wt)).toBe(false)
+      const res = await removeWorktree(wt)
+      expect(res.removed).toBe(false)
+      expect(res.message).toMatch(/uncommitted or untracked changes/)
+      expect(readFileSync(join(wt.path, 'new-work.txt'), 'utf8')).toBe('only copy\n')
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  }, TIMEOUT)
+
+  maybe('keeps commits made on a detached HEAD instead of removing them with the checkout', async () => {
+    const repo = initRepo()
+    try {
+      const g = (cwd: string, ...args: string[]): string =>
+        execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], {
+          encoding: 'utf8'
+        })
+      const wt = await createWorktree({ workspace: repo, branch: 'detached-work' })
+      g(wt.path, 'checkout', '-q', '--detach')
+      writeFileSync(join(wt.path, 'feature.txt'), 'work\n')
+      g(wt.path, 'add', 'feature.txt')
+      g(wt.path, 'commit', '-q', '-m', 'work on a detached HEAD')
+      const tip = g(wt.path, 'rev-parse', 'HEAD').trim()
+      const res = await removeWorktree(wt)
+      expect(res.removed).toBe(false)
+      expect(res.message).toMatch(/commits that are not on that branch/)
+      expect(existsSync(wt.path)).toBe(true)
+      expect(g(wt.path, 'rev-parse', 'HEAD').trim()).toBe(tip)
+      // Once the commit is on the branch, the checkout goes and the branch keeps it.
+      g(wt.path, 'checkout', '-q', '-B', 'detached-work')
+      const after = await removeWorktree(wt)
+      expect(after.removed).toBe(true)
+      expect(after.branchDeleted).toBe(false)
+      expect(g(repo, 'rev-parse', 'refs/heads/detached-work').trim()).toBe(tip)
     } finally {
       rmSync(repo, { recursive: true, force: true })
     }

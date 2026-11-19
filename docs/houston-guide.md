@@ -240,8 +240,9 @@ a new branch from the folder's current HEAD, so its edits stay off your checkout
 - **Leaving an interactive session.** A worktree with no changes and no commits of
   its own is removed with its branch. One with work in it is kept unless you answer
   `r` to "Keep it or remove it?". Removing uncommitted changes needs a second,
-  typed `remove`; commits stay on their branch. A kept worktree prints the command
-  that comes back to it: `houston --resume <id> -C <path>`.
+  typed `remove`; commits stay on their branch. A worktree with commits on no branch
+  (made on a detached HEAD) is kept even then, so they are never lost. A kept worktree
+  prints the command that comes back to it: `houston --resume <id> -C <path>`.
 - **One-shot (`-p`).** The worktree is always kept. Its path goes to stderr, and the
   `--json` init line carries it as `worktree`.
 - `--resume <id>` of a chat that ran in a worktree opens it in that worktree.
@@ -923,7 +924,8 @@ the model.
 - `/delete` deletes the chat after asking, then starts a new one. Like the desktop app's
   delete, it stops the chat's run and background shells. When the chat has its own git
   worktree you choose: `k` deletes the chat and keeps the worktree, `r` also removes it
-  (uncommitted or unmerged work is kept); anything else cancels. A worktree with no
+  (uncommitted or unmerged work is kept, and so are commits made on a detached HEAD);
+  anything else cancels. A worktree with no
   changes and no unmerged commits goes with the chat, and one another chat still uses
   always stays.
 - `/permissions` lists every rule that applies, in the order they are checked: the

@@ -625,6 +625,21 @@ export function killShellsFor(conversationId: string): number {
 }
 
 /**
+ * {@link killShellsFor}, then wait (at most `timeoutMs`) until those shells, and what
+ * they left running in their groups, have ended. For a chat whose worktree is about
+ * to be removed: a process still running in the folder makes that fail on Windows.
+ */
+export async function stopShellsFor(conversationId: string, timeoutMs = KILL_GRACE_MS + 1_000): Promise<number> {
+  const mine = [...shells.values()].filter((s) => s.conversationId === conversationId)
+  const signalled = killShellsFor(conversationId)
+  const deadline = Date.now() + timeoutMs
+  while (mine.some((s) => s.running || hasLeftover(s)) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, STOP_POLL_MS))
+  }
+  return signalled
+}
+
+/**
  * Most background shells one chat may have running at once. The agent can otherwise
  * start dev servers and watchers without end (each a process tree holding ports and
  * memory), most often by restarting one it lost track of.

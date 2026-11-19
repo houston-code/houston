@@ -22,6 +22,7 @@ import {
   peekShell,
   shellTail,
   stopShell,
+  stopShellsFor,
   unreadSlice,
   windowOf
 } from './shells'
@@ -69,6 +70,43 @@ describe('killShellsFor', () => {
 
   it('does nothing for a conversation with no shells', () => {
     expect(killShellsFor('conv-none')).toBe(0)
+  })
+})
+
+describe('stopShellsFor', () => {
+  it("returns only once the chat's shells have exited", async () => {
+    const child = node('setInterval(() => {}, 1000)')
+    let closed = false
+    child.on('close', () => {
+      closed = true
+    })
+    registerShell('node server', child, 'conv-wait')
+    expect(await stopShellsFor('conv-wait')).toBe(1)
+    expect(closed).toBe(true)
+  })
+
+  it.skipIf(process.platform === 'win32')('gives up after the timeout on a shell that ignores SIGTERM', async () => {
+    const child = node('process.on("SIGTERM", () => {}); console.log("up"); setInterval(() => {}, 1000)')
+    const id = registerShell('node stubborn', child, 'conv-slow')
+    await new Promise<void>((resolve) => child.stdout!.once('data', () => resolve()))
+    const started = Date.now()
+    try {
+      // The SIGKILL escalation comes only after the grace; the wait ends sooner.
+      await stopShellsFor('conv-slow', 50)
+      expect(Date.now() - started).toBeLessThan(2_000)
+      expect(child.exitCode === null && child.signalCode === null).toBe(true)
+      expect(peekShell(id)).toBeUndefined()
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        const done = onClose(child)
+        child.kill('SIGKILL')
+        await done
+      }
+    }
+  })
+
+  it('does nothing for a conversation with no shells', async () => {
+    expect(await stopShellsFor('conv-none-2')).toBe(0)
   })
 })
 

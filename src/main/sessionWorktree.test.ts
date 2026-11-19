@@ -324,6 +324,50 @@ describe('session worktree (real git)', () => {
     },
     TIMEOUT
   )
+
+  maybe(
+    'asks about new untracked files even when the user hides them with status.showUntrackedFiles=no',
+    async () => {
+      const repo = initRepo()
+      try {
+        git(repo, 'config', 'status.showUntrackedFiles', 'no')
+        const wt = await make(repo, 'hidden-untracked')
+        writeFileSync(join(wt.path, 'notes.txt'), 'only copy\n')
+        expect(await worktreeWork(wt)).toEqual({ dirty: true, commits: 0 })
+        const f = await finish(wt, [null])
+        expect(f.result).toBe('kept')
+        expect(f.asked).toHaveLength(1)
+        expect(existsSync(join(wt.path, 'notes.txt'))).toBe(true)
+      } finally {
+        rmSync(repo, { recursive: true, force: true })
+      }
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    'keeps a worktree whose commits are on a detached HEAD when asked to remove it',
+    async () => {
+      const repo = initRepo()
+      try {
+        const wt = await make(repo, 'detached-remove')
+        git(wt.path, 'checkout', '-q', '--detach')
+        writeFileSync(join(wt.path, 'e.txt'), 'e\n')
+        git(wt.path, 'add', 'e.txt')
+        git(wt.path, 'commit', '-q', '-m', 'on a detached head')
+        const tip = git(wt.path, 'rev-parse', 'HEAD')
+        const f = await finish(wt, ['remove'])
+        expect(f.text).toContain('1 commit')
+        expect(f.result).toBe('kept')
+        expect(f.text).toContain('commits that are not on that branch')
+        expect(existsSync(wt.path)).toBe(true)
+        expect(git(wt.path, 'rev-parse', 'HEAD')).toBe(tip)
+      } finally {
+        rmSync(repo, { recursive: true, force: true })
+      }
+    },
+    TIMEOUT
+  )
 })
 
 describe('resumeChatFolder', () => {
