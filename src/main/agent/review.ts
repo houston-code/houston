@@ -998,6 +998,9 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
   if (!d.isRepo) {
     return 'Cannot review: this project is not a git repository, so there is no diff to review. Commit your work in a git repo to use review_changes, or ask me to review specific files directly.'
   }
+  if (d.error) {
+    return `Cannot review: git could not read the diff (${d.error}). Narrow the review with paths, or review specific files directly.`
+  }
   const chunks = chunkReviewInput(d)
   if (chunks.length === 0) {
     const scope = paths.length ? ` in ${paths.join(', ')}` : ''

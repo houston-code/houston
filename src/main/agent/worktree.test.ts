@@ -15,6 +15,7 @@ import {
   createWorktree,
   removeWorktree,
   isWorktreeDisposable,
+  nativeSeparators,
   type GitRun
 } from './worktree'
 
@@ -94,7 +95,7 @@ describe('getRepoInfo', () => {
     const info = await getRepoInfo('/repo/sub', exec, onDisk)
     expect(info).toEqual({
       isRepo: true,
-      root: '/repo',
+      root: normalize('/repo'),
       currentBranch: 'feature',
       unborn: false,
       branches: ['feature', 'main', 'old'],
@@ -131,6 +132,11 @@ describe('getRepoInfo', () => {
     expect(await at('/repo')).toBe(false)
     expect(await at('/repo/sub')).toBe(false)
     expect(await at('/repo/.houston/worktrees/x/sub')).toBe(false)
+  })
+
+  it("spells the root git prints with forward slashes in the platform's own separators", () => {
+    expect(nativeSeparators('C:/work/repo', '\\')).toBe('C:\\work\\repo')
+    expect(nativeSeparators('/work/repo', '/')).toBe('/work/repo')
   })
 
   it('flags a folder with a .git that git cannot open as unreadable', async () => {

@@ -29,16 +29,48 @@ const MAX_WORKTREES = 10
 
 export type GitExec = (args: string[], cwd: string) => Promise<string>
 
-async function runGit(args: string[], cwd: string, shared?: Promise<string[]>): Promise<string> {
+/** How long, and how much output, a git read may take: small for the prompt's context. */
+interface GitLimits {
+  timeout: number
+  maxBuffer: number
+}
+const CONTEXT_LIMITS: GitLimits = { timeout: 5000, maxBuffer: 1_000_000 }
+/** A review's diff can be a whole branch's worth of changes (the Changes panel's limits). */
+const DIFF_LIMITS: GitLimits = { timeout: 15_000, maxBuffer: 16_000_000 }
+
+async function runGit(
+  args: string[],
+  cwd: string,
+  shared?: Promise<string[]>,
+  limits: GitLimits = CONTEXT_LIMITS
+): Promise<string> {
   const hardening = await (shared ?? hardenedGitArgs(cwd))
   return new Promise((resolve, reject) => {
     execFile(
       gitExecutable(GIT_ENV),
       [...hardening, '--no-pager', ...args],
-      { cwd, env: GIT_ENV, timeout: 5000, maxBuffer: 1_000_000, windowsHide: true },
-      (err, stdout) => (err ? reject(err) : resolve(stdout))
+      { cwd, env: GIT_ENV, ...limits, windowsHide: true },
+      (err, stdout, stderr) => (err ? reject(Object.assign(err, { stderr: String(stderr ?? '') })) : resolve(stdout))
     )
   })
+}
+
+/** The default runner for {@link gitDiff}: room for a large diff. */
+const runDiffGit: GitExec = (args, cwd) => runGit(args, cwd, undefined, DIFF_LIMITS)
+
+/** Why a `git diff` failed, in a line fit for the agent. Pure. */
+export function diffFailureText(e: unknown): string {
+  const err = e as { code?: unknown; killed?: boolean; signal?: unknown; stderr?: unknown; message?: unknown }
+  if (err?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+    return `the diff is larger than ${DIFF_LIMITS.maxBuffer / 1_000_000} MB`
+  }
+  if (err?.killed || err?.signal) return `git diff took longer than ${DIFF_LIMITS.timeout / 1000} seconds`
+  const text = typeof err?.stderr === 'string' && err.stderr.trim() ? err.stderr : String(err?.message ?? e ?? '')
+  const line = text
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith('hint:'))
+  return (line ?? 'git diff failed').replace(/^(fatal|error):\s*/i, '').slice(0, 300)
 }
 
 /** Format the branch + porcelain status into a compact prompt section. Pure. */
@@ -276,6 +308,8 @@ export interface WorkspaceDiff {
   diff: string
   /** Paths of new, untracked, non-ignored files (not present in `diff`). */
   untracked: string[]
+  /** Why the tracked diff could not be read (then `diff` is '' but that is not "no changes"). */
+  error?: string
 }
 
 /**
@@ -287,7 +321,7 @@ export async function gitDiff(
   workspace: string,
   base = 'HEAD',
   paths: string[] = [],
-  exec: GitExec = runGit
+  exec: GitExec = runDiffGit
 ): Promise<WorkspaceDiff> {
   try {
     await exec(['rev-parse', '--is-inside-work-tree'], workspace)
@@ -298,6 +332,7 @@ export async function gitDiff(
   // read as an option; callers still validate the paths stay in the workspace.
   const pathspec = paths.length ? ['--', ...paths] : ['--']
   let diff = ''
+  let error: string | undefined
   // Refuse an option-like base (defence in depth — callers should validate too).
   if (isSafeGitRef(base)) {
     // On a repo with no commits `git diff HEAD` throws, and staged files are in
@@ -311,8 +346,9 @@ export async function gitDiff(
       // `--no-ext-diff`/`--no-textconv` block repo-config diff drivers from running
       // a program (defence in depth atop GIT_HARDENING; matches workingTree.ts).
       diff = await exec(['diff', ref, '--no-ext-diff', '--no-textconv', ...pathspec], workspace)
-    } catch {
-      // invalid base — fall back to no tracked diff
+    } catch (e) {
+      // Too large, too slow, or an unknown base: say so, never "no changes".
+      error = diffFailureText(e)
     }
   }
   let untracked: string[] = []
@@ -325,5 +361,5 @@ export async function gitDiff(
   } catch {
     // ignore — untracked listing is best-effort
   }
-  return { isRepo: true, diff: diff.trim(), untracked }
+  return { isRepo: true, diff: diff.trim(), untracked, ...(error ? { error } : {}) }
 }

@@ -281,6 +281,28 @@ describe('gh git hardening', () => {
     })
   })
 
+  it('also sets GIT_CONFIG_PARAMETERS, after any value already there, for a git older than 2.31', () => {
+    const env = gitConfigEnv(['-c', 'core.hooksPath=/dev/null', '-c', "filter.it's.clean="], {
+      GIT_CONFIG_PARAMETERS: "'user.name=me'"
+    })
+    expect(env.GIT_CONFIG_PARAMETERS).toBe(`'user.name=me' 'core.hooksPath=/dev/null' 'filter.it'\\''s.clean='`)
+    expect(gitConfigEnv(['-c', 'core.fsmonitor='], {}).GIT_CONFIG_PARAMETERS).toBe(`'core.fsmonitor='`)
+  })
+
+  it('is read by git from GIT_CONFIG_PARAMETERS alone, as a git without GIT_CONFIG_COUNT reads it', () => {
+    const { GIT_CONFIG_PARAMETERS } = gitConfigEnv(['-c', 'core.hooksPath=/dev/null', '-c', "x.y=it's"], {})
+    const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_PARAMETERS }
+    delete env.GIT_CONFIG_COUNT
+    try {
+      execFileSync('git', ['--version'], { stdio: 'ignore' })
+    } catch {
+      return // git not installed here
+    }
+    const get = (key: string): string => execFileSync('git', ['config', '--get', key], { env, encoding: 'utf8' }).trim()
+    expect(get('core.hooksPath')).toBe('/dev/null')
+    expect(get('x.y')).toBe("it's")
+  })
+
   it('is read by git as config', () => {
     let out: string
     try {

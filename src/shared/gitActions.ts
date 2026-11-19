@@ -111,7 +111,7 @@ export function listCheckRuns(rollup: unknown): CheckRun[] {
     .slice(0, MAX_CHECK_RUNS)
 }
 
-/** Parse `gh pr view --json number,title,state,isDraft,url,statusCheckRollup`. Null when it doesn't fit. */
+/** Parse one pull request from `gh pr list --json number,title,state,isDraft,url,statusCheckRollup`. Null when it doesn't fit. */
 export function parsePrView(stdout: string): PrStatus | null {
   let o: Record<string, unknown>
   try {

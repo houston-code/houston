@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  dequote,
   parseUnifiedDiff,
   untrackedToFileDiff,
   totalStat,
@@ -159,6 +160,31 @@ describe('parseUnifiedDiff', () => {
     expect(edited.note).toBeUndefined()
     expect(edited.hunks).toHaveLength(1)
     expect(Object.keys(mode)).not.toContain('_modeChanged')
+  })
+
+  it('decodes the octal escapes git writes for a non-ASCII name', () => {
+    const diff = [
+      'diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"',
+      'index 1234567..89abcde 100644',
+      '--- "a/caf\\303\\251.txt"',
+      '+++ "b/caf\\303\\251.txt"',
+      '@@ -1 +1 @@',
+      '-old',
+      '+new'
+    ].join('\n')
+    const [f] = parseUnifiedDiff(diff)
+    expect(f.path).toBe('café.txt')
+    const [bin] = parseUnifiedDiff(
+      ['diff --git "a/\\346\\227\\245\\346\\234\\254.png" "b/\\346\\227\\245\\346\\234\\254.png"', 'Binary files differ'].join('\n')
+    )
+    expect(bin.path).toBe('日本.png')
+  })
+
+  it('undoes every escape in a quoted path', () => {
+    expect(dequote('"tab\\there"')).toBe('tab\there')
+    expect(dequote('"a\\"q\\\\b"')).toBe('a"q\\b')
+    expect(dequote('"na\\303\\257ve\\nx"')).toBe('naïve\nx')
+    expect(dequote('plain.txt')).toBe('plain.txt')
   })
 
   it('flags a binary change and recovers the path from the diff --git header', () => {

@@ -68,6 +68,15 @@ const EMPTY_REPO: RepoInfo = {
   exists: false
 }
 
+/**
+ * A path git printed, in this platform's spelling: git writes Windows paths with
+ * forward slashes (`C:/work/repo`), which would not match the same folder spelled
+ * `C:\work\repo` everywhere else the app keeps it. Pure.
+ */
+export function nativeSeparators(p: string, separator: string = sep): string {
+  return separator === '\\' ? p.replace(/\//g, '\\') : p
+}
+
 /** Normalize a path for equality checks: forward slashes, no trailing slash. */
 function normPath(p: string): string {
   return p.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -160,7 +169,7 @@ export async function getRepoInfo(
     const entries = parseWorktreePorcelain(out)
     const main = entries[0]
     if (!main) return { ...EMPTY_REPO, exists: true }
-    root = main.path
+    root = nativeSeparators(main.path)
     // Flag only an exact match on a linked worktree's root — a subdirectory of
     // one (or of the main worktree) is a deliberate scope, not a stale checkout.
     const ws = normPath(workspace)

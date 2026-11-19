@@ -130,14 +130,24 @@ export async function worktreeWork(
   }
 }
 
-/** Quote a path for a shell command line when it needs it. Pure. */
-export function shellQuote(s: string): string {
+/**
+ * Quote a path for a shell command line when it needs it. Pure. On Windows the user
+ * pastes it into cmd.exe or PowerShell, where single quotes are not quotes (cmd.exe
+ * keeps them as part of the path) and a backslash is an ordinary character, so a
+ * path there goes in double quotes, which no Windows file name can contain.
+ */
+export function shellQuote(s: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') return /^[A-Za-z0-9_.\\/:@+=,-]+$/.test(s) ? s : `"${s}"`
   return /^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`
 }
 
 /** The command that reopens the session in its worktree. Pure. */
-export function comeBackCommand(path: string, conversationId: string | null): string {
-  const p = shellQuote(path)
+export function comeBackCommand(
+  path: string,
+  conversationId: string | null,
+  platform: NodeJS.Platform = process.platform
+): string {
+  const p = shellQuote(path, platform)
   return conversationId ? `houston --resume ${conversationId} -C ${p}` : `houston -C ${p}`
 }
 
