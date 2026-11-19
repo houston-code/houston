@@ -63,34 +63,97 @@ export function localFilterOverrides(output: string): string[] | null {
   return out
 }
 
+/** One `git config` run: the error execFile gave (null on exit 0), and both streams. */
+export interface ConfigProbe {
+  err: (Error & { code?: unknown; killed?: boolean; signal?: unknown }) | null
+  stdout: string
+  stderr: string
+}
+
+/** Runs `git config <args>` in `cwd`. */
+export type ConfigRunner = (args: string[], cwd: string) => Promise<ConfigProbe>
+
+/** `git config <args>` with the fixed hardening and the probe's own small limits. */
+const probeConfig: ConfigRunner = (args, cwd) =>
+  new Promise((resolve) => {
+    execFile(
+      gitExecutable(GIT_ENV),
+      [...GIT_HARDENING, 'config', ...args],
+      { cwd, env: GIT_ENV, timeout: 5_000, maxBuffer: 1_000_000, windowsHide: true },
+      (err, stdout, stderr) =>
+        resolve({ err: err as ConfigProbe['err'], stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
+    )
+  })
+
+/** Whether git refused `--show-scope` as an unknown option: git older than 2.26. Pure. */
+export function showScopeUnsupported(p: ConfigProbe): boolean {
+  return !!p.err && p.err.code === 129 && /unknown option\W+show-scope/.test(p.stderr)
+}
+
+/**
+ * `git config -z` records without a scope (`key LF value NUL`, or `key NUL` for a key
+ * with no value) rewritten as `--show-scope -z` records (`scope NUL key LF value NUL`),
+ * so one parser reads both. Pure.
+ */
+export function withScope(scope: string, output: string): string {
+  return output
+    .split('\0')
+    .filter((record) => record !== '')
+    .map((record) => `${scope}\0${record}\0`)
+    .join('')
+}
+
+/** `git config --local` run outside any repository. */
+const OUTSIDE_REPO = /only be used inside a git repository/
+
+/**
+ * The config entries `query` selects (`['--get-regexp', re]` or `['--list']`), as
+ * `--show-scope -z` records. Git older than 2.26 has no `--show-scope`, so there the
+ * repository's own files are listed by themselves instead: `--local --includes` (the
+ * repository's config and every file it includes) and, when the repository turns on
+ * per-worktree config, `--worktree --includes`, labelled `local` and `worktree`. That
+ * leaves out the user's global and system config, which every caller trusts anyway,
+ * so the result means the same on any git. Outside a repository there is no local
+ * config, which reads as no entries. A failed or cut-off run is returned as it is,
+ * for the caller to refuse.
+ */
+export async function scopedConfig(cwd: string, query: string[], run: ConfigRunner = probeConfig): Promise<ConfigProbe> {
+  const scoped = await run(['--show-scope', '-z', ...query], cwd)
+  if (!showScopeUnsupported(scoped)) return scoped
+  const local = await run(['--local', '--includes', '-z', ...query], cwd)
+  if (local.err?.code === 128 && OUTSIDE_REPO.test(local.stderr)) return { err: null, stdout: '', stderr: '' }
+  if (filterProbeFailed(local.err, local.stdout)) return local
+  const perWorktree = await run(['--local', '--bool', '--get', 'extensions.worktreeConfig'], cwd)
+  if (filterProbeFailed(perWorktree.err, perWorktree.stdout)) return perWorktree
+  let worktree = ''
+  if (perWorktree.stdout.trim() === 'true') {
+    const w = await run(['--worktree', '--includes', '-z', ...query], cwd)
+    if (filterProbeFailed(w.err, w.stdout)) return w
+    worktree = w.stdout
+  }
+  return { err: null, stdout: withScope('local', local.stdout) + withScope('worktree', worktree), stderr: '' }
+}
+
 /**
  * The full hardening for a git command in `cwd`: {@link GIT_HARDENING} plus overrides
  * for the filter drivers the repo defines. Reading config runs no external program.
  * Outside a repo (or when git is missing) it is just the fixed flags. Rejects when the
  * repo defines a driver no override can name (see {@link localFilterOverrides}), and
- * when the listing did not finish (cut off at the buffer, timed out, or a git too old
- * for `--show-scope`): a partial listing could leave out exactly the driver that runs.
+ * when the listing did not finish (cut off at the buffer or timed out): a partial
+ * listing could leave out exactly the driver that runs. Works on git older than 2.26
+ * too (see {@link scopedConfig}).
  */
-export function hardenedGitArgs(cwd: string): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      gitExecutable(GIT_ENV),
-      [...GIT_HARDENING, 'config', '--show-scope', '-z', '--get-regexp', '^filter\\.'],
-      { cwd, env: GIT_ENV, timeout: 5_000, maxBuffer: 1_000_000, windowsHide: true },
-      (err, stdout, stderr) => {
-        if (filterProbeFailed(err, String(stdout ?? ''))) {
-          // git's own fatal error (a broken `.git`, a config it can't parse) says more
-          // than ours; anything else (cut off, timed out, too old) gets ours.
-          const fatal = err?.code === 128 ? /^fatal: .+$/m.exec(String(stderr ?? ''))?.[0] : undefined
-          reject(new Error(fatal ?? "Houston could not read this repository's git config, so it will not run git here."))
-          return
-        }
-        const overrides = localFilterOverrides(String(stdout ?? ''))
-        if (overrides) resolve([...GIT_HARDENING, ...overrides])
-        else reject(new Error('This repository defines a git filter driver Houston cannot switch off, so it will not run git here.'))
-      }
-    )
-  })
+export async function hardenedGitArgs(cwd: string, run: ConfigRunner = probeConfig): Promise<string[]> {
+  const { err, stdout, stderr } = await scopedConfig(cwd, ['--get-regexp', '^filter\\.'], run)
+  if (filterProbeFailed(err, stdout)) {
+    // git's own fatal error (a broken `.git`, a config it can't parse) says more
+    // than ours; anything else (cut off, timed out) gets ours.
+    const fatal = err?.code === 128 ? /^fatal: .+$/m.exec(stderr)?.[0] : undefined
+    throw new Error(fatal ?? "Houston could not read this repository's git config, so it will not run git here.")
+  }
+  const overrides = localFilterOverrides(stdout)
+  if (overrides) return [...GIT_HARDENING, ...overrides]
+  throw new Error('This repository defines a git filter driver Houston cannot switch off, so it will not run git here.')
 }
 
 /**

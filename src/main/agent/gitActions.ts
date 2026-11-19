@@ -13,7 +13,7 @@ import { workingTreeToText, type WorkingTreeChanges } from '@shared/workingTree'
 import { collectSecrets, getProvider, getSettings } from '../agentHost'
 import { peekConversation } from '../conversations'
 import { createProvider } from '../providers'
-import { GIT_ENV, hardenedGitArgs, runGitCapture } from './gitRead'
+import { GIT_ENV, hardenedGitArgs, runGitCapture, scopedConfig } from './gitRead'
 import { ghAuthedHosts, ghRepoEnv, ghRepoKey, resolveGh, runGh, type GhExec } from './github'
 import { gitExecutable } from './gitBinary'
 import { redactSecrets } from './redact'
@@ -82,7 +82,8 @@ const TRUSTED_SCOPES = new Set(['global', 'system', 'command'])
 /**
  * Keys from the repository's own config (not the user's global or system config)
  * that would let a commit or push run a command. Parses
- * `git config --show-scope -z --list` (records `scope NUL key LF value NUL`). Pure.
+ * `git config --show-scope -z --list` (records `scope NUL key LF value NUL`), or the
+ * same records {@link scopedConfig} builds on git older than 2.26. Pure.
  */
 export function riskyRepoConfig(output: string): string[] {
   const keys: string[] = []
@@ -171,8 +172,14 @@ export function repoFilterDrivers(output: string): string[] {
  * listed in full: a cut-off listing could leave out exactly the key that matters.
  */
 async function guardRepoConfig(root: string, op: 'commit' | 'push'): Promise<GitActionResult | null> {
-  const r = await runGitCapture(['config', '--show-scope', '-z', '--list'], root)
-  if (!r.ok) {
+  // The hardened capture, with its larger buffer and timeout; on git older than 2.26
+  // scopedConfig lists the repository's own files instead of reading scopes.
+  const hardening = hardenedGitArgs(root)
+  const r = await scopedConfig(root, ['--list'], async (args) => {
+    const c = await runGitCapture(['config', ...args], root, hardening)
+    return { err: c.ok ? null : Object.assign(new Error(c.stderr), { code: c.code }), stdout: c.stdout, stderr: c.stderr }
+  })
+  if (r.err) {
     return { ok: false, error: `Could not read this repository's git config, so Houston won't ${op} here. Use a terminal.` }
   }
   const filters = op === 'commit' ? repoFilterDrivers(r.stdout) : []

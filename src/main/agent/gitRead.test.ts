@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,7 +9,12 @@ import {
   hardenedGitArgs,
   localFilterOverrides,
   runGitCapture,
+  scopedConfig,
+  showScopeUnsupported,
   uncommittedDiffBase,
+  withScope,
+  type ConfigProbe,
+  type ConfigRunner,
   type GitTry
 } from './gitRead'
 
@@ -144,6 +149,138 @@ describe('hardenedGitArgs on a real repository', () => {
       const status = await runGitCapture(['status', '--porcelain'], r)
       expect(status.ok).toBe(false)
       expect(existsSync(marker)).toBe(false)
+    },
+    30_000
+  )
+})
+
+describe('git older than 2.26 (no --show-scope)', () => {
+  const tooOld: ConfigProbe = {
+    err: Object.assign(new Error('Command failed'), { code: 129 }),
+    stdout: '',
+    stderr: "error: unknown option `show-scope'\nusage: git config [<options>]\n"
+  }
+
+  it('recognises git refusing --show-scope, and nothing else', () => {
+    expect(showScopeUnsupported(tooOld)).toBe(true)
+    expect(showScopeUnsupported({ ...tooOld, stderr: "error: unknown option `show-origin'" })).toBe(false)
+    expect(showScopeUnsupported({ ...tooOld, err: Object.assign(new Error('x'), { code: 128 }) })).toBe(false)
+    expect(showScopeUnsupported({ err: null, stdout: '', stderr: '' })).toBe(false)
+  })
+
+  it('labels unscoped -z records with a scope, keeping keys without a value', () => {
+    expect(withScope('local', 'filter.a.clean\ncat\0filter.b.required\0')).toBe(
+      'local\0filter.a.clean\ncat\0local\0filter.b.required\0'
+    )
+    expect(withScope('local', '')).toBe('')
+  })
+
+  /** A runner answering from a map keyed by the joined args; anything else fails like git. */
+  const scripted =
+    (answers: Record<string, Partial<ConfigProbe>>, calls: string[] = []): ConfigRunner =>
+    async (args) => {
+      const key = args.join(' ')
+      calls.push(key)
+      if (key.startsWith('--show-scope')) return tooOld
+      const a = answers[key]
+      if (!a) return { err: Object.assign(new Error('no answer'), { code: 2 }), stdout: '', stderr: `no answer for ${key}` }
+      return { err: null, stdout: '', stderr: '', ...a }
+    }
+  const noMatch = { err: Object.assign(new Error('exit 1'), { code: 1 }) }
+
+  it("lists only the repository's own files, as local and worktree records", async () => {
+    const calls: string[] = []
+    const r = await scopedConfig(
+      '/r',
+      ['--get-regexp', '^filter\\.'],
+      scripted(
+        {
+          "--local --includes -z --get-regexp ^filter\\.": { stdout: 'filter.evil.clean\ntouch x\0' },
+          '--local --bool --get extensions.worktreeConfig': { stdout: 'true\n' },
+          "--worktree --includes -z --get-regexp ^filter\\.": { stdout: 'filter.wt.smudge\ncat\0' }
+        },
+        calls
+      )
+    )
+    expect(r).toEqual({ err: null, stdout: 'local\0filter.evil.clean\ntouch x\0worktree\0filter.wt.smudge\ncat\0', stderr: '' })
+    expect(calls[0]).toBe('--show-scope -z --get-regexp ^filter\\.')
+  })
+
+  it('skips per-worktree config when the repository does not turn it on', async () => {
+    const calls: string[] = []
+    const r = await scopedConfig(
+      '/r',
+      ['--list'],
+      scripted({ '--local --includes -z --list': { stdout: 'core.bare\nfalse\0' }, '--local --bool --get extensions.worktreeConfig': noMatch }, calls)
+    )
+    expect(r.stdout).toBe('local\0core.bare\nfalse\0')
+    expect(calls.some((c) => c.startsWith('--worktree'))).toBe(false)
+  })
+
+  it('reads outside a repository as no entries, and hands back any other failure to refuse on', async () => {
+    const outside = scripted({
+      '--local --includes -z --list': {
+        err: Object.assign(new Error('x'), { code: 128 }),
+        stderr: 'fatal: --local can only be used inside a git repository\n'
+      }
+    })
+    expect(await scopedConfig('/tmp', ['--list'], outside)).toEqual({ err: null, stdout: '', stderr: '' })
+    const cutOff = scripted({
+      '--local --includes -z --list': { err: Object.assign(new Error('maxBuffer'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }), stdout: 'local' }
+    })
+    expect((await scopedConfig('/r', ['--list'], cutOff)).err).not.toBeNull()
+    await expect(hardenedGitArgs('/r', scripted({ "--local --includes -z --get-regexp ^filter\\.": { err: Object.assign(new Error('t'), { killed: true, signal: 'SIGTERM' }) } }))).rejects.toThrow(
+      /could not read this repository's git config/
+    )
+  })
+
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const posix = gitOk && process.platform !== 'win32' ? it : it.skip
+
+  posix(
+    'blanks the same drivers as a git with --show-scope: the repo\'s and its includes\', never the user\'s',
+    async () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'houston-oldgit-')))
+      dirs.push(base)
+      const r = join(base, 'repo')
+      const globalCfg = join(base, 'global.gitconfig')
+      writeFileSync(globalCfg, '[filter "lfs"]\n\tclean = git-lfs clean -- %f\n')
+      const env = { ...process.env, GIT_CONFIG_GLOBAL: globalCfg, GIT_CONFIG_NOSYSTEM: '1' }
+      execFileSync('git', ['init', '-q', r], { env })
+      writeFileSync(join(base, 'included.cfg'), '[filter "inc"]\n\tclean = touch inc-ran\n')
+      appendFileSync(join(r, '.git', 'config'), `[filter "evil"]\n\tclean = touch evil-ran\n[include]\n\tpath = ${join(base, 'included.cfg')}\n`)
+      /** Real git; `old` rejects --show-scope the way git 2.25 does. */
+      const realGit =
+        (old: boolean): ConfigRunner =>
+        (args, cwd) =>
+          old && args.includes('--show-scope')
+            ? Promise.resolve(tooOld)
+            : new Promise((resolve) =>
+                execFile('git', ['config', ...args], { cwd, env }, (err, stdout, stderr) =>
+                  resolve({ err: err as ConfigProbe['err'], stdout: String(stdout), stderr: String(stderr) })
+                )
+              )
+      const blanked = (args: string[]): string[] => args.filter((a) => a.endsWith('.clean=')).sort()
+      const modern = await hardenedGitArgs(r, realGit(false))
+      const old = await hardenedGitArgs(r, realGit(true))
+      expect(blanked(old)).toEqual(['filter.evil.clean=', 'filter.inc.clean='])
+      expect(old).toEqual(modern)
+      // Outside any repository: only the fixed flags, as before.
+      const outside = join(base, 'plain')
+      execFileSync('mkdir', [outside])
+      const outsideEnv = { ...env, GIT_CEILING_DIRECTORIES: base }
+      const plainGit: ConfigRunner = (args, cwd) =>
+        args.includes('--show-scope')
+          ? Promise.resolve(tooOld)
+          : new Promise((resolve) =>
+              execFile('git', ['config', ...args], { cwd, env: outsideEnv }, (err, stdout, stderr) =>
+                resolve({ err: err as ConfigProbe['err'], stdout: String(stdout), stderr: String(stderr) })
+              )
+            )
+      expect(await hardenedGitArgs(outside, plainGit)).toEqual(GIT_HARDENING)
     },
     30_000
   )
