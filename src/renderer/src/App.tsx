@@ -59,6 +59,7 @@ import {
   suggestBranch
 } from './lib/worktree'
 import { useApplyAccent, useApplyAppearance, useApplyTheme } from './hooks/useApplyTheme'
+import { applyAccent, applyAppearance, applyTheme } from './lib/theme'
 import { useChatStatus } from './hooks/useChatStatus'
 import { useWindowFocused } from './hooks/useWindowFocused'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
@@ -344,6 +345,8 @@ export default function App(): JSX.Element {
   savedSettingsRef.current = savedSettings
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Set by the open Settings page: a close that saves what is pending first.
+  const settingsCloseRef = useRef<(() => void) | null>(null)
   // The section Settings opens on: a command like /theme lands on its own section.
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('models')
   // A settings search to open on (`/settings <words>`).
@@ -656,6 +659,16 @@ export default function App(): JSX.Element {
     density: settings?.density,
     codeTheme: settings?.codeTheme
   })
+  // Settings previews a look as it is edited; once it closes, put the saved look back,
+  // so an edit whose save failed doesn't stay on screen as if it had been kept.
+  useEffect(() => {
+    if (settingsOpen || !settings) return
+    applyTheme(settings.theme ?? 'system')
+    applyAccent(settings.accentColor)
+    applyAppearance({ chatFontSize: settings.chatFontSize, density: settings.density, codeTheme: settings.codeTheme })
+    // Only on close: the hooks above follow every later change of the saved look.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsOpen])
 
   // Live status of every conversation with a run (running, blocking prompts), used
   // to mark chats in the sidebar, including ones running in the background.
@@ -3826,7 +3839,7 @@ export default function App(): JSX.Element {
         else if (o.palette) setPaletteOpen(false)
         else if (o.help) setHelpOpen(false)
         else if (o.find) setFindOpen(false)
-        else if (o.settings) setSettingsOpen(false)
+        else if (o.settings) (settingsCloseRef.current ?? (() => setSettingsOpen(false)))()
         else if (o.scorecard) setScorecardOpen(false)
         else if (o.usage) setUsageOpen(false)
         else if (o.doctor) setDoctorOpen(false)
@@ -4551,6 +4564,7 @@ export default function App(): JSX.Element {
               setSettingsQuery('')
             }}
             onSaved={(s) => setSettings(s)}
+            closeRef={settingsCloseRef}
             onShowScorecard={() => {
               setSettingsOpen(false)
               setScorecardOpen(true)

@@ -1131,6 +1131,48 @@ describe('SettingsModal', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  it('saves a typed key before leaving for diagnostics, the scorecard, or the terminal', async () => {
+    for (const [props, open] of [
+      [{ onShowDoctor: vi.fn() }, () => {
+        fireEvent.click(screen.getByRole('button', { name: 'About' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Run diagnostics' }))
+      }],
+      [{ onShowScorecard: vi.fn() }, () => fireEvent.click(screen.getByRole('button', { name: /open loop scorecard/i }))]
+    ] as const) {
+      const api = installApi()
+      renderModal({}, props)
+      fireEvent.change(screen.getByPlaceholderText('•••••••• (stored)'), { target: { value: 'sk-typed' } })
+      open()
+      const handler = Object.values(props)[0]
+      await waitFor(() => expect(handler).toHaveBeenCalledTimes(1))
+      expect(api.setKey).toHaveBeenCalledWith('anthropic', 'sk-typed')
+      cleanup()
+    }
+  })
+
+  it('closes through the close handle it registers, saving a typed key first', async () => {
+    const api = installApi()
+    const closeRef: { current: (() => void) | null } = { current: null }
+    const { onClose } = renderModal({}, { closeRef })
+    fireEvent.change(screen.getByPlaceholderText('•••••••• (stored)'), { target: { value: 'sk-typed' } })
+    act(() => closeRef.current?.())
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+    expect(api.setKey).toHaveBeenCalledWith('anthropic', 'sk-typed')
+  })
+
+  it('stays open with the error when a pending change fails to save on the way out, and leaves on a second close', async () => {
+    installApi({ saveSettings: vi.fn(() => Promise.reject(new Error('disk full'))) })
+    const { onClose } = renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: '+ Add rule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to app' }))
+    expect(await screen.findByText(/Could not save settings: disk full/)).toBeInTheDocument()
+    expect(await screen.findByText(/Close again to leave without saving/)).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to app' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
   it('fetches models from the provider and writes them into the textarea', async () => {
     const api = installApi()
     renderModal()
@@ -1447,7 +1489,8 @@ describe('SettingsModal', () => {
       box.focus()
       fireEvent.change(box, { target: { value: 'pending edit' } })
       fireEvent.click(screen.getByRole('button', { name: 'Back to app' }))
-      expect(onClose).toHaveBeenCalledTimes(1)
+      // Settings closes once the pending edit is saved.
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
       unmount()
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
       expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).systemPromptExtra).toBe('pending edit')

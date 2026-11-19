@@ -64,6 +64,25 @@ describe('mergeList', () => {
     const p = { ...provider, hasKey: false }
     expect(mergeList([p], [{ ...p, label: 'Renamed' }], [{ ...p, hasKey: true }])).toEqual([{ ...p, label: 'Renamed' }])
   })
+
+  it('keeps a change made elsewhere to an entry the user left as it was', () => {
+    // The user renames one provider while a run marks a model of another unavailable.
+    const a = { ...provider, models: [{ id: 'm1', label: 'M1' }] }
+    const b = { ...provider, id: 'openai', kind: 'openai' as const, label: 'OpenAI' }
+    const marked = { ...a, models: [{ id: 'm1', label: 'M1', unavailableAt: '2026-11-19' }] }
+    expect(mergeList([a, b], [a, { ...b, label: 'Renamed' }], [marked, b])).toEqual([marked, { ...b, label: 'Renamed' }])
+  })
+
+  it('still takes the user copy of an entry the user edited', () => {
+    const a = { ...provider, label: 'A' }
+    expect(mergeList([a], [{ ...a, label: 'Mine' }], [{ ...a, label: 'Theirs' }])).toEqual([{ ...a, label: 'Mine' }])
+  })
+
+  it('keeps an entry added elsewhere at its place in the stored list', () => {
+    // An "Always allow" rule is prepended so it wins over a broader ask.
+    expect(mergeList(['ask', 'b'], ['ask'], ['allow', 'ask', 'b'])).toEqual(['allow', 'ask'])
+    expect(mergeList(['a', 'b'], ['b', 'a'], ['x', 'y', 'a', 'b'])).toEqual(['b', 'x', 'y', 'a'])
+  })
 })
 
 describe('withDerivedFlags', () => {
@@ -141,6 +160,30 @@ describe('useAutosave', () => {
     await act(() => result.current.flush())
     expect(saveSettings).toHaveBeenCalledTimes(1)
     expect(saveSettings.mock.calls[0][0].permissionRules).toEqual([keep, added])
+  })
+
+  it('keeps an "Always allow" rule saved meanwhile ahead of the broader ask it overrides', async () => {
+    const ask = { action: 'ask' as const, tool: 'run_shell', match: '*' }
+    const drop = { action: 'deny' as const, tool: 'run_shell', match: 'rm *' }
+    const always = { action: 'allow' as const, tool: 'run_shell', match: 'npm test' }
+    const opened = { ...base, permissionRules: [ask, drop] }
+    const getSettings = vi.fn().mockResolvedValue({ ...opened, permissionRules: [always, ask, drop] })
+    const saveSettings = vi.fn(async (s: AppSettings) => s)
+    window.api = { getSettings, saveSettings } as unknown as typeof window.api
+    const { result, rerender } = renderHook((p: { settings: AppSettings }) =>
+      useAutosave({
+        settings: p.settings,
+        setSettings: vi.fn(),
+        initial: opened,
+        containerRef: { current: null },
+        onSaved: vi.fn(),
+        delayMs: 60_000
+      }),
+      { initialProps: { settings: opened } }
+    )
+    rerender({ settings: { ...opened, permissionRules: [ask] } })
+    await act(() => result.current.flush())
+    expect(saveSettings.mock.calls[0][0].permissionRules).toEqual([always, ask])
   })
 })
 
