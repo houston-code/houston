@@ -116,7 +116,7 @@ hardened against every one of these; see `hardenedGitArgs` in
 
 **Detect after each command, ask, and undo on request**
 ([`src/main/agent/gitGuard.ts`](../src/main/agent/gitGuard.ts)). Before the run's first
-shell command Houston snapshots, for each root: the hooks directory (by content hash
+shell command or file-tool write Houston snapshots, for each root: the hooks directory (by content hash
 and mode, ignoring `*.sample`), the exec-capable keys in the repository's own config
 files (`config`, every `config.worktree`, one level of `include.path`), every
 `commondir`, the `.git` pointer file, and the same for each nested repository the index
@@ -124,9 +124,11 @@ records as a submodule, since the root's `git status` recurses into those and ru
 their fsmonitor. For a linked worktree that covers the shared common dir, the other
 worktrees' redirects, and the main checkout's index too, because the sandbox makes the
 common dir writable (see `gitWritableRoots`). After each foreground `run_shell` (and
-when a background shell's output is read or it is stopped, and after each verify-on-stop
-command, which runs the project's scripts outside the tool-approval gate), it compares
-again:
+when a background shell's output is read, it is waited on with `wait_for`, it is
+stopped, or the user moves a running command to the background; after each
+verify-on-stop command, which runs the project's scripts outside the tool-approval gate;
+and after a file-tool write whose path, as written or with symlinks resolved, lies in git
+exec data or in a git dir the baseline found), it compares again:
 
 - Settings that run nothing (`user.*`, remotes, upstreams, `core.fsmonitor=true`, which
   selects git's built-in daemon) are never reported.
@@ -136,7 +138,10 @@ again:
   restores exactly those items (a key's previous values, a hook's previous bytes and
   mode, or no file at all) and leaves unrelated changes from the same command alone;
   Keep makes the new state the baseline and the result names the commands to remove it
-  by hand. With nobody to ask (headless) it undoes.
+  by hand. With nobody to ask (headless) it undoes. After an undo the new baseline is
+  the state the question was asked about with the undone items put back, never a fresh
+  snapshot, so something another writer (a background shell, a writable subagent)
+  planted while the question was open is still reported at the next check.
 - Each run compares against its own baseline, so a change made while one chat's
   command ran also appears in every other chat working in the same repository, on that
   chat's next command. Once the user keeps a change in one chat, the others skip that
@@ -178,8 +183,11 @@ breaking routine setup. It could come back as an opt-in strict mode.
 - **The window.** Detection happens when the command finishes. Something else that
   runs git in the repository in between (a shell prompt in another terminal) runs what
   was planted before the question appears.
-- **Background shells** are checked when their output is read or they are stopped, so
-  a change one makes after the run's last such call isn't reported.
+- **Background shells** are checked when their output is read, they are waited on, or
+  they are stopped, so a change one makes after the run's last such call isn't reported.
+  A background shell outlives the run that started it, and a later run's baseline is
+  taken at its first shell command or file write, so a change such a shell makes before
+  then is taken as the starting state.
 - **Untracked nested repositories** aren't inspected: git doesn't enter them on its own,
   only when the user `cd`s into one, which is the same trust as running any other code
   the agent wrote.

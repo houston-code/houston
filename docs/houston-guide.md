@@ -2613,11 +2613,16 @@ stops) Houston checks for those and nothing else:
 - **File edits** to `.git/hooks/…`, `.git/config`, or similar ask every time, like
   project control files do: full auto and "Allow for this chat" don't cover them, only
   an `allow` rule for the path. That holds through a symlink too, so editing `g/config`
-  where `g` points at `.git` asks.
+  where `g` points at `.git` asks. A file edit that lands in `.git` (by that path, or
+  through a link that leads there) is also checked afterwards the same way as a shell
+  command.
+- **Undo puts back only what it listed.** Anything that appears while the question is
+  open (from a background command, say) is asked about at the next check.
 
 The check runs after the command, so a program that a shell prompt ran in the moment
 between the command finishing and the question appearing has already run. A background
-command is checked when its output is read or it is stopped.
+command is checked when its output is read, when the agent waits for it, when it is
+stopped, and when you move a running command to the background.
 
 ### Network calls in full auto
 

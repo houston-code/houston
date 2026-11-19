@@ -2321,6 +2321,65 @@ async function gitGuardAfter(ctx: ToolContext): Promise<string> {
   }
 }
 
+/** The paths a file-writing tool call names, resolved in the roots; unresolvable ones are left out. */
+function writtenPaths(name: string, args: Record<string, unknown>, roots: string[]): string[] {
+  const rels: string[] = []
+  if (typeof args.path === 'string' && args.path) rels.push(args.path)
+  if (name === 'apply_patch' && typeof args.patch === 'string') {
+    try {
+      for (const op of parsePatch(args.patch)) rels.push(op.path, ...(op.type === 'update' && op.moveTo ? [op.moveTo] : []))
+    } catch {
+      // A patch that doesn't parse writes nothing.
+    }
+  }
+  const out: string[] = []
+  for (const rel of rels) {
+    try {
+      out.push(resolveInRoots(roots, rel))
+    } catch {
+      // Outside the roots: the tool refuses it.
+    }
+  }
+  return out
+}
+
+/**
+ * `tool`, a file-writing tool, under the run's git guard. A symlink can lead a write
+ * from an ordinary-looking path into `.git` (a hook, the config), so the baseline is
+ * taken before the write (a file tool can be a run's first change) and the guard checks
+ * after one whose target may lie in git data (see GitGuard.touchesGitData). Any other
+ * write costs a few `realpath`s, not a snapshot.
+ */
+function withGitGuard(tool: ToolDef): ToolDef {
+  return {
+    ...tool,
+    async execute(args, ctx) {
+      const guard = ctx.gitGuard
+      if (!guard) return tool.execute(args, ctx)
+      await gitGuardBefore(ctx)
+      const after = async (): Promise<string> => {
+        try {
+          if (!(await guard.touchesGitData(writtenPaths(tool.schema.name, args, rootsOf(ctx))))) return ''
+        } catch {
+          return ''
+        }
+        return gitGuardAfter(ctx)
+      }
+      let out: string
+      try {
+        out = await tool.execute(args, ctx)
+      } catch (e) {
+        // A failed call may still have written part of its change.
+        const gitNote = await after()
+        if (gitNote && e instanceof Error) e.message = `${e.message}\n${gitNote}`
+        throw e
+      }
+      const gitNote = await after()
+      return gitNote ? `${out}\n${gitNote}` : out
+    }
+  }
+}
+
 const runShell: ToolDef = {
   kind: 'shell',
   summarize: (a) => (a.background === true ? `${str(a, 'command')} (background)` : str(a, 'command')),
@@ -2442,7 +2501,13 @@ const runShell: ToolDef = {
     } finally {
       unoffer?.()
     }
-    if (result.detached) return adoptForeground(command, result.detached, startedAt, ctx)
+    if (result.detached) {
+      // It keeps running, and later changes are checked when it is read, waited on, or
+      // stopped; what it already changed is checked now, as for any finished command.
+      const moved = adoptForeground(command, result.detached, startedAt, ctx)
+      const gitNote = await gitGuardAfter(ctx)
+      return gitNote ? `${moved}\n${gitNote}` : moved
+    }
     const segments: string[] = []
     if (result.stdout) segments.push(result.stdout.trimEnd())
     if (result.stderr) segments.push(result.stderr.trimEnd())
@@ -2678,7 +2743,11 @@ const waitForTool: ToolDef = {
     const id = str(args, 'id').trim()
     if (!id) throw new Error('id is required: an agent id from a background dispatch, a shell id from run_shell, or a session id from spawn_session.')
     if (!ctx.waitFor) throw new Error('Waiting on background work is not available in this context.')
-    return ctx.waitFor(id, waitSeconds(args.timeout_seconds))
+    const result = await ctx.waitFor(id, waitSeconds(args.timeout_seconds))
+    // A background shell can change git state at any point while it runs, and this
+    // result (an exit, or still running) stands in for reading it.
+    const gitNote = await gitGuardAfter(ctx)
+    return gitNote ? `${result}\n${gitNote}` : result
   }
 }
 
@@ -6188,11 +6257,11 @@ const lspTools = makeLspTools({ resolveInRoots, applyPatch })
 
 export const TOOLS: ToolDef[] = [
   readFile,
-  writeFile,
-  editFile,
-  multiEdit,
-  applyPatch,
-  notebookEdit,
+  withGitGuard(writeFile),
+  withGitGuard(editFile),
+  withGitGuard(multiEdit),
+  withGitGuard(applyPatch),
+  withGitGuard(notebookEdit),
   listDir,
   globTool,
   searchTool,

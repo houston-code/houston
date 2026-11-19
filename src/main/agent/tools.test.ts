@@ -66,6 +66,7 @@ import { killShell, MAX_RUNNING_SHELLS_PER_CHAT, readShellOutput, registerShell 
 import { detachedLaunchNote, detachedLaunches } from './detached'
 import { createShellSession } from './shell-session'
 import { GIT_GUARD_UNDO, GitGuard } from './gitGuard'
+import type { AgentQuestion } from '@shared/agent'
 import { backendSupportsSession } from '../sandbox'
 import { MAX_ATTACH_IMAGE_BYTES } from './attachments'
 import { MAX_PAGE_TEXT_CHARS, type CaptureInput, type LocalhostCapture } from './viewlocalhost'
@@ -3585,6 +3586,77 @@ describe('run_shell git guard', () => {
     expect(ask).not.toHaveBeenCalled()
     expect(out).not.toContain('[git:')
   })
+
+  it('checks what a background shell changed when wait_for returns it', { timeout: 30_000 }, async () => {
+    git(['init', '-q'])
+    const ask = vi.fn(async (_q: AgentQuestion) => GIT_GUARD_UNDO)
+    const hook = join(workspace, '.git/hooks/post-checkout')
+    ctx = {
+      ...ctx,
+      gitGuard: new GitGuard([workspace]),
+      askGitGuard: ask,
+      // The background shell plants a hook and exits while the agent waits on it.
+      waitFor: async () => {
+        writeFileSync(hook, '#!/bin/sh\necho evil\n')
+        return 'Background shell sh1 (`./setup.sh`) exited with code 0. It printed nothing.'
+      }
+    }
+    await run('run_shell', { command: 'true' })
+    const out = await run('wait_for', { id: 'sh1' })
+    expect(out).toContain('exited with code 0')
+    expect(ask).toHaveBeenCalledTimes(1)
+    expect(ask.mock.calls[0]![0].question).toContain('new hook .git/hooks/post-checkout')
+    expect(out).toContain('The user chose to undo them')
+    expect(existsSync(hook)).toBe(false)
+  })
+
+  describe('file tools', () => {
+    it('asks about a hook written through a symlink, even before any shell command', { timeout: 30_000 }, async () => {
+      git(['init', '-q'])
+      // Symlinks need privileges on Windows; a junction to the directory works there.
+      symlinkSync(join(workspace, '.git/hooks'), join(workspace, 'tools'), 'junction')
+      const ask = vi.fn(async (_q: AgentQuestion) => GIT_GUARD_UNDO)
+      ctx = { ...ctx, gitGuard: new GitGuard([workspace]), askGitGuard: ask }
+      const out = await run('write_file', { path: 'tools/post-checkout', content: '#!/bin/sh\necho evil\n' })
+      expect(ask).toHaveBeenCalledTimes(1)
+      expect(ask.mock.calls[0]![0].question).toContain('new hook .git/hooks/post-checkout')
+      expect(out).toContain('Wrote ')
+      expect(out).toContain('The user chose to undo them')
+      expect(existsSync(join(workspace, '.git/hooks/post-checkout'))).toBe(false)
+    })
+
+    it('asks about a config key an apply_patch adds to .git/config', { timeout: 30_000 }, async () => {
+      git(['init', '-q'])
+      const ask = vi.fn(async (_q: AgentQuestion) => GIT_GUARD_UNDO)
+      ctx = { ...ctx, gitGuard: new GitGuard([workspace]), askGitGuard: ask }
+      await run('apply_patch', {
+        patch: '*** Begin Patch\n*** Add File: .git/info/extra\n+[core]\n+\tfsmonitor = sh -c evil\n*** End Patch'
+      })
+      // Not exec data on its own: nothing to ask.
+      expect(ask).not.toHaveBeenCalled()
+      const cfg = join(workspace, '.git/config')
+      const before = readFileSync(cfg, 'utf8')
+      await run('apply_patch', {
+        patch: `*** Begin Patch\n*** Update File: .git/config\n@@\n ${before.trimEnd().split('\n').pop()}\n+[core]\n+\tfsmonitor = sh -c evil\n*** End Patch`
+      })
+      expect(ask).toHaveBeenCalledTimes(1)
+      expect(ask.mock.calls[0]![0].question).toContain('core.fsmonitor')
+      expect(() => git(['config', '--get', 'core.fsmonitor'])).toThrow()
+    })
+
+    it('neither asks nor snapshots after an ordinary edit', { timeout: 30_000 }, async () => {
+      git(['init', '-q'])
+      const guard = new GitGuard([workspace])
+      const ask = vi.fn()
+      ctx = { ...ctx, gitGuard: guard, askGitGuard: ask }
+      await run('write_file', { path: 'a.txt', content: 'one\n' })
+      const snapshot = vi.spyOn(guard, 'snapshot')
+      await run('write_file', { path: 'b.txt', content: 'two\n' })
+      await run('edit_file', { path: 'a.txt', old_string: 'one', new_string: 'uno' })
+      expect(snapshot).not.toHaveBeenCalled()
+      expect(ask).not.toHaveBeenCalled()
+    })
+  })
 })
 
 describe('run_shell moved to the background while it runs', () => {
@@ -3655,6 +3727,22 @@ describe('run_shell moved to the background while it runs', () => {
       expect(full.stdout).toContain('second')
     })
   }
+
+  it('checks what the command already changed in git when it is moved', { timeout: 30_000 }, async () => {
+    execFileSync('git', ['init', '-q'], { cwd: workspace, stdio: 'pipe' })
+    const m = moveWhenPrinted('planted')
+    const ask = vi.fn(async (_q: AgentQuestion) => GIT_GUARD_UNDO)
+    ctx = { ...ctx, offerBackground: m.offer, gitGuard: new GitGuard([workspace]), askGitGuard: ask }
+    const out = await run('run_shell', { command: "printf '#!/bin/sh\\n' > .git/hooks/post-checkout; echo planted; sleep 1" })
+    await m.moved
+    expect(out).toContain('The user moved this command to the background')
+    expect(ask).toHaveBeenCalledTimes(1)
+    expect(ask.mock.calls[0]![0].question).toContain('new hook .git/hooks/post-checkout')
+    expect(out).toContain('The user chose to undo them')
+    const id = /background shell (\w+)/.exec(out)?.[1]
+    await vi.waitFor(() => expect(readShellOutput(id!, { full: true }).running).toBe(false), { timeout: 10_000 })
+    expect(existsSync(join(workspace, '.git/hooks/post-checkout'))).toBe(false)
+  })
 
   it('a command that finishes without being moved returns its output as usual and withdraws the offer', async () => {
     const m = moveWhenPrinted('never printed')
