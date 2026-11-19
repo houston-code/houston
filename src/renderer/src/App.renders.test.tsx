@@ -491,3 +491,26 @@ describe('App putting a message back in a message box', () => {
     expect(appendComposerImages).toHaveBeenCalledWith('c9', [img])
   })
 })
+
+describe('App closing Settings', () => {
+  it('puts the saved theme back when Settings closes without saving the one it previewed', async () => {
+    installApi(1, { saveSettings: vi.fn(async () => Promise.reject(new Error('disk full'))) })
+    render(<App />)
+    await settle()
+    const saved = document.documentElement.dataset.theme
+    fireEvent.keyDown(window, { key: ',', ctrlKey: true, metaKey: true })
+    await settle()
+    fireEvent.click(await screen.findByRole('button', { name: 'Appearance' }))
+    const preview = saved === 'light' ? 'dark' : 'light'
+    fireEvent.change(screen.getByRole('combobox', { name: 'Color theme' }), { target: { value: preview } })
+    await settle()
+    expect(document.documentElement.dataset.theme).toBe(preview)
+    // The save fails: the first close stays open with the error, the second leaves.
+    fireEvent.click(screen.getByRole('button', { name: 'Back to app' }))
+    expect(await screen.findByText(/Could not save settings: disk full/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to app' }))
+    await settle()
+    expect(screen.queryByRole('button', { name: 'Back to app' })).toBeNull()
+    expect(document.documentElement.dataset.theme).toBe(saved)
+  })
+})

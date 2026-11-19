@@ -28,7 +28,8 @@ export function SettingsModal({
   onSaved,
   onShowScorecard,
   onShowDoctor,
-  onTypeInTerminal
+  onTypeInTerminal,
+  closeRef
 }: {
   initial: AppSettings
   /** The section to open on (e.g. Appearance for /theme). */
@@ -45,6 +46,8 @@ export function SettingsModal({
   onShowDoctor?: () => void
   /** Open the terminal with a command typed in, not run (Tools' Install buttons). */
   onTypeInTerminal?: (command: string) => void
+  /** Set while open to a close that saves what is pending first, like Esc or Back. */
+  closeRef?: { current: (() => void) | null }
 }): JSX.Element {
   const [settings, setSettings] = useState<AppSettings>(initial)
   const [tab, setTab] = useState<TabId>(initialTab)
@@ -182,10 +185,17 @@ export function SettingsModal({
     }
   }
 
-  // Leaving saves a key that was typed but not saved yet, as every other setting
-  // saves on its own; a key that fails to save keeps Settings open with the error.
+  // Leaving saves a key that was typed but not saved yet, and any change still pending,
+  // as every other setting saves on its own. A key or change that fails to save keeps
+  // Settings open with the error; closing again after a failed change leaves without
+  // it (a read-only disk must not trap the user here).
   const closing = useRef(false)
-  const requestClose = async (): Promise<void> => {
+  const [leaveUnsaved, setLeaveUnsaved] = useState(false)
+  useEffect(() => {
+    if (autosave.status !== 'error') setLeaveUnsaved(false)
+  }, [autosave.status])
+  /** Leave Settings (`go`) once what is pending is saved; right away when nothing is. */
+  const settleThen = (go: () => void): void => {
     if (closing.current) return
     // A field that commits when it loses focus (an MCP server's id or arguments, a
     // number box) gets no blur when Settings unmounts under it (Esc), so blur it here
@@ -194,17 +204,33 @@ export function SettingsModal({
     if (active instanceof HTMLElement && bodyRef.current?.contains(active)) flushSync(() => active.blur())
     const keyIds = new Set([...settings.providers.map((p) => p.id), ...SEARCH_PROVIDERS.map((p) => p.keyId)])
     const unsaved = Object.keys(keyInputs).filter((id) => keyInputs[id]?.trim() && keyIds.has(id))
-    if (unsaved.length > 0) {
-      closing.current = true
+    if (unsaved.length === 0 && !autosave.hasPending()) return go()
+    const discard = leaveUnsaved
+    closing.current = true
+    void (async () => {
       try {
         for (const id of unsaved) if (!(await saveKey(id))) return
+        if (!(await autosave.flush()) && !discard) return setLeaveUnsaved(true)
       } finally {
         closing.current = false
       }
-    }
-    onClose()
+      go()
+    })()
   }
-  useFocusTrap(modalRef, () => void requestClose())
+  const requestClose = (): void => settleThen(onClose)
+  useFocusTrap(modalRef, requestClose)
+  // The app's own Esc (with nothing focused) closes through here too.
+  useEffect(() => {
+    if (!closeRef) return
+    closeRef.current = requestClose
+    return () => {
+      closeRef.current = null
+    }
+  })
+  /** A way out of Settings to another view, once what is pending is saved. */
+  const leaveFor =
+    <A extends unknown[]>(go: ((...args: A) => void) | undefined) =>
+    go && ((...args: A): void => settleThen(() => go(...args)))
 
   const removeKey = async (id: string): Promise<void> => {
     setBusy(id)
@@ -220,7 +246,7 @@ export function SettingsModal({
 
   // For an action main performs against the stored settings (fetching a provider's
   // models, MCP OAuth): save whatever is pending first so it sees the edits.
-  const persistNow = autosave.flush
+  const persistNow = async (): Promise<void> => void (await autosave.flush())
 
   const ctx: SettingsCtx = {
     settings,
@@ -233,9 +259,9 @@ export function SettingsModal({
     saveKey,
     removeKey,
     persistNow,
-    onShowScorecard,
-    onShowDoctor,
-    onTypeInTerminal,
+    onShowScorecard: leaveFor(onShowScorecard),
+    onShowDoctor: leaveFor(onShowDoctor),
+    onTypeInTerminal: leaveFor(onTypeInTerminal),
     workspace,
     policy
   }
@@ -335,7 +361,7 @@ export function SettingsModal({
             {/* The way out leads the sidebar, styled as navigation rather than a button
                 beside the title: it is the first thing on the left, and nowhere near
                 the macOS window close button, which a far-right ✕ used to invite. */}
-            <button className="set-nav__back" onClick={() => void requestClose()} title="Back to the app (Esc)">
+            <button className="set-nav__back" onClick={requestClose} title="Back to the app (Esc)">
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M10 3.5L5.5 8l4.5 4.5" />
               </svg>
@@ -442,6 +468,7 @@ export function SettingsModal({
             {autosave.error && (
               <span role="alert" className="set-foot__error">
                 {autosave.error}
+                {leaveUnsaved && ' Close again to leave without saving it.'}
               </span>
             )}
           </div>

@@ -74,23 +74,52 @@ function entryId(v: unknown): string {
   return JSON.stringify(v)
 }
 
+/** An entry's whole value, ignoring the derived flags main recomputes on every read. */
+function entryValue(v: unknown): string {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return JSON.stringify({ ...v, hasKey: undefined, hasOAuth: undefined })
+  return JSON.stringify(v)
+}
+
 /**
  * A three-way merge of one list setting. `base` is the list this panel started from,
  * `next` the user's edit of it, `current` what is stored now (another writer may have
  * changed it meanwhile: an "Always allow" rule saved from an approval prompt, a server
- * added elsewhere). The user's list wins, in the user's order, except that entries
- * added elsewhere since `base` are kept (appended) and entries removed elsewhere stay
- * removed. An entry with an id is matched by that id, so editing one replaces it (the
- * user's copy wins) and the result never holds a second entry with that id; any other
- * entry is matched by its whole value, so an edit is a removal plus an addition.
+ * added elsewhere, a model a run marked unavailable). The user's list wins, in the
+ * user's order, except that entries added elsewhere since `base` are kept and entries
+ * removed elsewhere stay removed. An entry added elsewhere goes back at its place in the
+ * stored list (before the stored entry that follows it), so a rule prepended to win over
+ * a broader one still comes first. An entry with an id is matched by that id, so editing
+ * one replaces it (the user's copy wins) and the result never holds a second entry with
+ * that id; one the user left as it was is taken as stored now, so a change made to it
+ * elsewhere isn't reverted. Any other entry is matched by its whole value, so an edit is
+ * a removal plus an addition.
  */
 export function mergeList<T>(base: readonly T[] | undefined, next: readonly T[], current: readonly T[] | undefined): T[] {
-  const baseIds = new Set((base ?? []).map(entryId))
-  const currentIds = new Set((current ?? []).map(entryId))
+  const stored = current ?? []
+  const baseById = new Map((base ?? []).map((v) => [entryId(v), v] as const))
+  const storedById = new Map(stored.map((v) => [entryId(v), v] as const))
   const nextIds = new Set(next.map(entryId))
-  const removedElsewhere = (v: T): boolean => baseIds.has(entryId(v)) && !currentIds.has(entryId(v))
-  const addedElsewhere = (current ?? []).filter((v) => !baseIds.has(entryId(v)) && !nextIds.has(entryId(v)))
-  return [...next.filter((v) => !removedElsewhere(v)), ...addedElsewhere]
+  const result = next
+    .filter((v) => !(baseById.has(entryId(v)) && !storedById.has(entryId(v))))
+    .map((v) => {
+      const id = entryId(v)
+      const was = baseById.get(id)
+      const now = storedById.get(id)
+      return id.startsWith('id:') && was !== undefined && now !== undefined && entryValue(was) === entryValue(v) ? now : v
+    })
+  // Last to first, so a run of entries added together keeps its order.
+  for (let i = stored.length - 1; i >= 0; i--) {
+    const id = entryId(stored[i])
+    if (baseById.has(id) || nextIds.has(id)) continue
+    let at = result.length
+    for (let j = i + 1; j < stored.length && at === result.length; j++) {
+      const following = entryId(stored[j])
+      const k = result.findIndex((r) => entryId(r) === following)
+      if (k >= 0) at = k
+    }
+    result.splice(at, 0, stored[i])
+  }
+  return result
 }
 
 export type SaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
@@ -137,7 +166,10 @@ export function useAutosave({
   status: SaveStatus
   /** Why the last save failed, until a later one succeeds. */
   error: string | null
-  flush: () => Promise<void>
+  /** Save what is pending now; resolves false when that save failed. */
+  flush: () => Promise<boolean>
+  /** Whether a change is not saved yet (or its save is still in flight). */
+  hasPending: () => boolean
   undo: (() => void) | null
 } {
   const [status, setStatus] = useState<SaveStatus>('idle')
@@ -161,12 +193,13 @@ export function useAutosave({
   const onErrorRef = useRef(onError)
   onErrorRef.current = onError
 
-  const flush = useCallback(async (): Promise<void> => {
+  const flush = useCallback(async (): Promise<boolean> => {
     if (inFlight.current) await inFlight.current
     const next = working.current
     const patch = settingsPatch(baseline.current, next)
-    if (!patch) return
+    if (!patch) return true
     const replaced = baseline.current
+    let ok = false
     setStatus('saving')
     const run = (async () => {
       try {
@@ -192,6 +225,7 @@ export function useAutosave({
         setError(null)
         setStatus('saved')
         onSavedRef.current(fresh)
+        ok = true
       } catch (e) {
         failed.current = JSON.stringify(patch)
         const message = `Could not save settings: ${(e as Error).message}`
@@ -205,6 +239,7 @@ export function useAutosave({
     })()
     inFlight.current = run
     await run
+    return ok
   }, [])
 
   useEffect(() => {
@@ -237,5 +272,6 @@ export function useAutosave({
         setSettings(target)
       }
     : null
-  return { status, error, flush, undo }
+  const hasPending = (): boolean => inFlight.current !== null || settingsPatch(baseline.current, working.current) !== null
+  return { status, error, flush, hasPending, undo }
 }
