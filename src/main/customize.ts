@@ -154,6 +154,28 @@ function describe(text: string): string {
   return (data.description?.trim() || first || 'No description.').slice(0, 160)
 }
 
+/**
+ * Whether the loader takes the item in, as skills.ts, commands.ts and agents.ts read it:
+ * not empty, not switched off, a command with a template, and a skill whose fields parse
+ * (`.agents/skills` held to the format). Only such an item claims its name: one the
+ * loader skips leaves the name to the next one down.
+ */
+function loads(loc: Loc, text: string, name: string): boolean {
+  const raw = text.trim()
+  if (!raw) return false
+  if (isSkillLoc(loc)) {
+    const { fields } = parseStructuredFrontmatter(raw)
+    if (isDisabledFlag(typeof fields.disabled === 'string' ? fields.disabled : undefined)) return false
+    return parseSkillFields(fields, name, loc === 'skill-agents') !== null
+  }
+  const { data, body } = parseFrontmatter(raw)
+  if (isDisabledFlag(data.disabled)) return false
+  return loc === 'command' ? body.trim() !== '' : true
+}
+
+/** Listed items the loader skips (see loads), so they never shadow another. */
+const skipped = new WeakSet<CustomItem>()
+
 async function listKind(loc: Loc, scope: CustomScope, root: string): Promise<CustomItem[]> {
   const kind: CustomKind = isSkillLoc(loc) ? 'skill' : (loc as CustomKind)
   const dir = kindDir(loc, root)
@@ -182,7 +204,7 @@ async function listKind(loc: Loc, scope: CustomScope, root: string): Promise<Cus
     const text = await readText(file)
     if (text === null) continue
     const info = kind === 'skill' ? skillInfo(text, name) : null
-    items.push({
+    const item: CustomItem = {
       id: `${loc}:${scope}:${name}`,
       kind,
       scope,
@@ -193,7 +215,9 @@ async function listKind(loc: Loc, scope: CustomScope, root: string): Promise<Cus
       ...(loc === 'skill-agents' ? { source: 'agents' as const } : {}),
       ...(info?.details.length ? { details: info.details } : {}),
       ...(info?.problems.length ? { problems: info.problems } : {})
-    })
+    }
+    if (!loads(loc, text, name)) skipped.add(item)
+    items.push(item)
   }
   return items
 }
@@ -224,11 +248,13 @@ export async function customizeOverview(deps: CustomizeDeps): Promise<CustomizeO
     ? (await Promise.all(locs.map((k) => listKind(k, 'project', deps.workspace as string)))).flat()
     : []
   const user = (await Promise.all(locs.map((k) => listKind(k, 'user', home)))).flat()
+  // Only an item the loader takes in claims its name: a switched-off one, or an
+  // `.agents` skill that breaks the format, leaves it to the next one down.
   const taken = new Set<string>()
   for (const i of [...project, ...user]) {
     const key = `${i.kind}:${i.name.toLowerCase()}`
     if (taken.has(key)) i.shadowed = true
-    else taken.add(key)
+    else if (!skipped.has(i)) taken.add(key)
   }
   return { items: [...project, ...user], instructions: await listInstructionFiles(deps.workspace, home) }
 }

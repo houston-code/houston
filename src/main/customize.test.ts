@@ -48,17 +48,43 @@ function put(root: string, rel: string, text: string): string {
 describe('customizeOverview', () => {
   it('lists both places, marks switched-off items, and flags a user item a project one hides', async () => {
     put(ws, '.houston/skills/deploy/SKILL.md', '---\nname: deploy\ndescription: Ship it\n---\nSteps')
-    put(ws, '.houston/commands/review.md', '---\ndescription: Review\ndisabled: true\n---\nGo')
+    put(ws, '.houston/commands/lint.md', '---\ndescription: Lint\ndisabled: true\n---\nGo')
+    put(ws, '.houston/commands/review.md', '---\ndescription: Review\n---\nGo')
     put(home, '.houston/commands/review.md', 'Mine')
     put(home, '.houston/agents/explainer.md', '# Explains code\nYou explain.')
     put(home, '.houston/commands/bad name.md', 'skipped')
     const o = await customizeOverview(deps())
     expect(o.items).toEqual([
       { id: 'skill:project:deploy', kind: 'skill', scope: 'project', name: 'deploy', description: 'Ship it', file: '.houston/skills/deploy/SKILL.md', enabled: true },
-      { id: 'command:project:review', kind: 'command', scope: 'project', name: 'review', description: 'Review', file: '.houston/commands/review.md', enabled: false },
+      { id: 'command:project:lint', kind: 'command', scope: 'project', name: 'lint', description: 'Lint', file: '.houston/commands/lint.md', enabled: false },
+      { id: 'command:project:review', kind: 'command', scope: 'project', name: 'review', description: 'Review', file: '.houston/commands/review.md', enabled: true },
       { id: 'command:user:review', kind: 'command', scope: 'user', name: 'review', description: 'Mine', file: '~/.houston/commands/review.md', enabled: true, shadowed: true },
       { id: 'agent:user:explainer', kind: 'agent', scope: 'user', name: 'explainer', description: 'Explains code', file: '~/.houston/agents/explainer.md', enabled: true }
     ])
+  })
+
+  it("doesn't flag an item hidden only by one the loader skips: switched off, or an .agents skill that breaks the format", async () => {
+    put(ws, '.houston/commands/review.md', '---\ndescription: Review\ndisabled: true\n---\nGo')
+    put(home, '.houston/commands/review.md', 'Mine')
+    put(ws, '.houston/agents/explainer.md', '---\ndisabled: true\n---\nOurs.')
+    put(home, '.houston/agents/explainer.md', 'Mine.')
+    put(ws, '.houston/skills/deploy/SKILL.md', '---\nname: deploy\ndescription: Ship it\ndisabled: true\n---\nSteps')
+    put(home, '.houston/skills/deploy/SKILL.md', '---\nname: deploy\ndescription: Mine\n---\nSteps')
+    // No description: .agents/skills holds it to the format, so it never loads.
+    put(ws, '.agents/skills/pdf/SKILL.md', '---\nname: pdf\n---\nSteps')
+    put(home, '.agents/skills/pdf/SKILL.md', '---\nname: pdf\ndescription: Mine\n---\nSteps')
+    const o = await customizeOverview(deps())
+    const byId = Object.fromEntries(o.items.map((i) => [i.id, i]))
+    for (const id of ['command:user:review', 'agent:user:explainer', 'skill:user:deploy', 'skill-agents:user:pdf']) {
+      expect(byId[id], id).toBeDefined()
+      expect(byId[id].shadowed, id).toBeUndefined()
+    }
+    // What the loaders really offer: the user's own, every one.
+    expect((await loadCommands(ws, home)).find((c) => c.name === 'review')?.source).toBe('user')
+    expect((await loadAgents(ws, home)).find((a) => a.name === 'explainer')?.systemPrompt).toBe('Mine.')
+    const skills = await loadSkills(ws, home)
+    expect(skills.find((s) => s.name === 'deploy')?.description).toBe('Mine')
+    expect(skills.find((s) => s.name === 'pdf')?.description).toBe('Mine')
   })
 
   it('lists only the user folder with no project open', async () => {
