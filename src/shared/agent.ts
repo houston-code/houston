@@ -160,6 +160,13 @@ export interface ChatMessage {
    */
   subagents?: SubagentRecord[]
   /**
+   * Present on an assistant turn whose tool calls (or, on the turn's last reply, its
+   * checks) asked the user something outside `ask_user`: each question with the answer
+   * the run received, oldest first, so a reopened chat still shows the decision.
+   * Display-only; providers never see it.
+   */
+  questions?: AnsweredQuestion[]
+  /**
    * Present on a `user` turn that was steered into a running turn (read before the
    * agent's next step) rather than sent as its own turn. Kept on the saved message
    * for the record; the transcript shows it as a plain user message. Providers never
@@ -1241,6 +1248,18 @@ export interface AgentQuestion {
 }
 
 /**
+ * A question Houston asked from inside a tool call or a check rather than through
+ * `ask_user` (the git guard's "Undo these changes / Keep them"), saved with the answer
+ * the run received. `ask_user` needs no record: its call and result hold both.
+ */
+export interface AnsweredQuestion extends AgentQuestion {
+  /** The id the question was asked under: the tool call's own, or one minted from it. */
+  callId: string
+  /** What the run received: the user's answer, or the stopped/empty note. */
+  answer: string
+}
+
+/**
  * One field an MCP server asks for in an elicitation request. The MCP spec
  * restricts `requestedSchema` to a flat object of primitives, so a field is
  * always one of these kinds; anything exotic degrades to a plain string input.
@@ -1527,6 +1546,15 @@ export type AgentEvent =
       question: string
       options: QuestionOption[]
       multiSelect?: boolean
+    }
+  | {
+      // A `tool_question` got its answer (from the user, or the stopped note when the
+      // run ended first). Recorded in the replay buffer, so a renderer that re-opens the
+      // chat mid-turn shows the question as answered rather than dropping or re-asking it.
+      runId: string
+      type: 'question_answered'
+      callId: string
+      answer: string
     }
   | {
       // The agent presented a finished plan via `present_plan` and is now blocked

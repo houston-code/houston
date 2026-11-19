@@ -17,6 +17,7 @@ import type {
   TokenUsage,
   ProviderWebSearchUsage,
   AgentQuestion,
+  AnsweredQuestion,
   ReasoningBlock,
   ReasoningEffort,
   StopReason,
@@ -2613,12 +2614,44 @@ export async function startRun(
     // Ask the user a structured question under `callId` and block until they answer.
     // The resolver is registered before the event is emitted so a fast reply can't
     // race ahead of it; cancelRun resolves any still-pending question.
-    const askRunUser = (callId: string, q: AgentQuestion): Promise<string> =>
+    // Save an answered question on the latest assistant turn: the one whose tool call
+    // asked it, or, for a check after the reply, the reply itself. The next persist
+    // writes it, and until then the replay buffer holds the question and its answer.
+    // Scrubbed like a tool result, since the git guard quotes config values.
+    const recordAnsweredQuestion = (q: AnsweredQuestion): void => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i]
+        if (m.role !== 'assistant') continue
+        const saved: AnsweredQuestion = {
+          callId: q.callId,
+          question: redact(q.question),
+          options: q.options.map((o) => ({
+            label: redact(o.label),
+            ...(o.description ? { description: redact(o.description) } : {})
+          })),
+          ...(q.multiSelect ? { multiSelect: true } : {}),
+          answer: redact(q.answer)
+        }
+        // In place, as attachBackgroundRecords does: the round may still hold this turn.
+        m.questions = [...(m.questions ?? []), saved]
+        return
+      }
+    }
+
+    // Every answer is announced (question_answered), so a chat reopened mid-turn replays
+    // the card as answered. A question asked outside ask_user (`recorded`: the git
+    // guard) has no tool call and result of its own to hold it, so it is also saved on
+    // the assistant turn it belongs to; ask_user's own call and result already hold it.
+    const askRunUser = (callId: string, q: AgentQuestion, opts: { recorded?: boolean } = {}): Promise<string> =>
       new Promise<string>((resolve) => {
         // After Stop, cancelRun has already answered every pending question; a new one
         // would block forever, so answer it the same way.
         if (abort.signal.aborted || run.ending) return resolve(QUESTION_STOPPED_ANSWER)
-        run.questions.set(callId, resolve)
+        run.questions.set(callId, (answer: string) => {
+          if (opts.recorded) recordAnsweredQuestion({ callId, ...q, answer })
+          emit({ type: 'question_answered', callId, answer })
+          resolve(answer)
+        })
         run.pendingQuestions.set(callId, {
           question: q.question,
           options: q.options,
@@ -3053,7 +3086,7 @@ export async function startRun(
               gitGuard,
               ...(req.unattended === true
                 ? {}
-                : { askGitGuard: (q: AgentQuestion) => askRunUser(mintSubCallId(callId, 'git'), q) }),
+                : { askGitGuard: (q: AgentQuestion) => askRunUser(mintSubCallId(callId, 'git'), q, { recorded: true }) }),
               gateUnconfinedShell,
               // Delegated commands and edits belong on this turn's receipt, credited
               // to the agent that ran them.
@@ -3434,7 +3467,7 @@ export async function startRun(
       ...(shellSpill ? { spillShellOutput: (out: string, note?: string) => shellSpill.spill(out, note) } : {}),
       gitGuard,
       // Nobody can answer a headless run, so the guard undoes a change instead of asking.
-      ...(req.unattended === true ? {} : { askGitGuard: (q: AgentQuestion) => askRunUser(callId, q) }),
+      ...(req.unattended === true ? {} : { askGitGuard: (q: AgentQuestion) => askRunUser(callId, q, { recorded: true }) }),
       recordEvidence: (e) => recordEvidence(e),
       checkTodos,
       fileTracker,
@@ -5208,7 +5241,7 @@ export async function startRun(
               ...(req.unattended === true
                 ? {}
                 : // Unique across the chat's turns: question cards are keyed by this id.
-                  { ask: (q: AgentQuestion) => askRunUser(`${runId}:verify-git-${verifyPassesRun}`, q) })
+                  { ask: (q: AgentQuestion) => askRunUser(`${runId}:verify-git-${verifyPassesRun}`, q, { recorded: true }) })
             })
           } catch {
             // Unchecked, as for run_shell.

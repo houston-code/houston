@@ -9260,6 +9260,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'steers_returned':
           returnedSteers.push(...e.texts)
           break
+        // The picker that took the answer already shows it.
+        case 'question_answered':
+          break
         default:
           assertNever(e, 'tui:unhandled agent event')
       }

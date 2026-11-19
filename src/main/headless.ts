@@ -1419,6 +1419,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
         case 'steered':
         case 'steers_returned':
         case 'run_info':
+        case 'question_answered':
           break
         default:
           assertNever(e, 'headless:unhandled agent event')

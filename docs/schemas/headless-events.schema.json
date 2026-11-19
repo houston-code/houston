@@ -55,6 +55,9 @@
       "$ref": "#/$defs/event_tool_question"
     },
     {
+      "$ref": "#/$defs/event_question_answered"
+    },
+    {
       "$ref": "#/$defs/event_plan_ready"
     },
     {
@@ -853,6 +856,30 @@
         },
         "multiSelect": {
           "type": "boolean"
+        }
+      }
+    },
+    "event_question_answered": {
+      "description": "A question got its answer (headless's automatic one, or the stopped note when the run ended first).",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "callId",
+        "answer"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "question_answered"
+        },
+        "callId": {
+          "type": "string"
+        },
+        "answer": {
+          "type": "string"
         }
       }
     },

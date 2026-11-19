@@ -2,6 +2,7 @@ import {
   COMPACTION_SUMMARY_PREFIX,
   SYSTEM_NOTE_PREFIX,
   type AgentEvent,
+  type AnsweredQuestion,
   type ChatMessage,
   type ElicitationField,
   type PlanPayload,
@@ -731,6 +732,12 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         }
       ]
     }
+    case 'question_answered':
+      // The run took an answer: from this window (already shown), another client, or
+      // the stop. Also what replays a git-guard answer onto a chat reopened mid-turn.
+      return items.map((it) =>
+        it.kind === 'question' && it.id === e.callId && it.answer !== e.answer ? { ...it, answer: e.answer } : it
+      )
     case 'elicitation': {
       const finalized = finalizeStreaming(items)
       // Upsert (see tool_question): a replay on re-adopt updates in place.
@@ -1071,6 +1078,8 @@ export function itemsFromMessages(
           ...(typeof m.at === 'string' ? { at: m.at } : {})
         })
       }
+      const asked = savedQuestions(m.questions)
+      const placed = new Set<AnsweredQuestion>()
       for (const tc of m.toolCalls ?? []) {
         const res = resultByCallId.get(tc.id)
         // ask_user is shown as a (now-answered) question card, not a tool row.
@@ -1113,7 +1122,16 @@ export function itemsFromMessages(
         if (pr) {
           items.push({ kind: 'notice', id: nextId(), text: prNoticeText(pr), tone: 'info' })
         }
+        // A question the call asked (the git guard after a command, its own or a
+        // subagent's), answered, right below the row as it showed live.
+        for (const q of asked) {
+          if (placed.has(q) || !askedBy(q.callId, tc.id)) continue
+          placed.add(q)
+          items.push(answeredCard(q))
+        }
       }
+      // The rest were asked by the turn's checks, after its reply.
+      for (const q of asked) if (!placed.has(q)) items.push(answeredCard(q))
       // Saved on the turn's last assistant message, after everything that turn did.
       if (m.receipt) items.push({ kind: 'receipt', id: nextId(), receipt: m.receipt })
     }
@@ -1131,6 +1149,38 @@ export function itemsFromMessages(
     }
   }
   return items
+}
+
+/**
+ * The answered questions saved on an assistant message (see ChatMessage.questions),
+ * keeping only well-formed entries: the log is read from disk.
+ */
+function savedQuestions(raw: unknown): AnsweredQuestion[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (q): q is AnsweredQuestion =>
+      !!q &&
+      typeof q === 'object' &&
+      typeof q.callId === 'string' &&
+      typeof q.question === 'string' &&
+      typeof q.answer === 'string'
+  )
+}
+
+/** Whether a question was asked under a tool call: with its id, or one minted from it. */
+function askedBy(questionId: string, callId: string): boolean {
+  return questionId === callId || questionId.startsWith(`${callId}.`)
+}
+
+function answeredCard(q: AnsweredQuestion): QuestionItem {
+  return {
+    kind: 'question',
+    id: q.callId,
+    question: q.question,
+    options: optionsFromArgs(q.options),
+    ...(q.multiSelect === true ? { multiSelect: true } : {}),
+    answer: q.answer
+  }
 }
 
 /**

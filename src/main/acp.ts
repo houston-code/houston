@@ -2180,6 +2180,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         // Sent only to runs that set announceTools (the headless --json init line).
         case 'run_info':
           break
+        // The answer the question handler above already sent back.
+        case 'question_answered':
+          break
         default:
           assertNever(e, 'acp:unhandled agent event')
       }
