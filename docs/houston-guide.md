@@ -317,7 +317,8 @@ These work in an interactive session too (see "Session flags").
   JSON Schema. Houston checks it and gives the agent one round to correct a miss.
 - **`--mcp-config <file>`** adds MCP servers for this run only: the `mcpServers`
   shape of `.houston/settings.json`, at most 10. Their tools are named
-  `mcp__run-<id>__<tool>`.
+  `mcp__run-<id>__<tool>`, and a local one starts in the run's folder (or in its
+  `cwd`, resolved against that folder).
 - **`--input-format stream-json`** (with `--json`) reads one
   `{"type":"user","content":"..."}` line per turn from stdin. Each turn starts after
   the previous one finishes, until end of input.
@@ -480,8 +481,8 @@ and cost as usage.
   the same place as headless `--append-system-prompt`. It can't replace them.
 - **Compaction** is shown as compaction progress in an editor that supports it, and
   as a notice otherwise. MCP servers
-  the editor passes join your own for that session (as `run-acp-<name>`) and are never
-  saved to your settings.
+  the editor passes join your own for that session (as `run-acp-<name>`), start in the
+  session's folder, and are never saved to your settings.
 - **Credentials** resolve as in the CLI: environment variables, then saved keys. With
   no provider set up, the editor gets an "authentication required" error; an editor
   that can open a terminal is offered to run `houston -i`, which walks you through
@@ -2937,7 +2938,8 @@ the same way, and counts toward the same decision.
   being ignored.
 - **Once trusted:** project `allow` rules sit *below* your own rules (they fill gaps,
   never override you), project hooks run after yours, project MCP servers appear
-  namespaced as `mcp__proj-<id>__<tool>`, and project plugins run if you have also
+  namespaced as `mcp__proj-<id>__<tool>` (a local one starts in the project folder,
+  or in its `cwd` resolved against that folder), and project plugins run if you have also
   turned on `projectPlugins` (see "Plugins").
 
 **Reviewing decisions.** Settings > *Permissions* > *Trusted folders* lists every

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { HOOK_EVENTS, type Hook, type McpServerConfig, type PermissionRule } from '@shared/types'
 import { sanitizeServerId } from '@shared/mcp'
 import { parseTightenOnlyRules } from './permissions'
@@ -183,10 +183,14 @@ export function parseProjectMcpServers(raw: unknown): McpServerConfig[] {
  * `origin: 'project'` so the connection manager reads their header/env values
  * from the config itself rather than the user's secret store, and they are never
  * persisted into the user's settings (the merge happens per run).
+ *
+ * A stdio server starts in the folder whose config named it ({@link inWorkspace}),
+ * not wherever Houston itself was launched from.
  */
 export function mergeProjectMcpServers(
   user: McpServerConfig[] | undefined,
-  project: McpServerConfig[]
+  project: McpServerConfig[],
+  workspace: string
 ): McpServerConfig[] {
   const taken = new Set((user ?? []).map((s) => s.id))
   const merged = [...(user ?? [])]
@@ -194,9 +198,23 @@ export function mergeProjectMcpServers(
     const id = `proj-${s.id}`
     if (taken.has(id)) continue
     taken.add(id)
-    merged.push({ ...s, id, origin: 'project' })
+    merged.push(inWorkspace({ ...s, id, origin: 'project' }, workspace))
   }
   return merged
+}
+
+/**
+ * A project or run stdio server with its working directory pinned to the run's
+ * workspace: the workspace itself when the config names none, and a relative `cwd`
+ * resolved against it. Left alone, the server would inherit Houston's own working
+ * directory (`/` for the desktop app opened from Finder), so `uv run server.py`
+ * would not find its script and a filesystem server given `.` would serve the
+ * whole disk. The resolved path is part of the connection key, so two folders'
+ * copies of the same entry never share one process. Remote servers are unchanged.
+ */
+function inWorkspace(s: McpServerConfig, workspace: string): McpServerConfig {
+  const stdio = s.transport ? s.transport === 'stdio' : !!s.command || !s.url
+  return stdio ? { ...s, cwd: resolve(workspace, s.cwd ?? '.') } : s
 }
 
 /**
@@ -204,11 +222,13 @@ export function mergeProjectMcpServers(
  * under a `run-` id prefix so they can never shadow or impersonate a configured
  * server (a configured server wins a prefixed-id collision). Like project servers
  * they carry their header/env values in the config itself (`origin: 'project'`)
- * rather than the secret store, and they live for the run only.
+ * rather than the secret store, live for the run only, and start stdio servers in
+ * the run's workspace.
  */
 export function mergeRunMcpServers(
   configured: McpServerConfig[] | undefined,
-  run: McpServerConfig[] | undefined
+  run: McpServerConfig[] | undefined,
+  workspace: string
 ): McpServerConfig[] | undefined {
   if (!run?.length) return configured
   const taken = new Set((configured ?? []).map((s) => s.id))
@@ -217,7 +237,7 @@ export function mergeRunMcpServers(
     const id = `run-${s.id}`
     if (taken.has(id)) continue
     taken.add(id)
-    merged.push({ ...s, id, origin: 'project' })
+    merged.push(inWorkspace({ ...s, id, origin: 'project' }, workspace))
   }
   return merged
 }

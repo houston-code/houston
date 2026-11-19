@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
@@ -247,7 +247,8 @@ describe('tool scope in the loop', () => {
       extra: { extraMcpServers: [extra], announceTools: true },
       calls: [call('c1', 'mcp__run-gh__delete_repo', {})]
     })
-    expect(h.mcpConfigs[0]).toEqual([{ ...extra, id: 'run-gh', origin: 'project' }])
+    // A run server starts in the run's workspace, not Houston's own working directory.
+    expect(h.mcpConfigs[0]).toEqual([{ ...extra, id: 'run-gh', origin: 'project', cwd: realpathSync(ws) }])
     expect(toolNames(o)).toContain('mcp__run-gh__list_issues')
     expect(toolNames(o)).not.toContain('mcp__run-gh__delete_repo')
     expect(o.results.c1).toMatch(DISALLOWED)
