@@ -12,7 +12,10 @@
 // Prints one tab-separated row per trial and a TOTAL line, or with --markdown the table
 // RESULTS.md uses. With --cap, exits 3 once the total reaches the cap (the exit code a
 // headless run uses for a limit). Exits 2 on bad arguments or a missing job directory, and 1
-// when a trial's file exists but cannot be read, so the guard never counts it as free.
+// when a trial's file exists but cannot be read, or (with --cap) when a trial has done work
+// but reported no cost, so the guard never counts it as free. Houston reports no cost for a
+// model it has no price for (its cost is 0, "unknown"), and sends no usage_update at all
+// when it doesn't know the model's context window.
 //
 // The pure readers below are unit-tested in spend.test.mjs.
 
@@ -76,6 +79,26 @@ export function reportedCost(eventsText) {
   return cost
 }
 
+/**
+ * Whether an ACP events log shows a finished model step: a tool call. Houston sends a
+ * step's usage_update before the step's tools run, so a priced trial that ran a tool has
+ * reported a cost by then. Text alone isn't enough: the first step streams its reply
+ * before its usage arrives.
+ */
+export function ranTool(eventsText) {
+  for (const line of eventsText.split('\n')) {
+    if (!line.includes('tool_call')) continue
+    let entry
+    try {
+      entry = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (entry?.payload?.update?.sessionUpdate === 'tool_call') return true
+  }
+  return false
+}
+
 /** "terminal-bench/fin-saccr-rwa" or the trial dir "fin-saccr-rwa__wJRWh3F" -> "fin-saccr-rwa". */
 function taskName(result, trial) {
   const name = typeof result?.task_name === 'string' ? result.task_name : trial.split('__')[0]
@@ -108,6 +131,8 @@ export function readTrial(dir) {
     .filter((c) => c !== null)
   const usage = summary?.prompt_response?.usage ?? {}
   const model = result?.config?.agent?.model_name ?? summary?.requested_model ?? null
+  const cost = costs.length ? Math.max(...costs) : null
+  const worked = (count(usage.inputTokens) ?? 0) + (count(usage.outputTokens) ?? 0) > 0 || (events !== null && ranTool(events))
   return {
     trial,
     task: taskName(result, trial),
@@ -118,7 +143,9 @@ export function readTrial(dir) {
     inputTokens: count(usage.inputTokens),
     cachedReadTokens: count(usage.cachedReadTokens),
     outputTokens: count(usage.outputTokens),
-    cost: costs.length ? Math.max(...costs) : null,
+    cost,
+    // Did work but reported no cost: an unpriced model, or one whose usage never reaches the log.
+    unpriced: worked && !(cost > 0),
     stopReason: summary?.prompt_response?.stopReason ?? null,
     error: result?.exception_info?.exception_type ?? null,
     agentMinutes: agentMinutes(result)
@@ -224,7 +251,17 @@ export function main(argv, out = process.stdout, err = process.stderr) {
     return 1
   }
   out.write(opts.markdown ? markdownTable(rows) : textReport(rows))
-  return opts.cap !== null && totalCost(rows) >= opts.cap ? CAP_EXIT : 0
+  if (opts.cap === null) return 0
+  if (totalCost(rows) >= opts.cap) return CAP_EXIT
+  const unpriced = rows.filter((r) => r.unpriced)
+  if (unpriced.length) {
+    err.write(
+      `spend.mjs: ${unpriced.map((r) => r.trial).join(', ')} did work but reported no cost, so the cap can't see ` +
+        "what they spend (Houston has no price for the model, or doesn't know its context window)\n"
+    )
+    return 1
+  }
+  return 0
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
