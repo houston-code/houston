@@ -1880,8 +1880,7 @@ export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOpti
         mcpPrompt: (cwd, mcpServers) => workspaceMcpPromptFetch(cwd, getSettings(), mcpServers),
         skills: async (cwd) => (await loadSkills(cwd)).map((k) => ({ name: k.name, description: k.description })),
         agents: async (cwd) => (await loadAgents(cwd)).map((a) => ({ name: a.name, description: a.description })),
-        compact: (id, providerId, model, focus) =>
-          compactConversationNow(id, providerId, model, focus ? { focus } : {})
+        compact: (id, providerId, model, opts) => compactConversationNow(id, providerId, model, opts)
       },
       { shutdown: shutdown.signal, outputClosed: outputClosed.signal }
     )

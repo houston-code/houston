@@ -296,8 +296,16 @@ export interface AcpDeps {
   /** Run a command template's `` !`command` `` piece (tests inject it); the user's shell otherwise. */
   runContextShell?: (command: string) => Promise<ShellCapture>
   agents?: (cwd: string) => Promise<{ name: string; description: string }[]>
-  /** Summarize a stored chat's older turns now (`/compact [focus]`). */
-  compact?: (conversationId: string, providerId: string, model: string, focus?: string) => Promise<AcpCompactResult>
+  /**
+   * Summarize a stored chat's older turns now (`/compact [focus]`). Aborting `signal`
+   * (the editor's `session/cancel`) cancels it, and nothing is written.
+   */
+  compact?: (
+    conversationId: string,
+    providerId: string,
+    model: string,
+    opts: { focus?: string; signal?: AbortSignal }
+  ) => Promise<AcpCompactResult>
   /** One protocol frame (a JSON line, newline included). The only thing written to stdout. */
   write: (frame: string) => void
   /** Diagnostics for the operator (stderr / log file), never the protocol stream. */
@@ -350,8 +358,15 @@ interface Session {
   title?: string
   /** A `/compact` in progress, which holds off prompts like a run does. */
   compacting?: boolean
+  /** Cancels the `/compact` in progress. */
+  compactAbort?: AbortController
   /** Prompts still looking up their slash command, before their run starts. */
   resolving?: number
+  /**
+   * `session/cancel` arrived while a prompt was still looking up its slash command (or
+   * running `/compact`): that prompt ends as cancelled instead of replying or running.
+   */
+  cancelPending?: boolean
   /** Extra directories the editor gave this session (`additionalDirectories`), as given. */
   additionalRoots: string[]
   /** The editor's system prompt for this session, appended to Houston's own. */
@@ -1448,9 +1463,18 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   const cancel = (params: unknown): void => {
     const id = (params as { sessionId?: unknown } | undefined)?.sessionId
     const s = typeof id === 'string' ? sessions.get(id) : undefined
-    if (!s?.runId) return
-    s.cancelled = true
-    deps.cancelRun(s.runId)
+    if (!s) return
+    if (s.runId) {
+      s.cancelled = true
+      deps.cancelRun(s.runId)
+      return
+    }
+    // No run yet: the prompt is still resolving its slash command, which may be a
+    // `/compact` in progress. Stop that, and have the prompt end as cancelled.
+    if (s.resolving) {
+      s.cancelPending = true
+      s.compactAbort?.abort()
+    }
   }
 
   /** Stop serving a session: cancel its prompt, as `session/cancel` would, and forget it. */
@@ -1459,6 +1483,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       s.cancelled = true
       deps.cancelRun(s.runId)
     }
+    s.compactAbort?.abort()
     s.closed = true
     s.messages = null
     sessions.delete(s.id)
@@ -1631,9 +1656,15 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       }
     }
     s.compacting = true
+    const abort = new AbortController()
+    s.compactAbort = abort
     status('in_progress')
     try {
-      const r = focus ? await deps.compact(s.id, s.providerId, s.model, focus) : await deps.compact(s.id, s.providerId, s.model)
+      const r = await deps.compact(s.id, s.providerId, s.model, { ...(focus ? { focus } : {}), signal: abort.signal })
+      if (abort.signal.aborted && !(r.ok && r.summarized > 0)) {
+        status('cancelled')
+        return 'Compacting was cancelled. Nothing was changed.'
+      }
       if (!r.ok) {
         status('failed', r.error)
         return `Nothing was compacted${r.error ? `: ${r.error}` : '.'}`
@@ -1652,6 +1683,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       return `Compacting failed: ${String(e)}`
     } finally {
       s.compacting = false
+      if (s.compactAbort === abort) s.compactAbort = undefined
     }
   }
 
@@ -1661,20 +1693,26 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     const { text: typed, images } = promptFromBlocks((params as { prompt?: unknown }).prompt)
     if (!typed.trim() && images.length === 0) throw new AcpError(ACP_ERROR.invalidParams, 'The prompt is empty')
     let command: Awaited<ReturnType<typeof runCommand>> = null
+    let cancelledWhileResolving = false
     if (typed.trimStart().startsWith('/')) {
+      // A cancel left over from an earlier lookup doesn't apply to this one.
+      if (!s.resolving) s.cancelPending = false
       s.resolving = (s.resolving ?? 0) + 1
       try {
         command = await runCommand(s, typed.trim())
       } finally {
         s.resolving = (s.resolving ?? 1) - 1
+        cancelledWhileResolving = Boolean(s.cancelPending)
+        if (!s.resolving) s.cancelPending = false
       }
     }
     // Closed, deleted or shut down while the command lookup read the disk: a run
     // started now would be one nothing serves or stops.
     if (s.closed || stopping) return { stopReason: 'cancelled' }
+    // Cancelled (`session/cancel`) or withdrawn (`$/cancel_request`) while the command
+    // lookup read the disk or `/compact` ran: nothing more happens for this prompt.
+    if (cancelledWhileResolving || inbound?.cancelled) return { stopReason: 'cancelled' }
     if (command?.kind === 'reply') return reply(s, command.text)
-    // Withdrawn while the command lookup read the disk: nothing has run yet.
-    if (inbound?.cancelled) return { stopReason: 'cancelled' }
     // The command lookup read the disk: another prompt may have started meanwhile.
     if (busy(s)) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
     const text = command ? command.turn.text : typed
