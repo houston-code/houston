@@ -3,6 +3,7 @@ import { createReadStream, promises as fs } from 'node:fs'
 import type { ImageAttachment } from '@shared/images'
 import type { DocumentAttachment } from '@shared/agent'
 import { ASK_USER_NAME, type ToolKind } from './tools'
+import { openRegularFile } from './regularFile'
 
 /**
  * Per-run content-addressed cache for repeated READ-ONLY tool calls.
@@ -380,7 +381,8 @@ export function contentDigest(data: Buffer | string): string {
 /** {@link contentDigest} of a file, read in chunks so a large one is never held in memory. */
 export async function fileDigest(abs: string): Promise<string> {
   const hash = createHash('sha256')
-  for await (const chunk of createReadStream(abs) as AsyncIterable<Buffer>) hash.update(chunk)
+  const fd = await openRegularFile(abs)
+  for await (const chunk of createReadStream(abs, { fd }) as AsyncIterable<Buffer>) hash.update(chunk)
   return hash.digest('base64')
 }
 

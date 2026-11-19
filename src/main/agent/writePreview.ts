@@ -1,9 +1,9 @@
-import { promises as fs } from 'node:fs'
 import { diffLines, hunkDiff, type DiffLine, type FileDiffPreview } from '@shared/diff'
 import { parsePatch } from './apply-patch'
 import { resolveEdit } from './edit-match'
 import { editNotebook, parseNotebook, renderNotebook, type NotebookEditMode } from './notebook'
 import { multiEditIssues, resolveInRoots } from './tools'
+import { readRegularFile } from './regularFile'
 
 /**
  * Compute what a write-kind tool call WOULD do to each file it touches, as a diff
@@ -43,10 +43,13 @@ export const MAX_PREVIEW_DIFF_LINES = 400
  */
 const PREVIEW_ONLY = { showCandidate: false } as const
 
-/** Current contents of a file, or null when it does not exist / cannot be read. */
+/**
+ * Current contents of a file, or null when it does not exist / cannot be read (a FIFO,
+ * socket, or device is never opened: the write it previews will be refused).
+ */
 async function readOrNull(abs: string): Promise<string | null> {
   try {
-    return await fs.readFile(abs, 'utf8')
+    return (await readRegularFile(abs)).toString('utf8')
   } catch {
     return null
   }

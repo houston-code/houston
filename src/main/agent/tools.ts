@@ -1,6 +1,7 @@
 import { promises as fs, realpathSync, lstatSync, readlinkSync } from 'node:fs'
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path'
 import { removeEmptyDirContained, removeFileContained, writeFileContained } from './safeWrite'
+import { isNotRegularFileError, readRegularFile } from './regularFile'
 import type {
   AgentQuestion,
   ChatMessage,
@@ -724,12 +725,16 @@ const readFile: ToolDef = withShellCwdHint({
     // A directory can't be read as a file. Answer with its listing rather than a raw
     // EISDIR error, which models tend to retry or route around with run_shell. A path
     // that can't be stat'ed falls through so the read below reports the real error.
-    const isDir = await fs.stat(abs).then(
-      (st) => st.isDirectory(),
-      () => false
-    )
-    if (isDir) {
+    const st = await fs.stat(abs).catch(() => null)
+    if (st?.isDirectory()) {
       return `[directory: ${rel}: read_file reads files, so here are its entries (as list_dir shows them)]\n${await dirListing(abs)}`
+    }
+    // A FIFO, socket, or device is never read: a FIFO would block until a writer
+    // appears and /dev/zero never ends. The reads below refuse one swapped in later.
+    if (st && !st.isFile() && process.platform !== 'win32') {
+      throw new Error(
+        `${rel} is not a regular file (it is a FIFO, socket, or device), so read_file did not read it: that could wait forever or never end. Inspect it with run_shell (e.g. ls -l, file) instead.`
+      )
     }
 
     // Images and PDFs are binary — hand them to the model as attachments rather
@@ -744,7 +749,7 @@ const readFile: ToolDef = withShellCwdHint({
         ctx.fileTracker?.noteReadDigest(abs, await fileDigest(abs))
         return `[image: ${rel} (${humanSize(size)}): too large to attach; limit is ${humanSize(MAX_ATTACH_IMAGE_BYTES)}]`
       }
-      const buf = await fs.readFile(abs)
+      const buf = await readRegularFile(abs, rel)
       ctx.fileTracker?.noteRead(abs, buf)
       if (!ctx.attachImage) {
         return `[image: ${rel} (${humanSize(buf.byteLength)}): cannot be displayed in this context]`
@@ -761,7 +766,7 @@ const readFile: ToolDef = withShellCwdHint({
         ctx.fileTracker?.noteReadDigest(abs, await fileDigest(abs))
         return `[pdf: ${rel} (${humanSize(size)}): too large to attach; limit is ${humanSize(MAX_PDF_BYTES)}. Extract its text with run_shell (e.g. pdftotext) instead.]`
       }
-      const buf = await fs.readFile(abs)
+      const buf = await readRegularFile(abs, rel)
       ctx.fileTracker?.noteRead(abs, buf)
       if (!ctx.attachDocument) {
         return `[pdf: ${rel} (${humanSize(buf.byteLength)}): cannot be displayed in this context; extract its text with run_shell (e.g. pdftotext)]`
@@ -795,7 +800,7 @@ const readFile: ToolDef = withShellCwdHint({
       ctx.fileTracker?.noteReadDigest(abs, await fileDigest(abs))
       return `[notebook: ${rel} (${humanSize(notebookSize)}): too large to render (limit ${humanSize(MAX_NOTEBOOK_BYTES)}), most likely from stored cell outputs. Inspect it with run_shell (e.g. jq '.cells[].source') or clear its outputs first.]`
     }
-    const buf = await fs.readFile(abs)
+    const buf = await readRegularFile(abs, rel)
     ctx.fileTracker?.noteRead(abs, buf)
     if (looksBinary(buf)) {
       return `[binary file: ${rel} (${humanSize(buf.byteLength)}): not text, so there is nothing to show. Inspect it with run_shell (e.g. file, xxd, strings).]`
@@ -874,10 +879,14 @@ export function editableText(buf: Buffer, rel: string): string {
   return text
 }
 
-/** The file's bytes, or null when it can't be read (most often: it does not exist). */
+/**
+ * The file's bytes, or null when it can't be read (most often: it does not exist). A
+ * FIFO, socket, or device also reads as null without being opened, and the write that
+ * follows refuses it (writeFileContained writes only regular files).
+ */
 async function readIfPresent(abs: string): Promise<Buffer | null> {
   try {
-    return await fs.readFile(abs)
+    return await readRegularFile(abs)
   } catch {
     return null
   }
@@ -1187,7 +1196,7 @@ const editFile: ToolDef = withShellCwdHint({
     const oldStr = requiredEditString(args, 'old_string', 'edit_file')
     const newStr = requiredEditString(args, 'new_string', 'edit_file')
     const replaceAll = args.replace_all === true
-    const buf = await fs.readFile(abs)
+    const buf = await readRegularFile(abs, rel)
     assertSeen(ctx, 'edit_file', abs, rel, buf)
     const data = editableText(buf, rel)
     const sensitive = isSensitivePath(rel)
@@ -1370,7 +1379,7 @@ const multiEdit: ToolDef = withShellCwdHint({
       throw new Error(`multi_edit: ${issues.map((i) => i.message).join('; ')}. Nothing was written.`)
     }
     const edits = raw as EditSpec[]
-    const buf = await fs.readFile(abs)
+    const buf = await readRegularFile(abs, rel)
     assertSeen(ctx, 'multi_edit', abs, rel, buf)
     const original = editableText(buf, rel)
     let data = original
@@ -1453,9 +1462,10 @@ const notebookEdit: ToolDef = withShellCwdHint({
     }
     let bytes: Buffer
     try {
-      bytes = await fs.readFile(abs)
-    } catch {
-      throw new Error(`${rel} does not exist. Create a notebook with write_file before editing its cells.`)
+      bytes = await readRegularFile(abs, rel)
+    } catch (e) {
+      if (isNotRegularFileError(e)) throw e
+      throw new Error(`${rel} does not exist. Create a notebook with write_file before editing its cells.`, { cause: e })
     }
     assertSeen(ctx, 'notebook_edit', abs, rel, bytes)
     const nb = parseNotebook(bytes.toString('utf8'))
@@ -1523,7 +1533,7 @@ async function snapshotForRollback(paths: string[]): Promise<Map<string, FileSna
   for (const abs of paths) {
     if (snaps.has(abs)) continue // a move stages its source twice
     try {
-      const [data, st] = await Promise.all([fs.readFile(abs), fs.stat(abs)])
+      const [data, st] = await Promise.all([readRegularFile(abs), fs.stat(abs)])
       snaps.set(abs, { data, mode: st.mode })
     } catch {
       // Absent is a state worth recording: rolling back means deleting it again.
@@ -1637,9 +1647,12 @@ const applyPatch: ToolDef = {
       } else {
         let bytes: Buffer
         try {
-          bytes = await fs.readFile(abs)
-        } catch {
-          throw new Error(`Update File: ${op.path} does not exist.${await shellCwdHintSuffix(ctx, op.path)}`)
+          bytes = await readRegularFile(abs, op.path)
+        } catch (e) {
+          if (isNotRegularFileError(e)) throw new Error(`Update File: ${(e as Error).message}`, { cause: e })
+          throw new Error(`Update File: ${op.path} does not exist.${await shellCwdHintSuffix(ctx, op.path)}`, {
+            cause: e
+          })
         }
         let data = editableText(bytes, `Update File: ${op.path}`)
         const original = data
@@ -3474,7 +3487,7 @@ const showImages: ToolDef = {
       if (size > MAX_ATTACH_IMAGE_BYTES) {
         throw new Error(`${where}: ${humanSize(size)} is over the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} limit.`)
       }
-      const buf = await fs.readFile(abs)
+      const buf = await readRegularFile(abs, path)
       const mediaType = sniffImageType(buf.subarray(0, 16))
       if (!mediaType) throw new Error(`${where}: not a PNG, JPEG, GIF, or WebP image.`)
       ctx.fileTracker?.noteRead(abs, buf)
