@@ -22135,7 +22135,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### undici: 7.30.2
+### undici: 8.13.1
 
 - License: MIT
 - Homepage: https://undici.nodejs.org

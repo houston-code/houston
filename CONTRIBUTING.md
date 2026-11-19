@@ -13,7 +13,7 @@ Everyone taking part is expected to follow the
   Linux x64 (glibc 2.35+: Ubuntu 22.04+ / Debian 12+ / Fedora 36+). Each platform+arch
   builds its own artifacts on its own host, because native modules and the per-platform binaries
   can't cross-compile.
-- Node.js 22+ (pinned in `.nvmrc` and `engines`; CI uses the same)
+- Node.js 22.19+ (pinned in `.nvmrc` and `engines`; CI uses the same)
 - Xcode Command Line Tools (macOS, for `iconutil`/`sips` if you regenerate the icon)
 
 ## Setup
