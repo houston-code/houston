@@ -96,7 +96,7 @@ describe('prompt visibility guard', () => {
   const RENDERER_SEND_SITES: Record<string, { count: number; why: string }> = {
     'renderer/src/App.tsx': {
       count: 16,
-      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + main-prepared custom command (onRunCommand) + proposal "Do it here" + side-chat "Send to main" + project-card /init + Changes-view review-comment invocations, the mid-run steer, its idle send, and its off-chat queue (user text), and Retry on the last reply (resends that user message as it was, keeping its invokedAs)'
+      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + side-chat "Send to main" + project-card /init + Changes-view review-comment invocations, the mid-run steer, its idle send, and its off-chat queue (user text), and Retry on the last reply (resends that user message as it was, keeping its invokedAs), and invokeInChat for a main-prepared custom command (onRunCommand) and the proposal card "Do it here" button (sent in view, or started detached in the chat it was asked in, forwarding invokedAs)'
     },
     'renderer/src/components/Composer.tsx': { count: 3, why: 'the /review invocation and two sends of composer text' },
     'renderer/src/hooks/useChat.ts': {
@@ -112,7 +112,7 @@ describe('prompt visibility guard', () => {
 
   it('knows every place the renderer starts or queues a turn', () => {
     expect(
-      occurrences(['renderer/src'], /\b(onSend|sendNow|dispatch|onInvoke|chat\.send|queue\s*\.(?:enqueue|steer)|startAgent|queueInput|steerAgent)\(/)
+      occurrences(['renderer/src'], /\b(onSend|sendNow|dispatch|onInvoke|invokeInChat|chat\.send|queue\s*\.(?:enqueue|steer)|startAgent|queueInput|steerAgent)\(/)
     ).toEqual(counts(RENDERER_SEND_SITES))
   })
 

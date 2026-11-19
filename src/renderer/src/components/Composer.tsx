@@ -923,7 +923,7 @@ export function Composer({
   // twice still refills it.
   useEffect(() => {
     if (!prefill) return
-    if (prefill.kind === 'suggestion' && (text.trim() || context.length > 0)) {
+    if (prefill.kind === 'suggestion' && (text.trim() || context.length > 0 || images.length > 0)) {
       // A starter or example task never replaces what the user has typed.
       flashNotice('Clear the message box first to use this suggestion.')
       ref.current?.focus()
