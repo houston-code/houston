@@ -42,10 +42,17 @@ describe('ProposalCard', () => {
   it('routes each choice to its handler', async () => {
     const h = handlers()
     render(<ProposalCard item={item()} handlers={h} />)
+    // The choices stay disabled until the one in progress settles, which is after its
+    // handler was called: a click before then is dropped.
+    const settled = async (): Promise<void> => {
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Start session' })).toBeEnabled())
+    }
     fireEvent.click(screen.getByRole('button', { name: 'Do it here' }))
     await waitFor(() => expect(h.here).toHaveBeenCalledWith('p1', 'Update API docs', 'Document **/auth/***'))
+    await settled()
     fireEvent.click(screen.getByRole('button', { name: 'Start session' }))
     await waitFor(() => expect(h.start).toHaveBeenCalledWith('p1'))
+    await settled()
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     await waitFor(() => expect(h.dismiss).toHaveBeenCalledWith('p1'))
   })
