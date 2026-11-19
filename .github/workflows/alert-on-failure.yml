@@ -25,6 +25,10 @@ on:
         description: Display name of the calling workflow, e.g. "Provider canary". Keys the issue.
         required: true
         type: string
+      # Callers pass `contains(needs.*.result, 'failure') || contains(needs.*.result, 'abandoned')`.
+      # `abandoned` is what GitHub reports for a matrix job when a leg never got a runner (the
+      # hosted macOS pool out of capacity cancels a queued leg after about 15 minutes). The run
+      # itself ends red, but checking for `failure` alone reported it green and closed the alert.
       failed:
         description: Whether the caller's real jobs failed. False closes any open issue.
         required: true

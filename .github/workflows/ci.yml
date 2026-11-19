@@ -437,7 +437,7 @@ jobs:
   #
   # `!cancelled()` because a job whose dependency did not succeed is skipped by default. The
   # result is compared against the two good outcomes rather than `failure`: a matrix whose
-  # legs were never acquired has reported a result that is neither `failure` nor `cancelled`.
+  # legs were never acquired reports `abandoned`, which is neither `failure` nor `cancelled`.
   package-retry-plan:
     needs: [plan, package]
     if: ${{ !cancelled() && needs.package.result != 'success' && needs.package.result != 'skipped' }}
@@ -659,6 +659,7 @@ jobs:
   alert:
     # `plan` and `warm-caches` are listed for the push run, where nothing else reports them: a
     # cache refresh that fails after a merge would otherwise turn the run red and tell no one.
+    # `abandoned` is a warm-caches leg that never got a runner: see alert-on-failure.yml.
     needs: [test, linux-sandbox, build, plan, warm-caches]
     if: >-
       always() && (github.event_name == 'push' || github.event_name == 'schedule')
@@ -668,7 +669,7 @@ jobs:
       issues: write
     with:
       workflow: ${{ github.event_name == 'schedule' && 'CI nightly' || 'CI on main' }}
-      failed: ${{ contains(needs.*.result, 'failure') }}
+      failed: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'abandoned') }}
 
   # Silent-clobber guard. A PR branched off an out-of-date main can, when merged,
   # delete files and revert code that landed while it was open — and CI does not
