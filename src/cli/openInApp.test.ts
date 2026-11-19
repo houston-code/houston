@@ -104,6 +104,24 @@ describe('launchDetached', () => {
     await expect(launchDetached(process.execPath, ['-e', 'process.exit(1)'])).rejects.toThrow(/exited with code 1/)
   })
 
+  it('keeps this process alive until the opener settles, then lets a still-running one go', async () => {
+    // Nothing else holds the event loop in `houston open`, so the opener and its wait
+    // must, or Node exits before the command reports anything.
+    const handles = (): number => process.getActiveResourcesInfo().filter((r) => r === 'ProcessWrap').length
+    // An earlier test's opener can take a moment to close its handle after exiting.
+    await vi.waitFor(() => expect(handles()).toBe(0))
+    const before = handles()
+    const failing = launchDetached(process.execPath, ['-e', 'setTimeout(() => process.exit(3), 300)'])
+    await new Promise((r) => setTimeout(r, 100))
+    expect(handles()).toBe(before + 1)
+    await expect(failing).rejects.toThrow(/exited with code 3/)
+    const lingering = launchDetached(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], 100)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(handles()).toBe(before + 1)
+    await expect(lingering).resolves.toBeUndefined()
+    expect(handles()).toBe(before)
+  })
+
   it('takes an opener still running after the wait as having opened the link', async () => {
     await expect(launchDetached(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], 100)).resolves.toBeUndefined()
   })
