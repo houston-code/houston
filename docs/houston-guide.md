@@ -3468,7 +3468,11 @@ to have them fire on time anyway.
 - **Turning it off** stops the process and removes it from login. After an update
   moves the app, Houston points the login item at the new copy the next time it opens.
 
-From the terminal, with keys from environment variables or `cli-credentials.json`:
+From the terminal, the daemon reads keys from `cli-credentials.json`. It starts at
+login without your shell, so a key you only export there (`ANTHROPIC_API_KEY`,
+`HOUSTON_API_KEY_<ID>`, ...) never reaches it: `install` lists any such key and refuses
+until you store it with `houston providers set-key <id>`. A key is never copied into
+the login item itself.
 
 | Command | Does |
 | --- | --- |

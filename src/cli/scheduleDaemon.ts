@@ -11,7 +11,9 @@ import type { DaemonCommand, LoginAgentResult, ScheduleDaemonState } from '../ma
  * The terminal daemon reads keys like any CLI session (environment variables, then
  * cli-credentials.json). Keys saved in the desktop app are locked to it, so desktop
  * users turn the same thing on from Settings > Scheduled runs instead, where the
- * daemon runs as the app.
+ * daemon runs as the app. A login agent starts it without the user's shell, so a key
+ * only exported there never reaches it: `install` refuses until such keys are stored
+ * with `houston providers set-key` (and never copies a key into the agent's entry).
  */
 export const SCHEDULE_DAEMON_USAGE = `Usage: houston schedule-daemon [run|install|uninstall|status]
   run         fire scheduled runs until stopped (the default)
@@ -27,6 +29,11 @@ export interface ScheduleDaemonCliDeps {
   state: () => Promise<ScheduleDaemonState>
   /** What the login agent starts: this CLI, in `run` mode. */
   command: () => DaemonCommand
+  /**
+   * Configured providers that need a key whose key is only in this shell's environment
+   * (none stored in cli-credentials.json), with the variable it comes from.
+   */
+  envOnlyKeys: () => Array<{ id: string; envVar: string }>
   out: (s: string) => void
   err: (s: string) => void
 }
@@ -51,6 +58,20 @@ export async function runScheduleDaemonCommand(args: string[], deps: ScheduleDae
       if (state.installed && state.byApp) {
         deps.err(
           "houston: the desktop app's schedule daemon is already installed (Settings > Scheduled runs). Turn it off there, or run `houston schedule-daemon uninstall`, then install again.\n"
+        )
+        return 1
+      }
+      // The login agent starts the daemon without this shell's environment, so a key
+      // that lives only there is missing and every scheduled run on that provider
+      // fails. Have it stored where the daemon can read it.
+      const envOnly = deps.envOnlyKeys()
+      if (envOnly.length) {
+        const one = envOnly.length === 1
+        deps.err(
+          `houston: the schedule daemon starts at login without your shell's environment, so it wouldn't see ${one ? 'this key' : 'these keys'}:\n` +
+            envOnly.map((k) => `  ${k.id} (from ${k.envVar})\n`).join('') +
+            `Store ${one ? 'it' : 'each one'} where the daemon reads keys, then install again:\n` +
+            envOnly.map((k) => `  printf %s "$${k.envVar}" | houston providers set-key ${k.id}\n`).join('')
         )
         return 1
       }

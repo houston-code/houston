@@ -9,6 +9,7 @@ import {
   cliGetKey,
   cliGetMcpOAuth,
   cliHasKey,
+  cliKeyOnlyInEnv,
   cliRemoveKey,
   cliSetKey,
   cliSetMcpOAuth,
@@ -107,6 +108,23 @@ describe('credentials file', () => {
     const warn = vi.fn()
     expect(cliGetKey('anthropic', { dataDir: dir, env: {}, warn })).toBe('sk-x')
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+describe('cliKeyOnlyInEnv', () => {
+  it('names the variable a key comes from when no stored key would stand in for it', () => {
+    const warn = vi.fn()
+    expect(cliKeyOnlyInEnv('anthropic', { dataDir: dir, env: { ANTHROPIC_API_KEY: 'sk-env' }, warn })).toBe('ANTHROPIC_API_KEY')
+    expect(cliKeyOnlyInEnv('openrouter', { dataDir: dir, env: { HOUSTON_API_KEY_OPENROUTER: 'k' }, warn })).toBe(
+      'HOUSTON_API_KEY_OPENROUTER'
+    )
+  })
+
+  it('is null when the key is stored, or not set at all', () => {
+    const warn = vi.fn()
+    writeCreds({ anthropic: 'sk-file' })
+    expect(cliKeyOnlyInEnv('anthropic', { dataDir: dir, env: { ANTHROPIC_API_KEY: 'sk-env' }, warn })).toBeNull()
+    expect(cliKeyOnlyInEnv('openai', { dataDir: dir, env: {}, warn })).toBeNull()
   })
 })
 

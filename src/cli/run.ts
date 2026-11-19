@@ -50,6 +50,7 @@ import {
   cliGetKey,
   cliGetMcpOAuth,
   cliHasKey,
+  cliKeyOnlyInEnv,
   cliRemoveKey,
   cliSetKey,
   cliSetMcpOAuth
@@ -215,6 +216,11 @@ export async function runCli(argv: string[], { version, usage, argvProblem }: Ru
       uninstall: () => disableScheduleDaemon(loginDeps, () => runningDaemonPid()),
       state: () => scheduleDaemonState(loginDeps, () => runningDaemonPid()),
       command: () => cliDaemonCommand(),
+      envOnlyKeys: () =>
+        getSettings().providers.flatMap((p) => {
+          const envVar = p.requiresKey ? cliKeyOnlyInEnv(p.id) : null
+          return envVar ? [{ id: p.id, envVar }] : []
+        }),
       out: (s) => void process.stdout.write(s),
       err: (s) => void process.stderr.write(s)
     })
