@@ -18,6 +18,14 @@ export interface DiffHunk {
   /** The verbatim `@@ -a,b +c,d @@ …` header line. */
   header: string
   lines: DiffLine[]
+  /**
+   * git's `\ No newline at end of file` marker, per side: the old (`oldNoEol`) or new
+   * (`newNoEol`) side's last line has no final newline. Set only on hunks parsed from
+   * git's output; a diff from {@link diffLines} shows a final-newline change as a last,
+   * empty line instead.
+   */
+  oldNoEol?: boolean
+  newNoEol?: boolean
 }
 
 /** A single changed file in the working tree. */
@@ -260,6 +268,15 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
       hunk = { header: line, lines: [] }
     } else if (hunk) {
       const c = line[0]
+      if (c === '\\') {
+        // "\ No newline at end of file": the line before it, on its side(s), has no
+        // final newline. It carries no content, but a hunk that only adds or removes
+        // that newline is otherwise indistinguishable from no change at all.
+        const prev = hunk.lines[hunk.lines.length - 1]
+        if (prev?.type !== 'add') hunk.oldNoEol = true
+        if (prev?.type !== 'del') hunk.newNoEol = true
+        continue
+      }
       if (c === '+') {
         hunk.lines.push({ type: 'add', text: line.slice(1) })
         cur.added++
@@ -269,7 +286,6 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
       } else if (c === ' ') {
         hunk.lines.push({ type: 'ctx', text: line.slice(1) })
       }
-      // A leading '\' ("\ No newline at end of file") carries no content.
     }
   }
   closeFile()

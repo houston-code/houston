@@ -1475,7 +1475,8 @@ const notebookEdit: ToolDef = withShellCwdHint({
       throw new Error(`${rel} does not exist. Create a notebook with write_file before editing its cells.`, { cause: e })
     }
     assertSeen(ctx, 'notebook_edit', abs, rel, bytes)
-    const nb = parseNotebook(bytes.toString('utf8'))
+    const text = bytes.toString('utf8')
+    const nb = parseNotebook(text)
     const cell = num(args, 'cell')
     if (cell === undefined) throw new Error('notebook_edit requires a "cell" number.')
     const updated = editNotebook(nb, {
@@ -1484,7 +1485,7 @@ const notebookEdit: ToolDef = withShellCwdHint({
       source: typeof args.source === 'string' ? args.source : undefined,
       cellType: typeof args.cell_type === 'string' ? args.cell_type : undefined
     })
-    const serialized = serializeNotebook(updated)
+    const serialized = serializeNotebook(updated, text)
     writeFileContained(rootsOf(ctx), abs, serialized, { display: rel })
     ctx.fileTracker?.noteWrite(abs, serialized)
     const what =
@@ -1665,7 +1666,11 @@ const applyPatch: ToolDef = {
         const original = data
         op.hunks.forEach((hunk, h) => {
           try {
-            data = resolveEdit(data, hunk.oldText, hunk.newText, false, { showCandidate: !isSensitivePath(op.path) }).content
+            // A hunk names whole lines: its text must not land on part of one.
+            data = resolveEdit(data, hunk.oldText, hunk.newText, false, {
+              showCandidate: !isSensitivePath(op.path),
+              wholeLines: true
+            }).content
           } catch (e) {
             // Name the file and hunk: the matcher's message alone doesn't say which of
             // the patch's changes failed. A closest-region listing counts this file's

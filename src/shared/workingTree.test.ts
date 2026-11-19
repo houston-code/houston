@@ -7,6 +7,7 @@ import {
   workingTreeToText,
   type WorkingTreeChanges
 } from './workingTree'
+import { fileDiffSignature } from './changes'
 
 describe('parseUnifiedDiff', () => {
   it('counts removed and added lines whose text looks like a file header', () => {
@@ -218,6 +219,29 @@ describe('parseUnifiedDiff', () => {
     const files = parseUnifiedDiff(diff)
     expect(files.map((f) => f.path)).toEqual(['a.txt', 'b.txt'])
     expect(files.every((f) => f.added === 1 && f.removed === 1)).toBe(true)
+  })
+})
+
+describe('parseUnifiedDiff final-newline markers', () => {
+  const parse = (...hunk: string[]) =>
+    parseUnifiedDiff(['diff --git a/f b/f', '--- a/f', '+++ b/f', '@@ -1,2 +1,2 @@', ...hunk].join('\n'))[0]
+
+  it('records which side of a hunk lacks a final newline, adding no line for the marker', () => {
+    const added = parse(' a', '-b', '\\ No newline at end of file', '+b')
+    expect(added.hunks[0]).toMatchObject({ oldNoEol: true })
+    expect(added.hunks[0].newNoEol).toBeUndefined()
+    expect(added.hunks[0].lines).toHaveLength(3)
+    expect(added).toMatchObject({ added: 1, removed: 1 })
+
+    const removed = parse(' a', '-b', '+b', '\\ No newline at end of file')
+    expect(removed.hunks[0]).toMatchObject({ newNoEol: true })
+    expect(removed.hunks[0].oldNoEol).toBeUndefined()
+  })
+
+  it('changes the file signature when only the final newline differs', () => {
+    const added = parse(' a', '-b', '\\ No newline at end of file', '+b')
+    const removed = parse(' a', '-b', '+b', '\\ No newline at end of file')
+    expect(fileDiffSignature(added)).not.toBe(fileDiffSignature(removed))
   })
 })
 

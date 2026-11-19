@@ -140,6 +140,8 @@ export function fileDiffSignature(f: FileDiff): string {
   for (const h of f.hunks) {
     parts.push(h.header)
     for (const l of h.lines) parts.push(`${l.type[0]}${l.text}`)
+    // Only a final-newline change can differ here alone, so only a hunk with a marker adds a part.
+    if (h.oldNoEol || h.newNoEol) parts.push(`\\${h.oldNoEol ? 'o' : ''}${h.newNoEol ? 'n' : ''}`)
   }
   let hash = 0x811c9dc5
   const s = parts.join('\n')
@@ -162,7 +164,9 @@ export function canRevertHunks(f: FileDiff): boolean {
  * stale view can never rewrite lines it did not show. Context lines keep their
  * bytes; restored lines take the file's dominant line ending (a stray CRLF line in
  * an LF file does not turn the hunk into CRLF). The final newline follows the old
- * side where the hunk shows it changing, and is otherwise kept as it is.
+ * side where the hunk shows it changing, and is otherwise kept as it is. A hunk shows
+ * it changing either as a last, empty added line ({@link diffLines}) or, from git, with
+ * `\ No newline at end of file` markers (`oldNoEol` / `newNoEol`).
  */
 export function revertHunkText(content: string, hunk: DiffHunk): string | null {
   const head = parseHunkHeader(hunk.header)
@@ -186,6 +190,12 @@ export function revertHunkText(content: string, hunk: DiffHunk): string | null {
     endsWithNewline && n > 0 && at + n === lines.length + 1 && last.type === 'add' && strip(last.text) === ''
   if (eofNewlineAdded) n--
   if (at < 0 || at + n > lines.length) return null
+  // git's markers: the hunk ends at the end of the file, whose final newline the new
+  // side says is absent (newNoEol) or present. A file that no longer matches is stale.
+  const marked = hunk.oldNoEol === true || hunk.newNoEol === true
+  if (marked && content !== '' && (at + n !== lines.length || (hunk.newNoEol === true) === endsWithNewline)) {
+    return null
+  }
   for (let k = 0; k < n; k++) {
     if (strip(lines[at + k]) !== strip(newSide[k].text)) return null
   }
@@ -207,10 +217,16 @@ export function revertHunkText(content: string, hunk: DiffHunk): string | null {
   }
   const out = [...lines.slice(0, at), ...restored, ...lines.slice(at + n)]
   if (out.length === 0) return ''
-  // The final newline: gone with the added one the hunk shows; put back when the file
-  // was emptied (the diff of an emptied file cannot say, and text files end in one);
-  // otherwise kept as it is.
-  const finalNewline = eofNewlineAdded ? false : content === '' ? true : endsWithNewline
+  // The final newline: gone with the added one the hunk shows; as the old side had it
+  // where git's markers say; put back when the file was emptied (the diff of an emptied
+  // file cannot say, and text files end in one); otherwise kept as it is.
+  const finalNewline = eofNewlineAdded
+    ? false
+    : marked
+      ? hunk.oldNoEol !== true
+      : content === ''
+        ? true
+        : endsWithNewline
   // A last line with no newline after it has no line ending at all.
   if (!finalNewline) out[out.length - 1] = strip(out[out.length - 1])
   return out.join('\n') + (finalNewline ? '\n' : '')

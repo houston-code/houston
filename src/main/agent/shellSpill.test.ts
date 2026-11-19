@@ -80,8 +80,24 @@ describe('ShellSpill', () => {
   })
 
   it('quotes a path with a space, so a copied command reads it as one word', () => {
-    expect(spillNote({ path: "/Lib/Application Support/H/it's/shell-1.log", lines: 1 })).toContain(
+    expect(spillNote({ path: "/Lib/Application Support/H/it's/shell-1.log", lines: 1 }, 'darwin')).toContain(
       `saved to '/Lib/Application Support/H/it'\\''s/shell-1.log';`
+    )
+  })
+
+  it('quotes a POSIX path holding a backslash rather than leaving it to the shell', () => {
+    expect(spillNote({ path: '/data/a\\b/shell-1.log', lines: 1 }, 'linux')).toContain(
+      `saved to '/data/a\\b/shell-1.log';`
+    )
+  })
+
+  it('writes a Windows path with forward slashes, double-quoted when it has a space', () => {
+    // Git Bash reads an unquoted backslash as an escape: C:\Users\Dev came out as C:UsersDev.
+    expect(spillNote({ path: 'C:\\Users\\Dev\\AppData\\Roaming\\Houston\\shell-output\\r\\shell-1.log', lines: 1 }, 'win32')).toContain(
+      'saved to C:/Users/Dev/AppData/Roaming/Houston/shell-output/r/shell-1.log;'
+    )
+    expect(spillNote({ path: 'C:\\Users\\Jane Doe\\AppData\\shell-1.log', lines: 1 }, 'win32')).toContain(
+      'saved to "C:/Users/Jane Doe/AppData/shell-1.log";'
     )
   })
 })

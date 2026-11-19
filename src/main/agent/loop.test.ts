@@ -10049,12 +10049,19 @@ describe('egress hardening', () => {
         }
       }
       h.probeTools = [tool]
+      // The spill path climbing out of the run's folder, quoted as the note quoted it:
+      // single quotes on POSIX, double quotes on Windows (a path with a space).
+      const climbOut = (p: string): string => {
+        const out = p.replace(/shell-1\.log(['"]?)$/, '../../elsewhere/x$1')
+        expect(out).not.toBe(p)
+        return out
+      }
       const calls: Array<(path: string) => string> = [
         () => 'make',
         (p) => `sed -n '10,20p' ${p}`,
         (p) => `grep -n line ${p} | head -5`,
         (p) => `sed -i 's/line/x/' ${p}`,
-        (p) => `cat ${p.replace(/shell-1\.log'?$/, "../../elsewhere/x'")}`
+        (p) => `cat ${climbOut(p)}`
       ]
       let turn = 0
       const provider: Provider = {

@@ -303,11 +303,6 @@ export function editNotebook(nb: Notebook, edit: NotebookEdit): Notebook {
   return { ...nb, cells }
 }
 
-/**
- * Serialize a notebook the way Jupyter writes one: 2-space indent and a trailing
- * newline. Matching the canonical formatting keeps an agent edit from showing up in
- * git as a whole-file reformat that buries the one cell that actually changed.
- */
 /** A cell id unused in `cells`, in the short hex form Jupyter itself assigns. */
 function newCellId(cells: NotebookCell[]): string {
   const taken = new Set(cells.map((c) => c.id))
@@ -317,6 +312,51 @@ function newCellId(cells: NotebookCell[]): string {
   }
 }
 
-export function serializeNotebook(nb: Notebook): string {
-  return `${JSON.stringify(nb, null, 2)}\n`
+/** Whether every object in `value`, at any depth, lists its keys in sorted order. */
+function keysSorted(value: unknown): boolean {
+  if (Array.isArray(value)) return value.every(keysSorted)
+  if (value === null || typeof value !== 'object') return true
+  const keys = Object.keys(value)
+  for (let i = 1; i < keys.length; i++) if (keys[i - 1] > keys[i]) return false
+  return keys.every((k) => keysSorted((value as Record<string, unknown>)[k]))
+}
+
+/** `value` with every object's keys in sorted order, as Python's `json.dumps(sort_keys=True)` writes them. */
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys)
+  if (value === null || typeof value !== 'object') return value
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(value).sort()) out[k] = sortKeys((value as Record<string, unknown>)[k])
+  return out
+}
+
+/**
+ * Serialize a notebook in the formatting of the file it was read from (`original`), so
+ * an agent edit shows up in git as the cells it changed rather than a whole-file
+ * reformat. That means the original's indent (taken from its second line), its line
+ * endings and final newline, and sorted keys when the original sorts them.
+ *
+ * With no original (a new notebook) it writes what Jupyter's nbformat does: a 1-space
+ * indent, keys sorted (`json.dumps(sort_keys=True, indent=1)`), and a final newline.
+ */
+export function serializeNotebook(nb: Notebook, original?: string): string {
+  let indent: string | number = 1
+  let finalNewline = true
+  let crlf = false
+  let sorted = true
+  if (original !== undefined) {
+    const second = /\n([ \t]*)/.exec(original)
+    // A file on one line (no second line) is minified: keep it that way.
+    indent = second ? second[1] : ''
+    finalNewline = /\n$/.test(original)
+    crlf = original.includes('\r\n')
+    try {
+      sorted = keysSorted(JSON.parse(original))
+    } catch {
+      sorted = false
+    }
+  }
+  let text = JSON.stringify(sorted ? sortKeys(nb) : nb, null, indent)
+  if (crlf) text = text.replace(/\n/g, '\r\n')
+  return finalNewline ? `${text}${crlf ? '\r\n' : '\n'}` : text
 }

@@ -854,6 +854,23 @@ describe('notebook_edit', () => {
     expect(after.nbformat_minor).toBe(5)
   })
 
+  it('keeps the notebook file\'s own formatting, so only the edited cell\'s lines change', async () => {
+    // nbformat's own output: 1-space indent, sorted keys, a final newline.
+    const sortKeys = (v: unknown): unknown =>
+      Array.isArray(v)
+        ? v.map(sortKeys)
+        : v && typeof v === 'object'
+          ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys((v as Record<string, unknown>)[k])]))
+          : v
+    const original = `${JSON.stringify(sortKeys(NB), null, 1)}\n`
+    writeFileSync(join(workspace, 'a.ipynb'), original)
+    await run('notebook_edit', { path: 'a.ipynb', cell: 1, source: '# Renamed' })
+    const before = original.split('\n')
+    const after = readFileSync(join(workspace, 'a.ipynb'), 'utf8').split('\n')
+    expect(after).toHaveLength(before.length)
+    expect(after.filter((l, i) => l !== before[i])).toEqual(['    "# Renamed"'])
+  })
+
   it('inserts and deletes cells', async () => {
     writeNb()
     await run('notebook_edit', { path: 'a.ipynb', cell: 3, mode: 'insert', source: 'z = 3', cell_type: 'code' })
@@ -1319,6 +1336,28 @@ describe('apply_patch', () => {
     expect(fileText('new.ts')).toBe('export const x = 1\n')
     expect(fileText('keep.ts')).toBe('const a = 1\nconst b = 3\n')
     expect(existsSync(join(workspace, 'old.ts'))).toBe(false)
+  })
+
+  it('refuses a hunk that only matches part of a line, leaving the file alone', async () => {
+    const original = 'export const config = {\n  timeout: 3000,\n}\n'
+    await run('write_file', { path: 'cfg.ts', content: original })
+    // Context that is the tail of a line, and a removed line that is the start of one.
+    await expect(
+      run('apply_patch', {
+        patch: patch('*** Update File: cfg.ts', ' const config = {', '-  timeout: 30', '+  timeout: 60')
+      })
+    ).rejects.toThrow(/Update File: cfg\.ts, hunk 1: old_string was not found/)
+    await expect(
+      run('apply_patch', {
+        patch: patch('*** Update File: cfg.ts', ' export const config = {', '-  timeout: 30', '+  timeout: 60')
+      })
+    ).rejects.toThrow(/hunk 1: old_string was not found/)
+    expect(fileText('cfg.ts')).toBe(original)
+    // The whole line applies.
+    await run('apply_patch', {
+      patch: patch('*** Update File: cfg.ts', ' export const config = {', '-  timeout: 3000,', '+  timeout: 6000,')
+    })
+    expect(fileText('cfg.ts')).toBe(original.replace('3000', '6000'))
   })
 
   it('renames a file with Move to', async () => {
