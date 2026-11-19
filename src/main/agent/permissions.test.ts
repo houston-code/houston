@@ -2814,6 +2814,16 @@ describe('shellAllowCoversTripwires', () => {
     }
     const ssh = persistedRules('allow', 'run_shell', { command: 'ssh myhost uptime' }, ROOTS)
     expect(matchRule(ssh, 'run_shell', "ssh myhost 'rm -rf ~'", ROOTS)).toBeNull()
+    // `watch` is also a command wrapper, but it hands its words to `sh -c` itself, so a
+    // `watch ls` prefix would allow `watch ls '>' out` (a real redirect once watch runs it).
+    for (const command of ['watch ls', 'watch -n1 make check', 'sudo watch ls']) {
+      expect(persistedRules('allow', 'run_shell', { command }, ROOTS), command).toEqual([
+        { action: 'allow', tool: 'run_shell', match: command, exact: true }
+      ])
+    }
+    const watch = persistedRules('allow', 'run_shell', { command: 'watch ls' }, ROOTS)
+    expect(matchRule(watch, 'run_shell', "watch ls '>' out", ROOTS)).toBeNull()
+    expect(matchRule(watch, 'run_shell', 'watch ls', ROOTS)).toBe('allow')
     // An ordinary docker verb still generalizes.
     expect(shellRulePatterns('docker ps -a', ROOTS)).toEqual(['docker ps'])
   })

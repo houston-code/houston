@@ -2953,6 +2953,9 @@ function runsArbitraryCommand(tokens: string[]): boolean {
   let i = 0
   while (i < tokens.length && ENV_ASSIGN.test(tokens[i]!)) i++
   const base = (t: string): string => t.slice(t.lastIndexOf('/') + 1)
+  // A wrapper that is itself a runner (`watch` joins its words and hands them to
+  // `sh -c`) counts before its arguments are looked through.
+  if (runsArbitraryCommandAt(tokens, i)) return true
   if (i < tokens.length && COMMAND_WRAPPERS.has(base(tokens[i]!))) {
     for (let j = i + 1; j < tokens.length; j++) if (runsArbitraryCommandAt(tokens, j)) return true
     return false
