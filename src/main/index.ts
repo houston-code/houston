@@ -28,6 +28,8 @@ import { wireLocalhostCapture } from './localhostCapture'
 import { wireMockupCapture } from './mockupCapture'
 import { registerPrivilegedSchemes } from './schemes'
 import { wireDeepLinks } from './deepLinkHost'
+import { restoreNotificationClicks, setNotificationChatOpener } from './notifications'
+import { chatDeepLink } from '@shared/deepLink'
 import { configureIpcSenderPolicy } from './ipcSender'
 import { isAllowedChatFrameUrl } from './visualRender'
 import { appWindows, destroyHelperWindows } from './helperWindows'
@@ -370,8 +372,14 @@ if (acp) {
   const renderer = rendererDocument()
   configureIpcSenderPolicy({ startUrl: renderer.startUrl, devUrl: renderer.devUrl })
   // Before ready: macOS delivers a launch link through `open-url` during startup.
-  wireDeepLinks({ started: startedForLinks, createWindow })
+  const linkRouter = wireDeepLinks({ started: startedForLinks, createWindow })
+  // A clicked notification opens its chat the way a houston://chat link does: held
+  // until a window is listening, and checked against chats that still exist.
+  setNotificationChatOpener((id) => void linkRouter.handle(chatDeepLink(id)))
   app.whenReady().then(async () => {
+    // Notifications left in Notification Center by an earlier run open their chat
+    // again. Early, so the click that launched this run is not missed.
+    void restoreNotificationClicks()
     // Start decrypting the credential store, and open the window without waiting for
     // it. The OS store (Keychain, libsecret, DPAPI) usually answers in milliseconds,
     // but it can take seconds, or stop to ask the user, and until now nothing at all
