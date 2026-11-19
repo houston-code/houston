@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import {
   abortableSleep,
   backoffDelayMs,
@@ -18,6 +18,8 @@ import {
   retryAfterHintMs,
   retryDelayMs,
   RetryBudget,
+  SLEEP_UNTIL_SLICE_MS,
+  sleepUntil,
   throttleInfo,
   withProviderRetry
 } from './retry'
@@ -245,6 +247,53 @@ describe('abortableSleep', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('sleepUntil', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('ends soon after the wall-clock deadline even when the machine slept through it', async () => {
+    // Fake timers model the machine sleeping: the wall clock jumps an hour ahead while
+    // no timer time passes, as when a laptop lid is closed. A single timer set for the
+    // whole wait would still have an hour to go; a slice ends the wait.
+    vi.useFakeTimers()
+    const ac = new AbortController()
+    let done = false
+    const p = sleepUntil(Date.now() + 2 * 60 * 60_000, ac.signal).then(() => (done = true))
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(done).toBe(false)
+    vi.setSystemTime(Date.now() + 2 * 60 * 60_000)
+    await vi.advanceTimersByTimeAsync(SLEEP_UNTIL_SLICE_MS)
+    await p
+    expect(done).toBe(true)
+  })
+
+  it('waits the whole span when the machine stays awake', async () => {
+    vi.useFakeTimers()
+    const ac = new AbortController()
+    let done = false
+    const p = sleepUntil(Date.now() + 5 * 60_000, ac.signal).then(() => (done = true))
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1)
+    expect(done).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    await p
+    expect(done).toBe(true)
+  })
+
+  it('returns when the signal aborts, and at once for a past deadline', async () => {
+    vi.useFakeTimers()
+    const ac = new AbortController()
+    let done = false
+    const p = sleepUntil(Date.now() + 60 * 60_000, ac.signal).then(() => (done = true))
+    await vi.advanceTimersByTimeAsync(1_000)
+    ac.abort()
+    await vi.advanceTimersByTimeAsync(0)
+    await p
+    expect(done).toBe(true)
+    await sleepUntil(Date.now() - 1, new AbortController().signal)
   })
 })
 

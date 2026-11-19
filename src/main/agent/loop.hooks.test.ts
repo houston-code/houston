@@ -116,6 +116,7 @@ async function run(opts: {
   messages?: ChatMessage[]
   policy?: ApprovalPolicy
   onApproval?: (callId: string, decide: (d: ToolApprovalDecision) => void) => void
+  maxIterations?: number
 }): Promise<{ events: AgentEvent[]; messages: ChatMessage[] }> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
   const runId = `run-${Math.round(Math.random() * 1e9)}`
@@ -128,7 +129,8 @@ async function run(opts: {
       providerId: 'anthropic',
       model: 'claude-test',
       approvalPolicy: opts.policy ?? 'ask',
-      messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }]
+      messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }],
+      ...(opts.maxIterations ? { overrides: { maxIterations: opts.maxIterations } } : {})
     },
     (e) => {
       events.push(e)
@@ -185,6 +187,25 @@ describe('lifecycle hooks in the loop', () => {
     const assistantText = messages.filter((m) => m.role === 'assistant').map((m) => m.content)
     expect(assistantText).toContain('second')
     expect(events.at(-1)?.type).toBe('done')
+  })
+
+  it('a Stop hook blocking the final step ends the run at the step limit, keeping the reply as the answer', async () => {
+    h.settings.hooks = [{ event: 'Stop', matcher: '*', command: 'check' }]
+    h.script = { check: [{ exitCode: 1, stdout: 'run the tests' }, { exitCode: 1, stdout: 'still no tests' }] }
+    const provider = scripted([
+      [{ type: 'text', text: 'first' }, { type: 'done', stopReason: 'end_turn' }],
+      [{ type: 'text', text: 'Summary.' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const { events, messages } = await run({ provider, maxIterations: 2 })
+    expect(provider.calls).toBe(2)
+    // Sent back once (step 1); the final step's block has no round to send back to.
+    expect(events.filter((e) => e.type === 'reply_sent_back')).toHaveLength(1)
+    const notice = events.find((e) => e.type === 'notice' && e.message.includes('no steps left'))
+    expect(notice && 'message' in notice ? notice.message : '').toContain('still no tests')
+    expect(events.find((e) => e.type === 'limit')).toMatchObject({ reason: 'max-steps' })
+    expect(events.at(-1)?.type).toBe('done')
+    expect(messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Summary.' })
+    expect(messages.filter((m) => m.role === 'user' && m.content.includes('still no tests'))).toEqual([])
   })
 
   // The TUI tells users a hook edit "Applies on your next message", not on a
