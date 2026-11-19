@@ -195,6 +195,87 @@ describe('itemsFromMessages', () => {
   })
 })
 
+describe('questions asked outside ask_user (the git guard)', () => {
+  const guard = {
+    question: 'The last command changed git settings.',
+    options: [{ label: 'Undo these changes' }, { label: 'Keep them', description: 'Leave them.' }]
+  }
+  const asked: AgentEvent = { runId: 'r', type: 'tool_question', callId: 's1', ...guard }
+  const answered: AgentEvent = { runId: 'r', type: 'question_answered', callId: 's1', answer: 'Keep them' }
+
+  it('rebuilds a saved answer as an answered card right below the command that asked it', () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'set up hooks' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 's1', name: 'run_shell', arguments: { command: 'git config core.hooksPath ../..' } },
+          { id: 'd1', name: 'dispatch_writable_agent', arguments: { task: 'x' } }
+        ],
+        questions: [
+          { callId: 'd1.git.1', ...guard, answer: 'Undo these changes' },
+          { callId: 's1', ...guard, answer: 'Keep them' }
+        ]
+      },
+      { role: 'tool', toolCallId: 's1', toolName: 'run_shell', content: '[exit code: 0]' },
+      { role: 'tool', toolCallId: 'd1', toolName: 'dispatch_writable_agent', content: 'done' }
+    ]
+    const items = itemsFromMessages(messages)
+    expect(items.map((i) => `${i.kind}:${i.id}`).slice(1)).toEqual([
+      'tool:s1',
+      'question:s1',
+      'tool:d1',
+      'question:d1.git.1'
+    ])
+    expect(items.find((i) => i.kind === 'question' && i.id === 's1')).toMatchObject({
+      options: guard.options,
+      answer: 'Keep them'
+    })
+  })
+
+  it("puts a check's question after the reply, ahead of the receipt", () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: 'Done.',
+        questions: [{ callId: 'run-1:verify-git-1', ...guard, answer: 'Keep them' }],
+        receipt: { commands: [], files: [] } as unknown as ChatMessage['receipt']
+      }
+    ]
+    const kinds = itemsFromMessages(messages).map((i) => i.kind)
+    expect(kinds.slice(1)).toEqual(['assistant', 'question', 'receipt'])
+  })
+
+  it('skips malformed saved entries', () => {
+    const messages = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'ok', questions: [null, { callId: 1 }, 'x'] }
+    ] as unknown as ChatMessage[]
+    expect(itemsFromMessages(messages).some((i) => i.kind === 'question')).toBe(false)
+  })
+
+  it('marks the open card answered when the answer arrives', () => {
+    const items = reduceEvent(reduceEvent([], asked), answered)
+    expect(items.find((i) => i.kind === 'question')).toMatchObject({ id: 's1', answer: 'Keep them' })
+  })
+
+  it('replays a reopened mid-turn chat as answered, not as an open question', () => {
+    // A chat reopened before the round is saved: the disk log lacks the question, and
+    // the live buffer holds both events in order.
+    const reopened = [asked, answered].reduce((acc, ev) => reduceEvent(acc, ev), [] as DisplayItem[])
+    const card = reopened.find((i): i is QuestionItem => i.kind === 'question')
+    expect(card?.answer).toBe('Keep them')
+    expect(openQuestionIn(reopened)).toBeNull()
+  })
+
+  it('ignores an answer for a card it does not have', () => {
+    const items: DisplayItem[] = [{ kind: 'notice', id: 'n', text: 'hi', tone: 'info' }]
+    expect(reduceEvent(items, answered)).toEqual(items)
+  })
+})
+
 describe('present_plan', () => {
   const planReady: AgentEvent = {
     runId: 'r',

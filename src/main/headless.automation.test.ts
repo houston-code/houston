@@ -493,6 +493,7 @@ describe('the checked-in --json schema', () => {
     tool_approval: { runId: 'r', type: 'tool_approval', callId: 'c', name: 'run_shell', summary: 'ls', kind: 'shell', shellOffline: true },
     tool_result: { runId: 'r', type: 'tool_result', callId: 'c', name: 'read_file', ok: true, output: 'x' },
     tool_question: { runId: 'r', type: 'tool_question', callId: 'c', question: 'q', options: [] },
+    question_answered: { runId: 'r', type: 'question_answered', callId: 'c', answer: 'Keep them' },
     plan_ready: { runId: 'r', type: 'plan_ready', callId: 'c', plan: { title: 'Plan' } } as Extract<AgentEvent, { type: 'plan_ready' }>,
     elicitation: { runId: 'r', type: 'elicitation', callId: 'c', elicitId: 'e', serverId: 'gh', message: 'm', fields: [] },
     turn_start: { runId: 'r', type: 'turn_start', conversationId: 'conv', userText: 'next' },

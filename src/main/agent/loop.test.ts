@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { mcpToolName } from '@shared/mcp'
+import { QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
 import { McpClient } from '../mcp/client'
 import { _setMcpClientFactory, disconnectAllMcp } from '../mcp/manager'
 import { join } from 'node:path'
@@ -4702,6 +4703,10 @@ describe('ask_user', () => {
     const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'ask_user')
     expect(toolMsg?.content).toBe('Postgres')
     expect(types(r).at(-1)).toBe('done')
+    // The answer is announced (a reopened chat replays it), but not saved a second
+    // time: the call and its result already hold the question and the answer.
+    expect(r.events).toContainEqual(expect.objectContaining({ type: 'question_answered', callId: 'q1', answer: 'Postgres' }))
+    expect(r.messages.some((m) => m.questions)).toBe(false)
   })
 
   it("lets a run read a request's own extra root, and no other run", async () => {
@@ -8992,15 +8997,51 @@ describe('loop control — verification gate', () => {
       expect(q?.question).toMatch(/pre-commit/)
       expect(existsSync(join(ws, '.git', 'hooks', 'pre-commit'))).toBe(false)
       expect(types(r).at(-1)).toBe('done')
+      // The decision is saved with the chat, on the reply the check ran after.
+      const saved = r.messages.flatMap((m) => m.questions ?? [])
+      expect(saved).toEqual([expect.objectContaining({ callId: questions[0], answer: 'Undo these changes' })])
     }, 20_000)
 
-    it('keeps the hook when the user chooses Keep', async () => {
+    it('keeps the hook when the user chooses Keep, and saves the answered question', async () => {
       gitRepoWithTrackedFile()
       h.verifyRunner = plantHook(true)
-      await withSettings({ verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1 }, () =>
+      const r = await withSettings({ verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1 }, () =>
         run({ provider: writeThenStop(), policy: 'full-auto', onQuestion: (_id, answer) => answer('Keep them') })
       )
       expect(existsSync(join(ws, '.git', 'hooks', 'pre-commit'))).toBe(true)
+      const asked = r.events.find((e) => e.type === 'tool_question') as { callId: string; question: string }
+      // Announced right after the question, so a chat reopened mid-turn replays it answered.
+      const answered = r.events.findIndex((e) => e.type === 'question_answered')
+      expect(answered).toBeGreaterThan(r.events.indexOf(asked as AgentEvent))
+      expect(r.events[answered]).toMatchObject({ callId: asked.callId, answer: 'Keep them' })
+      // And saved on the turn's reply, so a chat reopened later still shows it.
+      const holder = r.messages.filter((m) => m.questions?.length)
+      expect(holder).toHaveLength(1)
+      expect(holder[0].role).toBe('assistant')
+      expect(holder[0].questions).toEqual([
+        {
+          callId: asked.callId,
+          question: asked.question,
+          options: [
+            expect.objectContaining({ label: 'Undo these changes' }),
+            expect.objectContaining({ label: 'Keep them' })
+          ],
+          answer: 'Keep them'
+        }
+      ])
+    }, 20_000)
+
+    it('saves the stopped note when the run ends before the user answers', async () => {
+      gitRepoWithTrackedFile()
+      h.verifyRunner = plantHook(true)
+      const runId = 'run-verify-git-stop'
+      const r = await withSettings({ verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1 }, () =>
+        run({ runId, provider: writeThenStop(), policy: 'full-auto', onQuestion: () => cancelRun(runId) })
+      )
+      expect(r.events).toContainEqual(expect.objectContaining({ type: 'question_answered', answer: QUESTION_STOPPED_ANSWER }))
+      expect(r.messages.flatMap((m) => m.questions ?? [])).toEqual([
+        expect.objectContaining({ answer: QUESTION_STOPPED_ANSWER })
+      ])
     }, 20_000)
 
     it('says nothing when the verify command leaves git alone', async () => {
