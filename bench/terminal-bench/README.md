@@ -137,8 +137,8 @@ cancels the running trials), kills Harbor if it is still running after 120 secon
 (`BENCH_STOP_GRACE`), removes any container left from this job's trials (and no other), and
 exits 3. Ctrl-C, or closing the terminal, stops the job the same way. The guard also fails
 closed: if the spend check itself fails three polls in a row (a trial file it cannot read
-counts as a failure, never as zero spend), it stops the job rather than run on without a
-limit. The latest table is in `<job>.spend` next to the job, and you can check a job at any
+counts as a failure, never as zero spend, and so does a trial that has run a tool or used
+tokens but reported no cost), it stops the job rather than run on without a limit. The latest table is in `<job>.spend` next to the job, and you can check a job at any
 time:
 
 ```bash
@@ -154,6 +154,12 @@ What it does not cover:
   cost over ACP in one update when that work ends, so the cap can be overshot by a whole
   dispatch, and one cut off when the job is stopped may never be counted, here or in Harbor's
   `cost_usd`.
+- **A model Houston can't price can't be run under the cap.** Houston reports a cost of 0
+  for a model missing from its price table, and no `usage_update` at all for one whose
+  context window it doesn't know, so the guard can't see what such a trial spends. It
+  treats a trial that has done work without reporting a cost as a failed check, which
+  stops the job within three polls, after a few minutes of uncounted spend. Pick a model
+  in `src/shared/model-facts.ts`.
 - **It is Houston's estimate**, not the provider's bill, and it reads log files written
   inside the task container. Check the provider's usage page after a large run.
 - **There is no per-trial money limit.** `--max-turns 400` caps the steps of each trial, but

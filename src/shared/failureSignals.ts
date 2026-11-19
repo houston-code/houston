@@ -199,12 +199,30 @@ function shellExit(content: string): { code: number; at: number } | null {
 }
 
 /**
+ * How much masked text past FAILURE_TAIL a window of output must yield before its start
+ * can't reach the kept tail: a mask match the window's start cuts through only changes
+ * the text near that start.
+ */
+const FAILURE_WINDOW_MARGIN = 512
+
+/**
  * A failing command's output with what changes between identical runs masked (clock
  * times, durations, addresses, temp paths, process ids: what the stall check masks
  * too), so the same failure compares equal and a different one (other tests, other
- * counts) doesn't.
+ * counts) doesn't. Only the end is kept, so only a window at the end is masked: a
+ * scorecard over a long history otherwise ran every mask over whole multi-megabyte
+ * outputs. The window widens until its masked text reaches past the kept tail (masks
+ * and whitespace folding can shrink it), so the result matches masking the whole output.
  */
 function failureText(output: string): string {
+  for (let span = 2 * FAILURE_TAIL; ; span *= 4) {
+    const from = Math.max(0, output.length - span)
+    const masked = maskFailure(output.slice(from))
+    if (from === 0 || masked.length >= FAILURE_TAIL + FAILURE_WINDOW_MARGIN) return masked.slice(-FAILURE_TAIL)
+  }
+}
+
+function maskFailure(output: string): string {
   return output
     .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, '<time>')
     .replace(/\b\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\b/g, '<time>')
@@ -214,7 +232,6 @@ function failureText(output: string): string {
     .replace(/\bpid[ =:]?\d+\b/gi, '<pid>')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(-FAILURE_TAIL)
 }
 
 /**

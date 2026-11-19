@@ -168,6 +168,16 @@ describe('assertRecordable', () => {
     expect(() => assertRecordable(scores, [], [])).not.toThrow()
   })
 
+  // A task whose test threw or timed out before it was scored has no row: written
+  // without it, the baseline would leave that task ungraded from then on.
+  it('refuses a run missing a score for any task it set out to run', () => {
+    const scores = [score('a', 1), score('c', 0)]
+    expect(() => assertRecordable(scores, [], [], ['a', 'b', 'c', 'd'])).toThrow(
+      /missing 2 of the run's 4 task\(s\)[\s\S]*Tasks: b, d/
+    )
+    expect(() => assertRecordable(scores, [], [], ['a', 'c'])).not.toThrow()
+  })
+
   it('refuses an empty score set', () => {
     expect(() => assertRecordable([])).toThrow(/no tasks/)
   })

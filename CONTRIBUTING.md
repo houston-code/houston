@@ -251,7 +251,10 @@ fresh recording.
 
 A recording is also refused when any failed attempt ended in a run error (the
 provider refused the call, the account ran out of credit) rather than a result:
-that is not a score, and a task frozen at 0 can never regress.
+that is not a score, and a task frozen at 0 can never regress. So is one missing a
+score for any task the run set out to score (its test threw or ran out of time before
+it was scored): the gate never grades a task its baseline lacks, and `baselines.test.ts`
+checks that each scheduled leg's baseline scores every registered task.
 
 Every attempt runs under a **cost cap**, $20 unless `HOUSTON_EVAL_MAX_COST_USD` sets
 another (a positive amount in dollars, like `40` or `0.5`). It is the loop's own cost

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { COMPACTION_SUMMARY_PREFIX, systemNoteMessage, type ChatMessage, type RunEndRecord } from './agent'
 import type { TurnReceipt } from './evidence'
 import {
@@ -274,6 +274,55 @@ describe('repeatedError', () => {
       reply()
     ])
     expect(fired(c)).toEqual({ repeatedError: 1 })
+  })
+
+  it('masks only the end of a long failing output, and still compares it as before', () => {
+    // Megabytes of output ahead of the failure, which differs only in its last lines.
+    const head = '12:00:01 ok 0x1f pid=42 took 3ms in /tmp/run-1/a.txt\n'.repeat(40_000)
+    const out = (name: string, ms: number): string =>
+      `${head}FAIL src/a.test.ts > ${name}\n  expected 1, got 2\nDuration ${ms}ms`
+    let longest = 0
+    const real = String.prototype.replace
+    const spy = vi.spyOn(String.prototype, 'replace').mockImplementation(function (this: string, ...args: unknown[]) {
+      longest = Math.max(longest, this.length)
+      return (real as (...a: unknown[]) => string).apply(this, args)
+    })
+    try {
+      const same = chat([
+        user(),
+        ...shellRun('npm test', out('adds', 812), 1),
+        ...shellRun('npm test', out('adds', 790), 1),
+        ...shellRun('npm test', out('adds', 1033), 1),
+        reply()
+      ])
+      expect(fired(same)).toEqual({ repeatedError: 1 })
+      const different = chat([
+        user(),
+        ...shellRun('npm test', out('adds', 812), 1),
+        ...shellRun('npm test', out('subtracts', 790), 1),
+        ...shellRun('npm test', out('divides', 1033), 1),
+        reply()
+      ])
+      expect(fired(different)).toEqual({})
+    } finally {
+      spy.mockRestore()
+    }
+    expect(head.length).toBeGreaterThan(2_000_000)
+    expect(longest).toBeLessThan(20_000)
+  })
+
+  it('reaches further back when masking folds the end of the output below the kept length', () => {
+    // A whitespace-heavy end folds to a few characters, so the failure further back must
+    // still be told apart, as it was when the whole output was masked.
+    const out = (name: string): string => `FAIL src/a.test.ts > ${name}\n${'  \n'.repeat(30_000)}done`
+    const c = chat([
+      user(),
+      ...shellRun('npm test', out('adds'), 1),
+      ...shellRun('npm test', out('subtracts'), 1),
+      ...shellRun('npm test', out('divides'), 1),
+      reply()
+    ])
+    expect(fired(c)).toEqual({})
   })
 })
 

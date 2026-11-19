@@ -271,14 +271,35 @@ export function compareAggregate(
  * A behavior probe never belongs in a baseline: probes are an A/B instrument, and the
  * gate ignores them. config.ts already refuses a recording that names any tasks; this
  * stops a probe row from reaching one some other way.
+ *
+ * `expected` is every task the run set out to score. A task whose test threw or timed
+ * out before it was scored has no row, and a baseline written without it would leave
+ * that task ungraded from then on (compareToBaseline reads a task missing from the
+ * baseline as unrecorded), so a recording missing any of them is refused too.
  */
 export function assertRecordable(
   scores: TaskScore[],
   errored: Array<{ taskId: string; attempts: number }> = [],
-  capped: Array<{ taskId: string; attempts: number }> = []
+  capped: Array<{ taskId: string; attempts: number }> = [],
+  expected: readonly string[] = []
 ): void {
   if (scores.length === 0) {
     throw new Error('Refusing to record a baseline with no tasks — nothing ran.')
+  }
+  const scored = new Set(scores.map((s) => s.taskId))
+  const missing = expected.filter((id) => !scored.has(id))
+  if (missing.length > 0) {
+    throw new Error(
+      [
+        `Refusing to record a baseline missing ${missing.length} of the run's ${expected.length} task(s): no score was recorded for them.`,
+        `Tasks: ${missing.join(', ')}`,
+        '',
+        "A task whose test threw or ran out of time before it was scored would drop out of",
+        'the baseline, and the gate never grades a task the baseline lacks.',
+        '',
+        "Find why those tasks didn't finish (their test failures above), fix it, and re-record."
+      ].join('\n')
+    )
   }
   const probes = scores.filter((s) => isProbeResultId(s.taskId))
   if (probes.length > 0) {

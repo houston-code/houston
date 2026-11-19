@@ -39,8 +39,11 @@ on:
 permissions:
   contents: read
 
+# Each cron gets its own group: a delayed nightly start once cancelled the weekly long
+# session (or the other way round), with nothing reported. A newer PR push still cancels
+# the older one's run.
 concurrency:
-  group: memory-soak-${{ github.event_name }}-${{ github.ref }}
+  group: memory-soak-${{ github.event_name }}-${{ github.event.schedule }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:

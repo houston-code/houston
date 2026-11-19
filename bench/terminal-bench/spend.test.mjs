@@ -125,6 +125,7 @@ describe('readJob', () => {
       cachedReadTokens: 1476142,
       outputTokens: 61947,
       cost: 2.033,
+      unpriced: false,
       stopReason: 'end_turn',
       error: null,
       agentMinutes: 12
@@ -178,6 +179,42 @@ describe('spend.mjs', () => {
     const err = capture()
     expect(main([join(job, 'missing')], capture(), err)).toBe(2)
     expect(err.text).toContain('no job directory')
+  })
+
+  it('fails closed with --cap on a trial that did work but reported no cost', () => {
+    const toolLine = JSON.stringify({ event_type: 'session_update', payload: { update: { sessionUpdate: 'tool_call', toolCallId: 't1' } } })
+    const zeroCost = (job) => {
+      // An unpriced model: Houston reports its cost as 0.
+      const agent = join(job, 'unpriced-task__aaaa', 'agent')
+      write(join(agent, 'acp-events.jsonl'), `${[usageLine(0), toolLine].join('\n')}\n`)
+      return job
+    }
+    const noUsage = (job) => {
+      // A model whose context window Houston doesn't know: no usage_update at all.
+      write(join(job, 'unknown-window__bbbb', 'agent', 'acp-events.jsonl'), `${messageLine}\n${toolLine}\n`)
+      return job
+    }
+    const finishedNoCost = (job) => {
+      write(join(job, 'finished-free__cccc', 'agent', 'acp-summary.json'), {
+        prompt_response: { stopReason: 'end_turn', usage: { inputTokens: 5000, outputTokens: 200 } },
+        latest_usage_update: null
+      })
+      return job
+    }
+    for (const add of [zeroCost, noUsage, finishedNoCost]) {
+      const job = add(fixtureJob())
+      const err = capture()
+      expect(main([job, '--cap', '100'], capture(), err), add.name).toBe(1)
+      expect(err.text, add.name).toContain('reported no cost')
+      // Still a plain report without a cap.
+      expect(main([job], capture(), capture()), add.name).toBe(0)
+    }
+    // A trial still in its first step (text only, no usage yet) is not flagged, and a
+    // dry run's refused first call (no work at all) is not either.
+    const job = fixtureJob()
+    write(join(job, 'first-step__dddd', 'agent', 'acp-events.jsonl'), `${messageLine}\n`)
+    expect(main([job, '--cap', '100'], capture(), capture())).toBe(0)
+    expect(readJob(job).filter((r) => r.unpriced)).toEqual([])
   })
 
   // chmod 000 blocks reads only for a non-root user on a POSIX system.
