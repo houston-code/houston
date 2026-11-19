@@ -131,8 +131,8 @@ import {
   type DisplayItem,
   type RewindItemTarget
 } from './lib/items'
-import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
-import { Titlebar } from './components/Titlebar'
+import { Sidebar as SidebarView, type ConversationStatusFilter } from './components/Sidebar'
+import { Titlebar as TitlebarView } from './components/Titlebar'
 import { KeyHints, keyHintList } from './components/KeyHints'
 import { activeTaskCount } from './components/BackgroundTasks'
 import { TerminalChip } from './components/TerminalChip'
@@ -150,10 +150,10 @@ import { RewindPicker } from './components/RewindPicker'
 import { PastEditDialog, pastEdits, type PastEdit } from './components/PastEditDialog'
 import { PAGE_LABELS } from './components/settings/pageIds'
 import { rewindDoneText, rewindsConversation, type RewindMode, type RewindOutcome } from '@shared/rewind'
-import { PlanPanel } from './components/PlanPanel'
+import { PlanPanel as PlanPanelView } from './components/PlanPanel'
 import { SideChatPanel } from './components/SideChatPanel'
 import type { ProposalHandlers } from './components/ProposalCard'
-import { Composer, IDLE_ONLY_COMMANDS } from './components/Composer'
+import { Composer as ComposerView, IDLE_ONLY_COMMANDS } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { GlobalRulesNotice } from './components/GlobalRulesNotice'
 import { PinnedTodos } from './components/PinnedTodos'
@@ -206,6 +206,8 @@ import { pageForWords } from './components/settings/pageIds'
 import type { WhatsNew } from '@shared/update'
 import { describeRule, ruleActionOf, savedRulesText, waitForSavedRules, withoutRules } from './lib/ruleToast'
 import { captureEventsAfter, createNavSequence, eventsForRun, finishCompact, resendAfterRewind } from './lib/chatSwitch'
+import { memoPane } from './lib/memoPane'
+import { useStableCallback } from './hooks/useStableCallback'
 
 // These overlays aren't on the initial render path, so load them as separate
 // chunks fetched on first open instead of bloating the main bundle. SettingsModal
@@ -222,9 +224,9 @@ const DoctorModal = lazy(() =>
 const SettingsModal = lazy(() =>
   import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal }))
 )
-const DiffPanel = lazy(() => import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel })))
+const DiffPanel = lazy(() => import('./components/DiffPanel').then((m) => ({ default: memoPane(m.DiffPanel) })))
 const FilesPanel = lazy(() =>
-  import('./components/FilesPanel').then((m) => ({ default: m.FilesPanel }))
+  import('./components/FilesPanel').then((m) => ({ default: memoPane(m.FilesPanel) }))
 )
 const Scorecard = lazy(() =>
   import('./components/Scorecard').then((m) => ({ default: m.Scorecard }))
@@ -244,6 +246,19 @@ const WhatsNewModal = lazy(() =>
 const ShortcutsHelp = lazy(() =>
   import('./components/ShortcutsHelp').then((m) => ({ default: m.ShortcutsHelp }))
 )
+
+// The panes beside the transcript. App holds the open chat's state, so every streamed
+// delta renders it; these render only when something they show changes (see memoPane).
+// Of the dock's panels, the Changes and Files tabs are memoized where they load, above.
+// The Tasks panel is left out: its "running for" times are read as it renders.
+const Sidebar = memoPane(SidebarView)
+const Titlebar = memoPane(TitlebarView)
+const Composer = memoPane(ComposerView)
+const PlanPanel = memoPane(PlanPanelView)
+
+/** Shared empty values for props, so an empty one doesn't count as a change. */
+const NO_GROUPS: ChatGroup[] = []
+const NO_COLLAPSED_SECTIONS: Record<string, boolean> = {}
 
 /** Built-in slash commands, derived from the shared catalog (custom ones are
  * loaded from the workspace). Same source the TUI and the agent's product
@@ -359,6 +374,11 @@ export default function App(): JSX.Element {
   )
   const [editing, setEditing] = useState<{ target: RewindItemTarget; mode: 'both' | 'conversation' } | null>(
     null
+  )
+  // What the composer shows of it, kept as one object while the edit holds.
+  const composerEditing = useMemo(
+    () => (editing ? { label: editing.target.label, mode: editing.mode } : undefined),
+    [editing]
   )
   // Tagged with its chat: the Composer remounts per chat and applies a prefill on
   // mount, so one meant for another chat must never reach it.
@@ -1408,6 +1428,12 @@ export default function App(): JSX.Element {
     const next = waitingIds[0]
     if (next) void selectConversation(next)
   }, [waitingIds, selectConversation])
+  // One object while the count holds, so the title bar doesn't render for every delta.
+  const openNextWaitingStable = useStableCallback(openNextWaiting)
+  const needsYou = useMemo(
+    () => ({ count: waitingIds.length, onNext: openNextWaitingStable }),
+    [waitingIds.length, openNextWaitingStable]
+  )
   // Flipping "New worktree" sets it for this chat and remembers it for the next one.
   const onToggleWorktree = useCallback(async (on: boolean) => {
     setWorktreeMode(on)
@@ -2543,8 +2569,9 @@ export default function App(): JSX.Element {
     },
     []
   )
-  useEffect(() => {
-    return window.api.onTerminalExit(({ id, exitCode, output }) => {
+  // Stable, so the subscription below is made once rather than again on every delta.
+  const onTerminalExit = useStableCallback(
+    ({ id, exitCode, output }: { id: string; exitCode: number; output?: string }) => {
       const run = shellEscapes.current.get(id)
       if (!run) return
       shellEscapes.current.delete(id)
@@ -2570,8 +2597,9 @@ export default function App(): JSX.Element {
           }
         })
         .catch(() => {})
-    })
-  }, [chat, recordHeldShell, flushHeldShellOutput, selectConversation])
+    }
+  )
+  useEffect(() => window.api.onTerminalExit(onTerminalExit), [onTerminalExit])
 
   // The agent's open `ask_user` question, if it is waiting on one. While it is, the
   // run can't read a steer (it is blocked on the answer), so Enter answers it instead.
@@ -3162,9 +3190,9 @@ export default function App(): JSX.Element {
   const sidebarLayout = useMemo<SidebarLayoutInput>(
     () => ({
       conversations: visibleConversations,
-      groups: search ? [] : settings?.chatGroups ?? [],
+      groups: search ? NO_GROUPS : settings?.chatGroups ?? NO_GROUPS,
       search,
-      collapsedSections: settings?.collapsedSections ?? {},
+      collapsedSections: settings?.collapsedSections ?? NO_COLLAPSED_SECTIONS,
       chatStatus,
       currentId,
       unreadFirst: settings?.sidebarUnreadFirst ?? false,
@@ -3864,7 +3892,7 @@ export default function App(): JSX.Element {
           onToggleSideChat={currentId ? () => setSideChatOpen((o) => !o) : undefined}
           sideChatOpen={sideChatVisible}
           terminalShortcut={shortcutHint('toggle-terminal', mac, shortcuts)}
-          needsYou={{ count: waitingIds.length, onNext: openNextWaiting }}
+          needsYou={needsYou}
           onOpenPalette={() => {
             setPaletteSeed('')
             setPaletteOpen(true)
@@ -4236,7 +4264,7 @@ export default function App(): JSX.Element {
             answering={openQuestion !== null}
             onSaveMemory={onSaveMemory}
             onCancel={chat.cancel}
-            editing={editing ? { label: editing.target.label, mode: editing.mode } : undefined}
+            editing={composerEditing}
             onEditModeChange={(mode) => setEditing((prev) => (prev ? { ...prev, mode } : prev))}
             onCancelEdit={() => setEditing(null)}
             prefill={composerPrefill?.conversationId === currentId ? composerPrefill : undefined}

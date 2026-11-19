@@ -59,6 +59,8 @@ const h = vi.hoisted(() => ({
   runOwner: vi.fn<(runId: string) => number | undefined>(),
   // Steerable "is a run live on this conversation" — the checkpoint gate reads it.
   activeRun: vi.fn<(conversationId: string) => string | null>(() => null),
+  // The window a WebContents belongs to (none by default), for the hidden-window tests.
+  windowFor: vi.fn<(wc: unknown) => unknown>(() => null),
   // Electron 44's clipboard: both reads resolve, and an image comes back as a Blob
   // under an image/* MIME type rather than from the removed readImage().
   clipboard: {
@@ -100,7 +102,7 @@ vi.mock('electron', () => ({
   shell: {},
   // The HTML-visual scheme handler is installed on the default session at registration.
   session: { defaultSession: { protocol: { handle: () => {} } } },
-  BrowserWindow: { getAllWindows: () => [], fromWebContents: () => null }
+  BrowserWindow: { getAllWindows: () => [], fromWebContents: (wc: unknown) => h.windowFor(wc) }
 }))
 
 // Mock the agent loop: the four run-control resolvers become spies, and runOwner is
@@ -1806,5 +1808,70 @@ describe('the loop scorecard handler', () => {
       expect(card.groupBy).toBe('model')
       expect(card.models.every((r) => r.promptId === undefined)).toBe(true)
     }
+  })
+})
+
+describe('agent events to a window that is hidden', () => {
+  const handler = (channel: string): ((...args: unknown[]) => unknown) => {
+    const fn = h.handlers.get(channel)
+    if (!fn) throw new Error(`no handler registered for ${channel}`)
+    return fn
+  }
+  registerIpc()
+  afterEach(() => {
+    h.windowFor.mockImplementation(() => null)
+    vi.useRealTimers()
+  })
+
+  it('holds its events, sends a prompt for the user at once, and the rest when shown', async () => {
+    updateSettings({ desktopNotifications: false })
+    h.activeRun.mockReturnValue(null)
+    h.runAndDrain.mockClear()
+    const send = vi.fn()
+    const sender = { id: 41, send, isDestroyed: () => false }
+    const on = new Map<string, () => void>()
+    const win = {
+      isDestroyed: () => false,
+      isVisible: () => true,
+      isMinimized: () => true,
+      isFocused: () => false,
+      on: (ev: string, fn: () => void) => on.set(ev, fn)
+    }
+    h.windowFor.mockImplementation((wc) => (wc === sender ? win : null))
+    const conversationId = createConversation({ workspace: '/tmp/ws', providerId: 'p', model: 'm' }).id
+    await handler(IPC.agentStart)({ sender }, {
+      runId: 'r-hidden', conversationId, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: 'go'
+    })
+    const io = h.runAndDrain.mock.calls[0][0] as { emit: (id: string, e: unknown) => void }
+    vi.useFakeTimers()
+    const agentSends = (): unknown[][] =>
+      send.mock.calls.filter((c) => c[0] === IPC.agentEvent || c[0] === IPC.agentEvents)
+
+    io.emit(conversationId, { runId: 'r-hidden', type: 'text', delta: 'Let me ' })
+    io.emit(conversationId, { runId: 'r-hidden', type: 'text', delta: 'look.' })
+    io.emit(conversationId, { runId: 'r-hidden', type: 'tool_start', callId: 't1', name: 'read_file', args: {} })
+    expect(agentSends()).toEqual([])
+
+    const approval = { runId: 'r-hidden', type: 'tool_approval', callId: 'w1', name: 'write_file', summary: 'w', kind: 'write' }
+    io.emit(conversationId, approval)
+    expect(agentSends()).toEqual([
+      [
+        IPC.agentEvents,
+        [
+          { runId: 'r-hidden', type: 'text', delta: 'Let me look.' },
+          { runId: 'r-hidden', type: 'tool_start', callId: 't1', name: 'read_file', args: {} },
+          approval
+        ]
+      ]
+    ])
+
+    io.emit(conversationId, { runId: 'r-hidden', type: 'tool_result', callId: 't1', name: 'read_file', ok: true, output: 'x' })
+    expect(agentSends()).toHaveLength(1)
+    // Restored: what it missed arrives, then each event as it comes.
+    on.get('restore')?.()
+    expect(agentSends()[1]).toEqual([
+      IPC.agentEvent,
+      { runId: 'r-hidden', type: 'tool_result', callId: 't1', name: 'read_file', ok: true, output: 'x' }
+    ])
   })
 })

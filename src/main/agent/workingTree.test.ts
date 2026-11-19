@@ -343,6 +343,24 @@ describe.skipIf(!hasGit)('collectWorkingTreeStats', () => {
     expect(stats.removed).toBeGreaterThan(0)
   }, GIT_TIMEOUT)
 
+  it('counts untracked lines as the full diff does, for awkward contents and many files', async () => {
+    const dir = freshRepo()
+    commit(dir)
+    writeFileSync(join(dir, 'crlf.txt'), 'one\r\ntwo\r\nthree')
+    writeFileSync(join(dir, 'only-newline.txt'), '\n')
+    writeFileSync(join(dir, 'blank-lines.txt'), '\n\n\nx\n\n')
+    writeFileSync(join(dir, 'bom.txt'), '\ufeffhello\nworld\n')
+    writeFileSync(join(dir, 'utf8.txt'), 'héllo wörld\n日本語\n')
+    // Invalid UTF-8 (a cut-off sequence just before a newline) decodes with replacements.
+    writeFileSync(join(dir, 'bad-utf8.txt'), Buffer.from([0x61, 0xe6, 0x97, 0x0a, 0x62]))
+    writeFileSync(join(dir, 'big.txt'), 'x\n'.repeat(130_000))
+    // Enough files that several are read at once, each with its own count.
+    for (let i = 0; i < 30; i++) writeFileSync(join(dir, `many-${i}.txt`), 'l\n'.repeat(i + 1))
+    const stats = await collectWorkingTreeStats(dir)
+    expect(stats).toEqual(await fromFull(dir))
+    expect(stats.added).toBe(3 + 1 + 5 + 2 + 2 + 2 + (30 * 31) / 2)
+  }, GIT_TIMEOUT)
+
   it('matches on an unborn HEAD with staged and untracked files', async () => {
     const dir = freshRepo()
     writeFileSync(join(dir, 'b.txt'), 'one\ntwo\n')

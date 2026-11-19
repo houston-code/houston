@@ -1,5 +1,5 @@
 import { act, renderHook } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent, AgentSendRequest, AgentStartResult, ToolApprovalDecision } from '@shared/agent'
 import { useChat } from './useChat'
 
@@ -776,3 +776,181 @@ async function sendAndGetRunId2(
   })
   return api.startAgent.mock.calls[1][0].runId
 }
+
+/** Display frames the test runs by hand; null leaves `requestAnimationFrame` unset. */
+function manualFrames(): { run: () => void; pending: () => number } {
+  let queue: FrameRequestCallback[] = []
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => queue.push(cb))
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => {
+    queue = queue.filter((_, i) => i + 1 !== id)
+  })
+  return {
+    run: () =>
+      act(() => {
+        const due = queue
+        queue = []
+        for (const cb of due) cb(performance.now())
+      }),
+    pending: () => queue.length
+  }
+}
+
+const assistantText = (items: ReturnType<typeof useChat>['items']): string =>
+  items
+    .filter((i) => i.kind === 'assistant')
+    .map((i) => (i as { text: string }).text)
+    .join('|')
+
+describe('useChat: one controller, events applied per frame', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('keeps the controller while nothing changes, and every method through a run', async () => {
+    const { api, emit } = installApi()
+    manualFrames()
+    const { result, rerender } = renderHook(() => useChat('c1'))
+    const first = result.current
+    rerender()
+    expect(result.current).toBe(first)
+
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'text', delta: 'hi' })
+    emit({ runId, type: 'tool_result', callId: 'a', name: 'write_file', ok: true, output: 'wrote' })
+    const during = result.current
+    expect(during).not.toBe(first)
+    for (const key of Object.keys(first) as (keyof typeof first)[]) {
+      if (typeof first[key] === 'function') expect({ key, same: during[key] === first[key] }).toEqual({ key, same: true })
+    }
+  })
+
+  it('applies a burst of streamed deltas once per frame, the first at once', async () => {
+    const { api, emit } = installApi()
+    const frames = manualFrames()
+    let renders = 0
+    const { result } = renderHook(() => {
+      renders++
+      return useChat('c1')
+    })
+    const runId = await sendAndGetRunId(result, api)
+
+    const before = renders
+    emit({ runId, type: 'text', delta: 'a' })
+    // Quiet until now, so it shows without waiting for a frame...
+    expect(assistantText(result.current.items)).toBe('a')
+    expect(renders).toBe(before + 1)
+    // ...and what follows inside the frame is held for it.
+    emit({ runId, type: 'text', delta: 'b' })
+    emit({ runId, type: 'reasoning', delta: 'r' })
+    emit({ runId, type: 'text', delta: 'c' })
+    expect(assistantText(result.current.items)).toBe('a')
+    expect(renders).toBe(before + 1)
+    frames.run()
+    expect(assistantText(result.current.items)).toBe('abc')
+    expect(renders).toBe(before + 2)
+
+    // Still streaming: the next frame gathers again rather than going back to one per event.
+    emit({ runId, type: 'text', delta: 'd' })
+    emit({ runId, type: 'text', delta: 'e' })
+    expect(assistantText(result.current.items)).toBe('abc')
+    frames.run()
+    expect(assistantText(result.current.items)).toBe('abcde')
+    expect(renders).toBe(before + 3)
+    // Every held delta reached the meter too (text and reasoning).
+    expect(result.current.meter?.streamedChars).toBe(6)
+
+    // A frame with nothing new ends the gathering: the next delta shows at once again.
+    frames.run()
+    expect(frames.pending()).toBe(0)
+    emit({ runId, type: 'text', delta: 'f' })
+    expect(assistantText(result.current.items)).toBe('abcdef')
+  })
+
+  it('applies what needs the user at once, after what was held, in order', async () => {
+    const { api, emit } = installApi()
+    manualFrames()
+    const { result } = renderHook(() => useChat('c1'))
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'text', delta: 'Let me ' })
+    emit({ runId, type: 'text', delta: 'write it.' })
+    // No frame yet: the approval card shows now, below the text that came before it.
+    emit({ runId, type: 'tool_approval', callId: 'w1', name: 'write_file', summary: 'write a.txt', kind: 'write' })
+    expect(assistantText(result.current.items)).toBe('Let me write it.')
+    const kinds = result.current.items.map((i) => i.kind)
+    expect(kinds.slice(-2)).toEqual(['assistant', 'tool'])
+    expect((result.current.items.at(-1) as { status: string }).status).toBe('awaiting-approval')
+
+    for (const blocking of [
+      { runId, type: 'tool_question', callId: 'q1', question: 'Which one?', options: [] },
+      { runId, type: 'plan_ready', callId: 'p1', plan: { title: 'Plan', body: '1. do it' } }
+    ] as AgentEvent[]) {
+      emit({ runId, type: 'text', delta: ' more' })
+      emit({ runId, type: 'text', delta: ' text' })
+      emit(blocking)
+      expect(result.current.items.at(-1)?.id).toBe((blocking as { callId: string }).callId)
+    }
+    expect(result.current.pendingPlan?.callId).toBe('p1')
+
+    emit({ runId, type: 'text', delta: ' last' })
+    emit({ runId, type: 'text', delta: ' words' })
+    emit({ runId, type: 'done', stopReason: 'end_turn' })
+    expect(result.current.running).toBe(false)
+    expect(assistantText(result.current.items)).toContain(' last words')
+  })
+
+  it('applies held deltas on an error before the run ends', async () => {
+    const { api, emit } = installApi()
+    manualFrames()
+    const { result } = renderHook(() => useChat('c1'))
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'text', delta: 'one' })
+    emit({ runId, type: 'text', delta: ' two' })
+    emit({ runId, type: 'error', message: 'boom' })
+    expect(assistantText(result.current.items)).toBe('one two')
+    expect(result.current.errored).toBe(true)
+  })
+
+  it('still applies held deltas when no frame comes (a hidden window)', async () => {
+    vi.useFakeTimers()
+    const { api, emit } = installApi()
+    manualFrames()
+    const { result } = renderHook(() => useChat('c1'))
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'text', delta: 'seen' })
+    emit({ runId, type: 'text', delta: ' later' })
+    expect(assistantText(result.current.items)).toBe('seen')
+    act(() => void vi.advanceTimersByTime(250))
+    expect(assistantText(result.current.items)).toBe('seen later')
+  })
+
+  it('drops held deltas when the transcript is replaced, so a re-adopted run shows them once', async () => {
+    const { api, emit } = installApi()
+    const frames = manualFrames()
+    const { result } = renderHook(() => useChat('c1'))
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'text', delta: 'Hello' })
+    emit({ runId, type: 'text', delta: ' world' })
+    // Switching away and back: the live transcript main returns already holds both deltas.
+    act(() => result.current.reset([{ kind: 'user', id: 'u1', text: 'hi' }]))
+    act(() =>
+      result.current.adopt(runId, [], [
+        { runId, type: 'text', delta: 'Hello' },
+        { runId, type: 'text', delta: ' world' }
+      ])
+    )
+    frames.run()
+    expect(assistantText(result.current.items)).toBe('Hello world')
+  })
+
+  it("holds nothing for another chat's run", async () => {
+    const { api, emit } = installApi()
+    const frames = manualFrames()
+    const { result } = renderHook(() => useChat('c1'))
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId: 'background', type: 'text', delta: 'not mine' })
+    expect(frames.pending()).toBe(0)
+    emit({ runId, type: 'text', delta: 'mine' })
+    expect(assistantText(result.current.items)).toBe('mine')
+  })
+})

@@ -119,7 +119,13 @@ import { deleteChat, planChatDelete, resolveDeleteAction } from './deleteChat'
 import { addToQueue, removeFromQueue, clearQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
 import { runAndDrain, drainQueue, startWakeTurn, type DrainIO } from './agent/drain'
 import { setWakeHost } from './agent/backgroundEvents'
-import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
+import {
+  createDeltaCoalescer,
+  createWindowEventGate,
+  flushAllDeltas,
+  type DeltaCoalescer,
+  type WindowEventGate
+} from './deltaCoalescer'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
 import { issueReportText, openIssueReport, revealLogs } from './issueReport'
@@ -382,11 +388,37 @@ export function eventForView(conversationId: string, ev: AgentEvent): AgentEvent
   return ev
 }
 
+/** Each window's pacing of run events by whether it can be seen (see createWindowEventGate). */
+const windowGates = new WeakMap<WebContents, WindowEventGate>()
+
+/** Send one run event to a window: at once while it is visible, held while it is hidden. */
+function sendAgentEvent(wc: WebContents, e: AgentEvent): void {
+  let gate = windowGates.get(wc)
+  if (!gate) {
+    const win = BrowserWindow.fromWebContents(wc)
+    const g = createWindowEventGate(
+      (events) => {
+        if (wc.isDestroyed()) return
+        if (events.length === 1) wc.send(IPC.agentEvent, events[0])
+        else wc.send(IPC.agentEvents, events)
+      },
+      () => !win || win.isDestroyed() || (win.isVisible() && !win.isMinimized())
+    )
+    // Back on screen: what it missed arrives before anything new.
+    win?.on('show', g.flush)
+    win?.on('restore', g.flush)
+    win?.on('focus', g.flush)
+    windowGates.set(wc, g)
+    gate = g
+  }
+  gate.push(e)
+}
+
 /** Stream one agent event to the renderers, persisting usage totals along the way. */
 function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
   noteRetryThrottle(conversationId, e)
   const ev = eventForView(conversationId, applyRunningUsage(conversationId, e))
-  for (const wc of runOutputTargets(sender)) wc.send(IPC.agentEvent, ev)
+  for (const wc of runOutputTargets(sender)) sendAgentEvent(wc, ev)
   maybeNotify(sender, conversationId, ev)
   attention?.noteEvent(conversationId, ev)
 }
@@ -510,7 +542,7 @@ function makeBroadcastIo(): DrainIO {
     emit: coalescedEmit((conversationId, e) => {
       noteRetryThrottle(conversationId, e)
       const ev = eventForView(conversationId, applyRunningUsage(conversationId, e))
-      toEach((wc) => wc.send(IPC.agentEvent, ev))
+      toEach((wc) => sendAgentEvent(wc, ev))
       const notifyVia = (windowShowing(conversationId) ?? targetWindow())?.webContents
       if (notifyVia) maybeNotify(notifyVia, conversationId, ev)
       attention?.noteEvent(conversationId, ev)

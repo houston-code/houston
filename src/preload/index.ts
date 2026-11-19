@@ -676,8 +676,17 @@ const api = {
 
   onAgentEvent: (cb: (e: AgentEvent) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, payload: AgentEvent): void => cb(payload)
+    // A batch (held while the window was hidden) is delivered event by event, in one
+    // task, so the window renders it once.
+    const batchListener = (_event: IpcRendererEvent, payload: AgentEvent[]): void => {
+      if (Array.isArray(payload)) for (const e of payload) cb(e)
+    }
     ipcRenderer.on(IPC.agentEvent, listener)
-    return () => ipcRenderer.removeListener(IPC.agentEvent, listener)
+    ipcRenderer.on(IPC.agentEvents, batchListener)
+    return () => {
+      ipcRenderer.removeListener(IPC.agentEvent, listener)
+      ipcRenderer.removeListener(IPC.agentEvents, batchListener)
+    }
   },
 
   // Integrated terminal (PTY-backed)

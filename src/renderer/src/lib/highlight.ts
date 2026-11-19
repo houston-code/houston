@@ -86,8 +86,12 @@ export function highlightFile(path: string, text: string): string | null {
  * `ts`, `py`, `bash`). Resolves shorthand ids through the same extension map, then
  * hljs's own aliases; returns null (raw text) when the language is unknown, the
  * block is too large, or hljs throws. Never auto-detects.
+ *
+ * `remember: false` leaves the result out of the cache, for text that is not final
+ * (a block whose closing fence never came): kept, each version would push finished
+ * blocks out of it.
  */
-export function highlightCode(lang: string, text: string): string | null {
+export function highlightCode(lang: string, text: string, { remember = true }: { remember?: boolean } = {}): string | null {
   if (!lang || text.length > MAX_HIGHLIGHT_BYTES) return null
   const resolved = lookup(EXT_LANG, lang.toLowerCase()) ?? lang.toLowerCase()
   if (!knownLanguage(resolved)) return null
@@ -101,7 +105,7 @@ export function highlightCode(lang: string, text: string): string | null {
   }
   try {
     const html = hljs.highlight(text, { language: resolved, ignoreIllegals: true }).value
-    rememberCode(key, text.length, html)
+    if (remember) rememberCode(key, text.length, html)
     return html
   } catch {
     return null
