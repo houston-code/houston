@@ -9,7 +9,7 @@ import type {
   TokenUsage
 } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
-import { geminiThinkingConfig, geminiUsesThinkingLevel } from './reasoning'
+import { geminiRequiresCallSignatures, geminiThinkingConfig, geminiUsesThinkingLevel } from './reasoning'
 import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS, StreamClosedEarlyError } from './idle-fetch'
 
 /** Output floor for models that always think (Gemini 4): Google's recommended minimum. */
@@ -18,7 +18,8 @@ const GEMINI_THINKING_MIN_OUTPUT = 32_768
 /**
  * The thought signatures a turn's function calls carried, keyed by call id, for the
  * model the request goes to. A signature is bound to the model that issued it, so
- * after a fallback hop or a model switch the calls go back without one.
+ * after a fallback hop or a model switch the calls go back without one (and, in the
+ * current turn, with a stand-in: see signCurrentTurnCalls).
  */
 function callSignatures(m: ChatMessage, model: string): Map<string, string> {
   const out = new Map<string, string>()
@@ -44,6 +45,38 @@ function modelParts(m: ChatMessage, model: string): Part[] {
     })
   }
   return parts
+}
+
+/**
+ * The stand-in signature Google documents for a function call the API didn't issue to this
+ * model (history from another model, or injected): it tells the validator to skip that call.
+ */
+export const SKIP_SIGNATURE = 'skip_thought_signature_validator'
+
+/**
+ * Gemini 3 on rejects a request (a 400, which no retry fixes) whose current turn has a model
+ * step whose first function call carries no thought signature. A call loses its signature
+ * when another model issued it: a fallback hop mid-turn, including Gemini to Gemini, since a
+ * signature is bound to its model. Give each such step the documented stand-in. The current
+ * turn starts at the newest user turn with text and no function responses (Google's rule);
+ * a nudge folded onto tool results doesn't end the search, so at worst an earlier step gets a
+ * stand-in it didn't need, which the API accepts.
+ */
+function signCurrentTurnCalls(contents: Content[]): void {
+  let start = 0
+  for (let i = contents.length - 1; i >= 0; i--) {
+    const c = contents[i]
+    const parts = c.parts ?? []
+    if (c.role === 'user' && parts.some((p) => 'text' in p) && !parts.some((p) => 'functionResponse' in p)) {
+      start = i + 1
+      break
+    }
+  }
+  for (const c of contents.slice(start)) {
+    if (c.role !== 'model') continue
+    const first = c.parts?.find((p) => p.functionCall)
+    if (first && !first.thoughtSignature) first.thoughtSignature = SKIP_SIGNATURE
+  }
 }
 
 /** Gemini finish reasons that mean a filter stopped the reply, not the model finishing it. */
@@ -160,6 +193,7 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
     }
   }
   flushToolImages()
+  if (geminiRequiresCallSignatures(model)) signCurrentTurnCalls(out)
   return out
 }
 

@@ -21,7 +21,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-fable-5-1": {
@@ -45,7 +46,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-fable-5": {
@@ -68,7 +70,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-mythos-5-2": {
@@ -92,7 +95,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-mythos-5-1": {
@@ -116,7 +120,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-mythos-5": {
@@ -139,7 +144,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-opus-5-5": {
@@ -163,7 +169,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-opus-5": {
@@ -186,7 +193,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-opus-4-8": {
@@ -209,7 +217,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-opus-4-7": {
@@ -232,7 +241,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-opus-4-6": {
@@ -255,7 +265,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-opus-4-5": {
@@ -278,7 +289,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-opus-4-1": {
@@ -301,7 +313,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-opus-4-20250514": {
@@ -324,7 +337,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "anthropic.claude-opus-4-1-20250805-v1:0": {
@@ -347,7 +361,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-sonnet-5-5": {
@@ -371,7 +386,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-sonnet-5": {
@@ -394,7 +410,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-sonnet-4-6": {
@@ -417,7 +434,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-sonnet-4-5": {
@@ -440,7 +458,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-sonnet-4-5-20250929": {
@@ -463,7 +482,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-sonnet-4-20250514": {
@@ -486,7 +506,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-haiku-4-5": {
@@ -509,7 +530,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-haiku-5-5": {
@@ -537,7 +559,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-3-7-sonnet-20250219": {
@@ -560,7 +583,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-3-5-sonnet-20241022": {
@@ -583,7 +607,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-3-5-haiku-20241022": {
@@ -606,7 +631,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-3-opus-20240229": {
@@ -629,7 +655,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-3-haiku-20240307": {
@@ -652,7 +679,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-2.1": {
@@ -672,7 +700,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-instant-1.2": {
@@ -692,7 +721,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "anthropic.claude-opus-5-5": {
@@ -716,7 +746,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "anthropic.claude-fable-5-2": {
@@ -740,7 +771,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "anthropic.claude-fable-5-1": {
@@ -764,7 +796,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "anthropic.claude-sonnet-5-5": {
@@ -788,7 +821,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "anthropic.claude-haiku-4-5": {
@@ -811,7 +845,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "anthropic.claude-haiku-5-5": {
@@ -839,7 +874,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "anthropic.claude-sonnet-4-6": {
@@ -862,7 +898,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-opus-4-5@20251101": {
@@ -885,7 +922,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-sonnet-4@20250514": {
@@ -908,7 +946,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "claude-sonnet-5-5@20260901": {
@@ -932,7 +971,8 @@
         "anthropicPreserved": true,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "anthropic/claude-sonnet-5": {
@@ -955,7 +995,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": true,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-6.2-astra": {
@@ -987,7 +1028,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-6.2-sol": {
@@ -1019,7 +1061,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-6-astra": {
@@ -1051,7 +1094,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-6.1-sol": {
@@ -1083,7 +1127,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-6.1-terra": {
@@ -1115,7 +1160,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-6-sol": {
@@ -1147,7 +1193,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-6-luna": {
@@ -1179,7 +1226,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.6-sol": {
@@ -1211,7 +1259,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.6-terra": {
@@ -1243,7 +1292,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.6-luna": {
@@ -1275,7 +1325,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.6": {
@@ -1307,7 +1358,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.5": {
@@ -1339,7 +1391,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.5-pro": {
@@ -1371,7 +1424,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.4": {
@@ -1403,7 +1457,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.4-mini": {
@@ -1428,7 +1483,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.4-nano": {
@@ -1453,7 +1509,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.4-pro": {
@@ -1485,7 +1542,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.2": {
@@ -1510,7 +1568,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.2-pro": {
@@ -1535,7 +1594,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5.1": {
@@ -1560,7 +1620,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5": {
@@ -1585,7 +1646,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5-mini": {
@@ -1610,7 +1672,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5-nano": {
@@ -1635,7 +1698,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-5-pro": {
@@ -1660,7 +1724,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-4.1": {
@@ -1685,7 +1750,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-4.1-mini": {
@@ -1710,7 +1776,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-4o": {
@@ -1735,7 +1802,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-4o-mini": {
@@ -1760,7 +1828,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-4-turbo": {
@@ -1780,7 +1849,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gpt-3.5-turbo": {
@@ -1800,7 +1870,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "o1": {
@@ -1825,7 +1896,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "o1-pro": {
@@ -1850,7 +1922,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "o1-preview": {
@@ -1875,7 +1948,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "o3": {
@@ -1900,7 +1974,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "o3-mini": {
@@ -1925,7 +2000,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "o3-pro": {
@@ -1950,7 +2026,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "o4-mini": {
@@ -1975,7 +2052,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": true,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "openai/gpt-6.1-sol": {
@@ -2007,7 +2085,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "openai/gpt-5.6-luna": {
@@ -2039,7 +2118,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "openai/o3": {
@@ -2064,7 +2144,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gemini-4-argon": {
@@ -2098,7 +2179,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "gemini-3.1-pro-preview": {
@@ -2130,7 +2212,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "gemini-3-pro-preview": {
@@ -2162,7 +2245,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "gemini-3.8-flash": {
@@ -2196,7 +2280,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "gemini-3.7-flash": {
@@ -2230,7 +2315,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "gemini-3.6-flash": {
@@ -2264,7 +2350,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "gemini-3.5-flash": {
@@ -2289,7 +2376,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "gemini-3-flash-preview": {
@@ -2314,7 +2402,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "gemini-3.5-flash-lite": {
@@ -2339,7 +2428,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "gemini-3.1-flash-lite": {
@@ -2364,7 +2454,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "gemini-2.5-pro": {
@@ -2412,7 +2503,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": false
       }
     },
     "gemini-2.5-flash": {
@@ -2446,7 +2538,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": false
       }
     },
     "gemini-2.5-flash-lite": {
@@ -2471,7 +2564,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": false
       }
     },
     "gemini-2.0-flash": {
@@ -2496,7 +2590,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gemini-2.0-flash-thinking-exp": {
@@ -2521,7 +2616,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": false
       }
     },
     "gemini-1.5-pro": {
@@ -2553,7 +2649,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "gemini-pro": {
@@ -2585,7 +2682,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "google/gemini-3.8-flash": {
@@ -2619,7 +2717,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": true
       }
     },
     "llama3.1:latest": {
@@ -2639,7 +2738,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "qwen2.5-coder": {
@@ -2659,7 +2759,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": true
+        "geminiThinking": true,
+        "geminiSignedCalls": false
       }
     },
     "deepseek/deepseek-r1": {
@@ -2679,7 +2780,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "mistral-nemo": {
@@ -2699,7 +2801,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     },
     "my-gpt-4o-deployment": {
@@ -2724,7 +2827,8 @@
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
         "openaiReasoning": false,
-        "geminiThinking": false
+        "geminiThinking": false,
+        "geminiSignedCalls": false
       }
     }
   },

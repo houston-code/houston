@@ -303,6 +303,10 @@ const GEMINI_THINKING = /2\.5|thinking|gemini-([3-9]|[1-9]\d)/i
  *  and always thinks, so "reasoning off" maps to the lowest level. */
 const GEMINI_THINKING_LEVEL = /gemini-([4-9]|[1-9]\d)/i
 
+/** Gemini 3 on validates function-call thought signatures: a current-turn call sent back
+ *  without one is a 400. */
+const GEMINI_SIGNED_CALLS = /gemini-([3-9]|[1-9]\d)/i
+
 const GEMINI_FAMILIES: FamilyRule[] = [
   // Gemini 4 names its flagship Argon rather than Pro.
   { name: 'argon', test: /argon/ },
@@ -589,4 +593,8 @@ export function geminiSupportsThinking(model: string): boolean {
 
 export function geminiUsesThinkingLevel(model: string): boolean {
   return GEMINI_THINKING_LEVEL.test(model)
+}
+
+export function geminiRequiresCallSignatures(model: string): boolean {
+  return GEMINI_SIGNED_CALLS.test(model)
 }

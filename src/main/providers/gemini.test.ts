@@ -249,9 +249,10 @@ describe('gemini function-call thought signatures', () => {
         { functionCall: { name: 'read_file', args: { path: 'b' } } }
       ]
     })
-    // Another model can't use the signature, so the calls go back without it.
+    // Another model can't use the signature: the step's first call goes back with the
+    // documented stand-in instead (it is in the current turn), the rest without one.
     expect(toGeminiContents(msgs, 'gemini-4-argon')[1].parts).toEqual([
-      { functionCall: { name: 'read_file', args: { path: 'a' } } },
+      { functionCall: { name: 'read_file', args: { path: 'a' } }, thoughtSignature: 'skip_thought_signature_validator' },
       { functionCall: { name: 'read_file', args: { path: 'b' } } }
     ])
   })
@@ -278,6 +279,86 @@ describe('gemini function-call thought signatures', () => {
     }
     const sent = h.stream.mock.calls[0][0] as { contents: { parts: Record<string, unknown>[] }[] }
     expect(sent.contents[1].parts[0]).toMatchObject({ thoughtSignature: 'SIG1' })
+  })
+})
+
+describe('gemini current-turn calls from another model (fallback hop)', () => {
+  beforeEach(() => h.stream.mockReset())
+  const SKIP = 'skip_thought_signature_validator'
+
+  // A turn another model started: two tool steps with no Gemini signatures (a GPT or
+  // Claude reply records none), then the request goes to Gemini mid-turn.
+  const hopped: ChatMessage[] = [
+    { role: 'user', content: 'earlier question' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'old', name: 'list_dir', arguments: {} }] },
+    { role: 'tool', content: 'x', toolCallId: 'old', toolName: 'list_dir' },
+    { role: 'assistant', content: 'done before' },
+    { role: 'user', content: 'fix the bug' },
+    {
+      role: 'assistant',
+      content: 'Looking.',
+      toolCalls: [
+        { id: 'c1', name: 'read_file', arguments: { path: 'a' } },
+        { id: 'c2', name: 'read_file', arguments: { path: 'b' } }
+      ],
+      reasoning: [{ text: 'thinking', model: 'gpt-6-luna', signature: 'opaque' }]
+    },
+    { role: 'tool', content: 'A', toolCallId: 'c1', toolName: 'read_file' },
+    { role: 'tool', content: 'B', toolCallId: 'c2', toolName: 'read_file' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c3', name: 'edit_file', arguments: {} }] },
+    { role: 'tool', content: 'ok', toolCallId: 'c3', toolName: 'edit_file' }
+  ]
+
+  it('sends the first call of each current-turn step with the stand-in signature', async () => {
+    h.stream.mockResolvedValue(
+      (async function* () {
+        yield { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'fixed' }] } }] }
+      })()
+    )
+    for await (const _ of createGeminiProvider('k').streamChat({ model: 'gemini-3.8-flash', messages: hopped } as ChatRequest)) {
+      // drain
+    }
+    const sent = h.stream.mock.calls[0][0] as { contents: { role: string; parts: Record<string, unknown>[] }[] }
+    const steps = sent.contents.filter((c) => c.role === 'model' && c.parts.some((p) => p.functionCall))
+    // The previous turn's step is not validated and stays as it was.
+    expect(steps[0].parts[0].thoughtSignature).toBeUndefined()
+    // This turn: the first call of each step is stand-in signed, later calls are not.
+    expect(steps[1].parts.map((p) => p.thoughtSignature)).toEqual([undefined, SKIP, undefined])
+    expect(steps[2].parts[0].thoughtSignature).toBe(SKIP)
+  })
+
+  it('covers a Gemini-to-Gemini hop, where the other model signature is filtered out', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'g1', name: 'run', arguments: {} }],
+        reasoning: [{ text: '', model: 'gemini-3.8-flash', id: 'g1', signature: 'SIG1' }]
+      },
+      { role: 'tool', content: 'ok', toolCallId: 'g1', toolName: 'run' }
+    ]
+    expect(toGeminiContents(msgs, 'gemini-3.7-flash')[1].parts![0].thoughtSignature).toBe(SKIP)
+    // The issuing model still gets its own signature back, never the stand-in.
+    expect(toGeminiContents(msgs, 'gemini-3.8-flash')[1].parts![0].thoughtSignature).toBe('SIG1')
+  })
+
+  it('keeps looking past a nudge folded onto tool results for the turn start', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'n1', name: 'run', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'n1', toolName: 'run' },
+      { role: 'user', content: 'Automated note from Houston (not from the user): keep going' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'n2', name: 'run', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'n2', toolName: 'run' }
+    ]
+    const steps = toGeminiContents(msgs, 'gemini-4-argon').filter((c) => c.role === 'model')
+    expect(steps.map((c) => c.parts![0].thoughtSignature)).toEqual([SKIP, SKIP])
+  })
+
+  it('adds no stand-in for models that do not validate signatures', () => {
+    const contents = toGeminiContents(hopped, 'gemini-2.5-flash')
+    expect(contents.flatMap((c) => c.parts ?? []).some((p) => 'thoughtSignature' in p)).toBe(false)
   })
 })
 

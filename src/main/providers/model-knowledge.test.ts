@@ -10,6 +10,7 @@ import {
   anthropicSupportsXhigh,
   anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
+  geminiRequiresCallSignatures,
   geminiSupportsThinking,
   openaiSupportsReasoning
 } from './reasoning'
@@ -154,7 +155,8 @@ describe('model knowledge golden', () => {
             anthropicPreserved: anthropicPreservesThinking(id),
             anthropicThinksByDefault: anthropicThinksByDefault(id),
             openaiReasoning: openaiSupportsReasoning(id),
-            geminiThinking: geminiSupportsThinking(id)
+            geminiThinking: geminiSupportsThinking(id),
+            geminiSignedCalls: geminiRequiresCallSignatures(id)
           }
         }
       ])

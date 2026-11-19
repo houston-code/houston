@@ -14,6 +14,7 @@ import {
   anthropicSupportsXhigh,
   anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
+  geminiRequiresCallSignatures,
   geminiSupportsThinking,
   geminiUsesThinkingLevel,
   maxOutputTokensFor,
@@ -29,6 +30,7 @@ export {
   anthropicSupportsXhigh,
   anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
+  geminiRequiresCallSignatures,
   geminiSupportsThinking,
   geminiUsesThinkingLevel,
   openaiSupportsReasoning
