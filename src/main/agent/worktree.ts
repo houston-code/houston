@@ -381,9 +381,29 @@ async function mergedInto(
 }
 
 /**
+ * Whether the commit checked out in the worktree is on its branch, the main
+ * checkout's HEAD, or origin's default branch, so removing the checkout loses no
+ * commit. False on any doubt (no HEAD, git failure). Never throws.
+ */
+async function headIsKept(wt: ConversationWorktree, exec: GitRun): Promise<boolean> {
+  let head: string
+  try {
+    head = (await exec(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], wt.path)).trim()
+  } catch {
+    return false
+  }
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(head)) return false
+  for (const base of [`refs/heads/${wt.branch}`, 'HEAD', ORIGIN_DEFAULT]) {
+    if (await mergedInto(wt, base, exec, head)) return true
+  }
+  return false
+}
+
+/**
  * Tear down a conversation's worktree. Without `force`, this is safe: the worktree
- * is only removed when it has no uncommitted changes, and the branch only when
- * it's fully merged — so work is never silently destroyed. With `force`, both are
+ * is only removed when it has no uncommitted changes and no commits off its branch
+ * (a detached HEAD's), and the branch only when it's fully merged — so work is
+ * never silently destroyed. With `force`, both are
  * removed unconditionally. Best-effort and never throws; reports what it did.
  *
  * `branch` overrides how the branch goes, apart from the checkout: `'safe'` deletes
@@ -398,16 +418,33 @@ export async function removeWorktree(
 ): Promise<WorktreeRemoval> {
   const force = opts.force === true
   const forceBranch = opts.branch ? opts.branch === 'force' : force
+  // Commits are meant to survive unless the branch goes regardless. Those made on a
+  // detached HEAD (or another branch checked out there) are on no ref git's own checks
+  // look at: `worktree remove` takes the checkout, `branch -d` passes because the
+  // branch never moved, and the commits become unreachable.
+  if (!forceBranch && !(await headIsKept(wt, exec))) {
+    return {
+      removed: false,
+      branchDeleted: false,
+      message:
+        `Kept the worktree for branch "${wt.branch}" because it has commits that are not on ` +
+        `that branch (made on a detached HEAD), so nothing was lost. Put them on a branch, ` +
+        `then remove it from ${wt.path}.`
+    }
+  }
+  // Stop its language servers first: they run in the checkout, and a process still
+  // working in it makes the removal fail on Windows.
+  await lspManager.stopForRoot(wt.path).catch(() => {})
   try {
-    const args = ['worktree', 'remove', wt.path]
+    // `worktree remove` checks for untracked files with git's own status, which a
+    // user's `status.showUntrackedFiles=no` would blind; ask for every one.
+    const args = ['-c', 'status.showUntrackedFiles=all', 'worktree', 'remove', wt.path]
     if (force) args.push('--force')
     await exec(args, wt.repoRoot)
   } catch (e) {
     // `git worktree remove` refuses a dirty worktree without --force; keep the work.
     return { removed: false, branchDeleted: false, message: removalFailureMessage(wt, e) }
   }
-  // Its language servers have nothing left to serve.
-  await lspManager.stopForRoot(wt.path).catch(() => {})
   let branchDeleted = false
   try {
     await exec(['branch', forceBranch ? '-D' : '-d', wt.branch], wt.repoRoot)
@@ -449,7 +486,8 @@ export async function isWorktreeDisposable(
 ): Promise<boolean> {
   if (!isSafeGitRef(wt.branch) || !exists(wt.path)) return false
   try {
-    const status = await exec(['status', '--porcelain'], wt.path)
+    // Every untracked file, whatever the user's `status.showUntrackedFiles` says.
+    const status = await exec(['status', '--porcelain', '--untracked-files=all'], wt.path)
     if (status.trim() !== '') return false
     // What the worktree has checked out, which need not be its branch: commits made on
     // a detached HEAD (or another branch) are on no ref the branch check would see,

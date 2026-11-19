@@ -1,7 +1,7 @@
 import type { ConversationWorktree, DeleteConversationResult, WorktreeRemoval } from '@shared/agent'
 import { activeRunForConversation, cancelRun } from './agent/loop'
 import { forgetQueue } from './agent/queue'
-import { killShellsFor } from './agent/shells'
+import { killShellsFor, stopShellsFor } from './agent/shells'
 import { isWorktreeDisposable, removeWorktree } from './agent/worktree'
 import { deleteConversation, otherConversationsInWorktree, peekConversation } from './conversations'
 
@@ -60,6 +60,8 @@ export interface DeleteChatDeps {
   sharedCount(id: string, path: string): number
   isDisposable(wt: ConversationWorktree): Promise<boolean>
   removeWorktree(wt: ConversationWorktree): Promise<WorktreeRemoval>
+  /** Stop the chat's live run and background shells, and wait (bounded) until they end. */
+  stopAndWait(id: string): Promise<void>
   stopAndDelete(id: string): void
 }
 
@@ -69,6 +71,11 @@ const defaultDeps: DeleteChatDeps = {
   sharedCount: otherConversationsInWorktree,
   isDisposable: (wt) => isWorktreeDisposable(wt),
   removeWorktree: (wt) => removeWorktree(wt),
+  stopAndWait: async (id) => {
+    const liveRun = activeRunForConversation(id)
+    if (liveRun) cancelRun(liveRun)
+    await stopShellsFor(id)
+  },
   stopAndDelete: stopAndDeleteConversation
 }
 
@@ -99,10 +106,14 @@ export async function deleteChat(
   removeWorktree: boolean,
   deps: DeleteChatDeps = defaultDeps
 ): Promise<DeleteConversationResult> {
-  // Stop what the chat still has running before it goes: its background shells'
-  // dev servers would otherwise hold their ports inside a worktree about to go.
-  deps.stopAndDelete(id)
   const wt = plan.worktree
-  const worktree = removeWorktree && wt && !plan.shared && plan.kind !== 'plain' ? await deps.removeWorktree(wt) : null
+  const removing = removeWorktree && wt && !plan.shared && plan.kind !== 'plain'
+  // Stop what the chat still has running before it goes: its background shells'
+  // dev servers would otherwise hold their ports inside a worktree about to go. When
+  // the worktree goes too, wait for them to end: on Windows a process still running
+  // in the folder makes the removal fail.
+  if (removing) await deps.stopAndWait(id).catch(() => {})
+  deps.stopAndDelete(id)
+  const worktree = removing ? await deps.removeWorktree(wt) : null
   return { deleted: true, worktree }
 }

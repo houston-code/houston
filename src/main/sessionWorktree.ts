@@ -116,7 +116,8 @@ export async function worktreeWork(
 ): Promise<WorktreeWork | null> {
   if (!exists(wt.path) || !isSafeGitRef(wt.branch)) return null
   try {
-    const status = await exec(['status', '--porcelain'], wt.path)
+    // Every untracked file, whatever the user's `status.showUntrackedFiles` says.
+    const status = await exec(['status', '--porcelain', '--untracked-files=all'], wt.path)
     // Fully qualified, so the branch can never be read as an option. HEAD too: commits
     // made on a detached HEAD (or another branch checked out there) are on no ref the
     // branch would show, and removing the checkout would lose them.
