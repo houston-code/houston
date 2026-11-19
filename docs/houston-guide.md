@@ -1224,7 +1224,7 @@ replace the built-in status line above the composer:
 | `Ctrl-W` | delete the word before the cursor |
 | `Ctrl-K` / `Ctrl-U` | delete to end / start of line |
 | `Ctrl-Y` | paste back what was just deleted |
-| `Ctrl-X Ctrl-E`, `Ctrl-G` | open the draft in `$VISUAL`/`$EDITOR` and come back with it |
+| `Ctrl-X Ctrl-E`, `Ctrl-G` | open the draft in `$VISUAL`/`$EDITOR` and come back with it. The variable is run through your shell, as git does, so `code --wait` or a quoted path with spaces works; an editor that can't be started says so |
 | `Ctrl-_` / `Ctrl-^` | undo / redo the last edit (on most keyboards `Ctrl-/` and `Ctrl-6`). A run of typing is one step; a paste, a delete-word or a paste-back is a step of its own |
 | `Ctrl-S` | stash the draft (text, cursor and collapsed pastes) and clear the composer; `Ctrl-S` on an empty composer brings it back. The stash survives sending other messages; stashing again keeps the older one in history |
 | `Ctrl-L` | repaint the screen |
@@ -1277,7 +1277,8 @@ again whenever it is saved. Without the file the keys are exactly the defaults.
   viewer; in the composer and pickers they type. Keys a terminal can't tell apart
   (`ctrl-shift-k`) are refused.
 - **Chords:** keys separated by spaces, pressed one after another within a second.
-  The built-in `ctrl-x ctrl-e` is one; bind it to `null` to free `Ctrl-X`.
+  The built-in `ctrl-x ctrl-e` and `ctrl-x ctrl-p` are chords; bind both to `null` to
+  free `Ctrl-X`.
 - **Actions:** `null` takes a key away. `command:<name>` sends that slash command from
   the composer (a draft you were writing is stashed; `Ctrl-S` brings it back). The
   other actions are named in the file's template: in the composer `submit`,

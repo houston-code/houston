@@ -397,9 +397,7 @@ async function editInEditor(initial: string, filename = 'PLAN.md'): Promise<stri
   try {
     // Owner-only: a draft or a transcript can hold anything pasted into the chat.
     writeFileSync(file, initial, { encoding: 'utf8', mode: 0o600 })
-    const [cmd, ...args] = editor.split(/\s+/)
-    const res = spawnSync(cmd, [...args, file], { stdio: 'inherit' })
-    if (res.error || res.status !== 0) return null
+    if (!runEditor(editor, file)) return null
     return readFileSync(file, 'utf8')
   } catch {
     return null
@@ -416,12 +414,55 @@ async function editFileInEditor(path: string): Promise<boolean> {
   const editor = process.env.VISUAL || process.env.EDITOR
   if (!editor) return false
   try {
-    const [cmd, ...args] = editor.split(/\s+/)
-    const res = spawnSync(cmd, [...args, path], { stdio: 'inherit' })
-    return !res.error && res.status === 0
+    return runEditor(editor, path)
   } catch {
     return false
   }
+}
+
+/**
+ * How to run the user's `$VISUAL`/`$EDITOR` on `file`: through a shell, as git does,
+ * so `code --wait`, a quoted path with spaces in it, and a Windows `.cmd` shim all
+ * work. On POSIX the file goes in as `"$@"`, never into the command string.
+ */
+export function editorCommand(
+  editor: string,
+  file: string,
+  platform: NodeJS.Platform = process.platform
+): { cmd: string; args: string[]; shell: boolean } {
+  // cmd.exe: a Windows path never holds a `"`, so quoting it is enough.
+  if (platform === 'win32') return { cmd: `${editor} "${file}"`, args: [], shell: true }
+  return { cmd: '/bin/sh', args: ['-c', `${editor} "$@"`, editor, file], shell: false }
+}
+
+/**
+ * Run the editor on `file` and wait for it. True when it exited cleanly. An editor
+ * that could not be started says so, rather than looking like one that was quit
+ * without saving.
+ */
+export function runEditor(
+  editor: string,
+  file: string,
+  opts: {
+    platform?: NodeJS.Platform
+    spawn?: typeof spawnSync
+    report?: (line: string) => void
+  } = {}
+): boolean {
+  const platform = opts.platform ?? process.platform
+  const run = opts.spawn ?? spawnSync
+  const report = opts.report ?? ((line: string) => void process.stderr.write(line))
+  const { cmd, args, shell } = editorCommand(editor, file, platform)
+  const res = run(cmd, args, { stdio: 'inherit', shell })
+  const shown = stripControlChars(editor)
+  if (res.error) {
+    report(`· could not start your editor (${shown}): ${stripControlChars(res.error.message)}\n`)
+    return false
+  }
+  // The shell's "not found" (127) and "not runnable" (126); cmd.exe's is 9009.
+  const notFound = platform === 'win32' ? res.status === 9009 : res.status === 126 || res.status === 127
+  if (notFound) report(`· could not start your editor (${shown}); check $VISUAL or $EDITOR\n`)
+  return res.status === 0
 }
 
 /**

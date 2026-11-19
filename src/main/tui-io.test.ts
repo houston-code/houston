@@ -592,6 +592,20 @@ describe('readComposer (raw-mode composer)', () => {
     await expect(read).resolves.toBe(`${big}x`)
   })
 
+  // The copy left in the scrollback once it is sent was the last screenful only.
+  it('a sent draft taller than the screen is echoed whole', async () => {
+    const t = harness({ rows: () => 24 })
+    const big = Array.from({ length: 60 }, (_, i) => `line ${i}`).join('\n')
+    const read = t.io.readComposer!('> ', big)
+    const before = t.written.length
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe(big)
+    const echoed = stripSgr(t.written.slice(before).join(''))
+    expect(echoed).toContain('> line 0\n')
+    expect(echoed).toContain('line 30\n')
+    expect(echoed).toContain('line 59\n')
+  })
+
   it('repaints when menu rows arrive after the keystroke (an @ file lookup)', async () => {
     let late: string[] = []
     let redraw: (() => void) | null = null
@@ -652,6 +666,45 @@ describe('readComposer (raw-mode composer)', () => {
     on.io.progress!('working', 'proj')
     expect(on.text()).toContain('\x1b]9;4;3\x07')
     expect(on.text()).toContain('\x1b]7501;state=working:app=houston:title=')
+  })
+
+  // A SIGTERM or an uncaught error left the tab's progress bar and a vim block
+  // cursor behind in the user's shell.
+  it('on exit clears the progress shown and resets the cursor shape of an open composer', () => {
+    let atExit: (() => void) | null = null
+    const t = harness({
+      editorMode: () => 'vim',
+      progress: { osc94: true, tmux: false },
+      onProcessExit: (fn) => {
+        atExit = fn
+      }
+    })
+    t.io.progress!('working', 'proj')
+    void t.io.readComposer!('> ')
+    const before = t.written.length
+    atExit!()
+    const out = t.written.slice(before).join('')
+    expect(out).toContain('\x1b[0 q')
+    expect(out).toContain('\x1b]9;4;0')
+    expect(out).toContain('\x1b]7501;state=clear')
+  })
+
+  it('does not write a progress clear on exit when none is showing', () => {
+    let atExit: (() => void) | null = null
+    const t = harness({ progress: { osc94: true, tmux: false }, onProcessExit: (fn) => (atExit = fn) })
+    t.io.progress!('working', 'proj')
+    t.io.progress!('clear')
+    const before = t.written.length
+    atExit!()
+    expect(t.written.slice(before).join('')).not.toContain('\x1b]9;4')
+  })
+
+  // The cursor shape was set only on a mode change: a vim prompt opened (and came
+  // back from $EDITOR) with the terminal's default cursor.
+  it('a vim composer opens with its mode cursor shape', () => {
+    const t = harness({ editorMode: () => 'vim' })
+    void t.io.readComposer!('> ')
+    expect(t.text()).toContain('\x1b[6 q') // insert mode: a bar
   })
 
   it('repaints at the new width when the terminal is resized, climbing the rewrapped rows', async () => {
@@ -891,6 +944,28 @@ describe('readComposer (raw-mode composer)', () => {
     // The trailing space comes from the completion itself, so the next token can
     // just be typed; the driver trims the submitted line.
     await expect(read).resolves.toBe('/help ')
+  })
+
+  // The data listener was off while the completer ran, and stdin kept flowing: what
+  // was typed meanwhile was lost.
+  it.each([false, true])('keeps keys typed while a Tab completion runs (screen reader %s)', async (screenReader) => {
+    let answer: (() => void) | null = null
+    const { io, stdin } = harness({
+      completer: (line, cb) => {
+        answer = () => cb(null, [['/help '], line])
+      }
+    })
+    if (screenReader) io.setAccessibility!({ screenReader: true })
+    const read = io.readComposer!('> ')
+    stdin.push('/he')
+    stdin.push('\t')
+    stdin.push('me')
+    await new Promise((r) => setImmediate(r))
+    expect(answer).not.toBeNull()
+    answer!()
+    await new Promise((r) => setImmediate(r))
+    stdin.push('\r')
+    await expect(read).resolves.toBe('/help me')
   })
 
   it('prints ambiguous completions only when no live menu already lists them', async () => {
@@ -1248,6 +1323,21 @@ describe('mid-run input', () => {
     expect(last).toContain('› …') // the start is what goes
     expect(last.endsWith('when you are done with this')).toBe(true) // the end, where you type, stays
     expect(last).toContain('[auto-edit]')
+  })
+
+  // Every frame measured the whole draft: 438 ms a frame with a 1 MB paste.
+  it('draws a huge draft from its end only, quickly', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    const big = `${'x'.repeat(1_000_000)}the end`
+    const t0 = performance.now()
+    t.stdin.push(`\x1b[200~${big}\x1b[201~`)
+    const took = performance.now() - t0
+    const last = t.text().split('\x1b[2K').at(-1)!.replace(CSI_MOVES, '').split('\n')[0]
+    expect(last).toContain('› …')
+    expect(last.endsWith('xxthe end')).toBe(true)
+    expect(visibleWidth(last)).toBeLessThanOrEqual(79)
+    expect(took).toBeLessThan(150)
   })
 
   it('queues what is typed while a turn runs, and hands it over at the end', () => {
