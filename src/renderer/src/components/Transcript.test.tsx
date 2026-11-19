@@ -274,6 +274,54 @@ describe('Transcript', () => {
     expect(screen.getByRole('img', { name: 'Attached image' })).toBeInTheDocument()
   })
 
+  it('shows attached images as thumbnails outside the text bubble', () => {
+    const { container } = renderTranscript([
+      userItem({ text: 'see this', images: [{ mediaType: 'image/png', data: 'AAAA' }] })
+    ])
+    const strip = container.querySelector('.msg--user > .msg__images')!
+    expect(strip).toBeInTheDocument()
+    // One image gets the larger single thumbnail.
+    expect(strip).toHaveClass('msg__images--single')
+    const body = container.querySelector('.msg--user .msg__body')!
+    expect(body).toHaveTextContent('see this')
+    expect(body.querySelector('img')).not.toBeInTheDocument()
+  })
+
+  it('renders no empty bubble for an images-only message', () => {
+    const images = [
+      { mediaType: 'image/png', data: 'AAAA' },
+      { mediaType: 'image/png', data: 'BBBB' }
+    ]
+    const { container } = renderTranscript([userItem({ text: '', images })])
+    expect(container.querySelectorAll('.msg__thumb')).toHaveLength(2)
+    expect(container.querySelector('.msg__images')).not.toHaveClass('msg__images--single')
+    expect(container.querySelector('.msg--user .msg__body')).not.toBeInTheDocument()
+  })
+
+  it('caps the thumbnails at four and opens the rest from a "+N" tile', () => {
+    const open = vi.fn()
+    const images = ['A', 'B', 'C', 'D', 'E', 'F'].map((d) => ({ mediaType: 'image/png', data: `${d}AAA` }))
+    const { container } = render(
+      <ImageViewerContext.Provider value={{ open }}>
+        <Transcript items={[userItem({ text: 'six', images })]} onApprove={vi.fn()} onAnswer={vi.fn()} onElicit={vi.fn()} />
+      </ImageViewerContext.Provider>
+    )
+    expect(container.querySelectorAll('.msg__thumb')).toHaveLength(4)
+    expect(container.querySelector('.msg__thumb-more')).toHaveTextContent('+2')
+    fireEvent.click(screen.getByRole('button', { name: 'Open attached image 4 full size, 2 more after it' }))
+    // The viewer still gets every image, so the hidden two are a page away.
+    const [shown, index] = open.mock.calls[0]
+    expect(shown).toHaveLength(6)
+    expect(index).toBe(3)
+  })
+
+  it('shows no "+N" tile when every image fits', () => {
+    const images = ['A', 'B', 'C', 'D'].map((d) => ({ mediaType: 'image/png', data: `${d}AAA` }))
+    const { container } = renderTranscript([userItem({ text: 'four', images })])
+    expect(container.querySelectorAll('.msg__thumb')).toHaveLength(4)
+    expect(container.querySelector('.msg__thumb-more')).not.toBeInTheDocument()
+  })
+
   it('renders a tool row with its verb and target', () => {
     const { container } = renderTranscript([
       toolItem({ name: 'read_file', args: { path: '/repo/src/app/main.ts' }, status: 'done' })
