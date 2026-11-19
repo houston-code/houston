@@ -3941,6 +3941,10 @@ versions the server speaks (`server/discover`):
   back as part of the call's answer and are shown the same way as before; Houston
   answers them and sends the call again. Over HTTP, change notifications come on a
   `subscriptions/listen` stream, and Stop closes the call's stream.
+- A 2026-07-28 server may run a long tool call as a task (the Tasks extension).
+  Houston follows it until it finishes, shows the server's status messages on the
+  call while it runs, answers its questions the same way, and cancels it on Stop. The
+  result is treated like any other tool result.
 - Any other server gets the older `initialize` handshake, asking for the newest
   version it accepts. Over stdio both questions go out together, since an older
   server may never answer the first. The legacy HTTP+SSE transport always uses the

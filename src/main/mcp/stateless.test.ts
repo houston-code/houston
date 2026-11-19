@@ -172,6 +172,15 @@ describe('runWithInputs (multi round-trip requests)', () => {
     ).rejects.toThrow('does not offer')
   })
 
+  it('hands a task result to onTask, and treats it as unknown without one', async () => {
+    const onTask = vi.fn(async () => ({ content: ['done'] }))
+    expect(await runWithInputs(async () => ({ resultType: 'task', taskId: 't' }), {}, { method: 'tools/call', onTask })).toEqual({
+      content: ['done']
+    })
+    expect(onTask).toHaveBeenCalledWith({ resultType: 'task', taskId: 't' })
+    await expect(runWithInputs(async () => ({ resultType: 'task' }), {}, { method: 'resources/read' })).rejects.toThrow('unknown type')
+  })
+
   it('rejects an unknown resultType', async () => {
     await expect(runWithInputs(async () => ({ resultType: 'weird' }), {}, { method: 'tools/call' })).rejects.toThrow(
       'unknown type'

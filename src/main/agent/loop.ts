@@ -3626,6 +3626,7 @@ export async function startRun(
       // The route's model, read live: a fallback hop can land on one without vision.
       // Unknown models count as not seeing images, as the composer's attach button does.
       modelSeesImages: () => route.sees.images,
+      reportProgress: (message) => emit({ type: 'tool_progress', callId, message }),
       attachDocument,
       // Undefined on the CLI (no backend wired) so the view_localhost guard reads
       // cleanly; the tool is already filtered out of the schema set above.
