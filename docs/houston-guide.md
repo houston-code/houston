@@ -1206,7 +1206,8 @@ replace the built-in status line above the composer:
   line shows. `/statusline` says why the last run didn't update it.
 - **In a project:** `.houston/settings.json` can set `statusLine` too. It runs only once
   you trust the folder (it is one of the things the trust prompt lists), and yours
-  wins when both are set.
+  wins when both are set. It belongs to its folder: after `/cd` the new folder's own
+  status line applies (once that folder is trusted), and `/trust forget` stops it.
 - Off by default: without the setting the built-in line is unchanged.
 
 

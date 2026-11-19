@@ -5799,11 +5799,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
     }
     deps.io.out(paint(`· working folder is now ${stripControlChars(homeRelative(opts.cwd))}\n`, 'dim'))
-    await promptFolderTrust(opts.cwd, deps, paint)
+    // Reply links resolve file paths against the folder.
+    sessionLinks = null
+    await promptFolderTrust(opts.cwd, deps, paint, { asked: trustAsked })
+    // The old folder's status line never runs here: resolve this folder's (and its trust).
+    await resolveSessionStatusLine()
     customCommands = []
     if (deps.commands) {
       try {
-        customCommands = await deps.commands()
+        customCommands = (await deps.commands()).filter((c) => !isReservedCommandName(c.name))
       } catch {
         /* no custom commands there: the built-ins still work */
       }
@@ -6431,11 +6435,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
 
   // The custom status line (`statusLine`): the user's command, or a trusted project's.
-  // Resolved once at launch; a run that fails keeps the last good output, and before
-  // any good output the built-in line shows.
-  let statusRunner: StatusLineRunner | null = null
-  let statusSource: ResolvedStatusLine | null = null
-  if (deps.runStatusLine) {
+  // Resolved at launch, and again whenever the folder or its trust changes (/cd, /trust):
+  // a project's command belongs to its folder and runs only while that folder is trusted.
+  // A run that fails keeps the last good output, and before any good output the built-in
+  // line shows.
+  // Typed by assertion: they are only reassigned in resolveSessionStatusLine, which
+  // TypeScript's narrowing doesn't follow, so a plain `= null` would read as never below.
+  let statusRunner = null as StatusLineRunner | null
+  let statusSource = null as ResolvedStatusLine | null
+  // The folder a project's status line was resolved for.
+  let statusFolder = opts.cwd
+  let worktreeRoot: string | null = null
+  // Rerun it on an interval while the composer is open, when the setting asks.
+  let stopStatusTimer = (): void => {}
+  const resolveSessionStatusLine = async (): Promise<void> => {
+    if (!deps.runStatusLine) return
     const user = deps.getSettings().statusLine
     let project: { config: StatusLineConfig | null; trusted: boolean } = { config: null, trusted: false }
     if (deps.projectStatusLine && !resolveStatusLine(user, null, () => false)) {
@@ -6445,19 +6459,42 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // An unreadable project config has no status line.
       }
     }
-    statusSource = resolveStatusLine(user, project.config, () => project.trusted)
-    if (statusSource) {
-      statusRunner = new StatusLineRunner(
-        statusSource,
-        deps.runStatusLine,
-        () => {
-          if (atComposer) deps.io.redrawComposer?.()
-        },
-        nowFn
-      )
+    const next = resolveStatusLine(user, project.config, () => project.trusted)
+    worktreeRoot = next ? linkedWorktreeRoot(opts.cwd) : null
+    // The same command from the same place keeps running, with its last output.
+    const unchanged =
+      next !== null &&
+      statusSource !== null &&
+      next.source === statusSource.source &&
+      next.command === statusSource.command &&
+      next.refreshSeconds === statusSource.refreshSeconds &&
+      (next.source === 'user' || statusFolder === opts.cwd)
+    statusFolder = opts.cwd
+    if (unchanged) return
+    stopStatusTimer()
+    stopStatusTimer = () => {}
+    statusRunner?.dispose()
+    statusSource = next
+    statusRunner = next
+      ? new StatusLineRunner(
+          next,
+          deps.runStatusLine,
+          () => {
+            if (atComposer) deps.io.redrawComposer?.()
+          },
+          nowFn
+        )
+      : null
+    const every = statusRunner?.config.refreshSeconds
+    if (statusRunner && every) {
+      const runner = statusRunner
+      const timer = setInterval(() => {
+        if (atComposer && !activeRunId) void runner.refresh(statusPayload())
+      }, every * 1000)
+      timer.unref?.()
+      stopStatusTimer = () => clearInterval(timer)
     }
   }
-  const worktreeRoot = statusRunner ? linkedWorktreeRoot(opts.cwd) : null
   onModeChange = () => {
     if (!activeRunId) void statusRunner?.refresh(statusPayload())
   }
@@ -6482,15 +6519,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     },
     vimMode: deps.getSettings().tuiEditor === 'vim' ? 'insert' : null
   })
-  // Rerun it on an interval while the composer is open, when the setting asks.
-  let stopStatusTimer = (): void => {}
-  if (statusRunner?.config.refreshSeconds) {
-    const timer = setInterval(() => {
-      if (atComposer && !activeRunId) void statusRunner?.refresh(statusPayload())
-    }, statusRunner.config.refreshSeconds * 1000)
-    timer.unref?.()
-    stopStatusTimer = () => clearInterval(timer)
-  }
+  await resolveSessionStatusLine()
   /** The status rows the composer shows: the command's last good output, else the built-in line. */
   const statusRows = (builtIn: string): string[] => {
     const rows = statusRunner?.lines() ?? []
@@ -7650,6 +7679,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'trust') {
         await runTrustCommand(result.op, opts.cwd, deps, paint, result.index)
+        // A project status line starts or stops with the folder's trust.
+        await resolveSessionStatusLine()
         continue
       }
       if (result.kind === 'memory') {
