@@ -293,24 +293,45 @@ const UserBubble = memo(function UserBubble({
       {menu.menu}
       {text.trim() !== '' && <CopyButton text={text} className="msg__copy--user" />}
       {actions}
-      <div className="msg__body">
-        {images && images.length > 0 && <BubbleImages images={images} />}
-        {text}
-      </div>
+      {images && images.length > 0 && <BubbleImages images={images} />}
+      {/* An images-only message has no text, so it gets no empty bubble under them. */}
+      {text.trim() !== '' && <div className="msg__body">{text}</div>}
       <MessageMeta at={at} align="user" />
     </article>
   )
 }, sameUserBubble)
 
-/** The images attached to a message: thumbnails that open full size in the image viewer. */
+/** How many thumbnails a message shows before the last one becomes "+N". */
+const MAX_BUBBLE_THUMBS = 4
+
+/**
+ * The images attached to a message: a strip of uniform thumbnails above the text
+ * bubble, each opening full size in the image viewer (which pages through all of
+ * them). Past MAX_BUBBLE_THUMBS the last thumbnail carries a "+N" count.
+ */
 function BubbleImages({ images }: { images: ImageAttachment[] }): JSX.Element {
   const viewer = useImageViewer()
   const label = (i: number): string => (images.length > 1 ? `Attached image ${i + 1}` : 'Attached image')
+  const shown = images.slice(0, MAX_BUBBLE_THUMBS)
+  const hidden = images.length - shown.length
   return (
-    <div className="bubble__images">
-      {images.map((img, i) => {
+    <div className={images.length === 1 ? 'msg__images msg__images--single' : 'msg__images'}>
+      {shown.map((img, i) => {
         const src = cachedImageDataUrl(img)
-        if (!viewer) return <img key={i} className="bubble__image" src={src} alt={label(i)} />
+        const more = hidden > 0 && i === shown.length - 1 ? hidden : 0
+        const badge =
+          more > 0 ? (
+            <span className="msg__thumb-more" aria-hidden="true">
+              +{more}
+            </span>
+          ) : null
+        if (!viewer)
+          return (
+            <span key={i} className="msg__thumb">
+              <img src={src} alt={label(i)} />
+              {badge}
+            </span>
+          )
         const open = (): void =>
           viewer.open(
             images.map((a, j) => ({ src: cachedImageDataUrl(a), label: label(j) })),
@@ -320,11 +341,12 @@ function BubbleImages({ images }: { images: ImageAttachment[] }): JSX.Element {
           <button
             key={i}
             type="button"
-            className="bubble__image-open"
+            className="msg__thumb"
             onClick={open}
-            aria-label={`Open ${label(i).toLowerCase()} full size`}
+            aria-label={`Open ${label(i).toLowerCase()} full size${more > 0 ? `, ${more} more after it` : ''}`}
           >
-            <img className="bubble__image" src={src} alt="" />
+            <img src={src} alt="" />
+            {badge}
           </button>
         )
       })}
