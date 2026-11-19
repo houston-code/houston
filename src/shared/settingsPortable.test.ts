@@ -74,6 +74,31 @@ describe('export and import', () => {
     expect(res.ok && res.settings).toMatchObject({ theme: 'light', verbosity: 'high', hooks: s.hooks })
   })
 
+  it('round-trips rules saved from an approval prompt or Settings, keeping when and how they were added', () => {
+    const permissionRules: AppSettings['permissionRules'] = [
+      { action: 'allow', tool: 'shell', match: 'npm test', exact: true, addedAt: 1_760_000_000_000, source: 'prompt' },
+      { action: 'deny', tool: 'write_file', match: '*.env', addedAt: 1_760_000_100_000, source: 'settings' },
+      { action: 'ask', tool: '*', match: '*' }
+    ]
+    const res = parsePreferencesImport(exportPreferences(base({ permissionRules })))
+    expect(res).toMatchObject({ ok: true })
+    expect(res.ok && res.settings.permissionRules).toEqual(permissionRules)
+  })
+
+  it('rejects a rule whose bookkeeping has the wrong type', () => {
+    const file = (rule: object): string =>
+      JSON.stringify({ format: 'houston-settings', version: 1, settings: { permissionRules: [rule] } })
+    const rule = { action: 'allow', tool: '*', match: '*' }
+    expect(parsePreferencesImport(file({ ...rule, addedAt: 'yesterday' }))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('"addedAt"')
+    })
+    expect(parsePreferencesImport(file({ ...rule, source: 'magic' }))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('"source"')
+    })
+  })
+
   it('ignores and reports fields that are not preferences', () => {
     const res = parsePreferencesImport(
       JSON.stringify({ format: 'houston-settings', version: 1, settings: { theme: 'dark', providers: [], additionalRoots: ['/'] } })

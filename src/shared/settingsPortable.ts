@@ -224,7 +224,7 @@ export function parsePreferencesImport(text: string): ParsedImport {
     }
     const key = k as PreferenceKey
     if (key === 'permissionRules') {
-      const parsed = parseRulesText(JSON.stringify(v))
+      const parsed = parseRulesText(JSON.stringify(v), { keepMeta: true })
       if (!parsed.ok) return { ok: false, error: `Permission rules: ${parsed.error}` }
       settings[key] = parsed.rules satisfies PermissionRule[]
     } else if (key === 'hooks') {
