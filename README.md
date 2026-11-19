@@ -325,7 +325,9 @@ Open source under the [Apache License 2.0](LICENSE).
   banner when `gh_pr_create` opens a PR and when a `gh_pr_view` shows it merged.
   On by default; toggle it in Settings → *General*. An optional, off-by-default
   setting there also plays a short sound when a turn finishes or the agent needs
-  your input while the window isn't focused. *Send test notification* there shows
+  your input while the window isn't focused. While you work in Houston, a chat
+  that starts waiting for your approval, an answer or a plan review shows a short
+  note above the message box with an *Open* button. *Send test notification* there shows
   one right away (on macOS that is when the system asks to allow Houston's
   notifications), and a button opens the system notification settings in case
   they're blocked.

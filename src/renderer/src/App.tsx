@@ -168,6 +168,7 @@ import { saveMemoryAndNotify } from './lib/memorySave'
 import { ShellOutputHold, type HeldShellRun } from './lib/shellOutputHold'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { Toast, ToastStack } from './components/Toasts'
+import { WaitingChatToast } from './components/WaitingChatToast'
 import { UpdateBanner } from './components/UpdateBanner'
 import { useUpdateBanner } from './hooks/useUpdateBanner'
 import { GetStarted } from './components/GetStarted'
@@ -1480,6 +1481,14 @@ export default function App(): JSX.Element {
         .map((c) => c.id),
     [conversations, chatStatus, currentId]
   )
+  // The "another chat needs you" toast names the chat and opens it.
+  const conversationsRef = useRef(conversations)
+  conversationsRef.current = conversations
+  const titleOfChat = useCallback(
+    (id: string) => conversationsRef.current.find((c) => c.id === id)?.title ?? '',
+    []
+  )
+  const openWaitingChat = useCallback((id: string) => void selectConversation(id), [selectConversation])
   const openNextWaiting = useCallback(() => {
     const next = waitingIds[0]
     if (next) void selectConversation(next)
@@ -4258,6 +4267,12 @@ export default function App(): JSX.Element {
 
         {/* Toasts float just above the terminal and the message box, never over them. */}
         <ToastStack>
+          <WaitingChatToast
+            chatStatus={chatStatus}
+            currentId={currentId}
+            titleOf={titleOfChat}
+            onOpen={openWaitingChat}
+          />
           {folderNotice && (
             <Toast ms={4000} resetKey={folderNotice} onDone={() => setFolderNotice(null)}>
               <span>{folderNotice}</span>
