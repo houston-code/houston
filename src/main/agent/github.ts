@@ -84,24 +84,35 @@ export type GhExec = (
 const MAX_GH_BUFFER = 8_000_000
 const GH_TIMEOUT_MS = 60_000
 
+/** Single-quote a string the way git's own `sq_quote` does (`'` becomes `'\\''`). Pure. */
+function sqQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`
+}
+
 /**
- * Carry git `-c key=value` hardening in the environment (`GIT_CONFIG_COUNT`,
- * `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`), after any entries `base` already
- * has, so every git that `gh` starts (checkout, fetch, push) inherits it. Pure.
+ * Carry git `-c key=value` hardening in the environment, after any entries `base`
+ * already has, so every git that `gh` starts (checkout, fetch, push) inherits it.
+ * Twice over: as `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`, and
+ * as `GIT_CONFIG_PARAMETERS` (each `'key=value'` single-quoted, space separated, the
+ * form git itself passes `-c` to its children in), since git reads the numbered
+ * variables only from 2.31 and an older one would otherwise run the repo's hooks. Pure.
  */
 export function gitConfigEnv(args: string[], base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base }
   const start = Number(base.GIT_CONFIG_COUNT)
   let n = Number.isInteger(start) && start > 0 ? start : 0
+  const params: string[] = base.GIT_CONFIG_PARAMETERS?.trim() ? [base.GIT_CONFIG_PARAMETERS.trim()] : []
   for (let i = 0; i + 1 < args.length; i += 2) {
     if (args[i] !== '-c') continue
     const eq = args[i + 1].indexOf('=')
     if (eq <= 0) continue
     env[`GIT_CONFIG_KEY_${n}`] = args[i + 1].slice(0, eq)
     env[`GIT_CONFIG_VALUE_${n}`] = args[i + 1].slice(eq + 1)
+    params.push(sqQuote(args[i + 1]))
     n++
   }
   env.GIT_CONFIG_COUNT = String(n)
+  if (params.length) env.GIT_CONFIG_PARAMETERS = params.join(' ')
   return env
 }
 

@@ -117,6 +117,28 @@ describe('revertChange, working tree', () => {
     TIMEOUT
   )
 
+  maybe(
+    'shows and reverts files with non-ASCII names',
+    async () => {
+      const ws = repo()
+      writeFileSync(join(ws, 'café.txt'), 'old\n')
+      git(ws, 'add', 'café.txt')
+      git(ws, 'commit', '-qm', 'cafe')
+      writeFileSync(join(ws, 'café.txt'), 'new\n')
+      writeFileSync(join(ws, 'naïve.txt'), 'staged\n')
+      git(ws, 'add', 'naïve.txt')
+      const listed = (await collectWorkingTreeChanges(ws)).files.map((f) => [f.path, f.status])
+      expect(listed).toEqual(expect.arrayContaining([['café.txt', 'modified'], ['naïve.txt', 'added']]))
+      for (const p of ['café.txt', 'naïve.txt']) {
+        expect(await revertChange(await treeReq(ws, p), deps([ws]))).toEqual({ ok: true })
+      }
+      expect(readFileSync(join(ws, 'café.txt'), 'utf8')).toBe('old\n')
+      expect(existsSync(join(ws, 'naïve.txt'))).toBe(false)
+      expect((await collectWorkingTreeChanges(ws)).files).toEqual([])
+    },
+    TIMEOUT
+  )
+
   maybeWithPosixNames(
     'unstages and deletes a newly added file, treating pathspec magic as a plain name',
     async () => {

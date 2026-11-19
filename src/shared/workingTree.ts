@@ -80,16 +80,57 @@ export interface WorkingTreeStats {
   ship?: RepoShipState
 }
 
-/** Undo git's C-style quoting of a path with unusual characters. */
-function dequote(s: string): string {
-  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
-    return s
-      .slice(1, -1)
-      .replace(/\\t/g, '\t')
-      .replace(/\\n/g, '\n')
-      .replace(/\\(["\\])/g, '$1')
+/** git's single-character escapes in a quoted path. */
+const C_ESCAPES: Record<string, string> = {
+  a: '\x07',
+  b: '\b',
+  t: '\t',
+  n: '\n',
+  v: '\v',
+  f: '\f',
+  r: '\r',
+  '"': '"',
+  '\\': '\\'
+}
+
+/**
+ * Undo git's C-style quoting of a path with unusual characters. Besides the
+ * single-character escapes, git writes each byte of a non-ASCII name as an octal
+ * `\NNN` escape (with `core.quotePath` on, its default), so runs of those are
+ * gathered and decoded as the UTF-8 they spell: `"caf\303\251"` is `café`.
+ */
+export function dequote(s: string): string {
+  if (!(s.length >= 2 && s.startsWith('"') && s.endsWith('"'))) return s
+  const inner = s.slice(1, -1)
+  let out = ''
+  let bytes: number[] = []
+  const flush = (): void => {
+    if (!bytes.length) return
+    out += new TextDecoder().decode(Uint8Array.from(bytes))
+    bytes = []
   }
-  return s
+  for (let i = 0; i < inner.length; ) {
+    if (inner[i] === '\\') {
+      const octal = /^[0-3][0-7]{2}/.exec(inner.slice(i + 1, i + 4))
+      if (octal) {
+        bytes.push(Number.parseInt(octal[0], 8))
+        i += 4
+        continue
+      }
+      const escaped = C_ESCAPES[inner[i + 1] ?? '']
+      if (escaped !== undefined) {
+        flush()
+        out += escaped
+        i += 2
+        continue
+      }
+    }
+    flush()
+    out += inner[i]
+    i++
+  }
+  flush()
+  return out
 }
 
 /** Resolve a `---`/`+++` path: strip the `a/`|`b/` prefix; `/dev/null` → null. */

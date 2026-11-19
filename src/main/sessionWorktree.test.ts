@@ -36,9 +36,16 @@ describe('session worktree helpers', () => {
 
   it('quotes a path for the come-back command only when it needs it', () => {
     expect(shellQuote('/repo/.houston/worktrees/swift-otter-ab12cd')).toBe('/repo/.houston/worktrees/swift-otter-ab12cd')
-    expect(shellQuote("/my repo/it's")).toBe(`'/my repo/it'\\''s'`)
+    expect(shellQuote("/my repo/it's", 'linux')).toBe(`'/my repo/it'\\''s'`)
     expect(comeBackCommand('/r/wt', 'abc')).toBe('houston --resume abc -C /r/wt')
-    expect(comeBackCommand('/r/w t', null)).toBe("houston -C '/r/w t'")
+    expect(comeBackCommand('/r/w t', null, 'linux')).toBe("houston -C '/r/w t'")
+  })
+
+  it('quotes a Windows path with double quotes, which cmd.exe and PowerShell both read', () => {
+    expect(shellQuote('C:\\work\\repo\\.houston\\worktrees\\x', 'win32')).toBe('C:\\work\\repo\\.houston\\worktrees\\x')
+    expect(shellQuote("C:\\My Repo\\it's", 'win32')).toBe(`"C:\\My Repo\\it's"`)
+    expect(comeBackCommand('C:\\My Repo\\wt', 'abc', 'win32')).toBe('houston --resume abc -C "C:\\My Repo\\wt"')
+    expect(comeBackCommand('/r/w t', null, 'linux')).toBe("houston -C '/r/w t'")
   })
 
   it('describes the work a worktree holds', () => {

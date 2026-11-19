@@ -91,6 +91,16 @@ describe('planNewChatWorkspace', () => {
     })
   })
 
+  it("matches a Windows root git spells with forward slashes against the app's backslashes", () => {
+    const win = repo({ root: 'C:/work/repo' })
+    expect(planNewChatWorkspace(win, 'C:\\work\\repo')).toEqual({ action: 'keep', worktreeDefault: true })
+    expect(planNewChatWorkspace(win, 'C:\\work\\repo\\')).toEqual({ action: 'keep', worktreeDefault: true })
+    expect(planNewChatWorkspace(win, 'C:\\work\\repo\\pkg')).toEqual({ action: 'keep', worktreeDefault: false })
+    expect(
+      planNewChatWorkspace(repo({ root: 'C:\\work\\repo', isLinkedWorktreeRoot: true }), 'C:\\work\\repo')
+    ).toEqual({ action: 'keep', worktreeDefault: true })
+  })
+
   it('drops a workspace that no longer exists on disk', () => {
     expect(planNewChatWorkspace(repo({ exists: false }), '/repo')).toEqual({ action: 'drop' })
   })

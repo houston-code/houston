@@ -31,7 +31,8 @@ export type NewChatWorkspacePlan =
  */
 export function planNewChatWorkspace(info: RepoInfo, workspace: string): NewChatWorkspacePlan {
   if (!info.exists) return { action: 'drop' }
-  const norm = (p: string): string => p.replace(/\/+$/, '')
+  // git reports Windows paths with forward slashes (C:/x) where the app has C:\x.
+  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
   if (info.isRepo && info.root && info.isLinkedWorktreeRoot && norm(info.root) !== norm(workspace)) {
     return { action: 'reanchor', root: info.root }
   }

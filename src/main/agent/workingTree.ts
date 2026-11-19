@@ -123,7 +123,8 @@ export async function collectWorkingTreeChanges(workspace: string): Promise<Work
     // --relative: in a workspace below the repository's top folder, git would print
     // tracked paths from the top (and list changes outside the workspace), while the
     // untracked listing and every reader here resolve paths against the workspace.
-    ['diff', base, '--relative', '--no-color', '--no-ext-diff', '--no-textconv'],
+    // core.quotePath=false: a non-ASCII name comes through as itself, not octal escapes.
+    ['-c', 'core.quotePath=false', 'diff', base, '--relative', '--no-color', '--no-ext-diff', '--no-textconv'],
     root
   )
   const tracked = diff.ok ? parseUnifiedDiff(diff.stdout) : []

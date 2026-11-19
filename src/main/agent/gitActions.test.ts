@@ -25,6 +25,7 @@ import {
   commitMessageRequest,
   lookupPr,
   pushBranch,
+  gitError,
   pushEnv,
   pushTargetProblem,
   repoFilterDrivers,
@@ -150,6 +151,30 @@ describe('pushTargetProblem', () => {
     expect(pushTargetProblem('EXT::sh')).toMatch(/ext:: transport/)
     expect(pushTargetProblem('fd::3')).toMatch(/fd:: transport/)
     expect(pushTargetProblem('')).toBe('it has no URL')
+  })
+})
+
+describe('gitError', () => {
+  const url = 'To https://github.com/o/r.git'
+  it('names the reason a push was rejected instead of the To line', () => {
+    expect(gitError(`${url}\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs to 'https://github.com/o/r.git'\nhint: Updates were rejected`, 'x')).toBe(
+      "The remote branch has commits you don't have; pull first."
+    )
+    expect(gitError(`${url}\n ! [rejected]        main -> main (non-fast-forward)\nerror: failed to push some refs`, 'x')).toBe(
+      "The remote branch has commits you don't have; pull first."
+    )
+    expect(gitError(`${url}\n ! [rejected]        main -> main (stale info)\nerror: failed to push some refs`, 'x')).toMatch(/changed since you last fetched/)
+    expect(gitError(`${url}\n ! [remote rejected] main -> main (protected branch hook declined)\nerror: failed to push some refs`, 'x')).toBe(
+      'The remote rejected the push: protected branch hook declined'
+    )
+  })
+
+  it("prefers git's error line, and never shows the To header alone", () => {
+    expect(gitError(`${url}\nerror: failed to push some refs to 'x'`, 'The push failed.')).toBe("failed to push some refs to 'x'")
+    expect(gitError(`${url}\n`, 'The push failed.')).toBe('The push failed.')
+    expect(gitError('hint: try this\nfatal: not a git repository', 'x')).toBe('not a git repository')
+    expect(gitError('nothing to commit, working tree clean', 'x')).toBe('nothing to commit, working tree clean')
+    expect(gitError('', 'The commit failed.')).toBe('The commit failed.')
   })
 })
 
@@ -358,6 +383,31 @@ describe('pushBranch and branchSync', () => {
         expect(await pushBranch(r, deps([r]))).toEqual({ ok: true, detail: 'origin/main' })
       })
       expect(execFileSync('git', ['-C', remote, 'log', '-1', '--format=%s', 'main'], { encoding: 'utf8' }).trim()).toBe('Two')
+    },
+    TIMEOUT
+  )
+
+  posix(
+    'says a push was rejected because the remote has new commits, not just "To <url>"',
+    async () => {
+      const remote = tmp('ga-remote-')
+      execFileSync('git', ['init', '-q', '--bare', remote])
+      const r = repo()
+      git(r, 'remote', 'add', 'origin', sshUrl(remote))
+      await withFakeSsh(async () => {
+        expect(await pushBranch(r, deps([r]))).toEqual({ ok: true, detail: 'origin/main' })
+      })
+      // Someone else pushes first.
+      const other = tmp('ga-other-')
+      execFileSync('git', ['clone', '-q', '-b', 'main', remote, other])
+      writeFileSync(join(other, 'theirs.txt'), 'theirs\n')
+      git(other, 'add', 'theirs.txt')
+      git(other, '-c', 'user.email=t@t.t', '-c', 'user.name=Test', 'commit', '-qm', 'Theirs')
+      git(other, 'push', '-q', 'origin', 'main')
+      writeFileSync(join(r, 'a.txt'), 'mine\n')
+      await commitAll(r, 'Mine', deps([r]))
+      const res = await withFakeSsh(() => pushBranch(r, deps([r])))
+      expect(res).toEqual({ ok: false, error: "The remote branch has commits you don't have; pull first." })
     },
     TIMEOUT
   )
@@ -636,7 +686,7 @@ describe('suggestCommitMessage', () => {
 })
 
 describe('lookupPr', () => {
-  const view = JSON.stringify({ number: 7, title: 'T', state: 'OPEN', isDraft: true, url: 'https://github.com/o/r/pull/7', statusCheckRollup: [] })
+  const view = JSON.stringify([{ number: 7, title: 'T', state: 'OPEN', isDraft: true, url: 'https://github.com/o/r/pull/7', statusCheckRollup: [] }])
 
   maybe(
     'reads the branch PR through gh with the repository pinned',
@@ -650,8 +700,37 @@ describe('lookupPr', () => {
       }
       const res = await lookupPr(r, { ...deps([r]), gh, authedHosts: async () => ['github.com'], repoKey: async () => 'github.com:o/r' })
       expect(res).toMatchObject({ kind: 'pr', pr: { number: 7, isDraft: true, checks: 'none' } })
-      expect(calls[0].args.slice(0, 3)).toEqual(['pr', 'view', 'feature'])
+      expect(calls[0].args).toEqual([
+        'pr',
+        'list',
+        '--head',
+        'feature',
+        '--state',
+        'all',
+        '--limit',
+        '1',
+        '--json',
+        'number,title,state,isDraft,url,statusCheckRollup'
+      ])
       expect(calls[0].env).toEqual({ GH_REPO: 'github.com/o/r' })
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    'looks a numeric branch up as a head branch, not as a pull request number',
+    async () => {
+      const r = repo()
+      git(r, 'checkout', '-qb', '1234')
+      const calls: string[][] = []
+      const gh = () => async (args: string[]) => {
+        calls.push(args)
+        return { ok: true, stdout: '[]', stderr: '', code: 0 }
+      }
+      const res = await lookupPr(r, { ...deps([r]), gh, authedHosts: async () => ['github.com'], repoKey: async () => 'github.com:o/r' })
+      expect(res).toEqual({ kind: 'none' })
+      expect(calls[0].slice(0, 4)).toEqual(['pr', 'list', '--head', '1234'])
+      expect(calls[0]).not.toContain('view')
     },
     TIMEOUT
   )
@@ -660,12 +739,14 @@ describe('lookupPr', () => {
     'is unavailable without gh, sign-in or a GitHub remote, and none when the branch has no PR',
     async () => {
       const r = repo()
-      const none = () => async () => ({ ok: false, stdout: '', stderr: 'no pull requests found for branch "main"', code: 1 })
+      const none = () => async () => ({ ok: true, stdout: '[]', stderr: '', code: 0 })
+      const failed = () => async () => ({ ok: false, stdout: '', stderr: 'could not connect', code: 1 })
       const base = { ...deps([r]), authedHosts: async () => ['github.com'], repoKey: async () => 'o/r' }
       expect(await lookupPr(r, { ...base, gh: () => null })).toEqual({ kind: 'unavailable' })
       expect(await lookupPr(r, { ...base, gh: none, authedHosts: async () => [] })).toEqual({ kind: 'unavailable' })
       expect(await lookupPr(r, { ...base, gh: none, repoKey: async () => null })).toEqual({ kind: 'unavailable' })
       expect(await lookupPr(r, { ...base, gh: none })).toEqual({ kind: 'none' })
+      expect(await lookupPr(r, { ...base, gh: failed })).toEqual({ kind: 'unavailable' })
       expect(await lookupPr(r, { ...deps([]), gh: none })).toEqual({ kind: 'unavailable' })
     },
     TIMEOUT

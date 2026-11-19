@@ -54,7 +54,9 @@ describe('comeBackHint', () => {
 
   it('names the folder when the chat lives elsewhere, and drops --continue', () => {
     const h = comeBackHint('abc', '/repo/.houston/worktrees/my wt', '/repo')
-    expect(h).toContain("houston --resume abc -C '/repo/.houston/worktrees/my wt'")
+    // Quoted the way this platform's shell reads it (double quotes on Windows).
+    const q = process.platform === 'win32' ? '"' : "'"
+    expect(h).toContain(`houston --resume abc -C ${q}/repo/.houston/worktrees/my wt${q}`)
     expect(h).not.toContain('--continue')
   })
 })

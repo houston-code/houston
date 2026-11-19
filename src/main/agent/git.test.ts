@@ -415,6 +415,20 @@ describe('gitDiff', () => {
     expect(d.untracked).toEqual(['first.ts'])
   })
 
+  it('says why the diff failed instead of reporting no changes', async () => {
+    const fail = (e: Error) => async (args: string[]): Promise<string> => {
+      if (args[0] === 'rev-parse') return 'true\n'
+      if (args[0] === 'diff') throw e
+      return ''
+    }
+    const big = Object.assign(new Error('stdout maxBuffer length exceeded'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' })
+    expect((await gitDiff('/ws', 'HEAD', [], fail(big))).error).toBe('the diff is larger than 16 MB')
+    const slow = Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' })
+    expect((await gitDiff('/ws', 'HEAD', [], fail(slow))).error).toBe('git diff took longer than 15 seconds')
+    const bad = Object.assign(new Error('Command failed: git diff nope'), { stderr: "fatal: bad revision 'nope'\n" })
+    expect((await gitDiff('/ws', 'nope', [], fail(bad))).error).toBe("bad revision 'nope'")
+  })
+
   it('never runs git diff with an option-like base', async () => {
     const seen: string[][] = []
     const exec = async (args: string[]): Promise<string> => {
@@ -440,6 +454,29 @@ describe('gitDiff', () => {
     // The paths come strictly after the `--` separator (can't be read as options).
     expect(diffArgs.slice(diffArgs.indexOf('--'))).toEqual(['--', 'src/api', 'README.md'])
     expect(lsArgs.slice(lsArgs.indexOf('--'))).toEqual(['--', 'src/api', 'README.md'])
+  })
+})
+
+describe('gitDiff on a large change (real git)', () => {
+  it('returns a diff over 1 MB in full', { timeout: 30_000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-git-large-'))
+    try {
+      const run = (...args: string[]): void => {
+        execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, stdio: 'pipe' })
+      }
+      run('init', '-q')
+      writeFileSync(join(dir, 'data.txt'), 'start\n')
+      run('add', 'data.txt')
+      run('commit', '-qm', 'init')
+      const line = 'x'.repeat(99)
+      writeFileSync(join(dir, 'data.txt'), `${Array.from({ length: 15_000 }, (_, i) => `${i} ${line}`).join('\n')}\nlast line\n`)
+      const d = await gitDiff(dir)
+      expect(d.error).toBeUndefined()
+      expect(d.diff.length).toBeGreaterThan(1_000_000)
+      expect(d.diff).toContain('+last line')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

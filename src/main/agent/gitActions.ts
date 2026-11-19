@@ -118,12 +118,32 @@ function runGitWrite(
   )
 }
 
-/** git's first meaningful error line, for the UI. */
-function gitError(stderr: string, fallback: string): string {
-  const line = stderr
+/** Why a push was rejected, by the reason git gives in brackets, in plain words. */
+const PUSH_REJECTIONS: Array<[RegExp, string]> = [
+  [/fetch first|non-fast-forward/i, "The remote branch has commits you don't have; pull first."],
+  [/stale info/i, 'The remote branch changed since you last fetched; fetch, then push again.'],
+  [/already exists/i, 'The remote already has a different version of this ref.']
+]
+
+/**
+ * git's most telling error line, for the UI. A rejected push's stderr starts with
+ * `To <url>` and names the reason on a ` ! [rejected]` line, so that line wins (in
+ * plain words when the reason is a common one), then an `error:`/`fatal:` line, then
+ * the first line that is neither a hint nor the `To` header. Pure.
+ */
+export function gitError(stderr: string, fallback: string): string {
+  const lines = stderr
     .split('\n')
     .map((l) => l.trim())
-    .find((l) => l && !l.startsWith('hint:'))
+    .filter((l) => l && !l.startsWith('hint:'))
+  const rejected = lines.find((l) => /^!\s*\[(remote )?rejected\]/.test(l))
+  if (rejected) {
+    const reason = /\(([^)]*)\)\s*$/.exec(rejected)?.[1]?.trim() ?? ''
+    const known = PUSH_REJECTIONS.find(([re]) => re.test(reason))
+    if (known) return known[1]
+    if (reason) return `The remote rejected the push: ${reason}`.slice(0, 300)
+  }
+  const line = lines.find((l) => /^(fatal|error):/i.test(l)) ?? lines.find((l) => !/^To\s/.test(l))
   return (line ?? fallback).replace(/^(fatal|error):\s*/i, '').slice(0, 300)
 }
 
@@ -561,7 +581,7 @@ export interface PrLookupDeps extends GitActionDeps {
 }
 
 /**
- * The pull request for the workspace's current branch, read with `gh pr view`. Only
+ * The pull request for the workspace's current branch, read with `gh pr list --head`. Only
  * when gh is installed and signed in to some host, and the folder has a remote on a
  * host gh is signed in to; otherwise `unavailable`, and the chip stays hidden. Read
  * only; the repository is pinned the way the gh tools pin it.
@@ -577,18 +597,36 @@ export async function lookupPr(workspace: unknown, deps: PrLookupDeps): Promise<
   if (!branch || branch.startsWith('-')) return { kind: 'none' }
   const repo = await (deps.repoKey ?? ghRepoKey)(root)
   if (!repo) return { kind: 'unavailable' }
+  // Listed by head branch: `gh pr view <branch>` would read a numeric branch name
+  // (`1234`) as a pull request number and show that PR instead.
   const r = await exec(
-    ['pr', 'view', branch, '--json', 'number,title,state,isDraft,url,statusCheckRollup'],
+    [
+      'pr',
+      'list',
+      '--head',
+      branch,
+      '--state',
+      'all',
+      '--limit',
+      '1',
+      '--json',
+      'number,title,state,isDraft,url,statusCheckRollup'
+    ],
     root,
     undefined,
     ghRepoEnv(repo)
   )
-  if (!r.ok) {
-    // "no pull requests found for branch" is the ordinary answer; anything else
-    // (offline, signed out) also just hides the chip.
-    return /no (open )?pull requests? found/i.test(r.stderr) ? { kind: 'none' } : { kind: 'unavailable' }
+  // Offline, signed out, or anything else: the chip just stays hidden.
+  if (!r.ok) return { kind: 'unavailable' }
+  let list: unknown
+  try {
+    list = JSON.parse(r.stdout)
+  } catch {
+    return { kind: 'unavailable' }
   }
-  const pr = parsePrView(r.stdout)
+  if (!Array.isArray(list)) return { kind: 'unavailable' }
+  if (list.length === 0) return { kind: 'none' }
+  const pr = parsePrView(JSON.stringify(list[0]))
   return pr ? { kind: 'pr', pr } : { kind: 'unavailable' }
 }
 

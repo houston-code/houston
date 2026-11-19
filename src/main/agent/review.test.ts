@@ -528,6 +528,22 @@ describe('reviewWorkspaceChanges', () => {
     expect(calls).toHaveLength(0)
   })
 
+  it('reports a diff git could not produce as an error, never as "no changes"', async () => {
+    const { fn, calls } = fakeAgent(() => 'unused')
+    const tooBig = Object.assign(new Error('stdout maxBuffer length exceeded'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' })
+    const out = await reviewWorkspaceChanges({
+      provider: base().provider,
+      model: 'm',
+      workspace: '/ws',
+      signal: new AbortController().signal,
+      gitExec: gitExecOf({ 'rev-parse': 'true', diff: tooBig, 'ls-files': '' }),
+      runAgent: fn
+    })
+    expect(out).toMatch(/^Cannot review: git could not read the diff \(the diff is larger than 16 MB\)/)
+    expect(out).not.toContain('No uncommitted changes')
+    expect(calls).toHaveLength(0)
+  })
+
   it('rejects an option-like base ref before touching git', async () => {
     let execCalled = false
     const out = await reviewWorkspaceChanges({
