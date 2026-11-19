@@ -18,6 +18,9 @@ export type ParsedRules = { ok: true; rules: PermissionRule[] } | { ok: false; e
 
 const ACTIONS = new Set(['allow', 'deny', 'ask'])
 const FIELDS = new Set(['action', 'tool', 'match', 'exact'])
+/** Bookkeeping fields a stored rule may carry (see `PermissionRule`); never read by the matcher. */
+const META_FIELDS = new Set(['addedAt', 'source'])
+const SOURCES = new Set(['prompt', 'settings'])
 
 /** 1-based line of a character offset. */
 function lineAt(text: string, offset: number): number {
@@ -49,8 +52,12 @@ function ruleLines(text: string): number[] {
  * Parse and validate the text form. Strict on purpose: a rule list is a security
  * boundary, so a misspelt field (`"acton"`) or a wrong type is an error naming the
  * rule's line, never something silently dropped or read loosely.
+ *
+ * `keepMeta` also accepts, validates, and keeps each rule's bookkeeping (`addedAt`,
+ * `source`), for a list read back from storage or a settings export rather than
+ * typed by hand.
  */
-export function parseRulesText(text: string): ParsedRules {
+export function parseRulesText(text: string, opts: { keepMeta?: boolean } = {}): ParsedRules {
   let raw: unknown
   try {
     raw = JSON.parse(text)
@@ -73,7 +80,7 @@ export function parseRulesText(text: string): ParsedRules {
       return { ok: false, error: `Rule ${n} is not an object like {"action": …, "tool": …, "match": …}.`, ...at }
     }
     const o = item as Record<string, unknown>
-    const unknown = Object.keys(o).find((k) => !FIELDS.has(k))
+    const unknown = Object.keys(o).find((k) => !FIELDS.has(k) && !(opts.keepMeta && META_FIELDS.has(k)))
     if (unknown) return { ok: false, error: `Rule ${n} has an unknown field "${unknown}".`, ...at }
     if (typeof o.action !== 'string' || !ACTIONS.has(o.action)) {
       return { ok: false, error: `Rule ${n} needs "action": "allow", "ask", or "deny".`, ...at }
@@ -85,8 +92,16 @@ export function parseRulesText(text: string): ParsedRules {
     if (o.exact !== undefined && typeof o.exact !== 'boolean') {
       return { ok: false, error: `Rule ${n}'s "exact" must be true or false.`, ...at }
     }
+    if (o.addedAt !== undefined && (typeof o.addedAt !== 'number' || !Number.isFinite(o.addedAt) || o.addedAt < 0)) {
+      return { ok: false, error: `Rule ${n}'s "addedAt" must be a time in milliseconds.`, ...at }
+    }
+    if (o.source !== undefined && (typeof o.source !== 'string' || !SOURCES.has(o.source))) {
+      return { ok: false, error: `Rule ${n}'s "source" must be "prompt" or "settings".`, ...at }
+    }
     const rule: PermissionRule = { action: o.action as PermissionRule['action'], tool: o.tool.trim(), match: o.match }
     if (o.exact === true) rule.exact = true
+    if (o.addedAt !== undefined) rule.addedAt = o.addedAt as number
+    if (o.source !== undefined) rule.source = o.source as PermissionRule['source']
     rules.push(rule)
   }
   return { ok: true, rules }
