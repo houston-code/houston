@@ -244,13 +244,20 @@ describe('startEgressProxy (TCP)', () => {
   })
 
   it('accepts a Host header that names the URI host with its default port spelled out', async () => {
-    // :80 is the default for http, so `127.0.0.1:80` and `127.0.0.1` name one authority.
-    // Nothing listens on 80 here, so only that the policy was asked (not refused with a
-    // 400 first) is checked; case folding is covered by the hostHeaderMatchesUri tests.
+    // :80 is the default for http, so `attacker.example:80` and `attacker.example` name
+    // one authority. The host is one the policy denies, so the proxy answers at once
+    // without dialing anything: the 403 (not a 400) shows the Host check passed and the
+    // policy was asked. An allowed host would make the proxy really connect to port 80,
+    // which can take seconds to fail on a Windows runner. Case folding is covered by the
+    // hostHeaderMatchesUri tests.
     const decided = log.length
-    const res = await rawProxyHttp(proxy.endpoints.tcpPort, 'http://127.0.0.1/x', ['Host: 127.0.0.1:80'])
+    const res = await rawProxyHttp(proxy.endpoints.tcpPort, 'http://attacker.example/x', [
+      'Host: attacker.example:80'
+    ])
     expect(res).not.toContain('400 Bad Request')
+    expect(res).toContain(EGRESS_BLOCKED_MARKER)
     expect(log.length).toBe(decided + 1)
+    expect(log.at(-1)).toEqual({ allowed: false, host: 'attacker.example', port: 80, via: 'http' })
   })
 
   it('refuses a Host header that names another origin than the allowed URI (CDN fronting)', async () => {
