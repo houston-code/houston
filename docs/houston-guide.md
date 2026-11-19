@@ -4420,6 +4420,12 @@ window:
   against it. Your own limit in Settings governs both trimming and summarizing.
 - **Built up, not redone.** The summary is saved with the conversation, so later turns
   extend it instead of re-summarizing from scratch.
+- **Summarized as the model saw it.** Output already trimmed in step 1 goes to the
+  summarizer trimmed too, and a long stretch is summarized in pieces sized to the
+  model, so the summary request itself never outgrows the window.
+- **A failed summary is reported.** If summarizing fails, a notice says why and the
+  turn carries on. Houston tries again once the conversation has grown, not on every
+  step; a request the model refuses as too long still triggers a summary right away.
 - **Nothing disappears on screen.** The full transcript stays visible; only what's sent
   to the model is compacted.
 - **Settings:** in Settings, *Agent Behavior*, *Context window*, choose Automatic,

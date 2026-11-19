@@ -157,6 +157,23 @@ export const SUMMARY_TRUNCATED_MESSAGE =
   "The summary was cut off at the model's output limit, so it was discarded."
 
 /**
+ * After a proactive compaction fails, the head it tried to summarize must grow by
+ * this factor before the loop tries again. Retrying the same span every step sends
+ * the same doomed request (and runs the PreCompact hook) over and over; the overflow
+ * recovery path is unaffected and still compacts when a request is refused.
+ */
+export const COMPACTION_RETRY_GROWTH = 1.25
+
+/** The notice shown when a proactive compaction fails, with the reason it gave. */
+export function compactionFailedNotice(reason: string): string {
+  const why = reason.trim().replace(/[.\s]+$/, '')
+  return (
+    `Couldn't summarize older messages to free up context${why ? ` (${why})` : ''}. ` +
+    'The conversation continues as it is, and Houston will try again once it has grown.'
+  )
+}
+
+/**
  * Rough per-attachment token costs. Attachments contribute (almost) nothing to a
  * message's text `content`, so without these the estimate ignores them entirely —
  * a handful of images can silently push the real request past the window. These
@@ -184,6 +201,9 @@ Keep exact identifiers verbatim (file paths, function and variable names, comman
 
 const SUMMARY_INSTRUCTION =
   'Produce the summary now, following your instructions. Output only the summary text.'
+
+/** Bridges a summary chunk that opens on an assistant iteration (see buildSummaryRequestMessages). */
+const SUMMARY_CONTINUES = '[The conversation continues.]'
 
 /** The longest `/compact` focus passed to the summarizer; the rest is dropped. */
 export const COMPACT_FOCUS_MAX_CHARS = 2000
@@ -466,10 +486,34 @@ export function findForcedCompactionCut(
 }
 
 /**
- * For incremental summarization of an over-long head, pick the furthest user-turn
- * boundary `cut` in (start, end] whose chunk `messages[start..cut)` is estimated to
- * fit within `budgetTokens`. Always advances by at least one whole turn, so a single
- * turn larger than the budget still makes progress (summarized in its own chunk).
+ * Fraction of the summarizing model's context window one summarization request's
+ * input chunk may use. The rest is headroom for the prior summary, an anchored
+ * request, the instruction, the system prompt, and the summary output. Keeping each
+ * chunk well under the window is what lets a summary be written for a head that is
+ * itself larger than the window.
+ */
+export const SUMMARY_CHUNK_FRACTION = 0.6
+
+/** The chunk budget when the summarizing model's window is unknown. */
+export const DEFAULT_SUMMARY_CHUNK_BUDGET = 100_000
+
+/** Estimated tokens one summarization chunk may hold on a model with this window. */
+export function summaryChunkBudget(contextWindow: number | null | undefined): number {
+  return contextWindow && contextWindow > 0
+    ? Math.floor(contextWindow * SUMMARY_CHUNK_FRACTION)
+    : DEFAULT_SUMMARY_CHUNK_BUDGET
+}
+
+/**
+ * For incremental summarization of an over-long head, pick the furthest boundary
+ * `cut` in (start, end] whose chunk `messages[start..cut)` is estimated to fit within
+ * `budgetTokens`. Whole turns are preferred: the cut lands before a `user` message
+ * (or at `end`) whenever one fits. When not even one whole turn fits (one long
+ * prompt with dozens of tool iterations), it falls back to the furthest iteration
+ * boundary that fits: an `assistant` message that opens a model iteration once every
+ * tool call before it has its result, so no `tool_use` is split from its
+ * `tool_result`. Always advances by at least one boundary, so a single iteration
+ * larger than the budget still makes progress (summarized in its own chunk).
  * This lets a head that is itself bigger than the context window be summarized in
  * pieces, none of which can overflow the window on its own.
  */
@@ -482,22 +526,37 @@ export function findSummaryChunkCut(
   let chars = 0
   let attachmentTokens = 0
   let count = 0
-  let cut = -1
+  let turnCut = -1
+  let iterationCut = -1
   let firstBoundary = -1
+  const pending = new Set<string>()
   for (let i = start; i < end; i++) {
     const m = messages[i]
     chars += messageChars(m)
     attachmentTokens += messageAttachmentTokens(m)
     count++
-    // A turn boundary sits before a `user` message (the start of a turn) or at `end`.
+    if (m.role === 'assistant') {
+      pending.clear()
+      for (const c of m.toolCalls ?? []) pending.add(c.id)
+    } else if (m.role === 'tool' && m.toolCallId) {
+      pending.delete(m.toolCallId)
+    }
     const boundary = i + 1
-    if (boundary !== end && messages[boundary].role !== 'user') continue
+    // A turn boundary sits before a `user` message (the start of a turn) or at `end`;
+    // an iteration boundary before an assistant message that opens the next iteration,
+    // right after the last result of the one before (never between a request and its
+    // first reply, which would leave a chunk of nothing but the request).
+    const turn = boundary === end || messages[boundary].role === 'user'
+    const iteration = !turn && messages[boundary].role === 'assistant' && m.role === 'tool' && pending.size === 0
+    if (!turn && !iteration) continue
     if (firstBoundary === -1) firstBoundary = boundary
     const size = Math.ceil(chars / 4) + count * 4 + attachmentTokens
-    if (size <= budgetTokens) cut = boundary
-    else break
+    if (size > budgetTokens) break
+    if (turn) turnCut = boundary
+    else iterationCut = boundary
   }
-  if (cut !== -1) return cut
+  if (turnCut !== -1) return turnCut
+  if (iterationCut !== -1) return iterationCut
   return firstBoundary !== -1 ? firstBoundary : end
 }
 
@@ -564,7 +623,8 @@ export function findCompactionCutByBudget(
  * it is folded in rather than lost, then the head being summarized, then an
  * instruction. A head can now start on an assistant iteration or end on a user
  * message (a cut inside a turn), so adjacent plain `user` messages are merged into
- * one: providers that enforce strict alternation reject two in a row.
+ * one, and two adjacent `assistant` messages get a short bridging `user` line:
+ * providers that enforce strict alternation reject two in a row.
  */
 export function buildSummaryRequestMessages(
   priorSummary: ChatMessage[],
@@ -578,6 +638,9 @@ export function buildSummaryRequestMessages(
     if (m.role === 'user' && last?.role === 'user') {
       out[out.length - 1] = mergeUserMessages(last, m)
     } else {
+      // A chunk that starts inside a turn opens on an assistant iteration, right after
+      // the running summary's acknowledgement: bridge the two so roles still alternate.
+      if (m.role === 'assistant' && last?.role === 'assistant') out.push({ role: 'user', content: SUMMARY_CONTINUES })
       out.push(m)
     }
   }

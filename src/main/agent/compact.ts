@@ -21,18 +21,10 @@ import {
   findCompactionCutByBudget,
   findSummaryChunkCut,
   summarizationSystemPrompt,
+  summaryChunkBudget,
   summaryFits,
   summaryMaxTokens
 } from './compaction'
-
-/**
- * Fraction of the model's context window a single summarization request's input
- * chunk may use. The rest is headroom for the prior summary, the instruction, the
- * system prompt, and the summary output. Keeping each chunk well under the window
- * is what lets `/compact` rescue a conversation that is *already* over the limit.
- */
-const SUMMARY_CHUNK_FRACTION = 0.6
-const DEFAULT_SUMMARY_CHUNK_BUDGET = 100_000
 
 /**
  * Fraction of the context window the kept (verbatim) tail may occupy after a manual
@@ -306,7 +298,9 @@ async function summarizeSpan(
   s: SpanSummarizer
 ): Promise<ChatMessage[]> {
   const { cfg, provider, model, window, signal, onRetry, focus } = s
-  const budget = window ? Math.floor(window * SUMMARY_CHUNK_FRACTION) : DEFAULT_SUMMARY_CHUNK_BUDGET
+  // Each chunk stays well under the window (see summaryChunkBudget), which is what
+  // lets `/compact` rescue a conversation that is *already* over the limit.
+  const budget = summaryChunkBudget(window)
   // The summaries are written the way the loop's automatic compaction writes them: by
   // the provider's small model when a chunk's request fits its window, with the chat's
   // own model taking over when it doesn't, or when the small model fails.

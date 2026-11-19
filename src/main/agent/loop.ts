@@ -309,6 +309,7 @@ import { gitWritableRoots } from './gitDirs'
 import { GitGuard, reviewGitChanges } from './gitGuard'
 import { ghRepoKey, githubContext, resolveGh, runGh } from './github'
 import {
+  COMPACTION_RETRY_GROWTH,
   COMPACTION_TAIL_FRACTION,
   EARLY_EVICTION_MIN_GAIN_FRACTION,
   EVICTION_TARGET_FRACTION,
@@ -318,6 +319,7 @@ import {
   buildSummaryMessages,
   buildSummaryRequestMessages,
   compactionAnchor,
+  compactionFailedNotice,
   estimateContextParts,
   estimateTokens,
   estimateToolTokens,
@@ -326,12 +328,14 @@ import {
   evictionBoundary,
   findCompactionCut,
   findForcedCompactionCut,
+  findSummaryChunkCut,
   hasEvictableToolResults,
   isContextOverflowError,
   isValidCompactionState,
   resolveCompactionThreshold,
   resolveEvictionTrigger,
   summarizationSystemPrompt,
+  summaryChunkBudget,
   summaryFits,
   summaryMaxTokens
 } from './compaction'
@@ -4268,6 +4272,11 @@ export async function startRun(
       return true
     }
 
+    // Why the last compaction failed, for the notice the proactive path shows.
+    let compactionError = ''
+    // The head size (estimated tokens) a proactive compaction waits for after one
+    // failed; 0 when the last attempt didn't fail.
+    let compactionRetryAt = 0
     // Summarize messages[cut..newCut), fold the result into the synthetic summary,
     // and advance `cut`. Shared by the proactive (pre-send, threshold-driven) path
     // and the reactive (post-overflow) recovery path. `newCut` may fall inside the
@@ -4275,6 +4284,7 @@ export async function startRun(
     // anchor re-sent between the summary and the tail.
     const compactTo = async (newCut: number): Promise<'ok' | 'aborted' | 'failed'> => {
       if (newCut <= cut) return 'failed'
+      compactionError = ''
       await refreshBranch()
       // PreCompact: let a hook persist state or inject a note before older turns are
       // summarized away. Any injected context is folded into the material being
@@ -4288,7 +4298,11 @@ export async function startRun(
         abort.signal
       )
       emitHookNotice(preCompact)
-      const toSummarize = messages.slice(cut, newCut)
+      // What the model was actually shown of the span: tool results before the
+      // eviction watermark as their stubs (attachments dropped with them), not the
+      // full reads and logs the window stopped carrying long ago. Summarizing the raw
+      // span sent a request far larger than the window the run was kept within.
+      const toSummarize = evictedLog().slice(cut, newCut)
       const material: ChatMessage[] = preCompact.additionalContext
         ? [{ role: 'user', content: redact(preCompact.additionalContext) }, ...toSummarize]
         : toSummarize
@@ -4299,38 +4313,55 @@ export async function startRun(
         // they are what stands in for messages[0..cut) today. On the primary route the
         // provider's small model writes it when the request fits its window, and the
         // run's own model takes over if that fails.
-        const request = buildSummaryRequestMessages([...summaryMsgs, ...anchorMsgs()], material)
-        const summarizeOn = (model: string): Promise<string> => {
-          const caps = sideModelCaps(model)
-          return summarize(
-            route.provider,
-            model,
-            request,
-            summaryMaxTokens(resolveContextWindow(model, caps)),
-            abort.signal,
-            // Report a retry in here the same way the turn loop does. Compaction can be
-            // forced mid-turn, so without this a summary riding out a blip is just a run
-            // sitting silent for the length of the backoff.
-            (attempt, err, max) => {
-              const message = redact(describeProviderError(err))
-              log.info(`run ${runId}: summary request retry ${attempt}${max !== undefined ? `/${max}` : ''} on ${serving.providerId}/${model}: ${message}`)
-              emit({
-                type: 'retry',
-                attempt,
-                ...(max !== undefined ? { max } : {}),
-                message
-              })
-            },
-            () => providerReached,
-            (u) => recordSideRequestUsage(u, model, caps)
-          )
+        const summarizeRequest = (request: ChatMessage[]): Promise<string> => {
+          const summarizeOn = (model: string): Promise<string> => {
+            const caps = sideModelCaps(model)
+            return summarize(
+              route.provider,
+              model,
+              request,
+              summaryMaxTokens(resolveContextWindow(model, caps)),
+              abort.signal,
+              // Report a retry in here the same way the turn loop does. Compaction can be
+              // forced mid-turn, so without this a summary riding out a blip is just a run
+              // sitting silent for the length of the backoff.
+              (attempt, err, max) => {
+                const message = redact(describeProviderError(err))
+                log.info(`run ${runId}: summary request retry ${attempt}${max !== undefined ? `/${max}` : ''} on ${serving.providerId}/${model}: ${message}`)
+                emit({
+                  type: 'retry',
+                  attempt,
+                  ...(max !== undefined ? { max } : {}),
+                  message
+                })
+              },
+              () => providerReached,
+              (u) => recordSideRequestUsage(u, model, caps)
+            )
+          }
+          const small = sideSmallModel()
+          const smallFits =
+            small !== null &&
+            summaryFits(estimateTokens(summarizationSystemPrompt, request), resolveContextWindow(small, sideModelCaps(small)))
+          return withSmallModel(smallFits ? small : null, route.model, summarizeOn, abort.signal)
         }
-        const small = sideSmallModel()
-        const smallFits =
-          small !== null &&
-          summaryFits(estimateTokens(summarizationSystemPrompt, request), resolveContextWindow(small, sideModelCaps(small)))
-        const text = await withSmallModel(smallFits ? small : null, route.model, summarizeOn, abort.signal)
-        if (!text) return 'failed'
+        // The span goes in chunks sized to the run's model's window (the one that
+        // writes the summary when the small model can't), each folded into a running
+        // summary, as /compact does: a forced compaction summarizes a span that just
+        // overflowed that window, so one request of all of it would overflow too.
+        const budget = summaryChunkBudget(resolveContextWindow(route.model, sideModelCaps(route.model)))
+        let prior: ChatMessage[] = [...summaryMsgs, ...anchorMsgs()]
+        let text = ''
+        for (let at = 0; at < material.length; ) {
+          const next = findSummaryChunkCut(material, at, material.length, budget)
+          text = await summarizeRequest(buildSummaryRequestMessages(prior, material.slice(at, next)))
+          if (!text) {
+            compactionError = 'The model returned an empty summary.'
+            return 'failed'
+          }
+          prior = buildSummaryMessages(text)
+          at = next
+        }
         // Messages folded into the summary *this round* (a count, which is what the
         // renderer shows) — not the absolute tail-start index.
         const compactedNow = newCut - cut
@@ -4349,6 +4380,7 @@ export async function startRun(
         summaryMsgs = buildSummaryMessages(landed, memoryTaintSource(messages.slice(0, newCut), (n) => lookupTool(n)?.kind))
         anchor = compactionAnchor(messages, newCut, turnStart)
         cut = newCut
+        compactionRetryAt = 0
         lastInputTokens = 0
         workspaceState = captureWorkspaceState()
         // Persist so the next run resumes from this summary instead of paying a
@@ -4358,8 +4390,10 @@ export async function startRun(
         forgetUnseenFiles()
         emit({ type: 'compaction', summarized: compactedNow })
         return 'ok'
-      } catch {
-        return abort.signal.aborted ? 'aborted' : 'failed'
+      } catch (e) {
+        if (abort.signal.aborted) return 'aborted'
+        compactionError = redact(describeProviderError(e))
+        return 'failed'
       }
     }
 
@@ -4646,11 +4680,22 @@ export async function startRun(
               turnStart,
               tailBudget: Math.floor(room * COMPACTION_TAIL_FRACTION)
             })
-            // Summarization failure is non-fatal: keep going with the full window —
-            // the turn may still fit, or the provider error path will recover below.
-            if (newCut > cut && (await compactTo(newCut)) === 'aborted') {
-              emit({ type: 'done', stopReason: 'aborted' })
-              return
+            // After a failure, wait for the head to grow before trying again: the same
+            // span would most likely fail the same way, and every attempt is a model
+            // call (and a PreCompact hook) on each step of the run.
+            const head = newCut > cut ? estimateTokens('', evictedLog().slice(cut, newCut)) : 0
+            if (newCut > cut && head >= compactionRetryAt) {
+              // Summarization failure is non-fatal: keep going with the full window —
+              // the turn may still fit, or the provider error path will recover below.
+              const outcome = await compactTo(newCut)
+              if (outcome === 'aborted') {
+                emit({ type: 'done', stopReason: 'aborted' })
+                return
+              }
+              if (outcome === 'failed') {
+                compactionRetryAt = Math.ceil(head * COMPACTION_RETRY_GROWTH)
+                emit({ type: 'notice', message: compactionFailedNotice(compactionError) })
+              }
             }
           }
         }

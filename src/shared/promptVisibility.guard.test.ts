@@ -61,8 +61,8 @@ describe('prompt visibility guard', () => {
     'main/acp.ts': { count: 1, why: "an ACP editor's session/prompt: the user's words, or a slash command's turn carrying its invokedAs" },
     'main/agent/loop.ts': { count: 2, why: "the user's own mid-run steers, and PreCompact context sent only to the summarizer" },
     'main/agent/compaction.ts': {
-      count: 3,
-      why: 'summarizer request (its instruction, and adjacent user turns merged into one for it), and the summary turn the transcript labels itself'
+      count: 4,
+      why: 'summarizer request (its instruction, adjacent user turns merged into one for it, and the line bridging a chunk that opens on an assistant iteration), and the summary turn the transcript labels itself'
     },
     'main/agent/subagent.ts': { count: 2, why: "a subagent's own transcript, never shown as the user's" },
     'main/agent/title.ts': { count: 1, why: 'the title-generation request, never persisted' },

@@ -32,6 +32,8 @@ import {
   findCompactionCutByBudget,
   findForcedCompactionCut,
   findSummaryChunkCut,
+  summaryChunkBudget,
+  compactionFailedNotice,
   hasEvictableToolResults,
   isContextOverflowError,
   isValidCompactionState,
@@ -509,6 +511,55 @@ describe('findSummaryChunkCut', () => {
     expect(cuts.at(-1)).toBe(end)
     expect(cuts.every((c, i) => i === 0 || c > cuts[i - 1])).toBe(true) // strictly increasing
   })
+
+  // One prompt, then `n` iterations of a ~1k-token tool result each.
+  const longTurn = (n: number): ChatMessage[] => {
+    const msgs: ChatMessage[] = [{ role: 'user', content: 'audit' }]
+    for (let i = 0; i < n; i++) {
+      msgs.push({ role: 'assistant', content: '', toolCalls: [{ id: `c${i}`, name: 'read_file', arguments: {} }] })
+      msgs.push({ role: 'tool', content: 'x'.repeat(4000), toolCallId: `c${i}`, toolName: 'read_file' })
+    }
+    msgs.push({ role: 'assistant', content: 'done' })
+    return msgs
+  }
+
+  it('splits a turn larger than the budget at iteration boundaries, keeping calls with results', () => {
+    const msgs = longTurn(6)
+    const cuts: number[] = []
+    let cur = 0
+    while (cur < msgs.length) {
+      cur = findSummaryChunkCut(msgs, cur, msgs.length, 2500)
+      cuts.push(cur)
+    }
+    expect(cuts.length).toBeGreaterThan(2)
+    expect(cuts.at(-1)).toBe(msgs.length)
+    for (const c of cuts.slice(0, -1)) {
+      expect(msgs[c].role).toBe('assistant') // never between a call and its result
+      expect(msgs[c - 1].role).toBe('tool')
+    }
+  })
+
+  it('still prefers a whole-turn boundary when one fits', () => {
+    const msgs = [...big(1), ...longTurn(6)] // a ~1k turn, then a ~6k one
+    expect(findSummaryChunkCut(msgs, 0, msgs.length, 2500)).toBe(2)
+  })
+})
+
+describe('summaryChunkBudget', () => {
+  it('is a share of a known window, and a fixed budget otherwise', () => {
+    expect(summaryChunkBudget(200_000)).toBe(120_000)
+    expect(summaryChunkBudget(null)).toBe(100_000)
+    expect(summaryChunkBudget(0)).toBe(100_000)
+  })
+})
+
+describe('compactionFailedNotice', () => {
+  it('names the reason without doubling its period', () => {
+    expect(compactionFailedNotice('Overloaded.')).toBe(
+      "Couldn't summarize older messages to free up context (Overloaded). The conversation continues as it is, and Houston will try again once it has grown."
+    )
+    expect(compactionFailedNotice('')).not.toContain('()')
+  })
 })
 
 describe('isContextOverflowError', () => {
@@ -704,6 +755,15 @@ describe('buildSummaryRequestMessages', () => {
     expect(req.at(-1)!.content).toContain('[note] wrap up')
     expect(req.at(-1)!.content).toContain('Produce the summary now')
     expect(JSON.stringify([prior, head])).toBe(before) // inputs untouched
+  })
+
+  it('bridges a chunk that opens on an assistant iteration after the running summary', () => {
+    const head: ChatMessage[] = [
+      { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'list_dir', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'a', toolName: 'list_dir' }
+    ]
+    const req = buildSummaryRequestMessages(buildSummaryMessages('so far'), head)
+    expect(req.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'tool', 'user'])
   })
 })
 
