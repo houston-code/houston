@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { LOCK_STALE_MS, POLL_MS, createSchedulerService, fireViaSpawn } from './schedulerService'
+import { LOCK_STALE_MS, POLL_MS, createSchedulerService, fireViaSpawn, scheduledProviderIds } from './schedulerService'
 import {
   MAX_SCHEDULE_ERROR_CHARS,
   type ScheduledFire,
@@ -438,6 +438,23 @@ describe('fireViaSpawn', () => {
     await fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)(stored({ approvalPolicy: 'yolo' as never, reasoningEffort: 'max' as never }))
     expect(spawned[0].approvalPolicy).toBe('plan')
     expect(spawned[0]).not.toHaveProperty('reasoningEffort')
+  })
+})
+
+describe('scheduledProviderIds', () => {
+  it('lists each provider the saved schedules name, once', () => {
+    const { service } = makeService()
+    service.create(input({ providerId: 'anthropic' }))
+    service.create(input({ providerId: 'openrouter', spec: 'every 30 minutes' }))
+    service.create(input({ providerId: 'anthropic', spec: 'every 2 hours' }))
+    expect(scheduledProviderIds(file).sort()).toEqual(['anthropic', 'openrouter'])
+  })
+
+  it('reads a missing or unreadable store as none, and leaves it in place', () => {
+    expect(scheduledProviderIds(file)).toEqual([])
+    writeFileSync(file, '{ not json')
+    expect(scheduledProviderIds(file)).toEqual([])
+    expect(readFileSync(file, 'utf8')).toBe('{ not json')
   })
 })
 

@@ -3473,9 +3473,10 @@ to have them fire on time anyway.
 
 From the terminal, the daemon reads keys from `cli-credentials.json`. It starts at
 login without your shell, so a key you only export there (`ANTHROPIC_API_KEY`,
-`HOUSTON_API_KEY_<ID>`, ...) never reaches it: `install` lists any such key and refuses
-until you store it with `houston providers set-key <id>`. A key is never copied into
-the login item itself.
+`HOUSTON_API_KEY_<ID>`, ...) never reaches it. `install` refuses while a provider your
+saved schedules use, or your default model's provider, has its key only there, and
+names the `houston providers set-key <id>` command that stores it; for any other
+provider it only warns. A key is never copied into the login item itself.
 
 | Command | Does |
 | --- | --- |
