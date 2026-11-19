@@ -344,6 +344,24 @@ tells users, so treat it as a behavior change, not a doc tweak. It is not in the
 prompt, so it moves no golden and no eval prompt hash. Renderer and TUI strings are
 ordinary source. Keep both in sync with the feature in the same PR.
 
+## The `full-ci` label
+
+Pull request CI packages Linux only. The merge queue adds macOS arm64 and Windows before
+anything lands, and the nightly run covers macOS x64. The `full-ci` label runs all four
+legs on the PR itself, and the hosted macOS pool is small: a handful of `full-ci` PRs can
+take every macOS runner, leaving queue candidates waiting for their required macOS leg
+until they time out and the queue rebuilds.
+
+- **Add `full-ci` only when a change really needs the native legs before queueing:** the
+  sandbox backends, path handling, packaging, native modules, OS process, PTY or signal
+  code, or a PR the queue removed over a macOS or Windows failure.
+- **Never label a batch.** When several PRs need it, label one or two at a time and let
+  each finish before the next.
+- **Removing the label does not start a new run** (only adding one does). To get a
+  Linux-only run after removing it, close and reopen the PR.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md#what-runs) for which legs run where.
+
 ## Avoiding silent-clobber merges
 
 A PR whose branch is based on an out-of-date `main` can, when finalized wrong, **silently
