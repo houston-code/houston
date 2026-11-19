@@ -158,7 +158,12 @@ describe('prompt visibility guard', () => {
       'renderer/src/components/SubagentPanel.tsx': 2,
       'renderer/src/components/settings/sections/schedules.tsx': 1
     })
-    expect(occurrences(['shared'], /\ba\.prompt\b/)).toEqual({ 'shared/toolLabel.ts': 1 })
+    // shared/visibleText.ts reads spawn_session, dispatch_writable_agent and
+    // schedule_run prompts only to show them in an approval prompt, never to send them.
+    expect(occurrences(['shared'], /\ba\.prompt\b/)).toEqual({
+      'shared/toolLabel.ts': 1,
+      'shared/visibleText.ts': 3
+    })
     expect(occurrences(['shared'], /\baction\.prompt\b/)).toEqual({ 'shared/promptInvocation.ts': 1 })
   })
 })
