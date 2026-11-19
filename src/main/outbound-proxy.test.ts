@@ -289,7 +289,11 @@ describe('outboundFetch through a proxy', () => {
     expect(await (await outboundFetch(`http://localhost:${targetPort}/local`)).text()).toBe('hello GET /local')
     expect(seen).toEqual([])
     process.env.NO_PROXY = 'bypass.invalid'
-    await expect(outboundFetch(`http://bypass.invalid:${targetPort}/x`)).rejects.toThrow()
+    // A direct attempt has to look the name up, and a slow resolver can take longer than
+    // the test has. Sent to the proxy, the request would be seen there at once.
+    await expect(
+      outboundFetch(`http://bypass.invalid:${targetPort}/x`, { signal: AbortSignal.timeout(1000) })
+    ).rejects.toThrow()
     expect(seen).toEqual([])
   })
 
