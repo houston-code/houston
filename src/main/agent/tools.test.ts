@@ -853,6 +853,23 @@ describe('notebook_edit', () => {
     expect(after.nbformat_minor).toBe(5)
   })
 
+  it('keeps the notebook file\'s own formatting, so only the edited cell\'s lines change', async () => {
+    // nbformat's own output: 1-space indent, sorted keys, a final newline.
+    const sortKeys = (v: unknown): unknown =>
+      Array.isArray(v)
+        ? v.map(sortKeys)
+        : v && typeof v === 'object'
+          ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys((v as Record<string, unknown>)[k])]))
+          : v
+    const original = `${JSON.stringify(sortKeys(NB), null, 1)}\n`
+    writeFileSync(join(workspace, 'a.ipynb'), original)
+    await run('notebook_edit', { path: 'a.ipynb', cell: 1, source: '# Renamed' })
+    const before = original.split('\n')
+    const after = readFileSync(join(workspace, 'a.ipynb'), 'utf8').split('\n')
+    expect(after).toHaveLength(before.length)
+    expect(after.filter((l, i) => l !== before[i])).toEqual(['    "# Renamed"'])
+  })
+
   it('inserts and deletes cells', async () => {
     writeNb()
     await run('notebook_edit', { path: 'a.ipynb', cell: 3, mode: 'insert', source: 'z = 3', cell_type: 'code' })

@@ -314,10 +314,90 @@ describe('editNotebook', () => {
 })
 
 describe('serializeNotebook', () => {
-  it('writes Jupyter\'s canonical formatting so a diff stays scoped to the edit', () => {
+  // What Jupyter's nbformat writes: json.dumps(nb, sort_keys=True, indent=1,
+  // ensure_ascii=False) plus a final newline. VS Code writes the same by default.
+  const NBFORMAT_TEXT = [
+    '{',
+    ' "cells": [',
+    '  {',
+    '   "cell_type": "code",',
+    '   "execution_count": 1,',
+    '   "id": "a1b2c3d4",',
+    '   "metadata": {},',
+    '   "outputs": [',
+    '    {',
+    '     "name": "stdout",',
+    '     "output_type": "stream",',
+    '     "text": [',
+    '      "1\\n"',
+    '     ]',
+    '    }',
+    '   ],',
+    '   "source": [',
+    '    "x = 1\\n",',
+    '    "print(x)"',
+    '   ]',
+    '  },',
+    '  {',
+    '   "cell_type": "markdown",',
+    '   "id": "e5f6a7b8",',
+    '   "metadata": {},',
+    '   "source": [',
+    '    "# Résumé"',
+    '   ]',
+    '  }',
+    ' ],',
+    ' "metadata": {',
+    '  "kernelspec": {',
+    '   "display_name": "Python 3",',
+    '   "language": "python",',
+    '   "name": "python3"',
+    '  }',
+    ' },',
+    ' "nbformat": 4,',
+    ' "nbformat_minor": 5',
+    '}',
+    ''
+  ].join('\n')
+
+  it('writes a new notebook as nbformat does: 1-space indent, sorted keys, final newline', () => {
+    expect(serializeNotebook(parseNotebook(NBFORMAT_TEXT))).toBe(NBFORMAT_TEXT)
     const text = serializeNotebook(nb([codeCell('x = 1')]))
-    expect(text.endsWith('\n')).toBe(true)
-    expect(text).toContain('\n  "cells": [')
+    expect(text.endsWith('}\n')).toBe(true)
+    expect(text).toContain('\n "cells": [\n  {\n   "cell_type": "code",\n   "execution_count": null,')
+  })
+
+  it('leaves every line of an nbformat file but the edited cell untouched', () => {
+    const edited = serializeNotebook(
+      editNotebook(parseNotebook(NBFORMAT_TEXT), { cell: 2, mode: 'replace', source: '# Summary' }),
+      NBFORMAT_TEXT
+    )
+    const before = NBFORMAT_TEXT.split('\n')
+    const after = edited.split('\n')
+    expect(after).toHaveLength(before.length)
+    expect(after.filter((line, i) => line !== before[i])).toEqual(['    "# Summary"'])
+  })
+
+  it('places an inserted cell\'s keys in sorted order when the file sorts its keys', () => {
+    const edited = serializeNotebook(
+      editNotebook(parseNotebook(NBFORMAT_TEXT), { cell: 3, mode: 'insert', source: 'y = 2' }),
+      NBFORMAT_TEXT
+    )
+    expect(edited.startsWith(NBFORMAT_TEXT.slice(0, NBFORMAT_TEXT.indexOf('\n ],')))).toBe(true)
+    expect(edited).toMatch(/"cell_type": "code",\n {3}"execution_count": null,\n {3}"id": "[0-9a-f]{8}",\n {3}"metadata": \{\},\n {3}"outputs": \[\],\n {3}"source": \[/)
+  })
+
+  it('keeps the file\'s own indent, key order, line endings, and final-newline state', () => {
+    const original = nb([codeCell('x = 1')])
+    // 2-space indent, keys in insertion order (not sorted), no final newline.
+    const twoSpace = JSON.stringify(original, null, 2)
+    expect(serializeNotebook(parseNotebook(twoSpace), twoSpace)).toBe(twoSpace)
+    // Tabs, CRLF line endings, and a final newline.
+    const tabsCrlf = `${JSON.stringify(original, null, '\t').replace(/\n/g, '\r\n')}\r\n`
+    expect(serializeNotebook(parseNotebook(tabsCrlf), tabsCrlf)).toBe(tabsCrlf)
+    // A minified file stays on one line.
+    const minified = JSON.stringify(original)
+    expect(serializeNotebook(parseNotebook(minified), minified)).toBe(minified)
   })
 
   it('round-trips through parse unchanged when nothing is edited', () => {
