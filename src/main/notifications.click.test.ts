@@ -4,6 +4,8 @@ import { IPC } from '@shared/constants'
 // A fake Notification that records its click handler, so the test can click it.
 const h = vi.hoisted(() => ({ clicks: [] as (() => void)[] }))
 vi.mock('electron', () => ({
+  app: { focus: vi.fn() },
+  BrowserWindow: { getAllWindows: () => [], getFocusedWindow: () => null },
   Notification: class {
     static isSupported(): boolean {
       return true

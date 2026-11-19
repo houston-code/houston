@@ -14,6 +14,7 @@ import { SettingsSection } from '../fields'
 import { KeyboardTab } from '../KeyboardTab'
 import type { SettingsCtx } from '../context'
 import { playAttentionSound } from '../../../lib/attentionSound'
+import { isMacPlatform } from '../../../lib/shortcuts'
 
 export function AppearanceSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
@@ -174,7 +175,11 @@ function NotificationCheck(): JSX.Element {
       <p className="field__hint notification-check__status" role="status">
         {status === 'sent' &&
           (hasOsPage
-            ? 'Sent. If nothing appeared, your system is blocking Houston’s notifications: allow Houston in system notification settings, and check that Focus or Do Not Disturb isn’t holding them back.'
+            ? `Sent. If nothing appeared, your system is blocking Houston’s notifications: allow Houston in system notification settings, and check that Focus or Do Not Disturb isn’t holding them back.${
+                isMacPlatform()
+                  ? ' If it slid away before you could click it, set Houston’s notifications to Persistent there.'
+                  : ''
+              }`
             : 'Sent. If nothing appeared, check your desktop’s notification settings.')}
         {status === 'unsupported' && 'This system can’t show desktop notifications.'}
         {status === 'error' && 'Couldn’t send a test notification.'}

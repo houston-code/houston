@@ -167,6 +167,12 @@ mac:
   # pin our own so the set is reviewable and stable.
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # Houston's notifications default to the Persistent (alert) style: they stay on screen
+  # until clicked or closed instead of sliding away after a few seconds, since each one
+  # means a chat finished or is waiting on the user. Only the default for a new install;
+  # the user can change it in System Settings > Notifications > Houston.
+  extendInfo:
+    NSUserNotificationAlertStyle: alert
   # NOTE on auto-update: arm64 and x64 build on separate runners, and electron-builder writes
   # a single `latest-mac.yml` per build — naively publishing both clobbers one another's feed
   # (electron-builder#5592). So both arches auto-update from ONE merged feed: the arm64 leg

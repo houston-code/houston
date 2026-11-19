@@ -46,6 +46,15 @@ describe('NotificationsSection test notification', () => {
     expect(api.sendTestNotification).toHaveBeenCalledOnce()
   })
 
+  it('on macOS, says how to keep notifications on screen', async () => {
+    const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    installApi({ hasOsPage: true })
+    render(<NotificationsSection ctx={ctx()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Send test notification' }))
+    expect(await screen.findByText(/set Houston’s notifications to Persistent/)).toBeTruthy()
+    platform.mockRestore()
+  })
+
   it('opens the system notification settings', async () => {
     const api = installApi({ hasOsPage: true })
     render(<NotificationsSection ctx={ctx()} />)

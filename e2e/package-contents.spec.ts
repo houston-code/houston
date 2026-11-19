@@ -171,7 +171,7 @@ test("node-pty ships only this platform's prebuilds", () => {
   expect(present.filter((d) => d !== own), 'other platforms\' node-pty prebuilds are packaged').toEqual([])
 })
 
-test('the macOS bundle declares its id, version and minimum OS', () => {
+test('the macOS bundle declares its id, version, notification style and minimum OS', () => {
   test.skip(process.platform !== 'darwin', 'Info.plist is macOS-only')
   skipUnlessPackaged()
   const plist = readFileSync(join(packaged!.resources, '..', 'Info.plist'), 'utf8')
@@ -181,6 +181,8 @@ test('the macOS bundle declares its id, version and minimum OS', () => {
 
   expect(value('CFBundleIdentifier')).toBe('com.houston.app')
   expect(value('CFBundleShortVersionString')).toBe(version)
+  // Notifications stay on screen until acted on (the default alert style for a new install).
+  expect(value('NSUserNotificationAlertStyle')).toBe('alert')
   // electron-builder.yml pins the floor so an older Mac gets a clean "requires macOS 13"
   // dialog instead of a dyld crash; a dropped setting would fall back to Electron's own.
   expect(value('LSMinimumSystemVersion')).toBe('13.0')

@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   opened: [] as string[]
 }))
 vi.mock('electron', () => ({
+  app: { focus: vi.fn() },
+  BrowserWindow: { getAllWindows: () => [], getFocusedWindow: () => null },
   Notification: class {
     constructor(private opts: { title: string; body: string }) {}
     static isSupported(): boolean {
