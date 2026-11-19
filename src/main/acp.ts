@@ -2052,11 +2052,14 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           break
         case 'turn_discarded':
           // ACP has no way to take streamed text back, so say plainly that what
-          // follows replaces the cut-off reply.
-          up({
-            sessionUpdate: 'agent_message_chunk',
-            content: { type: 'text', text: '\n\n(The reply above was cut off; redoing it.)\n\n' }
-          })
+          // follows replaces the cut-off reply. An attempt that streamed only
+          // reasoning left no reply above to replace.
+          if (e.textChars > 0) {
+            up({
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: '\n\n(The reply above was cut off; redoing it.)\n\n' }
+            })
+          }
           break
         case 'steered':
           up({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: e.text } })

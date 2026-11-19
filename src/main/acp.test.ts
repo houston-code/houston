@@ -586,6 +586,27 @@ describe('ACP server: protocol flow', () => {
     }
   })
 
+  it('says a cut-off reply is being redone only when reply text had streamed', async () => {
+    const h = harness({
+      run: async (req, send) => {
+        send({ runId: req.runId, type: 'reasoning', delta: 'thinking' })
+        send({ runId: req.runId, type: 'turn_discarded', attempt: 1, reason: 'stream dropped', textChars: 0, reasoningChars: 8 })
+        send({ runId: req.runId, type: 'text', delta: 'partial' })
+        send({ runId: req.runId, type: 'turn_discarded', attempt: 2, reason: 'stream dropped', textChars: 7, reasoningChars: 0 })
+        send({ runId: req.runId, type: 'text', delta: 'full answer' })
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('go') })
+    const said = h
+      .updates(sessionId)
+      .filter((u) => u.sessionUpdate === 'agent_message_chunk')
+      .map((u) => (u.content as { text: string }).text)
+    expect(said).toEqual(['partial', '\n\n(The reply above was cut off; redoing it.)\n\n', 'full answer'])
+    await h.end()
+  })
+
   it('maps session/cancel to cancelRun and reports the turn as cancelled', async () => {
     const h = harness({
       run: async (req, send, loop) => {
