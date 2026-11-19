@@ -18,8 +18,10 @@
 //   RunAsNode stays ON on Linux only. The Linux sandbox's proxied-egress mode runs a small
 //   forwarder inside the bubblewrap namespace with `ELECTRON_RUN_AS_NODE=1 <execPath>`
 //   (src/main/sandbox/linux.ts, FORWARDER_SOURCE in egress-proxy.ts), because the
-//   namespace has no other Node to run it with. Nothing on macOS or Windows uses it, so it
-//   is off there. On Linux the secret store (libsecret) does not bind a secret to the
+//   namespace has no other Node to run it with. Nothing Houston runs on macOS or Windows
+//   needs it, so it is off there. (node-pty's Windows kill() forks a Node helper to list
+//   the console's processes, which this fuse breaks; src/main/terminal.ts killPty replaces
+//   that step with a taskkill of the shell's tree.) On Linux the secret store (libsecret) does not bind a secret to the
 //   binary that stored it, so this fuse is not what keeps a same-user process from the
 //   key there; the debugger and NODE_OPTIONS fuses still go off.
 //

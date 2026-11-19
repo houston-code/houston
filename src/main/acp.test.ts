@@ -586,6 +586,27 @@ describe('ACP server: protocol flow', () => {
     }
   })
 
+  it('says a cut-off reply is being redone only when reply text had streamed', async () => {
+    const h = harness({
+      run: async (req, send) => {
+        send({ runId: req.runId, type: 'reasoning', delta: 'thinking' })
+        send({ runId: req.runId, type: 'turn_discarded', attempt: 1, reason: 'stream dropped', textChars: 0, reasoningChars: 8 })
+        send({ runId: req.runId, type: 'text', delta: 'partial' })
+        send({ runId: req.runId, type: 'turn_discarded', attempt: 2, reason: 'stream dropped', textChars: 7, reasoningChars: 0 })
+        send({ runId: req.runId, type: 'text', delta: 'full answer' })
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('go') })
+    const said = h
+      .updates(sessionId)
+      .filter((u) => u.sessionUpdate === 'agent_message_chunk')
+      .map((u) => (u.content as { text: string }).text)
+    expect(said).toEqual(['partial', '\n\n(The reply above was cut off; redoing it.)\n\n', 'full answer'])
+    await h.end()
+  })
+
   it('maps session/cancel to cancelRun and reports the turn as cancelled', async () => {
     const h = harness({
       run: async (req, send, loop) => {
@@ -1354,7 +1375,7 @@ describe('ACP server: slash commands, config options and session info', () => {
     const sessionId = await ready(h)
     await h.call('session/prompt', { sessionId, prompt: text('first') })
     await h.call('session/prompt', { sessionId, prompt: text('/compact') })
-    expect(compact).toHaveBeenCalledWith(sessionId, 'anthropic', 'claude-sonnet-4-5')
+    expect(compact).toHaveBeenCalledWith(sessionId, 'anthropic', 'claude-sonnet-4-5', { signal: expect.any(AbortSignal) })
     expect(replies(h, sessionId).at(-1)).toBe('Summarized 4 earlier messages.')
     await h.call('session/prompt', { sessionId, prompt: text('next') })
     expect(h.loop.requests.at(-1)!.messages).toEqual([
@@ -1376,7 +1397,65 @@ describe('ACP server: slash commands, config options and session info', () => {
     const sessionId = await ready(h)
     await h.call('session/prompt', { sessionId, prompt: text('first') })
     await h.call('session/prompt', { sessionId, prompt: text('/compact keep the API decisions') })
-    expect(compact).toHaveBeenCalledWith(sessionId, 'anthropic', 'claude-sonnet-4-5', 'keep the API decisions')
+    expect(compact).toHaveBeenCalledWith(sessionId, 'anthropic', 'claude-sonnet-4-5', {
+      focus: 'keep the API decisions',
+      signal: expect.any(AbortSignal)
+    })
+    await h.end()
+  })
+
+  it('cancels a /compact in progress on session/cancel and ends the prompt as cancelled', async () => {
+    let signal: AbortSignal | undefined
+    const compact = vi.fn(
+      (_id: string, _p: string, _m: string, opts: { signal?: AbortSignal }) =>
+        new Promise<{ ok: boolean; summarized: number; error?: string }>((resolve) => {
+          signal = opts.signal
+          opts.signal?.addEventListener('abort', () => resolve({ ok: false, summarized: 0, error: 'Compaction cancelled.' }))
+        })
+    )
+    const h: Harness = harness({
+      run: async (req, send, _loop, onMessages) => {
+        onMessages?.([...req.messages, { role: 'assistant', content: 'ok' }])
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      },
+      deps: { compact }
+    })
+    const sessionId = await ready(h, { session: { compaction: {} } })
+    await h.call('session/prompt', { sessionId, prompt: text('first') })
+    const pending = h.call('session/prompt', { sessionId, prompt: text('/compact') })
+    await vi.waitFor(() => expect(compact).toHaveBeenCalled())
+    h.notify('session/cancel', { sessionId })
+    expect((await pending).result).toEqual({ stopReason: 'cancelled' })
+    expect(signal?.aborted).toBe(true)
+    const statuses = h.updates(sessionId).filter((u) => u.sessionUpdate === 'compaction_update').map((u) => u.status)
+    expect(statuses).toEqual(['in_progress', 'cancelled'])
+    // The session is free again, and a later cancel-free prompt runs as usual.
+    expect((await h.call('session/prompt', { sessionId, prompt: text('next') })).result).toEqual({ stopReason: 'end_turn' })
+    await h.end()
+  })
+
+  it('ends a prompt as cancelled when session/cancel arrives while its slash command is looked up', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const h: Harness = harness({
+      run: async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' }),
+      deps: {
+        commands: async () => {
+          await gate
+          return []
+        }
+      }
+    })
+    const sessionId = await ready(h)
+    const pending = h.call('session/prompt', { sessionId, prompt: text('/review') })
+    await new Promise((r) => setTimeout(r, 10))
+    h.notify('session/cancel', { sessionId })
+    release()
+    expect((await pending).result).toEqual({ stopReason: 'cancelled' })
+    // No run started for the cancelled prompt.
+    expect(h.loop.requests).toHaveLength(0)
+    // A cancel that arrived for that prompt doesn't carry over to the next one.
+    expect((await h.call('session/prompt', { sessionId, prompt: text('/review') })).result).toEqual({ stopReason: 'end_turn' })
     await h.end()
   })
 

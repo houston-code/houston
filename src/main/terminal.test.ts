@@ -35,7 +35,8 @@ import {
   killAllTerminals,
   killTerminalsOf,
   terminalCount,
-  commandArgs
+  commandArgs,
+  killPty
 } from './terminal'
 
 const nextTick = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -209,5 +210,51 @@ describe('command terminals', () => {
     expect(ptyMock.spawn.mock.calls[0][1]).toEqual([])
     spawned[0].emitExit(0)
     expect(sender.send).toHaveBeenCalledWith(IPC.terminalExit, { id, exitCode: 0 })
+  })
+})
+
+describe('killPty', () => {
+  /** A fake ConPTY terminal whose agent lists console processes the way node-pty 1.1 does. */
+  function windowsPty(fails = true) {
+    const forked: number[] = []
+    const agent = {
+      // node-pty forks a Node helper here, which throws with the RunAsNode fuse off.
+      _getConsoleProcessList: (): Promise<number[]> => {
+        forked.push(1)
+        return fails ? Promise.reject(new Error('fork is unavailable')) : Promise.resolve([])
+      },
+      kill(): void {
+        void this._getConsoleProcessList().then(() => {})
+      }
+    }
+    const p = { pid: 4242, _agent: agent, kill: vi.fn(() => agent.kill()) }
+    return { p, forked }
+  }
+
+  it('kills the shell tree with taskkill on Windows instead of forking the console-list helper', async () => {
+    const { p, forked } = windowsPty()
+    const trees: number[] = []
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      killPty(p as never, 'win32', (pid) => trees.push(pid))
+      await new Promise((r) => setTimeout(r, 10))
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+    expect(p.kill).toHaveBeenCalledOnce()
+    expect(trees).toEqual([4242])
+    expect(forked).toEqual([])
+    expect(unhandled).not.toHaveBeenCalled()
+  })
+
+  it('leaves node-pty alone elsewhere', () => {
+    const { p } = windowsPty(false)
+    const original = p._agent._getConsoleProcessList
+    const trees: number[] = []
+    killPty(p as never, 'darwin', (pid) => trees.push(pid))
+    expect(p.kill).toHaveBeenCalledOnce()
+    expect(p._agent._getConsoleProcessList).toBe(original)
+    expect(trees).toEqual([])
   })
 })

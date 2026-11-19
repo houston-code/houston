@@ -100,21 +100,38 @@ const OPENER_EXIT_WAIT_MS = 5_000
  * can't start or exits non-zero (`open` and `xdg-open` fail that way when nothing
  * handles the link). `rundll32` always exits 0, so it counts as done once started; an
  * opener still running after a few seconds is taken as having opened the link.
+ *
+ * The child and the wait stay referenced until one of those settles the promise: with
+ * nothing else pending, an unreferenced pair let Node exit with the command still
+ * waiting, so it printed nothing and exited 0 even when the opener failed. Only an
+ * opener still running once the promise settles is let go, so this process can exit
+ * without waiting for it.
  */
 export function launchDetached(cmd: string, args: string[], waitMs = OPENER_EXIT_WAIT_MS): Promise<void> {
   const spawnOnly = /^rundll32(\.exe)?$/i.test(basename(cmd))
   return new Promise((done, fail) => {
     const child = spawn(cmd, args, { stdio: 'ignore', detached: true, shell: false })
     let timer: NodeJS.Timeout | undefined
-    child.once('error', fail)
-    child.once('spawn', () => {
+    const release = (): void => {
+      if (timer) clearTimeout(timer)
       child.unref()
-      if (spawnOnly) return done()
-      timer = setTimeout(done, waitMs)
-      timer.unref()
+    }
+    child.once('error', (e) => {
+      release()
+      fail(e)
+    })
+    child.once('spawn', () => {
+      if (spawnOnly) {
+        release()
+        return done()
+      }
+      timer = setTimeout(() => {
+        release()
+        done()
+      }, waitMs)
     })
     child.once('exit', (code, signal) => {
-      if (timer) clearTimeout(timer)
+      release()
       if (spawnOnly) return
       if (code === 0) done()
       else fail(new Error(`${basename(cmd)} ${signal ? `was stopped by ${signal}` : `exited with code ${code}`}`))

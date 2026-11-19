@@ -1485,6 +1485,26 @@ export function watchTerminationSignals(
 }
 
 /**
+ * Call `onClosed` once when `stream` errors: the reader of a piped stdout went away
+ * (EPIPE), or the stream otherwise can't be written. Without a listener the error is
+ * uncaught and the process dies on it with no cleanup. Returns the unsubscribe; the
+ * listener stays to absorb any later error until then.
+ */
+export function watchOutputClosed(
+  stream: Pick<NodeJS.EventEmitter, 'on' | 'off'>,
+  onClosed: (err: Error) => void
+): () => void {
+  let closed = false
+  const listener = (err: Error): void => {
+    if (closed) return
+    closed = true
+    onClosed(err)
+  }
+  stream.on('error', listener)
+  return () => void stream.off('error', listener)
+}
+
+/**
  * Wait for the background sessions a run spawned, unless `stopped` settles first (a
  * termination signal: the sessions are then stopped by the caller's cleanup rather
  * than awaited). Says on `write` how many it waits for. Returns whether it was stopped.
@@ -1628,6 +1648,16 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
   }
   let code = 1
   let interrupted = false
+  // stdout's reader went away (`houston -p ... | head -1`): nothing more can be written
+  // there, so the run is stopped the way a signal stops it, as SIGPIPE (exit 141),
+  // rather than the write error killing the process with no cleanup.
+  let outputClosed = false
+  let onOutputClosed: (() => void) | undefined
+  const stopWatchingOutput = watchOutputClosed(process.stdout, (e) => {
+    outputClosed = true
+    log.info(`headless: stdout closed (${(e as NodeJS.ErrnoException).code ?? e.message}); stopping`)
+    onOutputClosed?.()
+  })
   // Whether the run got as far as starting: a launch refused before that (a missing
   // file, an empty prompt, no usable model) leaves no worktree behind.
   let runStarted = false
@@ -1645,15 +1675,26 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
       resolvePlan,
       resolveElicitation,
       cancelRun,
-      onSignal: (handler) =>
-        watchTerminationSignals((signal) => {
+      onSignal: (handler) => {
+        const stop = (signal: HeadlessSignal): void => {
           interrupted = true
           handler(signal)
-        }),
+        }
+        const unwatch = watchTerminationSignals(stop)
+        onOutputClosed = () => stop('SIGPIPE')
+        if (outputClosed) onOutputClosed()
+        return () => {
+          unwatch()
+          onOutputClosed = undefined
+        }
+      },
       // On a terminal, the answer and the progress lines are text the model and its
       // tools wrote, so they pass the TUI's output filter: no escape in them can drive
-      // the terminal. Piped output stays byte-exact for the script reading it.
-      out: (s) => process.stdout.write(process.stdout.isTTY ? filterTerminalOutput(s) : s),
+      // the terminal. Piped output stays byte-exact for the script reading it. Nothing
+      // is written once the reader has gone.
+      out: (s) => {
+        if (!outputClosed) process.stdout.write(process.stdout.isTTY ? filterTerminalOutput(s) : s)
+      },
       err: (s) => process.stderr.write(process.stderr.isTTY ? filterTerminalOutput(s) : s),
       readStdin: readAllStdin,
       readStdinLines,
@@ -1724,6 +1765,7 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
     await lspManager.stopAll()
     if (runWt && !runStarted) await dropUnusedRunWorktree(runWt)
     stopWatching?.()
+    stopWatchingOutput()
   }
   return code
 }
@@ -1847,8 +1889,7 @@ export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOpti
         mcpPrompt: (cwd, mcpServers) => workspaceMcpPromptFetch(cwd, getSettings(), mcpServers),
         skills: async (cwd) => (await loadSkills(cwd)).map((k) => ({ name: k.name, description: k.description })),
         agents: async (cwd) => (await loadAgents(cwd)).map((a) => ({ name: a.name, description: a.description })),
-        compact: (id, providerId, model, focus) =>
-          compactConversationNow(id, providerId, model, focus ? { focus } : {})
+        compact: (id, providerId, model, opts) => compactConversationNow(id, providerId, model, opts)
       },
       { shutdown: shutdown.signal, outputClosed: outputClosed.signal }
     )

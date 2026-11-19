@@ -1911,7 +1911,7 @@ describe('runHeadless termination signals', () => {
   }
 
   it('cancels the live run, writes an aborted result line, and exits 128+signal', async () => {
-    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGPIPE'] as const) {
       const b = blockedRun()
       const { d, out, err } = deps([], b.extra)
       const done = runHeadless({ ...baseOpts, json: true }, d)
@@ -1930,7 +1930,7 @@ describe('runHeadless termination signals', () => {
       expect(err.join('')).toContain(`interrupted (${signal})`)
       expect(b.unsubscribed()).toBe(true)
     }
-    expect(HEADLESS_SIGNAL_EXIT).toEqual({ SIGINT: 130, SIGTERM: 143, SIGHUP: 129 })
+    expect(HEADLESS_SIGNAL_EXIT).toEqual({ SIGINT: 130, SIGTERM: 143, SIGHUP: 129, SIGPIPE: 141 })
   })
 
   it('persists the interrupted turn', async () => {
