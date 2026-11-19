@@ -2504,6 +2504,8 @@ and in a new terminal tab below the chat in the desktop app.
 - **Typed while the agent works,** a `!` line is never sent to the model as text. In
   the desktop app it runs right away in its own tab. In the terminal it waits, like a
   `/command`, and runs once the turn ends.
+- **`Ctrl-C` stops the command** in the terminal app, as it would in your shell, and
+  leaves Houston running.
 - `!` alone, or `!` in the middle of a line, is ordinary text. So is a `!` line sent
   with an image or attached context.
 

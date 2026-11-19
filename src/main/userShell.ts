@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { constants as osConstants } from 'node:os'
 
 /**
  * Commands run in the user's own shell: the composer's `!` escape, and the
@@ -28,7 +29,23 @@ function spawnUserShell(workspace: string, command: string, detached: boolean, w
   })
 }
 
-/** Run a `!` escape, streaming its output so a build looks alive rather than hung. */
+/** How many `!` escapes are running in the foreground right now. */
+let foregroundShells = 0
+
+/**
+ * Whether a `!` escape holds the terminal: it shares Houston's process group and runs
+ * with the terminal cooked, so a Ctrl-C typed now is a real SIGINT for both.
+ */
+export function userShellInForeground(): boolean {
+  return foregroundShells > 0
+}
+
+/**
+ * Run a `!` escape, streaming its output so a build looks alive rather than hung.
+ * It stays in Houston's process group, in the terminal's foreground: Ctrl-C stops it
+ * the way a shell's would, and a password prompt it opens on the terminal works.
+ * Ended by a signal, it reports `128 + n`, as a shell does.
+ */
 export function runUserShell(
   workspace: string,
   command: string,
@@ -36,14 +53,26 @@ export function runUserShell(
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawnUserShell(workspace, command, false)
+    foregroundShells++
+    let counted = true
+    const release = (): void => {
+      if (counted) foregroundShells--
+      counted = false
+    }
     // Decode as streams, so a multibyte character split across two pipe chunks
     // prints as itself rather than as two replacement characters.
     child.stdout?.setEncoding('utf8')
     child.stderr?.setEncoding('utf8')
     child.stdout?.on('data', (d: string) => onOutput(d))
     child.stderr?.on('data', (d: string) => onOutput(d))
-    child.on('error', reject)
-    child.on('close', (code) => resolve(code ?? 0))
+    child.on('error', (e) => {
+      release()
+      reject(e)
+    })
+    child.on('close', (code, signal) => {
+      release()
+      resolve(code ?? (signal ? 128 + (osConstants.signals[signal] ?? 0) : 0))
+    })
   })
 }
 

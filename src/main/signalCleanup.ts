@@ -47,6 +47,11 @@ export function installSignalCleanup(
      * otherwise do once the entry returns (a signal never returns to it).
      */
     beforeSignalExit?: () => void | Promise<unknown>
+    /**
+     * A signal to leave alone right now: it is not a request to exit (a Ctrl-C the
+     * terminal also sent to a command the user is running in the foreground).
+     */
+    ignore?: (signal: CleanupSignal) => boolean
   }
 ): SignalCleanup {
   const proc = opts.proc ?? (process as unknown as SignalProcess)
@@ -75,6 +80,7 @@ export function installSignalCleanup(
   for (const sig of opts.signals) {
     const code = 128 + SIGNAL_NUMBERS[sig]
     const fn = (): void => {
+      if (!exiting && opts.ignore?.(sig)) return
       // A second signal while cleanup is still running: the user means it, go now.
       if (exiting) {
         proc.exit(code)
