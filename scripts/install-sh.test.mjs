@@ -92,16 +92,36 @@ describe.skipIf(process.platform === 'win32')('install.sh', () => {
     expect(readFileSync(join(bin, 'houston'), 'utf8')).toBe(CLI)
   })
 
+  /** Puts a `node` reporting `version` first on PATH and runs the installer. */
+  const runWithNode = (version) => {
+    const stubs = join(dir, 'stubs')
+    mkdirSync(stubs, { recursive: true })
+    writeFileSync(join(stubs, 'node'), `#!/bin/sh\ncase "$1" in -p) echo ${version} ;; *) echo v${version} ;; esac\n`)
+    chmodSync(join(stubs, 'node'), 0o755)
+    return run({ PATH: `${stubs}:${process.env.PATH}` })
+  }
+
   it('refuses a Node older than 22', () => {
     publish()
-    const stubs = join(dir, 'stubs')
-    mkdirSync(stubs)
-    writeFileSync(join(stubs, 'node'), '#!/bin/sh\ncase "$1" in -p) echo 18 ;; *) echo v18.20.0 ;; esac\n')
-    chmodSync(join(stubs, 'node'), 0o755)
-    const r = run({ PATH: `${stubs}:${process.env.PATH}` })
+    const r = runWithNode('18.20.0')
     expect(r.status).not.toBe(0)
-    expect(r.stderr).toContain('Node 22 or newer is required (found v18.20.0)')
+    expect(r.stderr).toContain('Node 22.19 or newer is required (found v18.20.0)')
     expect(existsSync(join(bin, 'houston'))).toBe(false)
+  })
+
+  it('refuses a Node 22 release older than 22.19', () => {
+    publish()
+    const r = runWithNode('22.18.0')
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toContain('Node 22.19 or newer is required (found v22.18.0)')
+    expect(existsSync(join(bin, 'houston'))).toBe(false)
+  })
+
+  it('accepts Node 22.19 and any newer major', () => {
+    publish()
+    expect(runWithNode('22.19.0').status).toBe(0)
+    rmSync(bin, { recursive: true, force: true })
+    expect(runWithNode('24.0.0').status).toBe(0)
   })
 
   it('rejects a malformed HOUSTON_VERSION before downloading anything', () => {

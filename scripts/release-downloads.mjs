@@ -32,7 +32,7 @@ const ROWS = [
   ],
   [
     'Terminal CLI: macOS, Windows, Linux',
-    'Node 22 or newer, on x64 or Arm. Run `node houston-cli.cjs --help` to start.',
+    'Node 22.19 or newer, on x64 or Arm. Run `node houston-cli.cjs --help` to start.',
     (n) => n === 'houston-cli.cjs',
   ],
 ]

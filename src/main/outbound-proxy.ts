@@ -1,5 +1,5 @@
 import { BlockList, isIP } from 'node:net'
-import { Agent, EnvHttpProxyAgent, type Dispatcher } from 'undici'
+import { Agent, Dispatcher1Wrapper, EnvHttpProxyAgent, type Dispatcher } from 'undici'
 import { log } from './logger'
 
 /**
@@ -26,6 +26,14 @@ import { log } from './logger'
  * With no proxy configured, requests still go out through one shared agent of our own,
  * which differs from fetch's default only in how long it keeps an idle connection (see
  * {@link KEEP_ALIVE_TIMEOUT_MS}).
+ *
+ * The agents come from the `undici` package but are handed to the runtime's global
+ * `fetch`, which is built on the undici bundled into Node (and so into Electron). Those
+ * two need not share a version: undici 8 agents speak a newer handler API than the
+ * bundled undici 7 fetch calls them with, and reject its requests outright. Each agent
+ * is therefore wrapped in {@link legacyCompatible}, undici's own adapter for older
+ * callers, which passes a handler already on the newer API through unchanged, so the
+ * same code keeps working once the bundled fetch moves to undici 8.
  */
 
 /**
@@ -214,9 +222,18 @@ function currentConfig(): OutboundProxyConfig | null {
 let cached: { key: string; dispatcher: Dispatcher } | null = null
 let direct: Dispatcher | null = null
 
+/**
+ * An agent the global fetch can drive whatever undici version it bundles (see the
+ * module comment). The adapter keeps requests on HTTP/1.1, which is all the bundled
+ * fetch ever asked for, and forwards `close()` to the agent it wraps.
+ */
+function legacyCompatible(dispatcher: Dispatcher): Dispatcher {
+  return new Dispatcher1Wrapper(dispatcher)
+}
+
 /** The agent for requests that go straight to their host, created on first use. */
 function directDispatcher(): Dispatcher {
-  direct ??= new Agent(KEEP_ALIVE)
+  direct ??= legacyCompatible(new Agent(KEEP_ALIVE))
   return direct
 }
 
@@ -232,16 +249,18 @@ export function outboundDispatcher(config: OutboundProxyConfig | null = currentC
   if (cached) retire(cached.dispatcher)
   // Empty strings (not undefined) so the agent never reads the environment on its own:
   // what it does must match what resolveOutboundProxy decided.
-  const dispatcher = new EnvHttpProxyAgent({
-    ...KEEP_ALIVE,
-    // A plain-http target is forwarded to the proxy, as curl and browsers do, rather
-    // than tunnelled with CONNECT, which proxies commonly refuse for ports other than 443.
-    // https targets are always tunnelled.
-    proxyTunnel: false,
-    httpProxy: config.httpProxy,
-    httpsProxy: config.httpsProxy,
-    noProxy: config.noProxy
-  })
+  const dispatcher = legacyCompatible(
+    new EnvHttpProxyAgent({
+      ...KEEP_ALIVE,
+      // A plain-http target is forwarded to the proxy, as curl and browsers do, rather
+      // than tunnelled with CONNECT, which proxies commonly refuse for ports other than 443.
+      // https targets are always tunnelled.
+      proxyTunnel: false,
+      httpProxy: config.httpProxy,
+      httpsProxy: config.httpsProxy,
+      noProxy: config.noProxy
+    })
+  )
   cached = { key, dispatcher }
   log.info(`outbound proxy (${config.source}): ${redactProxyUrl(config.httpsProxy || config.httpProxy)}`)
   return dispatcher

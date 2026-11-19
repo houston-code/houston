@@ -34,19 +34,31 @@ declare const __HOUSTON_VERSION__: string | undefined
 
 const VERSION = typeof __HOUSTON_VERSION__ === 'string' ? __HOUSTON_VERSION__ : 'dev'
 
-/** Node major this build targets (esbuild `target: node22`); older crashes cryptically. */
-const MIN_NODE_MAJOR = 22
+/**
+ * Oldest Node this build runs on, as `major.minor`. The bundle is emitted for Node 22
+ * (esbuild `target: node22`), and the undici it bundles needs 22.19: older 22.x lacks
+ * the zstd stream that undici sets up the moment it loads.
+ */
+const MIN_NODE = '22.19'
+
+/** `[major, minor]` of a `v22.19.0`-style version, or null when it doesn't parse. */
+function majorMinor(version: string): [number, number] | null {
+  const m = /^v?(\d+)(?:\.(\d+))?/.exec(version)
+  return m ? [Number(m[1]), Number(m[2] ?? 0)] : null
+}
 
 /**
- * The bundle is emitted for Node 22, and `engines` doesn't govern a downloaded
- * `.cjs`, so guard the runtime explicitly: an old Node otherwise dies with an
- * opaque syntax/API error. Pure (takes the version string) so it's unit-testable.
- * Returns an error message, or null when the runtime is new enough / unparseable.
+ * The bundle needs a recent Node (see {@link MIN_NODE}), and `engines` doesn't govern
+ * a downloaded `.cjs`, so guard the runtime explicitly: an old Node otherwise dies
+ * with an opaque syntax/API error. Pure (takes the version string) so it's
+ * unit-testable. Returns an error message, or null when the runtime is new enough /
+ * unparseable.
  */
-export function nodeVersionError(nodeVersion: string, min = MIN_NODE_MAJOR): string | null {
-  const major = Number.parseInt(nodeVersion.replace(/^v/, '').split('.')[0] ?? '', 10)
-  if (Number.isNaN(major)) return null // unrecognizable version — don't block on it
-  if (major < min) {
+export function nodeVersionError(nodeVersion: string, min = MIN_NODE): string | null {
+  const have = majorMinor(nodeVersion)
+  const need = majorMinor(min)
+  if (!have || !need) return null // unrecognizable version — don't block on it
+  if (have[0] < need[0] || (have[0] === need[0] && have[1] < need[1])) {
     return `Houston CLI requires Node ${min} or newer (this is ${nodeVersion}). Install Node ${min}+ and re-run.`
   }
   return null
