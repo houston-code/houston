@@ -336,6 +336,13 @@ export interface ToolContext {
    */
   askGitGuard?: (q: AgentQuestion) => Promise<string>
   /**
+   * The approval gate cleared this call as a protected write (see isProtectedWrite):
+   * the user approved it at its prompt, or an allow rule for its path covered it. The
+   * git guard then takes what it wrote at its git exec paths as kept instead of asking
+   * about them again; anything else that changed is still asked about.
+   */
+  protectedWriteApproved?: boolean
+  /**
    * Report what a tool executed (a shell command's exit code, from the runner itself)
    * to the run's evidence ledger, which the turn's receipt is built from (injected by
    * the loop; see evidence.ts). The model reads a tool's text result; this is the
@@ -2322,15 +2329,81 @@ async function gitGuardBefore(ctx: ToolContext): Promise<void> {
 }
 
 /** Check the run's git state after a shell command (see gitGuard.ts); '' when nothing to say. */
-async function gitGuardAfter(ctx: ToolContext): Promise<string> {
+async function gitGuardAfter(ctx: ToolContext, approvedPaths?: string[]): Promise<string> {
   if (!ctx.gitGuard) return ''
   try {
     return await reviewGitChanges(ctx.gitGuard, {
       workspace: ctx.workspace,
-      ...(ctx.askGitGuard ? { ask: ctx.askGitGuard } : {})
+      ...(ctx.askGitGuard ? { ask: ctx.askGitGuard } : {}),
+      ...(approvedPaths?.length ? { approvedPaths } : {})
     })
   } catch {
     return ''
+  }
+}
+
+/** The paths a file-writing tool call names, resolved in the roots; unresolvable ones are left out. */
+function writtenPaths(name: string, args: Record<string, unknown>, roots: string[]): string[] {
+  const rels: string[] = []
+  if (typeof args.path === 'string' && args.path) rels.push(args.path)
+  if (name === 'apply_patch' && typeof args.patch === 'string') {
+    try {
+      for (const op of parsePatch(args.patch)) rels.push(op.path, ...(op.type === 'update' && op.moveTo ? [op.moveTo] : []))
+    } catch {
+      // A patch that doesn't parse writes nothing.
+    }
+  }
+  const out: string[] = []
+  for (const rel of rels) {
+    try {
+      out.push(resolveInRoots(roots, rel))
+    } catch {
+      // Outside the roots: the tool refuses it.
+    }
+  }
+  return out
+}
+
+/**
+ * `tool`, a file-writing tool, under the run's git guard. A symlink can lead a write
+ * from an ordinary-looking path into `.git` (a hook, the config), so a write whose
+ * target may lie in git data (see GitGuard.touchesGitData) takes the baseline before it
+ * runs (a file tool can be a run's first change) and is checked after. Any other write
+ * costs a few `stat`s and `realpath`s, not a snapshot.
+ */
+function withGitGuard(tool: ToolDef): ToolDef {
+  return {
+    ...tool,
+    async execute(args, ctx) {
+      const guard = ctx.gitGuard
+      if (!guard) return tool.execute(args, ctx)
+      // Judged before the write, from where its paths lead now (a file tool can't make a
+      // symlink), so an ordinary edit costs no snapshot at all. One that may land in git
+      // data gets a baseline first: it can be the run's first change.
+      const paths = writtenPaths(tool.schema.name, args, rootsOf(ctx))
+      let touches = true
+      try {
+        touches = await guard.touchesGitData(paths)
+      } catch {
+        // Unknown: check.
+      }
+      if (!touches) return tool.execute(args, ctx)
+      await gitGuardBefore(ctx)
+      // The user already approved writing these git exec paths: what this call put there
+      // isn't asked about again (see ToolContext.protectedWriteApproved).
+      const after = (): Promise<string> => gitGuardAfter(ctx, ctx.protectedWriteApproved === true ? paths : undefined)
+      let out: string
+      try {
+        out = await tool.execute(args, ctx)
+      } catch (e) {
+        // A failed call may still have written part of its change.
+        const gitNote = await after()
+        if (gitNote && e instanceof Error) e.message = `${e.message}\n${gitNote}`
+        throw e
+      }
+      const gitNote = await after()
+      return gitNote ? `${out}\n${gitNote}` : out
+    }
   }
 }
 
@@ -2455,7 +2528,13 @@ const runShell: ToolDef = {
     } finally {
       unoffer?.()
     }
-    if (result.detached) return adoptForeground(command, result.detached, startedAt, ctx)
+    if (result.detached) {
+      // It keeps running, and later changes are checked when it is read, waited on, or
+      // stopped; what it already changed is checked now, as for any finished command.
+      const moved = adoptForeground(command, result.detached, startedAt, ctx)
+      const gitNote = await gitGuardAfter(ctx)
+      return gitNote ? `${moved}\n${gitNote}` : moved
+    }
     const segments: string[] = []
     if (result.stdout) segments.push(result.stdout.trimEnd())
     if (result.stderr) segments.push(result.stderr.trimEnd())
@@ -2691,7 +2770,11 @@ const waitForTool: ToolDef = {
     const id = str(args, 'id').trim()
     if (!id) throw new Error('id is required: an agent id from a background dispatch, a shell id from run_shell, or a session id from spawn_session.')
     if (!ctx.waitFor) throw new Error('Waiting on background work is not available in this context.')
-    return ctx.waitFor(id, waitSeconds(args.timeout_seconds))
+    const result = await ctx.waitFor(id, waitSeconds(args.timeout_seconds))
+    // A background shell can change git state at any point while it runs, and this
+    // result (an exit, or still running) stands in for reading it.
+    const gitNote = await gitGuardAfter(ctx)
+    return gitNote ? `${result}\n${gitNote}` : result
   }
 }
 
@@ -6201,11 +6284,11 @@ const lspTools = makeLspTools({ resolveInRoots, applyPatch })
 
 export const TOOLS: ToolDef[] = [
   readFile,
-  writeFile,
-  editFile,
-  multiEdit,
-  applyPatch,
-  notebookEdit,
+  withGitGuard(writeFile),
+  withGitGuard(editFile),
+  withGitGuard(multiEdit),
+  withGitGuard(applyPatch),
+  withGitGuard(notebookEdit),
   listDir,
   globTool,
   searchTool,

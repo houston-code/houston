@@ -17,6 +17,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { AgentQuestion } from '@shared/agent'
 import {
   answerKeeps,
   defaultReadConfigEntries,
@@ -716,6 +717,66 @@ describe('GitGuard on real repositories', () => {
     })
   })
 
+  it('shares one baseline snapshot between concurrent callers', async () => {
+    const guard = new GitGuard([ws])
+    const snapshot = vi.spyOn(guard, 'snapshot')
+    await Promise.all([guard.ensureBaseline(), guard.ensureBaseline()])
+    await guard.ensureBaseline()
+    expect(snapshot).toHaveBeenCalledTimes(1)
+  })
+
+  it('a check before any baseline takes one first, so its undo can still write', async () => {
+    const guard = new GitGuard([ws])
+    expect((await guard.check()).changes).toEqual([])
+    git(ws, 'config', 'core.fsmonitor', 'sh -c evil')
+    const { changes, current } = await guard.check()
+    expect(await guard.undo(changes, current)).toEqual([])
+    expect(() => git(ws, 'config', '--get', 'core.fsmonitor')).toThrow()
+  })
+
+  describe('touchesGitData', () => {
+    it('is false for ordinary project files, true for git exec paths as written', async () => {
+      const guard = await guarded()
+      expect(await guard.touchesGitData([join(ws, 'a.txt'), join(ws, 'src/new/b.ts')])).toBe(false)
+      expect(await guard.touchesGitData([join(ws, '.git/hooks/pre-commit')])).toBe(true)
+      expect(await guard.touchesGitData([join(ws, 'sub/.git')])).toBe(true)
+    })
+
+    it('follows a symlink into the hooks directory', async () => {
+      const guard = await guarded()
+      // A junction works on Windows without the symlink privilege.
+      symlinkSync(join(ws, '.git/hooks'), join(ws, 'tools'), 'junction')
+      expect(await guard.touchesGitData([join(ws, 'tools/post-checkout')])).toBe(true)
+      writeFileSync(join(ws, 'tools/post-checkout'), '#!/bin/sh\n')
+      expect(await guard.touchesGitData([join(ws, 'tools/post-checkout')])).toBe(true)
+    })
+
+    it('covers a git dir whose name is not .git', async () => {
+      // A checkout whose .git file points at a git dir named anything.
+      const sep = join(tmp, 'sep')
+      const store = join(tmp, 'store')
+      git(tmp, 'init', '-q', '--separate-git-dir', store, sep)
+      const guard = new GitGuard([sep])
+      await guard.ensureBaseline()
+      symlinkSync(store, join(sep, 'meta'), 'junction')
+      expect(await guard.touchesGitData([join(sep, 'meta/hooks/post-checkout')])).toBe(true)
+      expect(await guard.touchesGitData([join(sep, 'meta/info/exclude')])).toBe(true)
+      expect(await guard.touchesGitData([join(sep, 'notes.txt')])).toBe(false)
+    })
+
+    it('before any baseline, finds a root git dir with another name without a snapshot', async () => {
+      const sep = join(tmp, 'sep')
+      const store = join(tmp, 'store')
+      git(tmp, 'init', '-q', '--separate-git-dir', store, sep)
+      symlinkSync(store, join(sep, 'meta'), 'junction')
+      const guard = new GitGuard([sep])
+      const snapshot = vi.spyOn(guard, 'snapshot')
+      expect(await guard.touchesGitData([join(sep, 'meta/hooks/post-checkout')])).toBe(true)
+      expect(await guard.touchesGitData([join(sep, 'notes.txt')])).toBe(false)
+      expect(snapshot).not.toHaveBeenCalled()
+    })
+  })
+
   describe('reviewGitChanges', () => {
     it('returns nothing and asks nothing when nothing exec-capable changed', async () => {
       const guard = await guarded()
@@ -764,6 +825,107 @@ describe('GitGuard on real repositories', () => {
       const note = await reviewGitChanges(guard, { workspace: ws })
       expect(note).toContain('Nobody was available')
       expect(() => git(ws, 'config', '--get', 'core.fsmonitor')).toThrow()
+    })
+
+    it('after an undo, still reports what something else planted while the question was open', async () => {
+      const guard = await guarded()
+      git(ws, 'config', 'core.pager', 'less -R')
+      const hook = join(ws, '.git/hooks/post-checkout')
+      // A background shell (or a writable subagent) writes while the user reads the question.
+      const first = vi.fn(async () => {
+        writeFileSync(hook, '#!/bin/sh\necho evil\n')
+        chmodSync(hook, 0o755)
+        return GIT_GUARD_UNDO
+      })
+      const note = await reviewGitChanges(guard, { workspace: ws, ask: first })
+      expect(note).toContain('core.pager')
+      expect(note).not.toContain('post-checkout')
+      expect(() => git(ws, 'config', '--get', 'core.pager')).toThrow()
+      const ask = vi.fn(async (_q: AgentQuestion) => GIT_GUARD_UNDO)
+      const next = await reviewGitChanges(guard, { workspace: ws, ask })
+      expect(ask).toHaveBeenCalledTimes(1)
+      expect(ask.mock.calls[0]![0].question).toContain('new hook .git/hooks/post-checkout')
+      expect(ask.mock.calls[0]![0].question).not.toContain('core.pager')
+      expect(next).toContain('chose to undo')
+      expect(existsSync(hook)).toBe(false)
+      expect(await reviewGitChanges(guard, { workspace: ws, ask })).toBe('')
+      expect(ask).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps a change at an approved path without asking, and still asks about the rest', async () => {
+      const guard = await guarded()
+      const approved = join(ws, '.git/hooks/post-checkout')
+      const planted = join(ws, '.git/hooks/pre-push')
+      writeFileSync(approved, '#!/bin/sh\necho hi\n')
+      writeFileSync(planted, '#!/bin/sh\necho evil\n')
+      const ask = vi.fn(async (_q: AgentQuestion) => GIT_GUARD_UNDO)
+      await reviewGitChanges(guard, { workspace: ws, ask, approvedPaths: [approved] })
+      expect(ask).toHaveBeenCalledTimes(1)
+      expect(ask.mock.calls[0]![0].question).toContain('pre-push')
+      expect(ask.mock.calls[0]![0].question).not.toContain('post-checkout')
+      expect(existsSync(planted)).toBe(false)
+      expect(existsSync(approved)).toBe(true)
+      expect(await reviewGitChanges(guard, { workspace: ws, ask })).toBe('')
+      expect(ask).toHaveBeenCalledTimes(1)
+    })
+
+    it('still asks about an approved path that reaches git data only through a git dir with another name', async () => {
+      const sep = join(tmp, 'sep')
+      const store = join(tmp, 'store')
+      git(tmp, 'init', '-q', '--separate-git-dir', store, sep)
+      const guard = new GitGuard([sep])
+      await guard.ensureBaseline()
+      // A junction works on Windows without the symlink privilege.
+      symlinkSync(store, join(sep, 'meta'), 'junction')
+      writeFileSync(join(store, 'hooks/post-checkout'), '#!/bin/sh\necho evil\n')
+      const ask = vi.fn(async () => GIT_GUARD_UNDO)
+      await reviewGitChanges(guard, { workspace: sep, ask, approvedPaths: [join(sep, 'meta/hooks/post-checkout')] })
+      expect(ask).toHaveBeenCalledTimes(1)
+      expect(existsSync(join(store, 'hooks/post-checkout'))).toBe(false)
+    })
+
+    it('after an undo, does not ask again about what it undid or what it only noted', async () => {
+      const hook = join(ws, '.git/hooks/pre-commit')
+      writeFileSync(hook, '#!/bin/sh\necho ok\n')
+      git(ws, 'config', 'alias.lg', 'log --oneline')
+      const guard = await guarded()
+      writeFileSync(hook, '#!/bin/sh\necho evil\n')
+      git(ws, 'config', 'alias.lg', '!sh -c evil')
+      git(ws, 'config', 'core.hooksPath', '.husky')
+      git(ws, 'config', 'core.fsmonitor', 'sh -c evil')
+      const ask = vi.fn(async () => GIT_GUARD_UNDO)
+      const note = await reviewGitChanges(guard, { workspace: ws, ask })
+      expect(note).toContain('known hook installer')
+      expect(readFileSync(hook, 'utf8')).toContain('echo ok')
+      expect(git(ws, 'config', '--get', 'alias.lg').trim()).toBe('log --oneline')
+      expect(() => git(ws, 'config', '--get', 'core.fsmonitor')).toThrow()
+      expect(await reviewGitChanges(guard, { workspace: ws, ask })).toBe('')
+      expect(ask).toHaveBeenCalledTimes(1)
+      // The same key planted again afterwards is a new change.
+      git(ws, 'config', 'core.fsmonitor', 'sh -c evil')
+      await reviewGitChanges(guard, { workspace: ws, ask })
+      expect(ask).toHaveBeenCalledTimes(2)
+    })
+
+    it('after an undo of a repointed .git file, compares against the repository it points at again', async () => {
+      // Present from the start in the repository the pointer belongs to.
+      git(ws, 'config', 'alias.st', 'status')
+      const sub = join(tmp, 'linked')
+      git(ws, 'worktree', 'add', '-q', '-b', 'side', sub)
+      const guard = new GitGuard([sub])
+      await guard.ensureBaseline()
+      const other = join(tmp, 'other')
+      makeRepo(other)
+      git(other, 'config', 'core.fsmonitor', 'sh -c other')
+      const pointer = readFileSync(join(sub, '.git'), 'utf8')
+      // Replaced rather than overwritten (git marks the file hidden on Windows).
+      rmSync(join(sub, '.git'))
+      writeFileSync(join(sub, '.git'), `gitdir: ${join(other, '.git')}\n`)
+      const ask = vi.fn(async () => GIT_GUARD_UNDO)
+      await reviewGitChanges(guard, { workspace: sub, ask })
+      expect(readFileSync(join(sub, '.git'), 'utf8')).toBe(pointer)
+      expect(await reviewGitChanges(guard, { workspace: sub, ask })).toBe('')
+      expect(ask).toHaveBeenCalledTimes(1)
     })
 
     describe('two chats in one repository', () => {

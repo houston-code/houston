@@ -2875,7 +2875,7 @@ export async function startRun(
         name: string,
         kind: ToolKind,
         gateArgs: Record<string, unknown>,
-        runCall: () => Promise<string>
+        runCallAs: (extra?: Pick<ToolContext, 'protectedWriteApproved'>) => Promise<string>
       ): Promise<string> => {
         const matched = matchRun(name, permissionSubject(name, gateArgs))
         if (matched === 'deny') return ruleDenialText(name, gateArgs)
@@ -2893,6 +2893,9 @@ export async function startRun(
         const ruleAction = trip ? trip.ruleAction : matched
         const protectedWrite = isProtectedWrite(kind, name, gateArgs, roots)
         const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs, roots) || protectedWrite
+        // Run only once cleared (an allow rule, or the user at the prompt below), so a
+        // protected write that runs is an approved one (see protectedWriteApproved).
+        const runCall = (): Promise<string> => runCallAs(protectedWrite ? { protectedWriteApproved: true } : undefined)
         const mustApprove =
           kind === 'read'
             ? decideApproval({
@@ -6191,7 +6194,10 @@ export async function startRun(
                     ),
                     // gh is pinned to the repository this call's grant was keyed on, so
                     // what ran is what the user approved (see ghRunner).
-                    ...(ghRepoCall ? { ghRepo } : {})
+                    ...(ghRepoCall ? { ghRepo } : {}),
+                    // Reaching here, a protected write was approved (its prompt, or an
+                    // allow rule for it): the git guard doesn't ask about it again.
+                    ...(protectedWrite ? { protectedWriteApproved: true } : {})
                   }
                   // A client that shows a running command's output as it arrives gets
                   // its tail, redacted and throttled (see liveOutput.ts).

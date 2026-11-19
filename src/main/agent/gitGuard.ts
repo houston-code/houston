@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import type { AgentQuestion } from '@shared/agent'
 import { gitExecutable } from './gitBinary'
 import { GIT_ENV, runGitCapture } from './gitRead'
+import { isGitExecPath } from './sensitive-paths'
 
 /**
  * Catches a sandboxed command planting code in a repository's `.git` that would later
@@ -746,6 +747,34 @@ async function within(p: string, dirs: string[]): Promise<boolean> {
   })
 }
 
+/**
+ * `p` with symlinks resolved as far as it exists: its nearest existing ancestor's real
+ * path, joined with the rest (a write creates the missing directories under that
+ * ancestor). Null when nothing on the way resolves.
+ */
+async function realpathNearest(p: string): Promise<string | null> {
+  const rest: string[] = []
+  let at = p
+  for (;;) {
+    try {
+      return join(await realpath(at), ...rest)
+    } catch {
+      const up = dirname(at)
+      if (up === at) return null
+      rest.unshift(basename(at))
+      at = up
+    }
+  }
+}
+
+/** Where a working tree's git data lives (its git dir and common dir), as a snapshot finds it. */
+async function rootGitDirs(dir: string): Promise<Pick<RepoSnap, 'gitDir' | 'commonDir'>> {
+  const { gitDir } = await locateGitDir(dir)
+  if (!gitDir) return {}
+  const own = await readText(join(gitDir, 'commondir'))
+  return { gitDir, commonDir: own !== null && own.trim() ? resolve(gitDir, own.trim()) : gitDir }
+}
+
 /** The per-run guard: a baseline, refreshed after each check the user has answered. */
 export class GitGuard {
   private snap: Snapshotter
@@ -757,6 +786,8 @@ export class GitGuard {
    * the user's repositories can't steer Houston's own undo into editing it.
    */
   private undoDirs: string[] | undefined
+  /** The baseline snapshot in flight (see {@link ensureBaseline}). */
+  private baselining: Promise<void> | undefined
 
   constructor(
     private roots: string[],
@@ -798,9 +829,20 @@ export class GitGuard {
     return out
   }
 
-  /** Take the baseline if this run hasn't yet (call before a command runs). */
-  async ensureBaseline(): Promise<void> {
-    if (this.baseline) return
+  /**
+   * Take the baseline if this run hasn't yet (call before a command or file write
+   * runs). Concurrent callers share one snapshot: a second one, finishing after a
+   * write that started on the first, would fold that write into the baseline.
+   */
+  ensureBaseline(): Promise<void> {
+    if (this.baseline) return Promise.resolve()
+    this.baselining ??= this.takeBaseline().finally(() => {
+      this.baselining = undefined
+    })
+    return this.baselining
+  }
+
+  private async takeBaseline(): Promise<void> {
     this.baseline = await this.snapshot()
     const dirs = new Set<string>()
     for (const root of this.roots) {
@@ -822,6 +864,9 @@ export class GitGuard {
    * snapshot they were computed from; call {@link accept} with it once handled.
    */
   async check(): Promise<{ changes: GitChange[]; current: GuardSnapshot }> {
+    // A check with no baseline yet (a background shell from an earlier run, read before
+    // this run's first command) takes one first, so what it accepts sets undoDirs too.
+    await this.ensureBaseline()
     const current = await this.snapshot()
     const before = this.baseline ?? current
     const changes: GitChange[] = []
@@ -842,21 +887,123 @@ export class GitGuard {
     return { changes, current }
   }
 
+  /**
+   * Whether a file tool's write to `paths` (absolute) may have landed in git data, so a
+   * {@link check} is due after it: a path that names git exec data as written (see
+   * {@link isGitExecPath}), or one that resolves, through any symlink on the way, into
+   * such a path or into a git dir or common dir the baseline found (a `.git` file can
+   * point at a git dir with any name; before a baseline, the roots' own git dirs, found
+   * the way a snapshot finds them but without reading anything else). Ordinary edits
+   * need no baseline or check, so they spawn nothing and read nothing beyond a few
+   * `stat`s and `realpath`s. A path that can't be resolved counts.
+   */
+  async touchesGitData(paths: string[]): Promise<boolean> {
+    if (paths.some((p) => isGitExecPath(p))) return true
+    const dirs = new Set<string>()
+    const repos: Array<Pick<RepoSnap, 'gitDir' | 'commonDir'>> = this.baseline
+      ? [...this.baseline.values()]
+      : await Promise.all(this.roots.map((root) => rootGitDirs(root)))
+    for (const r of repos) {
+      for (const d of [r.gitDir, r.commonDir]) {
+        if (!d) continue
+        dirs.add(d)
+        const real = await realpath(d).catch(() => null)
+        if (real) dirs.add(real)
+      }
+    }
+    for (const p of paths) {
+      const real = await realpathNearest(p)
+      if (real === null || isGitExecPath(real)) return true
+      for (const d of dirs) {
+        const rel = relative(d, real)
+        if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) return true
+      }
+    }
+    return false
+  }
+
   /** Make `current` the new baseline (the user kept the changes, or they were noted). */
   accept(current: GuardSnapshot): void {
     this.baseline = current
   }
 
-  /** Undo `changes`, then re-baseline. Returns the ones that could not be undone. */
-  async undo(changes: GitChange[]): Promise<GitChange[]> {
+  /**
+   * Undo `changes`, then re-baseline. Returns the ones that could not be undone.
+   *
+   * `current` is the snapshot {@link check} reported them from. The new baseline is
+   * that snapshot with each undone item put back to its previous state, never a fresh
+   * snapshot: the user may take minutes to answer, and anything another writer (a
+   * background shell, a writable subagent) planted meanwhile must still be reported by
+   * the next check, not folded silently into the baseline. Without `current` (a direct
+   * caller with no check in hand) it re-baselines from a fresh snapshot.
+   */
+  async undo(changes: GitChange[], current?: GuardSnapshot): Promise<GitChange[]> {
     const failed: GitChange[] = []
+    const undone: GitChange[] = []
     for (const c of changes) {
       // Outside the roots and their git dirs, leave it to the user (see undoDirs).
       const ok = (await within(c.file, this.undoDirs ?? [])) && (await undoChange(c))
-      if (!ok) failed.push(c)
+      if (ok) undone.push(c)
+      else failed.push(c)
     }
-    this.baseline = await this.snapshot()
+    // What could not be undone was reported along with how to remove it by hand, so it
+    // is accepted like a kept change rather than asked about on every later check.
+    this.baseline = current ? await this.restored(current, undone) : await this.snapshot()
     return failed
+  }
+
+  /** `current` with each of the `undone` items as it was before its change. */
+  private async restored(current: GuardSnapshot, undone: GitChange[]): Promise<GuardSnapshot> {
+    // Copies of the maps that get patched: the snapshot's own may be shared (one
+    // snapshot reads a common dir's files once for every checkout using it).
+    const copy = (r: RepoSnap): RepoSnap => ({
+      ...r,
+      configs: new Map(r.configs),
+      hooks: new Map(r.hooks),
+      commondirs: new Map(r.commondirs)
+    })
+    const out: GuardSnapshot = new Map()
+    for (const [dir, r] of current) out.set(dir, copy(r))
+    // A repository `current` didn't see (a repointed `.git` hid a linked worktree's main
+    // checkout) keeps its baseline, so it isn't all new once the pointer is back.
+    for (const [dir, r] of this.baseline ?? []) if (!out.has(dir)) out.set(dir, copy(r))
+    for (const c of undone) {
+      switch (c.kind) {
+        case 'config': {
+          // The file as the undo left it, for a later undo that has to put it back whole.
+          const text = await readText(c.file)
+          for (const r of out.values()) {
+            const cfg = r.configs.get(c.file)
+            if (!cfg) continue
+            const exec = new Map(cfg.exec)
+            if (c.before.length) exec.set(c.key, c.before)
+            else exec.delete(c.key)
+            r.configs.set(c.file, { text, exec })
+          }
+          break
+        }
+        case 'hook':
+          for (const r of out.values()) {
+            if (r.hooksDir !== dirname(c.file)) continue
+            if (c.before) r.hooks.set(basename(c.file), c.before)
+            else r.hooks.delete(basename(c.file))
+          }
+          break
+        case 'commondir':
+          for (const r of out.values()) if (r.commondirs.has(c.file)) r.commondirs.set(c.file, c.before)
+          break
+        case 'dotgit': {
+          // The pointer is back, so the repository's git data is the one the baseline
+          // read; what `current` read sat wherever the replaced pointer led.
+          const prev = this.baseline?.get(c.repo)
+          const r = out.get(c.repo)
+          if (prev) out.set(c.repo, copy(prev))
+          else if (r) r.dotGit = c.before
+          break
+        }
+      }
+    }
+    return out
   }
 }
 
@@ -933,26 +1080,54 @@ export function answerKeeps(answer: string): boolean {
 }
 
 /**
- * After an agent shell command: compare against the baseline, ask about exec-capable
- * changes (or undo them when nobody can be asked), and return a note for the tool
- * result, empty when nothing relevant changed. A known installer's setting (husky's
- * hooksPath) is noted without asking.
+ * The changes at a git exec path among `paths` (see {@link isGitExecPath}), matched by
+ * real path: what a write the user approved put there. A path that reaches git data
+ * only through a git dir with another name isn't one, so a change there is still asked
+ * about.
+ */
+async function changesAtApprovedPaths(changes: GitChange[], paths: string[]): Promise<Set<GitChange>> {
+  const approved = new Set<string>()
+  for (const p of paths) {
+    const real = await realpathNearest(p)
+    if (real && (isGitExecPath(p) || isGitExecPath(real))) approved.add(real)
+  }
+  const out = new Set<GitChange>()
+  if (approved.size === 0) return out
+  for (const c of changes) {
+    const real = await realpathNearest(c.file)
+    if (real && approved.has(real)) out.add(c)
+  }
+  return out
+}
+
+/**
+ * After an agent shell command or file write: compare against the baseline, ask about
+ * exec-capable changes (or undo them when nobody can be asked), and return a note for
+ * the tool result, empty when nothing relevant changed. A known installer's setting
+ * (husky's hooksPath) is noted without asking. A change at one of `approvedPaths` (the
+ * git exec paths of a write the user just approved through its protected-write prompt,
+ * or an allow rule for that path covered) is kept without asking again, like a Keep;
+ * anything else that changed meanwhile is still asked about.
  */
 export async function reviewGitChanges(
   guard: GitGuard,
-  opts: { workspace: string; ask?: (q: AgentQuestion) => Promise<string> }
+  opts: { workspace: string; ask?: (q: AgentQuestion) => Promise<string>; approvedPaths?: string[] }
 ): Promise<string> {
   const { changes, current } = await guard.check()
   if (changes.length === 0) {
     guard.accept(current)
     return ''
   }
-  const notes = changes.filter((c) => c.kind === 'config' && c.known)
-  const flagged = changes.filter((c) => !(c.kind === 'config' && c.known))
+  const approved = opts.approvedPaths?.length ? await changesAtApprovedPaths(changes, opts.approvedPaths) : new Set<GitChange>()
+  // Shared like a kept change, so another chat's guard doesn't ask about it either.
+  rememberKept([...approved])
+  const notes = changes.filter((c) => c.kind === 'config' && c.known && !approved.has(c))
+  const flagged = changes.filter((c) => !(c.kind === 'config' && c.known) && !approved.has(c))
   const out: string[] = []
   if (notes.length) {
     out.push(`[git: ${notes.map((c) => describeChange(c, opts.workspace)).join('; ')} (a known hook installer's setting).]`)
   }
+  // An undo below puts back only `flagged`, so the approved items stay as `current` has them.
   if (flagged.length === 0) {
     guard.accept(current)
     return out.join('\n')
@@ -970,7 +1145,7 @@ export async function reviewGitChanges(
     )
     return out.join('\n')
   }
-  const failed = await guard.undo(flagged)
+  const failed = await guard.undo(flagged, current)
   const why = opts.ask ? 'The user chose to undo them' : 'Nobody was available to approve them, so Houston undid them'
   out.push(
     `[git: this command changed settings that run programs outside the sandbox (${listed}). ${why}.` +
