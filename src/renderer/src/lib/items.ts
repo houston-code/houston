@@ -531,6 +531,20 @@ function settleRunEnd(items: DisplayItem[], unsaved: boolean): DisplayItem[] {
   })
 }
 
+/**
+ * A transcript rebuilt from the log with no live run behind it: a subagent record saved
+ * as still running (the log was written while its agent worked, and the app quit or
+ * the run ended before the agent settled) was stopped with that run.
+ */
+export function settleSavedSubagents(items: DisplayItem[]): DisplayItem[] {
+  if (!items.some((it) => it.kind === 'tool' && it.records?.some((r) => r.status === 'running'))) return items
+  return items.map((it) =>
+    it.kind === 'tool' && it.records?.some((r) => r.status === 'running')
+      ? { ...it, records: it.records.map((r) => (r.status === 'running' ? { ...r, status: 'aborted' as const } : r)) }
+      : it
+  )
+}
+
 function updateTool(items: DisplayItem[], callId: string, patch: Partial<ToolItem>): DisplayItem[] {
   return items.map((it) => (it.kind === 'tool' && it.id === callId ? { ...it, ...patch } : it))
 }

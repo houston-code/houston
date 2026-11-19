@@ -24,6 +24,7 @@ import type {
 } from '@shared/types'
 import { cleanLabelName, newLabelId, nextLabelColor, readChatLabels, readLabelFilters } from '@shared/chatLabels'
 import type {
+  AgentEvent,
   ConversationMeta,
   PlanDecision,
   ProposalState,
@@ -125,6 +126,7 @@ import type { ForkPoint } from '@shared/conversation-io'
 import {
   endsWithRecordedError,
   itemsFromMessages,
+  settleSavedSubagents,
   openQuestionIn,
   lastUserText,
   rewindTargets,
@@ -1051,16 +1053,22 @@ export default function App(): JSX.Element {
 
   // Load the workspace's custom slash commands (alongside the built-ins). Read again
   // when a turn ends: the connected MCP servers' prompts (`/mcp__<server>__<prompt>`)
-  // appear once a turn has connected them.
+  // appear once a turn has connected them. A run starting doesn't read them again, but
+  // opening a running chat in another project does: the list shown must be that
+  // project's.
+  const commandsWorkspaceRef = useRef<string | null>(null)
   useEffect(() => {
     if (!workspace) {
+      commandsWorkspaceRef.current = null
       setCommands(BUILTIN_COMMANDS)
       return
     }
-    if (chat.running) return
+    if (chat.running && commandsWorkspaceRef.current === workspace) return
     let cancelled = false
     void window.api.listCommands(workspace).then((custom) => {
-      if (!cancelled) setCommands(mergeWithBuiltins(BUILTIN_COMMANDS, custom))
+      if (cancelled) return
+      commandsWorkspaceRef.current = workspace
+      setCommands(mergeWithBuiltins(BUILTIN_COMMANDS, custom))
     })
     return () => {
       cancelled = true
@@ -1078,25 +1086,32 @@ export default function App(): JSX.Element {
       // composer shows Send for a conversation whose run is still going). Events the
       // run streams after its live transcript is read, while the other reads finish,
       // are held and replayed after adopting it, so none go missing.
-      const live = captureEventsAfter(window.api.onAgentEvent, window.api.getLiveTranscript(id))
       let fetched
-      try {
-        fetched = await Promise.all([
-          window.api.getConversation(id),
-          window.api.getActiveRun(id),
-          window.api.getPendingPrompts(id),
-          live.snapshot,
-          window.api.getCheckpoint(id)
-        ])
-      } catch (e) {
-        live.take()
-        throw e
+      let since: AgentEvent[]
+      for (let attempt = 0; ; attempt++) {
+        const live = captureEventsAfter(window.api.onAgentEvent, window.api.getLiveTranscript(id))
+        try {
+          fetched = await Promise.all([
+            window.api.getConversation(id),
+            window.api.getActiveRun(id),
+            window.api.getPendingPrompts(id),
+            live.snapshot,
+            window.api.getCheckpoint(id)
+          ])
+        } catch (e) {
+          live.take()
+          throw e
+        }
+        since = live.take()
+        if (!fetched[0] || !nav.isLatest(token)) return false
+        // A turn of this chat started while the reads were in flight (a queued
+        // follow-up, once the run they found ended): the reads straddle it, so the log
+        // may lack its message and the run found isn't the one going. Read again.
+        if (attempt < 2 && since.some((e) => e.type === 'turn_start' && e.conversationId === id)) continue
+        break
       }
       const [conv, activeRunId, pendingPrompts, liveTranscript, checkpoint] = fetched
-      if (!conv || !nav.isLatest(token)) {
-        live.take()
-        return false
-      }
+      if (!conv) return false
       const unreadAnchor = chatStatusRef.current[id]?.unread?.anchor
       const saved = savedSettingsRef.current
       const own = saved ? chatSettingsFor(conv, saved) : null
@@ -1136,7 +1151,9 @@ export default function App(): JSX.Element {
         items.push({ kind: 'notice', id: `lasterror-${id}`, text: conv.lastError.message, tone: 'error' })
       }
       chat.reset(
-        items,
+        // A subagent record saved while its agent was still working (the app quit, or
+        // the run ended before it settled) is not running unless a live run owns it.
+        activeRunId ? items : settleSavedSubagents(items),
         // Map through the shared helper so the persisted per-model breakdown and
         // cache split survive a reopen too — not just context/output/cost.
         conv.usage ? sessionUsageFromConversation(conv.usage) : null,
@@ -1155,7 +1172,6 @@ export default function App(): JSX.Element {
       // freshly spawned session); pendingPrompts re-renders any approval/question
       // still awaiting the user, so a run parked on a prompt isn't left wedged; and
       // `since` is what streamed while the other reads were still in flight.
-      const since = live.take()
       if (activeRunId) {
         chat.adopt(
           activeRunId,
@@ -1179,6 +1195,41 @@ export default function App(): JSX.Element {
     [chat, nav]
   )
   selectConversationRef.current = selectConversation
+
+  // Runs whose end this window has seen (the last few). Main keeps a run listed as the
+  // chat's live run for a moment after its ending event (it saves the turn's
+  // checkpoint first), and following one of those would leave Stop lit for good.
+  const endedRunsRef = useRef<string[]>([])
+  useEffect(
+    () =>
+      window.api.onAgentEvent((e) => {
+        if (e.type !== 'done' && e.type !== 'error') return
+        endedRunsRef.current = [...endedRunsRef.current.slice(-31), e.runId]
+      }),
+    []
+  )
+
+  // The open chat has a run going that this view isn't following: one started outside
+  // it (another window on the same chat, a queued follow-up that began while the chat
+  // was being opened). Reopen the chat so its message, its output and Stop show.
+  const openChatRunning = currentId !== null && chatStatus[currentId]?.running === true
+  useEffect(() => {
+    if (!currentId || !openChatRunning || chat.running) return
+    const id = currentId
+    const token = nav.mark()
+    let live = true
+    void window.api
+      .getActiveRun(id)
+      .then((runId) => {
+        if (!live || !runId || endedRunsRef.current.includes(runId)) return
+        if (currentIdRef.current !== id || !nav.isLatest(token)) return
+        void selectConversationRef.current?.(id)
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [currentId, openChatRunning, chat.running, nav])
 
   // A chat opened before the saved settings had loaded has no settings of its own in
   // view yet; fill them in from its list entry once both are here, so it never runs
@@ -1288,7 +1339,7 @@ export default function App(): JSX.Element {
   // of the user's messages, the fork ends just before it and that message waits in the
   // new chat's box to send or change.
   const forkFrom = useCallback(
-    async (point: ForkPoint, draft?: string) => {
+    async (point: ForkPoint, draft?: string, images?: ImageAttachment[]) => {
       if (!currentId) return
       const fork = await window.api.forkConversationAt(currentId, point)
       if (!fork) {
@@ -1296,6 +1347,8 @@ export default function App(): JSX.Element {
         return
       }
       if (draft) saveComposerDraft(fork.id, draft)
+      // The message's attachments wait in the new chat's box beside its text.
+      if (images?.length) await appendComposerImages(fork.id, images).catch(() => {})
       await refreshConversations()
       await selectConversation(fork.id)
     },
@@ -2313,7 +2366,7 @@ export default function App(): JSX.Element {
       const id = currentId
       const done = await performRewind(pending.target, mode)
       // The message left the chat: put it back in its composer to send again or change.
-      if (done && rewindsConversation(mode)) giveBackText(id, done.text)
+      if (done && rewindsConversation(mode)) giveBackText(id, done.text, pending.target.images)
     },
     [rewindConfirm, currentId, performRewind, giveBackText]
   )
@@ -2406,7 +2459,8 @@ export default function App(): JSX.Element {
             disabled: chat.running,
             onRewind: (target, mode) => setRewindConfirm({ target, mode }),
             onEdit: onEditMessage,
-            onFork: (target) => void forkFrom({ kind: 'turn', n: target.turn, text: target.text }, target.text)
+            onFork: (target) =>
+              void forkFrom({ kind: 'turn', n: target.turn, text: target.text }, target.text, target.images)
           }
         : undefined,
     [currentId, chat.running, onEditMessage, forkFrom]
@@ -2472,26 +2526,78 @@ export default function App(): JSX.Element {
       ),
     [dispatch, sendAfterEdit]
   )
+  const onInvokeRef = useRef(onInvoke)
+  onInvokeRef.current = onInvoke
+
+  // Whether the chat `id` (null: the new-chat screen) is still the one in view, with no
+  // navigation since `token`.
+  const stillOnChat = useCallback(
+    (id: string | null, token: number) =>
+      id === null ? nav.isLatest(token) && currentIdRef.current === null : stillOn(id, token),
+    [nav, stillOn]
+  )
+
+  // Send an invoked turn in the chat it was asked for in (`token` from nav.mark() when
+  // the asking began, before an await). Still there, it goes out in view as usual.
+  // Moved to another chat meanwhile, it starts in its own chat without taking over the
+  // open one (whose transcript and Stop would otherwise follow it); `back` goes to that
+  // chat's message box when it can't start there.
+  const invokeInChat = useCallback(
+    async (id: string | null, token: number, turn: InvokedTurn, back: string): Promise<void> => {
+      if (stillOnChat(id, token)) {
+        onInvokeRef.current(turn)
+        return
+      }
+      const selected = settings?.selected
+      const started =
+        id !== null &&
+        !!selected &&
+        !!settings &&
+        (await chat.startDetached({
+          conversationId: id,
+          userText: turn.text,
+          invokedAs: turn.invokedAs,
+          providerId: selected.providerId,
+          model: selected.model,
+          approvalPolicy: settings.approvalPolicy,
+          reasoningEffort: settings.reasoningEffort,
+          ...(turn.grant ? { commandGrant: turn.grant } : {})
+        }))
+      if (started) void refreshConversations()
+      else giveBackText(id, back)
+    },
+    [stillOnChat, settings, chat, refreshConversations, giveBackText]
+  )
 
   // A custom command whose frontmatter sets its turn's model, effort, agent or tools:
   // main reads it from disk and decides what this folder's trust allows, then the
   // turn goes out like any invoked one, carrying main's token for those options.
+  // Preparing it can take a while (an MCP prompt, a template's command output, a
+  // consent dialog), so its result goes to the chat it was typed in, not to whichever
+  // chat is open by then.
   const onRunCommand = useCallback(
     (cmd: Command, args: string, typed: string) => {
       if (!workspace) return
+      const id = currentId
+      const token = nav.mark()
       void window.api
         .prepareCommand(workspace, cmd.name, args, typed)
         .then((res) => {
+          const here = stillOnChat(id, token)
           if (!res.ok) {
-            chat.notify(res.error, 'error')
+            if (here) chat.notify(res.error, 'error')
+            else giveBackText(id, typed)
             return
           }
-          if (res.notes.length) chat.notify(res.notes.join('. ').concat('.'))
-          onInvoke(res.turn)
+          if (here && res.notes.length) chat.notify(res.notes.join('. ').concat('.'))
+          return invokeInChat(id, token, res.turn, typed)
         })
-        .catch(() => chat.notify(`Couldn't run /${cmd.name}.`, 'error'))
+        .catch(() => {
+          if (stillOnChat(id, token)) chat.notify(`Couldn't run /${cmd.name}.`, 'error')
+          else giveBackText(id, typed)
+        })
     },
-    [workspace, chat, onInvoke]
+    [workspace, currentId, nav, chat, stillOnChat, invokeInChat, giveBackText]
   )
 
   // The project card's "Write one with /init": the same turn as typing /init.
@@ -2658,11 +2764,14 @@ export default function App(): JSX.Element {
   const proposalHandlers = useMemo<ProposalHandlers | undefined>(() => {
     if (!currentId || !settings) return undefined
     const convId = currentId
+    // The decisions are saved on `convId`; a reply that comes back after the user opened
+    // another chat must not replace that chat's cards (they load from its own log).
     return {
       states: proposalStates,
       start: async (callId) => {
+        const token = nav.mark()
         const res = await window.api.startProposal(convId, callId, settings.approvalPolicy)
-        setProposalStates(res.proposals)
+        if (stillOn(convId, token)) setProposalStates(res.proposals)
         await refreshConversations()
       },
       here: async (callId, title, prompt) => {
@@ -2670,15 +2779,20 @@ export default function App(): JSX.Element {
         // recording "asked here" for a message that never went out would strand the
         // card with no way to start it.
         if (!settings.selected || !workspace) throw new Error('Pick a model first.')
-        setProposalStates(await window.api.decideProposal(convId, callId, 'here'))
-        onInvoke(proposalHereTurn({ title, prompt }))
+        const token = nav.mark()
+        const states = await window.api.decideProposal(convId, callId, 'here')
+        if (stillOn(convId, token)) setProposalStates(states)
+        const turn = proposalHereTurn({ title, prompt })
+        await invokeInChat(convId, token, turn, turn.text)
       },
       dismiss: async (callId) => {
-        setProposalStates(await window.api.decideProposal(convId, callId, 'dismissed'))
+        const token = nav.mark()
+        const states = await window.api.decideProposal(convId, callId, 'dismissed')
+        if (stillOn(convId, token)) setProposalStates(states)
       },
       open: (id) => void selectConversation(id)
     }
-  }, [currentId, settings, workspace, proposalStates, refreshConversations, onInvoke, selectConversation])
+  }, [currentId, settings, workspace, proposalStates, refreshConversations, selectConversation, nav, stillOn, invokeInChat])
 
   // The handoff banner's link back to the chat that spawned this one. That chat may
   // have been deleted since; say so rather than doing nothing.
@@ -2995,7 +3109,7 @@ export default function App(): JSX.Element {
             chat.notify(`There is no message ${action.turn + 1} to fork from.`)
             return
           }
-          void forkFrom({ kind: 'turn', n: target.turn, text: target.text }, target.text)
+          void forkFrom({ kind: 'turn', n: target.turn, text: target.text }, target.text, target.images)
           return
         }
         case 'resume':

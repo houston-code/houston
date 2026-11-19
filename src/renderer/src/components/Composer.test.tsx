@@ -814,6 +814,16 @@ describe('Composer rewind (Esc Esc picker, edit and resend)', () => {
     expect(input.value).toBe('Explain this repo')
   })
 
+  it('never replaces an attached image with a starter suggestion', () => {
+    const img = { mediaType: 'image/png', data: 'AA==' }
+    const { rerender } = render(<Composer {...baseProps({ prefill: { text: '', images: [img], seq: 1 } })} />)
+    expect(screen.getAllByAltText('attachment')).toHaveLength(1)
+    rerender(<Composer {...baseProps({ prefill: { text: 'Explain this repo', seq: 2, kind: 'suggestion' } })} />)
+    expect(screen.getAllByAltText('attachment')).toHaveLength(1)
+    expect(screen.getByRole('textbox')).toHaveValue('')
+    expect(screen.getByText('Clear the message box first to use this suggestion.')).toBeInTheDocument()
+  })
+
   it('puts an edited message\'s images back with its text (vision models only)', () => {
     const img = { mediaType: 'image/png', data: 'AA==' }
     render(<Composer {...baseProps({ prefill: { text: 'see this', images: [img], seq: 1 } })} />)

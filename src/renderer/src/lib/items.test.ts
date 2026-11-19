@@ -11,6 +11,7 @@ import {
   itemsFromMessages,
   lastUserText,
   rewindTargets,
+  settleSavedSubagents,
   showsHandoff,
   systemNoteSummary,
   turnStatsByReply,
@@ -1435,6 +1436,22 @@ describe('reduceEvent — subagent records', () => {
     ])
     const tool = items.find((i) => i.kind === 'tool') as ToolItem
     expect(tool.records).toEqual([saved])
+  })
+
+  it('shows a background agent saved mid-work as stopped once no run owns the chat', () => {
+    // Saved while the agent worked (the app quit, or the run ended before it settled).
+    const saved = { ...record, backgroundId: 'bg1', status: 'running' as const }
+    const done = { ...record, id: 'sa2', status: 'done' as const, endedAt: 5 }
+    const items = itemsFromMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'dispatch_agent', arguments: { description: 'Trace', prompt: 'p' } }] },
+      { role: 'tool', content: 'started', toolCallId: 'c1', toolName: 'dispatch_agent', subagents: [saved, done] }
+    ])
+    const settled = settleSavedSubagents(items)
+    const tool = settled.find((i) => i.kind === 'tool') as ToolItem
+    expect(tool.records!.map((r) => r.status)).toEqual(['aborted', 'done'])
+    // Nothing running: the same transcript comes back.
+    expect(settleSavedSubagents(settled)).toBe(settled)
   })
 })
 
