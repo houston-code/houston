@@ -128,6 +128,9 @@ sidebar lists every chat in all of them.
   questions can be answered there, even after the window that started the run closes.
 - Notifications and the app icon badge cover every window. Clicking a notification
   opens the window showing that chat.
+- A settings change made in one window (the approval mode new chats start in, the
+  model, the theme) applies in every window, and so does a chat created, renamed,
+  pinned, archived or deleted in one: every sidebar shows it.
 - Only the first window remembers its size and position for the next launch. Others
   open slightly offset from the window you're in.
 - On Windows and Linux, closing the last window quits Houston, and Houston asks first if

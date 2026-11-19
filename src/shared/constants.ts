@@ -154,6 +154,8 @@ export const IPC = {
   // Settings
   settingsGet: 'settings:get',
   settingsSave: 'settings:save',
+  /** Main → renderer: the stored settings changed (any window, a run, another process). */
+  settingsChanged: 'settings:changed',
   // Tidy a permission-rule list (re-generalize + dedupe) for the "Clean up rules" action.
   permissionsCleanup: 'permissions:cleanup',
   /** The managed policy + open project's permission config, read-only for Settings. */
@@ -238,6 +240,8 @@ export const IPC = {
   rateLimitChanged: 'rateLimit:changed',
   /** Main → renderer: a chat got a model-generated title (live sidebar/header update). */
   conversationTitleChanged: 'conversation:titleChanged',
+  /** Main → renderer: another window created, deleted, forked, imported or organized a chat. */
+  conversationsChanged: 'conversation:listChanged',
   conversationSuggestion: 'conversation:suggestion',
   // Agent
   agentStart: 'agent:start',

@@ -25,6 +25,14 @@ export function formatRunTime(ms: number): string {
 /** How often the list re-reads while a scheduled run is in flight. */
 export const RUNNING_POLL_MS = 5000
 
+/**
+ * Turning the background scheduler on starts its process, which records itself a
+ * moment later: the status is read again this often, this many times, until it shows
+ * the process running.
+ */
+export const DAEMON_START_POLL_MS = 1000
+export const DAEMON_START_POLLS = 10
+
 /** The last path segment, for a compact folder label. */
 function folderName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path
@@ -343,6 +351,31 @@ function CreateForm({
 export function ScheduleDaemonToggle(): JSX.Element | null {
   const [status, setStatus] = useState<ScheduleDaemonStatus | null>(null)
   const [busy, setBusy] = useState(false)
+  // Set when it was just turned on and the process it started isn't seen running yet.
+  const [starting, setStarting] = useState(false)
+  const waiting = starting && !!status?.installed && !status.running && !status.error
+  useEffect(() => {
+    if (!waiting) return
+    let live = true
+    let polls = 0
+    const t = setInterval(() => {
+      const last = ++polls >= DAEMON_START_POLLS
+      if (last) clearInterval(t)
+      void window.api
+        .getScheduleDaemon()
+        .then((s) => {
+          if (live) setStatus(s)
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (live && last) setStarting(false)
+        })
+    }, DAEMON_START_POLL_MS)
+    return () => {
+      live = false
+      clearInterval(t)
+    }
+  }, [waiting])
   useEffect(() => {
     let live = true
     // As the list does: a status that can't be read hides the toggle rather than throwing.
@@ -361,6 +394,7 @@ export function ScheduleDaemonToggle(): JSX.Element | null {
   if (!status?.supported) return null
   const change = async (on: boolean): Promise<void> => {
     setBusy(true)
+    setStarting(on)
     try {
       setStatus(await window.api.setScheduleDaemon(on))
     } catch (e) {
@@ -387,7 +421,11 @@ export function ScheduleDaemonToggle(): JSX.Element | null {
       </label>
       {status.installed && (
         <p className="field__hint" role="status">
-          {status.running ? 'Running in the background.' : 'Set up; it starts the next time you log in.'}
+          {status.running
+            ? 'Running in the background.'
+            : waiting
+              ? 'Starting in the background…'
+              : 'Set up; it starts the next time you log in.'}
         </p>
       )}
       {status.error && (

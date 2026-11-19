@@ -90,7 +90,7 @@ function installApi(chats: number, overrides: Record<string, unknown> = {}, work
   const stubs: Record<string, unknown> = {
     getSettings: async () => settings,
     getLaunchChat: async () => 'c0',
-    listConversations: async () => metas,
+    listConversations: async () => [...metas],
     getConversation,
     getActiveRun: async (id: string) => (id === 'c0' ? 'run-1' : null),
     getLiveTranscript: async () => [],
@@ -132,6 +132,12 @@ function installApi(chats: number, overrides: Record<string, unknown> = {}, work
   return {
     getConversation,
     conversation,
+    settings,
+    metas,
+    /** Main's signal on a channel with no payload (e.g. onSettingsChanged). */
+    signal(prop: string): void {
+      for (const cb of listeners.get(prop) ?? []) cb()
+    },
     emit(e: AgentEvent): void {
       for (const cb of listeners.get('onAgentEvent') ?? []) cb(e)
     },
@@ -177,6 +183,24 @@ async function settle(): Promise<void> {
   }
 }
 const count = (name: string): number => renders.get(name) ?? 0
+
+describe('App following changes made in another window', () => {
+  it('re-reads the settings and the chat list when main says they changed', async () => {
+    const api = installApi(1)
+    render(<App />)
+    await settle()
+    const theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'
+    api.settings.theme = theme
+    api.signal('onSettingsChanged')
+    await settle()
+    expect(document.documentElement.dataset.theme).toBe(theme)
+
+    api.metas.push({ ...api.metas[0], id: 'other', title: 'Made in the other window' })
+    api.signal('onConversationsChanged')
+    await settle()
+    expect(screen.getByText('Made in the other window')).toBeInTheDocument()
+  })
+})
 
 describe('App during a streaming run', () => {
   it('re-renders the transcript for a streamed delta, not the sidebar, title bar, composer or dock', async () => {

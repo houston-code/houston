@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { APP_NAME } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
 import { openExternalSafely } from './safeExternal'
+import { applyAppUserModelId } from './notifications'
 import { isAllowedNavigation } from './navigation'
 import { cascadeBounds, loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
 import { mainWindowWebPreferences } from './main-window-prefs'
@@ -61,6 +62,12 @@ process.on('unhandledRejection', (reason) => log.error('unhandledRejection', rea
 // resolved userData/Keychain, so stored keys would land in / be read from an
 // inconsistent location and silently fail to persist.
 app.setName(APP_NAME)
+
+// Windows shows a notification only under an app identity a Start menu shortcut
+// carries: the installer's appId. Set before anything can post one. Every mode sets
+// it; the windowless ones (the schedule daemon, the terminal clients) never post a
+// native notification, so for them it changes nothing.
+applyAppUserModelId(app)
 
 // Keep a minidump when a process crashes, on this computer only: uploading is off, so
 // nothing is sent anywhere (docs/PRIVACY.md). Started early, as Electron asks, and

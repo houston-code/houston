@@ -6,9 +6,9 @@ import { NotificationsSection } from './app'
 
 afterEach(cleanup)
 
-function ctx(): SettingsCtx {
+function ctx(settings: Partial<AppSettings> = {}): SettingsCtx {
   return {
-    settings: {} as AppSettings,
+    settings: settings as AppSettings,
     setSettings: vi.fn(),
     busy: null,
     setBusy: vi.fn(),
@@ -75,6 +75,14 @@ describe('NotificationsSection test notification', () => {
     render(<NotificationsSection ctx={ctx()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Send test notification' }))
     expect(await screen.findByText('This system can’t show desktop notifications.')).toBeTruthy()
+  })
+
+  it('says agent notifications are off when they are, though the test is sent', async () => {
+    const api = installApi({ hasOsPage: true })
+    render(<NotificationsSection ctx={ctx({ desktopNotifications: false })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Send test notification' }))
+    expect(await screen.findByText(/Agent notifications are off/)).toBeTruthy()
+    expect(api.sendTestNotification).toHaveBeenCalledWith(false)
   })
 
   it('reports a failed send instead of staying silent', async () => {

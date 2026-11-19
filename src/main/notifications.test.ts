@@ -1,5 +1,27 @@
-import { describe, expect, it } from 'vitest'
-import { notificationFor, workspaceLabel } from './notifications'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
+
+const shown = vi.hoisted(() => [] as Array<{ title: string; body: string }>)
+vi.mock('electron', () => ({
+  Notification: class {
+    static isSupported = (): boolean => true
+    constructor(private readonly opts: { title: string; body: string }) {}
+    on(): void {}
+    show(): void {
+      shown.push(this.opts)
+    }
+  },
+  shell: {}
+}))
+
+import {
+  APP_USER_MODEL_ID,
+  applyAppUserModelId,
+  notificationFor,
+  sendTestNotification,
+  workspaceLabel
+} from './notifications'
 
 describe('notificationFor', () => {
   it('pings when a turn finishes', () => {
@@ -101,5 +123,33 @@ describe('workspaceLabel', () => {
   it('returns undefined when there is no workspace', () => {
     expect(workspaceLabel(undefined)).toBeUndefined()
     expect(workspaceLabel('')).toBeUndefined()
+  })
+})
+
+describe('sendTestNotification', () => {
+  it('promises agent notifications only while they are on', () => {
+    shown.length = 0
+    expect(sendTestNotification(true)).toBe(true)
+    expect(sendTestNotification(false)).toBe(true)
+    expect(shown[0].body).toContain('You’ll see these when the agent needs you.')
+    expect(shown[1].body).not.toContain('You’ll see these')
+    expect(shown[1].body).toContain('agent notifications are off')
+  })
+})
+
+describe('applyAppUserModelId', () => {
+  it("names the process on Windows by the installer's appId, which its Start menu shortcut carries", () => {
+    const yml = readFileSync(join(__dirname, '../../electron-builder.yml'), 'utf8')
+    expect(APP_USER_MODEL_ID).toBe(/^appId:\s*(\S+)\s*$/m.exec(yml)?.[1])
+    const app = { setAppUserModelId: vi.fn() }
+    applyAppUserModelId(app, 'win32')
+    expect(app.setAppUserModelId).toHaveBeenCalledWith(APP_USER_MODEL_ID)
+  })
+
+  it('leaves other platforms alone', () => {
+    const app = { setAppUserModelId: vi.fn() }
+    applyAppUserModelId(app, 'darwin')
+    applyAppUserModelId(app, 'linux')
+    expect(app.setAppUserModelId).not.toHaveBeenCalled()
   })
 })

@@ -3,7 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, ProviderConfig } from '@shared/types'
 import type { ScheduleDaemonStatus, ScheduleView } from '@shared/schedules'
 import type { SettingsCtx } from '../context'
-import { RUNNING_POLL_MS, ScheduleDaemonToggle, ScheduledRunsSection, usableModels } from './schedules'
+import {
+  DAEMON_START_POLLS,
+  DAEMON_START_POLL_MS,
+  RUNNING_POLL_MS,
+  ScheduleDaemonToggle,
+  ScheduledRunsSection,
+  usableModels
+} from './schedules'
 
 afterEach(cleanup)
 
@@ -226,6 +233,44 @@ describe('ScheduleDaemonToggle', () => {
     expect((await screen.findByRole('status')).textContent).toBe('Set up; it starts the next time you log in.')
     fireEvent.click(screen.getByLabelText(label))
     expect((await screen.findByRole('alert')).textContent).toBe("Couldn't turn it off: systemctl --user disable failed")
+  })
+
+  it('checks back after turning it on, until the background process it started is running', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const api = installApi([])
+      api.getScheduleDaemon.mockResolvedValue(status())
+      // Installing starts the process, which records itself a moment later.
+      api.setScheduleDaemon.mockResolvedValue(status({ installed: true }))
+      render(<ScheduleDaemonToggle />)
+      fireEvent.click(await screen.findByLabelText(label))
+      expect((await screen.findByRole('status')).textContent).toBe('Starting in the background…')
+      api.getScheduleDaemon.mockResolvedValue(status({ installed: true, running: true }))
+      await vi.advanceTimersByTimeAsync(DAEMON_START_POLL_MS + 10)
+      await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Running in the background.'))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops checking after a while, and says when it will start', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const api = installApi([])
+      api.getScheduleDaemon.mockResolvedValue(status())
+      api.setScheduleDaemon.mockResolvedValue(status({ installed: true }))
+      render(<ScheduleDaemonToggle />)
+      fireEvent.click(await screen.findByLabelText(label))
+      await screen.findByText('Starting in the background…')
+      api.getScheduleDaemon.mockResolvedValue(status({ installed: true }))
+      await vi.advanceTimersByTimeAsync(DAEMON_START_POLL_MS * (DAEMON_START_POLLS + 1))
+      await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Set up; it starts the next time you log in.'))
+      const reads = api.getScheduleDaemon.mock.calls.length
+      await vi.advanceTimersByTimeAsync(DAEMON_START_POLL_MS * 3)
+      expect(api.getScheduleDaemon.mock.calls.length).toBe(reads)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('sits in the Scheduled runs section, whose text no longer says runs need Houston open', async () => {
