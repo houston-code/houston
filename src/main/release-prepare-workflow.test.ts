@@ -159,9 +159,25 @@ describe("release-prepare runs publish's checks first", () => {
     expect(verify).toContain('release: true')
   })
 
+  it('runs the live provider canary on the same commit, in a group no nightly run can cancel', () => {
+    const canary = job('provider-canary')
+    expect(canary).toContain('uses: ./.github/workflows/provider-canary.yml')
+    expect(canary).toContain('ref: ${{ needs.plan.outputs.sha }}')
+    // Each key is passed by name, never `secrets: inherit` (which would hand over every secret).
+    for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY']) {
+      expect(canary).toContain(`${key}: \${{ secrets.${key} }}`)
+    }
+    expect(canary).not.toContain('inherit')
+    const called = readFileSync(resolve(repoRoot, '.github/workflows/provider-canary.yml'), 'utf8')
+    expect(called).toMatch(/^ {2}workflow_call:$/m)
+    expect(called).toContain('ref: ${{ inputs.ref || github.sha }}')
+    // `github.workflow` is the caller's name inside a call, so prepare's run has its own group.
+    expect(called).toContain('group: provider-canary-${{ github.workflow }}')
+  })
+
   it('writes the notes and opens the PR last, only after every check passed', () => {
     const prepare = job('prepare')
-    expect(prepare).toContain('needs: [plan, native-scan, sbom-conformance, verify, build]')
+    expect(prepare).toContain('needs: [plan, native-scan, sbom-conformance, provider-canary, verify, build]')
     expect(prepare).toContain('ref: ${{ needs.plan.outputs.sha }}')
     expect(prepare.indexOf('- name: Generate release notes')).toBeLessThan(prepare.indexOf('- name: Open release PR'))
   })

@@ -467,7 +467,7 @@ describe('CI is the release gate', () => {
       'utf8'
     )
     expect(prepare).toMatch(/\n {2}verify:\n {4}needs: plan\n {4}if: .*\n {4}uses: \.\/\.github\/workflows\/ci\.yml\n/)
-    expect(prepare).toContain('needs: [plan, native-scan, sbom-conformance, verify, build]')
+    expect(prepare).toContain('needs: [plan, native-scan, sbom-conformance, provider-canary, verify, build]')
     // Called that way, CI tests `ref` and leaves packaging and SBOMs to publish's own jobs.
     for (const name of ['test', 'linux-sandbox', 'package', 'workflow-lint']) {
       expect(job(name), name).toContain('ref: ${{ inputs.ref || github.sha }}')

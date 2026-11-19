@@ -134,6 +134,26 @@ jobs:
     with:
       ref: ${{ needs.plan.outputs.sha }}
 
+  # One live request per shipped model to every hosted provider (provider-canary.yml), on the
+  # commit being cut. The unit suite mocks the provider SDKs, so it can't see a provider that
+  # stopped accepting Houston's request shape; this is the only check that can. A provider outage
+  # fails it too: re-run the failed leg once the provider recovers.
+  provider-canary:
+    needs: plan
+    if: needs.plan.outputs.mode != 'line-only'
+    uses: ./.github/workflows/provider-canary.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    permissions:
+      contents: read
+      # Not used here: the canary's `alert` job only runs on its own schedule. But GitHub checks
+      # every nested job's permissions against the caller's grant at startup.
+      issues: write
+
   # CI's own gate (ci.yml) on the commit being cut: lint, typecheck, license and notices, the
   # full unit suite, the Linux sandbox conformance, and workflow lint. `release: true` skips
   # its packaging and SBOM jobs, which the jobs around this one run in publish's form.
@@ -197,7 +217,7 @@ jobs:
 
   # Last, and only once every check above passed: the release notes and the release PR.
   prepare:
-    needs: [plan, native-scan, sbom-conformance, verify, build]
+    needs: [plan, native-scan, sbom-conformance, provider-canary, verify, build]
     timeout-minutes: 15
     runs-on: ubuntu-24.04
     # RELEASE_PR_TOKEN lives in the `release-pr` environment (deployment branches: main only), so

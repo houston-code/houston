@@ -47,13 +47,30 @@ on:
   # Allow an on-demand run (e.g. right after a provider announces a model or param change) without
   # waiting for the nightly slot.
   workflow_dispatch: {}
+  # Release - prepare calls it on the commit it cuts, so a release never ships a provider request
+  # shape a live API has stopped accepting.
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Commit to check (defaults to the run''s own commit)'
+        type: string
+        default: ''
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+      OPENAI_API_KEY:
+        required: true
+      GEMINI_API_KEY:
+        required: true
 
 permissions:
   contents: read
 
 # Don't stack a manual run on top of a scheduled one (or two scheduled fires) — keep the latest.
+# Called from Release - prepare, `github.workflow` is the caller's name, so the release's run gets
+# its own group and a nightly or hand-dispatched canary can never cancel it (or be cancelled by it).
 concurrency:
-  group: provider-canary
+  group: provider-canary-${{ github.workflow }}
   cancel-in-progress: true
 
 env:
@@ -94,6 +111,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
       # Fail LOUDLY instead of silently skipping, and before spending the install on it. Each
       # canary is `describe.skipIf(!API_KEY)`, so a missing or empty secret would make it SKIP

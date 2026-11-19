@@ -61,7 +61,11 @@ PR when everything passes:
 2. **The vulnerability and SBOM gates** ([`native-vuln-scan.yml`](../.github/workflows/native-vuln-scan.yml),
    [`sbom-conformance.yml`](../.github/workflows/sbom-conformance.yml)), the same called
    workflows Release - publish runs. CI's own gate ([`ci.yml`](../.github/workflows/ci.yml):
-   lint, typecheck, the full test suite, the Linux sandbox, workflow lint) runs alongside.
+   lint, typecheck, the full test suite, the Linux sandbox, workflow lint) runs alongside,
+   and so does the **provider canary** ([`provider-canary.yml`](../.github/workflows/provider-canary.yml)):
+   one live request per shipped model to Anthropic, OpenAI and Gemini, which catches a provider
+   that stopped accepting Houston's requests (the test suite mocks them). A provider outage
+   fails it too; re-run the failed leg once the provider recovers.
 3. **The four build legs** ([`release-build.yml`](../.github/workflows/release-build.yml)),
    the same steps Release - publish runs: notices, package, the packaged-app e2e on macOS,
    the standalone CLI, the SBOMs, and the binary SBOM's vulnerability policy. They're unsigned
