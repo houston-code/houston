@@ -21,6 +21,8 @@
  * terminal and the editor (ACP) client, so all of them show a command the same way.
  */
 
+import { isMcpToolName } from './mcp'
+
 /** `<U+202E>` for a code point: the visible stand-in for an invisible character. */
 export function codePointTag(cp: number): string {
   return `<U+${cp.toString(16).toUpperCase().padStart(4, '0')}>`
@@ -84,11 +86,29 @@ export interface ApprovalSubjectPart {
 }
 
 /**
+ * The most of one subject part an approval shows. A model-written prompt or an MCP
+ * call's arguments can be any length (a pasted file, a base64 blob); past this the part
+ * ends with a line saying how much is left out, so nothing is cut silently.
+ */
+export const APPROVAL_SUBJECT_MAX_CHARS = 10_000
+
+/** `s` cut to {@link APPROVAL_SUBJECT_MAX_CHARS} code points, saying how much was left out. */
+function capped(s: string): string {
+  const chars = [...s]
+  if (chars.length <= APPROVAL_SUBJECT_MAX_CHARS) return s
+  const rest = chars.length - APPROVAL_SUBJECT_MAX_CHARS
+  return `${chars.slice(0, APPROVAL_SUBJECT_MAX_CHARS).join('')}\n… (${rest} more characters not shown)`
+}
+
+/**
  * The free text an approval is really about, for the tools whose one-line summary
  * can't carry it: a shell command (the row folds it to one line and cuts it to fit, so a
- * `; curl … | sh` tail would sit past the ellipsis), and a memory about to be saved (the
+ * `; curl … | sh` tail would sit past the ellipsis), a memory about to be saved (the
  * summary names it, but what persists into every later session is its description and
- * body). Empty for every other tool, whose target (a path, a URL) already says it.
+ * body), the prompt a spawned session, a scheduled run or a writable subagent starts
+ * from (the summary shows only a title, and the prompt is what then runs on its own),
+ * and the arguments of an MCP call (the summary names the tool, not what it sends).
+ * Empty for every other tool, whose target (a path, a URL) already says it.
  */
 export function approvalSubject(name: string, args: Record<string, unknown> | undefined): ApprovalSubjectPart[] {
   const a = args ?? {}
@@ -104,7 +124,20 @@ export function approvalSubject(name: string, args: Record<string, unknown> | un
       if (text(a.body)) parts.push({ label: 'Memory', text: text(a.body) })
       return parts
     }
-    default:
-      return []
+    case 'spawn_session':
+    case 'dispatch_writable_agent': {
+      const prompt = text(a.prompt)
+      return prompt ? [{ label: 'Prompt', text: capped(prompt) }] : []
+    }
+    case 'schedule_run': {
+      const parts: ApprovalSubjectPart[] = []
+      if (text(a.spec)) parts.push({ label: 'When', text: text(a.spec) })
+      if (text(a.prompt)) parts.push({ label: 'Prompt', text: capped(text(a.prompt)) })
+      return parts
+    }
+    default: {
+      if (!isMcpToolName(name) || Object.keys(a).length === 0) return []
+      return [{ label: 'Arguments', text: capped(JSON.stringify(a, null, 2) ?? '') }]
+    }
   }
 }
