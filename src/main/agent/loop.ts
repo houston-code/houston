@@ -171,6 +171,7 @@ import {
   RETRY_AFTER_CAP_MS,
   retryDelayMs,
   RetryBudget,
+  sleepUntil,
   throttleInfo,
   withProviderRetry
 } from './retry'
@@ -4944,7 +4945,9 @@ export async function startRun(
               message: reason,
               throttle: { ...(base ?? {}), waitMs: limitWaitMs, resetAt }
             })
-            await abortableSleep(limitWaitMs, abort.signal)
+            // Until the reset time on the wall clock, not for a span of timer time: a
+            // timer stops while the machine sleeps, so a wait of hours would overrun.
+            await sleepUntil(resetAt, abort.signal)
             if (abort.signal.aborted) {
               emit({ type: 'done', stopReason: 'aborted' })
               return
@@ -5137,6 +5140,12 @@ export async function startRun(
           return
         }
 
+        // From here on (only the step cap can still make this the final step: a stall and
+        // the cost cap ended above), every check that sends the reply back for another
+        // round is skipped on the final step. There is no round left, so sending it back
+        // would end the run at the step limit on Houston's own note, with the summary the
+        // model was asked for no longer counted as the run's answer.
+
         // Background agents whose reports the model hasn't had: wait for the ones still
         // working (Stop ends the wait), then loop once more with their reports, so the
         // turn never ends on work nobody reported. First, before the Stop hooks, the
@@ -5153,7 +5162,9 @@ export async function startRun(
               return
             }
           }
-          if (deliverBackgroundAgents()) {
+          // On the final step the reports still go in the log, for the next turn, but
+          // there is no round left to answer them in.
+          if (deliverBackgroundAgents() && !finalStep) {
             emit({ type: 'reply_sent_back' })
             continue
           }
@@ -5175,6 +5186,18 @@ export async function startRun(
           emitHookNotice(stop)
           if (abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })
+            return
+          }
+          // On the final step there is no round left to keep working in: the reply stays
+          // the run's answer, and the run ends at the step limit, as the hook says the
+          // work isn't finished.
+          if (stop.blocked && finalStep) {
+            emit({
+              type: 'notice',
+              message: `A Stop hook asked to keep working, but the run has no steps left: ${redact(stop.message) || 'it gave no reason.'}`
+            })
+            emit({ type: 'limit', reason: 'max-steps' })
+            emit({ type: 'done', stopReason: 'end_turn' })
             return
           }
           if (stop.blocked) {
@@ -5210,8 +5233,10 @@ export async function startRun(
           if (treeNow !== null && treeNow !== treeAtStart) filesModified = true
         }
         const verify = verifyCommandFor()
+        // Not on the final step: a failure is fed back for another round, and there is none.
         const verifyDue =
           stopReason === 'end_turn' &&
+          !finalStep &&
           verify !== null &&
           shouldVerify({
             enabled: settings.verifyOnStop === true,
@@ -5316,7 +5341,7 @@ export async function startRun(
           // The evidence-of-done note (doneEvidence.ts): once per turn, only when the
           // ledger shows a real gap. It carries the test edits too, so they aren't
           // raised twice.
-          if (settings.doneEvidenceNote !== false && !doneEvidenceNoted) {
+          if (settings.doneEvidenceNote !== false && !doneEvidenceNoted && !finalStep) {
             const note = doneEvidenceNote(doneEvidenceOf(edits))
             if (note) {
               doneEvidenceNoted = true
@@ -5327,7 +5352,7 @@ export async function startRun(
               continue
             }
           }
-          if (edits.length && !testEditsNoted) {
+          if (edits.length && !testEditsNoted && !finalStep) {
             testEditsNoted = true
             messages.push(systemNoteMessage(testEditsNote(edits)))
             persist(messages)
@@ -5365,7 +5390,10 @@ export async function startRun(
         // continuation. This is the common case, not an edge one: the final turn is
         // always a no-tool end_turn turn, and "wait, do X instead" while the agent
         // writes its answer is exactly when someone steers.
-        if (run.steering.length) continue
+        // On the final step there is no next iteration to feed it to: the reply is the
+        // run's answer, and the `finally` hands the steer back (steers_returned) so it
+        // goes out as a follow-up.
+        if (run.steering.length && !finalStep) continue
 
         emit({ type: 'done', stopReason })
         return

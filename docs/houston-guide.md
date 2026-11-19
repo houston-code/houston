@@ -660,7 +660,9 @@ retries the turn with a growing pause between attempts and tells you it's retryi
   limit that says when it resets (a plan's hourly allowance, say), Houston waits for
   the reset and continues the same turn then, instead of failing it. The terminal says
   `limit resets at 14:05; continuing then (Esc to cancel)`, and the desktop app shows
-  the same notice in the chat. Stop (Esc in the terminal) cancels the wait. It waits
+  the same notice in the chat. Stop (Esc in the terminal) cancels the wait. The wait
+  follows the clock, so a computer that sleeps through the reset carries on within a
+  minute of waking. It waits
   up to three times a turn and at most six hours each, and tries a fallback model
   first when one is set. Turn it off with **Wait for usage limits to reset** (Settings,
   Agent Behavior), `/config usage-limit-wait=off` in the terminal, or `"usageLimitWait": false`
@@ -1583,7 +1585,10 @@ turn and, if something is still open, tells the agent once before it finishes:
 
 The agent then closes the gap or says in its reply why it can't (no test suite, a check
 only you can run). It's one note per turn, built from what already ran, with no extra
-commands. Nothing is sent when there is no gap. Turn it off with **Check before
+commands. Nothing is sent when there is no gap, or on the turn's last step (the one
+where the agent writes its summary with tools off): there is no step left to close a
+gap in, so the summary stands as the answer, and the receipt still lists what it
+found. The verification command is skipped on that step for the same reason. Turn it off with **Check before
 finishing** in Settings (Loop control), or `"doneEvidenceNote": false` in settings.
 
 ### An accepted plan's progress
@@ -3618,7 +3623,7 @@ hook's globs the agent's name (a custom agent's name, else `research` or `writab
 | **PostToolUse** | after a tool call | append output to the tool result so the agent sees it (auto-format after every edit, run tests after a write) |
 | **UserPromptSubmit** | when you submit a message, before the turn runs | block the prompt or inject extra context |
 | **SessionStart** | once when a run begins | add context to the system prompt |
-| **Stop** | when the agent would end its turn | force another turn with the reason fed back ("run the tests before you stop"), bounded so a hook can't keep the agent going forever |
+| **Stop** | when the agent would end its turn | force another turn with the reason fed back ("run the tests before you stop"), bounded so a hook can't keep the agent going forever. On the turn's last step there is no step left: the reply stays the answer, the reason is shown as a notice, and the turn ends at its step limit |
 | **PreCompact** | before the conversation is compacted | fold context into the material being summarized, so it survives compaction |
 | **Notification** | when the agent stops to wait for you: an approval, a question, a plan to review, or an MCP server asking for input | observe only, e.g. play a sound or send yourself a desktop alert. It runs alongside the wait and can't answer it |
 | **SessionEnd** | once when a run ends, however it ended | observe only, e.g. log the session or clean up. Its `reason` is `completed`, `aborted`, `error`, or `limit` |

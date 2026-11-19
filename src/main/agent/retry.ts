@@ -689,6 +689,29 @@ export async function withProviderRetry<T>(
   }
 }
 
+/**
+ * How long one slice of a {@link sleepUntil} wait lasts: the most a wall-clock deadline
+ * can be overshot once the machine wakes from sleep.
+ */
+export const SLEEP_UNTIL_SLICE_MS = 30_000
+
+/**
+ * Sleep until the wall-clock time `deadline` (ms since the epoch), resolving early if
+ * the signal aborts. Timers run on a monotonic clock that stops while the machine
+ * sleeps, so one long timer set for a reset hours away fires that much late after a
+ * laptop lid was closed; short slices re-read the wall clock and end soon after the
+ * deadline passes, however long the machine slept.
+ */
+export async function sleepUntil(
+  deadline: number,
+  signal: AbortSignal,
+  sliceMs: number = SLEEP_UNTIL_SLICE_MS
+): Promise<void> {
+  for (let left = deadline - Date.now(); left > 0 && !signal.aborted; left = deadline - Date.now()) {
+    await abortableSleep(Math.min(left, sliceMs), signal)
+  }
+}
+
 /** Sleep that resolves early if the signal aborts. */
 export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {

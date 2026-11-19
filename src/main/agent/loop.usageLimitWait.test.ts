@@ -34,11 +34,16 @@ vi.mock('./plugins', () => ({
   loadTrustedPlugins: async () => ({ has: () => false, size: 0, emit: async () => {} }),
   readPluginFiles: async () => ({ files: [], skipped: [] })
 }))
-// Every wait returns at once, recorded; a test can act during one (Stop).
+// Every wait returns at once, recorded (as the time it would last); a test can act
+// during one (Stop).
 vi.mock('./retry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./retry')>()),
   abortableSleep: async (ms: number) => {
     h.sleeps.push(ms)
+    h.onSleep?.()
+  },
+  sleepUntil: async (deadline: number) => {
+    h.sleeps.push(deadline - Date.now())
     h.onSleep?.()
   }
 }))

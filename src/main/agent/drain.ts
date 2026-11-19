@@ -9,6 +9,7 @@ import { getConversation, setMessages, takeChildReports } from '../conversations
 import { getSettings } from '../agentHost'
 import { activeRunForConversation } from './loop'
 import { rewindInProgress } from './rewindLock'
+import { conversationRunningElsewhere } from '../runMarkers'
 import { clearChildReportFlag, takeBackgroundEvents, wakeNote } from './backgroundEvents'
 
 /** How the run orchestrator talks back to the renderer (provided by the IPC layer). */
@@ -121,8 +122,16 @@ export function drainQueue(io: DrainIO, conversationId: string, owner?: number):
   // Another run already holds the chat (one the user started while this run's
   // SessionEnd hooks ran, or a wake turn), or a rewind is replacing its log: leave the
   // queue alone. Writing it into the log now would race that run's own saves, and the
-  // run would refuse to start anyway. The live run's natural end drains it.
-  if (activeRunForConversation(conversationId) || rewindInProgress(conversationId)) return
+  // run would refuse to start anyway. The live run's natural end drains it. The same
+  // goes for a run another Houston process has going in this chat (a terminal session,
+  // the schedule daemon): its saves would overwrite the queued turn written here, and
+  // startRun would refuse this one, so the queue stays put until the user sends again.
+  if (
+    activeRunForConversation(conversationId) ||
+    rewindInProgress(conversationId) ||
+    conversationRunningElsewhere(conversationId) !== null
+  )
+    return
   const taken = takeQueue(conversationId)
   if (!taken) return
   const { text, images, invokedAs } = combineQueued(taken.items)
@@ -183,8 +192,15 @@ export function drainQueue(io: DrainIO, conversationId: string, owner?: number):
  */
 export function startWakeTurn(io: DrainIO, conversationId: string): boolean {
   // Mid-rewind the log is about to be replaced: the news waits (the rewind's end asks
-  // for a wake again) rather than being taken into a turn that can't start.
-  if (activeRunForConversation(conversationId) || rewindInProgress(conversationId)) return false
+  // for a wake again) rather than being taken into a turn that can't start. Likewise
+  // while another Houston process runs the chat: its saves would overwrite the note, and
+  // startRun would refuse the turn, so the news stays held rather than lost.
+  if (
+    activeRunForConversation(conversationId) ||
+    rewindInProgress(conversationId) ||
+    conversationRunningElsewhere(conversationId) !== null
+  )
+    return false
   const conv = getConversation(conversationId)
   if (!conv) return false
   clearChildReportFlag(conversationId)

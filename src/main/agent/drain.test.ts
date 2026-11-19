@@ -17,10 +17,13 @@ const h = vi.hoisted(() => ({
   maybeGenerateTitle: vi.fn(() => Promise.resolve()),
   maybeSuggestNext: vi.fn((_opts: { conversationId: string; onSuggestion: (t: string) => void }) => Promise.resolve()),
   activeRun: vi.fn((): string | null => null),
+  runningElsewhere: vi.fn((): number | null => null),
   takeChildReports: vi.fn((): unknown[] => [])
 }))
 vi.mock('./loop', () => ({ startRun: h.startRun, activeRunForConversation: h.activeRun }))
 vi.mock('../agentHost', () => ({ getSettings: () => ({ approvalPolicy: 'auto-edit' }) }))
+// Another process's run markers (covered in runMarkers.test.ts): none unless a test says so.
+vi.mock('../runMarkers', () => ({ conversationRunningElsewhere: h.runningElsewhere }))
 // Auto-titling has its own tests (title.test.ts); here we only assert drain wires it
 // up at turn start (plus a natural-completion fallback), so stub it out rather than reaching the provider/store.
 vi.mock('./title', () => ({ maybeGenerateTitle: h.maybeGenerateTitle }))
@@ -237,6 +240,26 @@ describe('runAndDrain', () => {
     clearQueue(cid)
   })
 
+  it('leaves the queue alone while another Houston process runs the chat', () => {
+    // That process's saves would overwrite the queued turn written into the log here,
+    // and startRun would refuse the turn anyway: the queued message must stay queued.
+    const cid = 'conv-drain-elsewhere'
+    addToQueue({ conversationId: cid, userText: 'A', providerId: 'anthropic', model: 'm', approvalPolicy: 'ask' })
+    const sink = io()
+    h.runningElsewhere.mockReturnValue(4242)
+    try {
+      drainQueue(sink, cid)
+    } finally {
+      h.runningElsewhere.mockReturnValue(null)
+    }
+    expect(listQueue(cid).map((q) => q.text)).toEqual(['A'])
+    expect(h.setMessages).not.toHaveBeenCalled()
+    expect(h.startRun).not.toHaveBeenCalled()
+    expect(sink.emit).not.toHaveBeenCalled()
+    expect(sink.emitQueueChanged).not.toHaveBeenCalled()
+    clearQueue(cid)
+  })
+
   it('starts titling before the turn runs, not after it ends', async () => {
     const cid = 'conv-title-early'
     let calledBeforeRun = -1
@@ -431,6 +454,20 @@ describe('startWakeTurn', () => {
     expect(started).toBe(false)
     expect(h.setMessages).not.toHaveBeenCalled()
     expect(h.startRun).not.toHaveBeenCalled()
+    expect(hasBackgroundNews('c')).toBe(true)
+  })
+
+  it('starts nothing while another Houston process runs the chat, and keeps the news', () => {
+    pushBackgroundEvent('c', exit, { wake: false })
+    h.runningElsewhere.mockReturnValue(4242)
+    try {
+      expect(startWakeTurn(io(), 'c')).toBe(false)
+    } finally {
+      h.runningElsewhere.mockReturnValue(null)
+    }
+    expect(h.setMessages).not.toHaveBeenCalled()
+    expect(h.startRun).not.toHaveBeenCalled()
+    expect(h.takeChildReports).not.toHaveBeenCalled()
     expect(hasBackgroundNews('c')).toBe(true)
   })
 

@@ -14190,6 +14190,34 @@ describe('background subagents', () => {
     expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
   }, 30_000)
 
+  it('on the final step, waits for a working agent and saves its report, but keeps the reply as the answer', async () => {
+    let release: () => void = () => {}
+    const released = new Promise<void>((r) => (release = r))
+    const { provider, mainRequests } = routed(
+      (_req, n) => {
+        if (n === 0) return call('d1', 'dispatch_agent', { description: 'Slow', prompt: 'slow', background: true })
+        setTimeout(release, 50)
+        return say('Summary of the work.')
+      },
+      async () => {
+        await released
+        return say('Slow result.')
+      }
+    )
+    const r = await run({ provider, policy: 'full-auto', overrides: { maxIterations: 2 } })
+    expect(r.events.some((e) => e.type === 'notice' && e.message === 'Waiting for 1 background agent to finish')).toBe(true)
+    // No round is left to answer the report in: the summary stands as the answer.
+    expect(mainRequests).toHaveLength(2)
+    expect(r.events.some((e) => e.type === 'reply_sent_back')).toBe(false)
+    expect(r.events.some((e) => e.type === 'limit')).toBe(false)
+    expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+    // The report is still saved, after the reply, for the next turn.
+    const replyAt = r.messages.findIndex((m) => m.role === 'assistant' && m.content === 'Summary of the work.')
+    const reportAt = r.messages.findIndex((m) => m.role === 'user' && m.content.includes('Slow result.'))
+    expect(replyAt).toBeGreaterThan(-1)
+    expect(reportAt).toBeGreaterThan(replyAt)
+  }, 30_000)
+
   it('Stop ends a background agent along with the turn', async () => {
     const runId = 'run-bg-stop'
     const { provider } = routed(
@@ -14874,5 +14902,99 @@ describe('approval grants and taint at the loop gate', () => {
       expect(approvalNames(r)).toEqual(['memory_save'])
       expect(saved()).toEqual([])
     })
+  })
+})
+
+// The final step tells the model its tools won't run, so it spends the step on a
+// summary. Nothing at the natural end may send that summary back for another round:
+// there is none, so the run would end at the step limit on Houston's own note, with
+// the summary no longer counted as the run's answer.
+describe('the final step keeps its reply as the answer', () => {
+  const call = (id: string, name: string, args: Record<string, unknown>): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name, arguments: args } },
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const say = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn' }
+  ]
+  const notes = (r: RunResult): string[] =>
+    r.messages.filter((m) => m.role === 'user' && m.content.startsWith(SYSTEM_NOTE_PREFIX)).map((m) => m.content)
+  const endedCleanly = (r: RunResult, reply: string): void => {
+    expect(r.events.some((e) => e.type === 'reply_sent_back')).toBe(false)
+    expect(r.events.some((e) => e.type === 'limit')).toBe(false)
+    expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+    expect(r.messages.at(-1)).toMatchObject({ role: 'assistant', content: reply })
+    expect(r.messages.at(-1)?.runEnds).toBeUndefined()
+  }
+
+  it('does not send the summary back with the done-evidence note', async () => {
+    const r = await run({
+      policy: 'full-auto',
+      overrides: { maxIterations: 2 },
+      turns: [call('w1', 'write_file', { path: 'a.ts', content: 'export const a = 1\n' }), say('Summary: wrote a.ts.')]
+    })
+    endedCleanly(r, 'Summary: wrote a.ts.')
+    expect(notes(r).filter((n) => n.includes('Before you finish'))).toEqual([])
+  })
+
+  it('does not send the summary back with the test-edits note, but still lists the edit on the receipt', async () => {
+    h.settings.doneEvidenceNote = false
+    const suite = "it('adds', () => {\n  expect(1).toBe(1)\n})\n"
+    writeFileSync(join(ws, 'add.test.ts'), suite)
+    const r = await run({
+      policy: 'full-auto',
+      overrides: { maxIterations: 3 },
+      turns: [
+        call('r1', 'read_file', { path: 'add.test.ts' }),
+        call('w1', 'write_file', { path: 'add.test.ts', content: suite.replace("it('adds'", "it.skip('adds'") }),
+        say('Summary: skipped the test.')
+      ]
+    })
+    endedCleanly(r, 'Summary: skipped the test.')
+    expect(notes(r).filter((n) => n.includes('changed tests in ways'))).toEqual([])
+    expect(r.messages.at(-1)?.receipt?.testEdits?.map((e) => e.path)).toEqual(['add.test.ts'])
+  })
+
+  it('does not run the verification gate, whose failure could only be fed back', async () => {
+    h.verifyRunner = async () => ({ passed: false, output: 'TS2322', aborted: false })
+    const saved = { ...h.settings }
+    Object.assign(h.settings, { verifyOnStop: true, verifyCommand: 'npm run typecheck', verifyMaxPasses: 2 })
+    try {
+      const r = await run({
+        policy: 'full-auto',
+        overrides: { maxIterations: 2 },
+        turns: [call('w1', 'write_file', { path: 'out.txt', content: 'v1' }), say('Summary: wrote out.txt.')]
+      })
+      endedCleanly(r, 'Summary: wrote out.txt.')
+      expect(h.verifyRuns).toHaveLength(0)
+    } finally {
+      for (const k of ['verifyOnStop', 'verifyCommand', 'verifyMaxPasses']) delete h.settings[k]
+      Object.assign(h.settings, saved)
+    }
+  })
+
+  it('counts the reply as finished when a steer arrives during it, and hands the steer back', async () => {
+    const runId = 'run-final-step-steer'
+    let n = 0
+    const provider: Provider = {
+      async *streamChat() {
+        if (n++ === 0) {
+          for (const ev of call('w1', 'write_file', { path: 'a.ts', content: 'x\n' })) yield ev
+          return
+        }
+        yield { type: 'text', text: 'Summary: wrote a.ts.' }
+        expect(steerRun(runId, 'also do b', 's1')).toBe(true)
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    h.settings.doneEvidenceNote = false
+    const r = await run({ provider, runId, policy: 'full-auto', overrides: { maxIterations: 2 } })
+    expect(n).toBe(2)
+    expect(r.events.some((e) => e.type === 'limit')).toBe(false)
+    expect(r.events.find((e) => e.type === 'done')).toMatchObject({ stopReason: 'end_turn' })
+    expect(r.events.at(-1)).toMatchObject({ type: 'steers_returned', texts: ['also do b'] })
+    expect(r.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Summary: wrote a.ts.' })
+    expect(r.messages.at(-1)?.runEnds).toBeUndefined()
   })
 })
