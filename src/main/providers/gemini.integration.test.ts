@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { createGeminiProvider } from './gemini'
+import type { ChatMessage, ProviderStreamEvent, ReasoningBlock, ToolCall, ToolSchema } from '@shared/agent'
+import { createGeminiProvider, listGeminiModels } from './gemini'
 import { defaultProviders } from '@shared/defaults'
 import { CANARY_TEST_TIMEOUT_MS, runCanaryProbe } from './canary'
 
@@ -66,3 +67,83 @@ describe.skipIf(!API_KEY)('gemini thinking (live API canary)', () => {
     CANARY_TEST_TIMEOUT_MS
   )
 })
+
+/** Pass a stream through unchanged, showing each event to `see` on the way. */
+async function* tap(
+  events: AsyncIterable<ProviderStreamEvent>,
+  see: (e: ProviderStreamEvent) => void
+): AsyncGenerator<ProviderStreamEvent> {
+  for await (const e of events) {
+    see(e)
+    yield e
+  }
+}
+
+const GET_TIME: ToolSchema = {
+  name: 'get_time',
+  description: 'Returns the current local time in a city.',
+  parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }
+}
+
+describe.skipIf(!API_KEY)('gemini tools and listing (live API canary)', () => {
+  // The agent loop's own path: a turn that calls a tool, then the same calls sent back
+  // with their results. Thinking models sign their function calls and reject a follow-up
+  // whose calls come back unsigned, so this also proves the signature round-trips on the
+  // API version Houston pins (and that `parametersJsonSchema` tool declarations are served).
+  it.each(GEMINI_MODELS)(
+    'round-trips a tool call for %s',
+    async (model) => {
+      const provider = createGeminiProvider(API_KEY!)
+      const system = 'You are a test fixture. Use the get_time tool to answer questions about the time.'
+      const ask: ChatMessage = { role: 'user', content: 'What time is it in Paris right now?' }
+      let calls: ToolCall[] = []
+      let reasoning: ReasoningBlock[] = []
+      const first = await runCanaryProbe((signal) => {
+        calls = []
+        reasoning = []
+        return tap(
+          provider.streamChat({ model, system, messages: [ask], tools: [GET_TIME], reasoningEffort: 'low', signal }),
+          (e) => {
+            if (e.type === 'tool_call') calls.push(e.call)
+            if (e.type === 'done') reasoning = e.reasoning ?? []
+          }
+        )
+      })
+      expect(first, `${model} produced no done event`).toBe(true)
+      expect(calls.map((c) => c.name), `${model} did not call the tool`).toContain('get_time')
+
+      const followUp: ChatMessage[] = [
+        ask,
+        { role: 'assistant', content: '', toolCalls: calls, reasoning },
+        ...calls.map((c): ChatMessage => ({ role: 'tool', content: '14:05', toolCallId: c.id, toolName: c.name }))
+      ]
+      let answer = ''
+      const second = await runCanaryProbe((signal) => {
+        answer = ''
+        return tap(
+          provider.streamChat({ model, system, messages: followUp, tools: [GET_TIME], reasoningEffort: 'low', signal }),
+          (e) => {
+            if (e.type === 'text') answer += e.text
+          }
+        )
+      })
+      expect(second, `${model} produced no done event after the tool result`).toBe(true)
+      expect(answer.length, `${model} gave no answer after the tool result`).toBeGreaterThan(0)
+    },
+    2 * CANARY_TEST_TIMEOUT_MS
+  )
+
+  it(
+    'lists the shipped models',
+    async () => {
+      const listed = new Set((await listGeminiModels(API_KEY!)).map((m) => m.id))
+      expect(listed.size).toBeGreaterThan(0)
+      // The live list is not proof a model serves (see defaults.ts), only that the
+      // listing endpoint answers on this API version; the default must be on it.
+      const fallback = defaultProviders().find((p) => p.id === 'gemini')?.defaultModel
+      expect(fallback && listed.has(fallback), `${fallback} missing from the listing`).toBe(true)
+    },
+    CANARY_TEST_TIMEOUT_MS
+  )
+})
+
