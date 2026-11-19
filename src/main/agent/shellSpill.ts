@@ -145,11 +145,25 @@ export function runShellSpill(runId: string, redact: (text: string) => string): 
   }
 }
 
+/**
+ * The spill path as the model should type it into a command. The app data folder has a
+ * space on macOS (`Application Support`), so a path that needs it is quoted to read as
+ * one word. On Windows the shell may be Git Bash, which takes an unquoted backslash as
+ * an escape and drops it, so the path is written with forward slashes (which every
+ * Windows shell accepts) and double-quoted when it has a space (single quotes mean
+ * nothing to cmd).
+ */
+function spillPathForShell(path: string, platform: NodeJS.Platform): string {
+  if (platform === 'win32') {
+    const forward = path.replace(/\\/g, '/')
+    return /^[\w@%+=:,./-]+$/.test(forward) ? forward : `"${forward}"`
+  }
+  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`
+}
+
 /** The note appended to a clamped run_shell result. */
-export function spillNote(r: SpillResult): string {
-  // The app data folder has a space on macOS (`Application Support`): quote the path so
-  // the command the model copies from here reads it as one word.
-  const path = /^[\w@%+=:,./\\-]+$/.test(r.path) ? r.path : `'${r.path.replace(/'/g, `'\\''`)}'`
+export function spillNote(r: SpillResult, platform: NodeJS.Platform = process.platform): string {
+  const path = spillPathForShell(r.path, platform)
   return (
     `[full output (${r.lines} line${r.lines === 1 ? '' : 's'}) saved to ${path}; ` +
     `read the part you need with run_shell, e.g. sed -n '1000,1200p' or grep -n 'error']`
