@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { captureUserShell } from './userShell'
+import { captureUserShell, runUserShell, userShellInForeground } from './userShell'
 
 const dir = mkdtempSync(join(tmpdir(), 'houston-usershell-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
@@ -31,4 +31,22 @@ describe('captureUserShell', () => {
     },
     10_000
   )
+})
+
+describe.skipIf(process.platform === 'win32')('runUserShell', () => {
+  it('is in the foreground while it runs, and not after', async () => {
+    expect(userShellInForeground()).toBe(false)
+    const out: string[] = []
+    const run = runUserShell(tmpdir(), 'echo hi', (c) => out.push(c))
+    expect(userShellInForeground()).toBe(true)
+    await expect(run).resolves.toBe(0)
+    expect(out.join('')).toBe('hi\n')
+    expect(userShellInForeground()).toBe(false)
+  })
+
+  // A Ctrl-C at a `!` command stops it with SIGINT; that was reported as a clean exit 0.
+  it('reports a command stopped by a signal as 128 + n', async () => {
+    await expect(runUserShell(tmpdir(), 'kill -INT $$', () => {})).resolves.toBe(130)
+    expect(userShellInForeground()).toBe(false)
+  })
 })

@@ -1256,7 +1256,7 @@ replace the built-in status line above the composer:
 | `Esc` | *while the agent works:* clear what you typed, or stop the run if nothing is typed |
 | `Enter` / `Tab` | *while the agent works:* steer the running turn / queue the message for after it (see "Typing while it works") |
 | `Up` | *while the agent works, on an empty line:* take the newest waiting message back to edit |
-| `Ctrl-Z` | suspend Houston to your shell (macOS and Linux); `fg` brings it back with the draft as it was. Works while a turn runs too: the run is not cancelled, it carries on after `fg` |
+| `Ctrl-Z` | suspend Houston to your shell (macOS and Linux); `fg` brings it back with the draft as it was. Works while a turn runs too: the run is not cancelled, it carries on after `fg`. At a question Houston asks (an approval's reason, a `[y/N]`), `fg` brings the question back with what you had typed |
 | `Ctrl-B` | while the agent waits on a shell command: move it to the background. The command keeps running as a background shell (`/tasks` lists it), and the agent gets its shell id at once and carries on, reading its output later. Says so when no command is running. At the prompt, `Ctrl-B` moves the cursor left as before |
 | `Ctrl-D` | leave (on an empty composer) |
 | `Shift-Tab` | switch approval mode (plan → ask → auto-edit → full auto → plan) |
@@ -2524,6 +2524,8 @@ and in a new terminal tab below the chat in the desktop app.
 - **Typed while the agent works,** a `!` line is never sent to the model as text. In
   the desktop app it runs right away in its own tab. In the terminal it waits, like a
   `/command`, and runs once the turn ends.
+- **`Ctrl-C` stops the command** in the terminal app, as it would in your shell, and
+  leaves Houston running.
 - `!` alone, or `!` in the middle of a line, is ordinary text. So is a `!` line sent
   with an image or attached context.
 

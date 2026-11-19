@@ -72,7 +72,7 @@ import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './
 import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps, sideChatView } from './sideChat'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
-import { captureUserShell, runUserShell } from './userShell'
+import { captureUserShell, runUserShell, userShellInForeground } from './userShell'
 import { loadAgents } from './agent/agents'
 import { loadSlashCommands } from './agent/commands'
 import { loadWorkspaceSlashCommands, workspaceMcpPromptCommands, workspaceMcpPromptFetch } from './agent/mcpPromptWorkspace'
@@ -314,7 +314,7 @@ export async function stopLiveRuns(graceMs = RUN_STOP_GRACE_MS): Promise<void> {
  */
 export function guardTerminalExit(
   signals: CleanupSignal[],
-  host: Pick<TerminalHost, 'flush'> = {},
+  host: Pick<TerminalHost, 'flush'> & { ignore?: (signal: CleanupSignal) => boolean } = {},
   proc?: SignalProcess
 ): SignalCleanup {
   return installSignalCleanup(
@@ -332,6 +332,7 @@ export function guardTerminalExit(
         await host.flush?.()
       },
       ...(proc ? { proc } : {}),
+      ...(host.ignore ? { ignore: host.ignore } : {}),
       onSignal: (sig) => log.info(`received ${sig}; stopping background shells and servers before exiting`)
     }
   )
@@ -955,7 +956,12 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // the terminal and exit rather than die with the terminal modes still on.
   // A signal never removes the worktree (it may hold work, and there is no one to
   // ask): it says where the worktree is, then exits.
+  // The exception is a `!command`: it runs in the foreground with the terminal back
+  // in cooked mode (so a password prompt it opens works), and there Ctrl-C IS the
+  // terminal's SIGINT, sent to the command and to Houston alike. It stops the
+  // command, as in a shell, and must not take Houston down with it.
   const exitGuard = guardTerminalExit(['SIGHUP', 'SIGTERM', 'SIGINT'], {
+    ignore: (sig) => sig === 'SIGINT' && userShellInForeground(),
     flush: async () => {
       await host.flush?.()
       if (sessionWt) process.stderr.write(keptWorktreeNote(sessionWt, lastConversationId))

@@ -38,6 +38,21 @@ describe('installSignalCleanup', () => {
     expect(proc.emitter.listenerCount(sig)).toBe(0)
   })
 
+  it('leaves a signal alone while ignore says so, and acts on it once that ends', async () => {
+    const proc = fakeProcess()
+    const cleanup = vi.fn(async () => {})
+    let held = true
+    installSignalCleanup(cleanup, { signals: ['SIGINT'], proc, ignore: (sig) => sig === 'SIGINT' && held })
+    proc.emitter.emit('SIGINT')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(proc.exits).toEqual([])
+    held = false
+    proc.emitter.emit('SIGINT')
+    expect(await proc.exited).toBe(130)
+    expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+
   it('listens only for the signals it was given', () => {
     const proc = fakeProcess()
     installSignalCleanup(() => {}, { signals: ['SIGHUP', 'SIGTERM'], proc })

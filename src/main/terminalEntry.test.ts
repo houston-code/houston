@@ -23,6 +23,7 @@ import { parseHeadlessArgs } from './headless'
 import { daemonPidPath, runningDaemonPid } from './scheduleDaemon'
 import { readShellOutput, registerShell } from './agent/shells'
 import type { SignalProcess } from './signalCleanup'
+import { runUserShell, userShellInForeground } from './userShell'
 import { setUserDataDir, resetUserDataDir } from './userData'
 import { resetSpawnBackend, isSpawnBackendConfigured, spawnSession } from './agent/spawn'
 import { resetSchedulerBackend, isSchedulerConfigured, scheduleCreate, scheduleList } from './agent/scheduler'
@@ -406,6 +407,28 @@ describe('guardTerminalExit', () => {
     },
     15_000
   )
+
+  // Ctrl-C at a running `!command` reaches Houston too (the terminal is cooked and
+  // the command shares its process group): it stopped the command and quit Houston.
+  it.skipIf(process.platform === 'win32')('a SIGINT while a ! command runs stops only the command', async () => {
+    const emitter = new EventEmitter()
+    const exits: number[] = []
+    const proc: SignalProcess = {
+      on: (sig, fn) => emitter.on(sig, fn),
+      removeListener: (sig, fn) => emitter.removeListener(sig, fn),
+      exit: (code) => void exits.push(code)
+    }
+    const guard = guardTerminalExit(['SIGINT'], { ignore: (sig) => sig === 'SIGINT' && userShellInForeground() }, proc)
+    try {
+      const run = runUserShell(tmpdir(), 'sleep 0.2', () => {})
+      emitter.emit('SIGINT')
+      await expect(run).resolves.toBe(0)
+      await new Promise((r) => setTimeout(r, 10))
+      expect(exits).toEqual([])
+    } finally {
+      guard.dispose()
+    }
+  })
 })
 
 describe('runScheduleDaemonEntry', () => {
