@@ -226,6 +226,15 @@ describe('elevatedConfigHash', () => {
   })
 })
 
+describe('parseProjectMcpServers args', () => {
+  it('keeps number and boolean args as text rather than dropping every arg', () => {
+    const [s] = parseProjectMcpServers({ mcpServers: [{ id: 'srv', command: 'srv', args: ['--port', 3000, '--verbose', true] }] })
+    expect(s.args).toEqual(['--port', '3000', '--verbose', 'true'])
+    const [bad] = parseProjectMcpServers({ mcpServers: [{ id: 'srv', command: 'srv', args: ['--x', { y: 1 }] }] })
+    expect(bad.args).toBeUndefined()
+  })
+})
+
 describe('mergeProjectMcpServers', () => {
   it('prefixes project ids, marks origin, and lets user servers win collisions', () => {
     const user = [

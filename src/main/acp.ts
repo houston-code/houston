@@ -36,7 +36,7 @@ import { QUESTION_DISMISSED_ANSWER } from '@shared/answerCaps'
 import { agentTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
 import { builtinCommands, mergeCommands, parseSlashCommand, resolveCommand, type Command } from '@shared/commands'
 import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
-import { prepareMcpPromptRun, type McpPromptFetch } from './agent/mcpPromptCommands'
+import { isMcpPromptLine, prepareMcpPromptRun, type McpPromptFetch } from './agent/mcpPromptCommands'
 import type { ShellCapture } from './userShell'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { modelDisplayName } from '@shared/models'
@@ -1506,6 +1506,11 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     if (!parsed || !/^[\w:-]+$/.test(parsed.name)) return null
     const commands = acpCommands(await loadCustomCommands(s.cwd, s.mcpServers))
     const cmd = resolveCommand(commands, parsed.name)
+    // An MCP prompt's command whose server isn't connected (or no longer offers it) is
+    // still a command: say so rather than sending the line to the model as text.
+    if (!cmd && isMcpPromptLine(line.trim())) {
+      return { kind: 'reply', text: `/${parsed.name} isn't offered by a connected MCP server.` }
+    }
     if (!cmd) return null
     const arg = parsed.args
     const settings = deps.getSettings()

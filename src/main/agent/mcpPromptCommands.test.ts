@@ -96,6 +96,20 @@ describe('parseMcpPromptArgs', () => {
     expect(parseMcpPromptArgs('x=1', spec, usage)).toEqual({ ok: true, values: { topic: 'x=1' } })
   })
 
+  it('reads an apostrophe inside a word as a letter, not a quote', () => {
+    expect(parseMcpPromptArgs("the login page doesn't load", spec, usage)).toEqual({
+      ok: true,
+      values: { topic: 'the', tone: "login page doesn't load" }
+    })
+    expect(parseMcpPromptArgs("it's broken tone=dry", spec, usage)).toEqual({ ok: true, values: { topic: "it's broken", tone: 'dry' } })
+    // A quote still opens at the start of a word or right after name=, and may hold an apostrophe.
+    expect(parseMcpPromptArgs("'don't stop' tone='it's fine'", spec, usage)).toEqual({
+      ok: true,
+      values: { topic: "don't stop", tone: "it's fine" }
+    })
+    expect(parseMcpPromptArgs('"x=1" now', spec, usage)).toEqual({ ok: true, values: { topic: 'x=1', tone: 'now' } })
+  })
+
   it('says what is missing, or that a prompt takes nothing', () => {
     expect(parseMcpPromptArgs('', spec, usage)).toEqual({ ok: false, error: 'Missing topic. Usage: /mcp__docs__summarize <topic> [tone]' })
     expect(parseMcpPromptArgs('tone=dry', spec, usage)).toMatchObject({ ok: false })
@@ -144,6 +158,11 @@ describe('prepareMcpPromptRun', () => {
       })
     ).toEqual({ ok: false, error: '/mcp__docs__none failed: MCP server "docs" is not connected. ]0;x' })
     expect(await prepareMcpPromptRun(docs[2], '', '/mcp__docs__none', async () => '  ')).toEqual({
+      ok: false,
+      error: '/mcp__docs__none: the server returned an empty prompt.'
+    })
+    // What the MCP clients return for a prompt with no messages.
+    expect(await prepareMcpPromptRun(docs[2], '', '/mcp__docs__none', async () => '[no content]')).toEqual({
       ok: false,
       error: '/mcp__docs__none: the server returned an empty prompt.'
     })

@@ -839,12 +839,17 @@ class Renderer {
     // A layout table (one column, or cells holding blocks) reads better as its content.
     const blocky = (e: Element): boolean =>
       e.tagName === 'pre' || e.tagName === 'table' || e.tagName === 'ul' || e.tagName === 'ol'
+    // The table's own caption (not a nested table's), as a line above it.
+    const captionEl = el.childNodes.find((c): c is Element => isElement(c) && c.tagName === 'caption')
+    const caption = captionEl ? oneLine(this.inline(captionEl)) : ''
+    const above = caption ? `\n\n${caption}` : ''
     if (!grid || cols < 2 || rowCells.some((r) => r.some((cell) => contains(cell, blocky)))) {
       const cells = rowCells
         .flat()
         .map((cell) => this.blockContent(cell))
         .filter(Boolean)
-      return cells.length ? `\n\n${cells.join('\n\n')}\n\n` : ''
+      if (!cells.length) return above ? `${above}\n\n` : ''
+      return `${above}\n\n${cells.join('\n\n')}\n\n`
     }
     const rendered = new Map<Element, string>()
     const text = (cell: Element): string => {
@@ -857,16 +862,19 @@ class Renderer {
       return `| ${cells.join(' | ')} |`
     })
     const sep = `| ${Array.from({ length: cols }, () => '---').join(' | ')} |`
-    return `\n\n${[lines[0], sep, ...lines.slice(1)].join('\n')}\n\n`
+    return `${above}\n\n${[lines[0], sep, ...lines.slice(1)].join('\n')}\n\n`
   }
 
   /** Swap code placeholders back in, carrying the line's indent or quote prefix onto every code line. */
   private restoreCode(text: string): string {
-    const token = new RegExp(`^(.*?)${PRE_OPEN}(\\d+)${PRE_CLOSE}`, 'gm')
-    return text.replace(token, (_m, prefix: string, id: string) => {
+    const token = new RegExp(`${PRE_OPEN}(\\d+)${PRE_CLOSE}`, 'g')
+    const carryable = new RegExp(`^[> ${INDENT}]*$`)
+    // Every placeholder, not just a line's first: a heading or a cell can hold several.
+    return text.replace(token, (_m, id: string, at: number) => {
       const block = this.codeBlocks[Number(id)] ?? ''
-      const carry = new RegExp(`^[> ${INDENT}]*$`).test(prefix) ? prefix : ''
-      return prefix + block.split('\n').join(`\n${carry}`)
+      const prefix = text.slice(text.lastIndexOf('\n', at - 1) + 1, at)
+      const carry = carryable.test(prefix) ? prefix : ''
+      return block.split('\n').join(`\n${carry}`)
     })
   }
 }

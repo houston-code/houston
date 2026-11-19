@@ -174,7 +174,7 @@ import { normalizeCompactFocus } from './agent/compaction'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
-import { prepareMcpPromptRun } from './agent/mcpPromptCommands'
+import { isMcpPromptLine, prepareMcpPromptRun } from './agent/mcpPromptCommands'
 import { loadWorkspaceSlashCommands, workspaceMcpPromptCommands, workspaceMcpPromptFetch } from './agent/mcpPromptWorkspace'
 import { loadSkills } from './agent/skills'
 import { prepareCommandRun, workspaceTrusted } from './agent/commandRun'
@@ -1169,11 +1169,15 @@ export function registerIpc(ready?: Promise<unknown>): void {
         return { ok: false, error: "This chat's folder no longer exists." }
       }
       const settings = getSettings()
+      const cmd = resolveCommand(await loadCommands(root).catch(() => []), name)
       // A connected MCP server's prompt (`/mcp__<server>__<prompt>`): fetched here, from
       // this folder's own servers only; its taint rides main's grant, not the renderer's word.
-      if (name.startsWith('mcp__')) {
-        const promptCmd = resolveCommand(await workspaceMcpPromptCommands(root, settings).catch(() => []), name)
-        if (!promptCmd) return { ok: false, error: `/${name} isn't offered by a connected MCP server any more.` }
+      // A custom command of the same name wins it, as it does in the command menu and the
+      // terminal, so only a name no custom command takes is looked up as a prompt.
+      const promptCmd = cmd
+        ? undefined
+        : resolveCommand(await workspaceMcpPromptCommands(root, settings).catch(() => []), name)
+      if (promptCmd?.mcpPrompt) {
         const ran = await prepareMcpPromptRun(
           promptCmd,
           typeof args === 'string' ? args : '',
@@ -1184,7 +1188,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
         const grant = putCommandGrant({ workspace: root, taintSource: ran.taintSource })
         return { ok: true, turn: { ...ran.turn, grant }, notes: [] }
       }
-      const cmd = resolveCommand(await loadCommands(root).catch(() => []), name)
+      if (!cmd && isMcpPromptLine(`/${name}`)) {
+        return { ok: false, error: `/${name} isn't offered by a connected MCP server any more.` }
+      }
       if (!cmd) return { ok: false, error: `No command /${name} in this folder any more.` }
       const prepared = await prepareCommandRun(
         cmd,

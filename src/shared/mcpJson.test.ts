@@ -26,6 +26,28 @@ describe('mcpServersFromJson', () => {
     expect(mcpServersFromJson({ mcpServers: [{ id: 'e', command: 'z' }] }).servers.map((s) => s.id)).toEqual(['e'])
   })
 
+  it("reads Gemini CLI settings' url as SSE and httpUrl as streamable HTTP", () => {
+    const servers = mcpServersFromJson(
+      {
+        mcpServers: {
+          a: { url: 'https://h/sse' },
+          b: { httpUrl: 'https://h/mcp' },
+          c: { url: 'https://h/sse', httpUrl: 'https://h/mcp' },
+          d: { url: 'https://h/mcp', type: 'http' }
+        }
+      },
+      'gemini'
+    ).servers
+    expect(servers.map((s) => [s.id, s.transport, s.url])).toEqual([
+      ['a', 'sse', 'https://h/sse'],
+      ['b', 'http', 'https://h/mcp'],
+      ['c', 'http', 'https://h/mcp'],
+      ['d', 'http', 'https://h/mcp']
+    ])
+    // Pasted JSON keeps reading url as streamable HTTP.
+    expect(mcpServersFromJson({ mcpServers: { a: { url: 'https://h/x' } } }).servers[0].transport).toBe('http')
+  })
+
   it('sanitizes names and reports entries it cannot use', () => {
     const { servers, problems } = mcpServersFromJson({
       mcpServers: {

@@ -86,18 +86,44 @@ export function mcpPromptCommands(sources: { server: string; prompts: McpPromptI
   return out
 }
 
+/** One typed word: as written with its quotes taken off, and its `name=` split off when it has one. */
+type Word = { text: string; name?: string; value?: string }
+
 /**
  * Split what follows the command into words as typed, a "double" or 'single' quoted
- * stretch keeping its spaces (`tone="very formal"` is one word). An unclosed quote
- * runs to the end.
+ * stretch keeping its spaces (`tone="very formal"` is one word). A quote opens only at
+ * the start of a word or right after `name=`, and closes at the same quote followed by
+ * a space or the end, so an apostrophe inside a word (`doesn't`) is just a letter. An
+ * unclosed quote runs to the end.
  */
-function rawWords(text: string): string[] {
-  return text.match(/(?:"[^"]*(?:"|$)|'[^']*(?:'|$)|[^\s"']+)+/g) ?? []
-}
-
-/** A word with its quotes taken off: `"very formal"` → `very formal`. */
-function unquote(word: string): string {
-  return word.replace(/"([^"]*)(?:"|$)|'([^']*)(?:'|$)/g, (_m, a?: string, b?: string) => a ?? b ?? '')
+function words(text: string): Word[] {
+  const out: Word[] = []
+  let i = 0
+  while (i < text.length) {
+    if (/\s/.test(text[i])) {
+      i++
+      continue
+    }
+    let word = ''
+    let startsQuoted = false
+    while (i < text.length && !/\s/.test(text[i])) {
+      const c = text[i]
+      if ((c === '"' || c === "'") && (word === '' || /^[\w.-]+=$/.test(word))) {
+        const close = new RegExp(`${c}(?=\\s|$)`).exec(text.slice(i + 1))
+        const end = close ? i + 1 + close.index : text.length
+        if (word === '') startsQuoted = true
+        word += text.slice(i + 1, end)
+        i = end + 1
+        continue
+      }
+      word += c
+      i++
+    }
+    // A word that opened with a quote is all value, even when it reads like `x=1`.
+    const eq = startsQuoted ? null : /^([\w.-]+)=([\s\S]*)$/.exec(word)
+    out.push(eq ? { text: word, name: eq[1], value: eq[2] } : { text: word })
+  }
+  return out
 }
 
 /**
@@ -116,12 +142,11 @@ export function parseMcpPromptArgs(
 ): { ok: true; values: Record<string, string> } | { ok: false; error: string } {
   const values: Record<string, string> = {}
   const positional: string[] = []
-  for (const w of rawWords(text.trim())) {
-    const eq = /^([\w.-]+)=([\s\S]*)$/.exec(w)
+  for (const w of words(text.trim())) {
     // `name=value` only for a declared name: `x=1` in free text is a positional word.
-    const named = eq ? spec.find((a) => a.name === eq[1]) : undefined
-    if (eq && named) values[named.name] = unquote(eq[2])
-    else positional.push(unquote(w))
+    const named = w.name !== undefined ? spec.find((a) => a.name === w.name) : undefined
+    if (named) values[named.name] = w.value ?? ''
+    else positional.push(w.text)
   }
   if (positional.length) {
     if (!spec.length) return { ok: false, error: `${usage} takes no arguments.` }
@@ -173,6 +198,7 @@ export async function prepareMcpPromptRun(
   } catch (e) {
     return { ok: false, error: `/${cmd.name} failed: ${oneLine((e as Error).message, 300)}` }
   }
-  if (!text) return { ok: false, error: `/${cmd.name}: the server returned an empty prompt.` }
+  // The clients write a prompt with no messages as this placeholder.
+  if (!text || text === '[no content]') return { ok: false, error: `/${cmd.name}: the server returned an empty prompt.` }
   return { ok: true, turn: mcpPromptTurn(cmd, text, typed), taintSource: cmd.name }
 }
