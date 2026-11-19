@@ -97,7 +97,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       LABEL: model-drift
-      TITLE: New models available
       # A user login: an organization owner can't be assigned (see alert-on-failure.yml).
       ASSIGNEE: ${{ vars.ALERT_ASSIGNEE }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -127,13 +126,20 @@ jobs:
           # printf '%s\n' so the last id is newline-terminated; wc -l counts newlines.
           count=$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l | tr -d ' ')
           [ "$count" = 1 ] && noun=model || noun=models
+          # The title says what is pending, so an alert about prices alone doesn't read as new models.
+          if [ "$count" != 0 ]; then
+            title="New models available"
+          else
+            title="Scheduled model price change coming due"
+          fi
           # Scheduled price changes coming due join the marker, so a new one notifies too.
           all_ids=$(printf '%s\n%s\n' "$ids" "$price_ids" | sed '/^$/d' | sort -u)
 
           gh label create "$LABEL" --color 1D76DB \
-            --description 'A provider lists models Houston does not ship yet' --force > /dev/null
+            --description 'A provider lists models Houston does not ship yet, or a price change is due' --force > /dev/null
+          # Found by the marker on its first line, not the title, which changes with what is pending.
           existing=$(gh issue list --label "$LABEL" --state open --limit 20 --json number,title,body \
-            | jq -c --arg t "$TITLE" 'map(select(.title == $t)) | .[0] // empty')
+            | jq -c 'map(select(.body | startswith("<!-- model-drift ids:"))) | .[0] // empty')
 
           if [ -z "$all_ids" ]; then
             if [ -n "$existing" ]; then
@@ -175,7 +181,7 @@ jobs:
             echo "::warning::ALERT_ASSIGNEE is not set, so the drift issue notifies nobody. Set the repo variable to a GitHub login."
           fi
           if [ -z "$existing" ]; then
-            gh issue create --label "$LABEL" ${ASSIGNEE:+--assignee "$ASSIGNEE"} --title "$TITLE" --body-file "$body_file"
+            gh issue create --label "$LABEL" ${ASSIGNEE:+--assignee "$ASSIGNEE"} --title "$title" --body-file "$body_file"
             exit 0
           fi
 
@@ -183,7 +189,7 @@ jobs:
           # Idempotent: also assigns an issue opened before ALERT_ASSIGNEE was set.
           [ -z "$ASSIGNEE" ] || gh issue edit "$number" --add-assignee "$ASSIGNEE" > /dev/null
           before=$(jq -r .body <<<"$existing" | head -1 | sed -E 's/^<!-- model-drift ids: (.*) -->$/\1/' | tr ',' '\n' | sed '/^$/d' | sort -u)
-          gh issue edit "$number" --body-file "$body_file"
+          gh issue edit "$number" --title "$title" --body-file "$body_file"
           # Comment only when something new appeared: the assignee is notified on a comment, not
           # on a body edit, so an unchanged list stays quiet day to day.
           new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$all_ids") | sed '/^$/d' | sed 's/^price:\(.*\)@\(.*\)$/\1 price change on \2/' | paste -sd, - | sed 's/,/, /g')
