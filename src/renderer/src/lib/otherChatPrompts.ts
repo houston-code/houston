@@ -3,7 +3,7 @@ import type { ChatStatusMap, PendingPrompt } from '@shared/chatStatus'
 /** A prompt that just started blocking a chat other than the one on screen. */
 export interface ArrivedPrompt {
   id: string
-  prompt: PendingPrompt
+  waitingOn: PendingPrompt
 }
 
 /** One key per pending prompt, so the same prompt in two snapshots compares equal. */
@@ -28,7 +28,7 @@ export function arrivedPrompts(
     if (id === currentId) continue
     const before = keysOf(prev, id)
     ;(next[id].pending ?? []).forEach((prompt, i) => {
-      if (!before.has(`${i}\u0000${prompt.kind}\u0000${prompt.label ?? ''}`)) out.push({ id, prompt })
+      if (!before.has(`${i}\u0000${prompt.kind}\u0000${prompt.label ?? ''}`)) out.push({ id, waitingOn: prompt })
     })
   }
   return out

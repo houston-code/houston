@@ -52,7 +52,7 @@ export function WaitingChatToast({
   if (!note || stale) return null
   return (
     <Toast ms={WAITING_TOAST_MS} resetKey={note} onDone={() => setNote(null)}>
-      <span className="undo-toast__text">{waitingToastText(titleOf(note.id), note.prompt)}</span>
+      <span className="undo-toast__text">{waitingToastText(titleOf(note.id), note.waitingOn)}</span>
       <button
         type="button"
         className="undo-toast__btn"

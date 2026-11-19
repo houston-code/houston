@@ -7,7 +7,7 @@ const approve: PendingPrompt = { kind: 'approval', label: 'Run npm test' }
 
 describe('arrivedPrompts', () => {
   it('reports a prompt that just started blocking another chat', () => {
-    expect(arrivedPrompts({ a: waiting() }, { a: waiting(approve) }, 'b')).toEqual([{ id: 'a', prompt: approve }])
+    expect(arrivedPrompts({ a: waiting() }, { a: waiting(approve) }, 'b')).toEqual([{ id: 'a', waitingOn: approve }])
   })
 
   it('ignores the open chat, which shows its own prompts', () => {
@@ -20,7 +20,7 @@ describe('arrivedPrompts', () => {
 
   it('reports a follow-up prompt that replaces an answered one', () => {
     const next: PendingPrompt = { kind: 'approval', label: 'Run npm run lint' }
-    expect(arrivedPrompts({ a: waiting(approve) }, { a: waiting(next) }, null)).toEqual([{ id: 'a', prompt: next }])
+    expect(arrivedPrompts({ a: waiting(approve) }, { a: waiting(next) }, null)).toEqual([{ id: 'a', waitingOn: next }])
   })
 
   it('stays quiet when a chat stops waiting or finishes', () => {
