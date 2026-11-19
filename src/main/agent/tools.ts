@@ -2353,10 +2353,10 @@ function writtenPaths(name: string, args: Record<string, unknown>, roots: string
 
 /**
  * `tool`, a file-writing tool, under the run's git guard. A symlink can lead a write
- * from an ordinary-looking path into `.git` (a hook, the config), so the baseline is
- * taken before the write (a file tool can be a run's first change) and the guard checks
- * after one whose target may lie in git data (see GitGuard.touchesGitData). Any other
- * write costs a few `realpath`s, not a snapshot.
+ * from an ordinary-looking path into `.git` (a hook, the config), so a write whose
+ * target may lie in git data (see GitGuard.touchesGitData) takes the baseline before it
+ * runs (a file tool can be a run's first change) and is checked after. Any other write
+ * costs a few `stat`s and `realpath`s, not a snapshot.
  */
 function withGitGuard(tool: ToolDef): ToolDef {
   return {
@@ -2364,18 +2364,21 @@ function withGitGuard(tool: ToolDef): ToolDef {
     async execute(args, ctx) {
       const guard = ctx.gitGuard
       if (!guard) return tool.execute(args, ctx)
-      await gitGuardBefore(ctx)
-      const after = async (): Promise<string> => {
-        const paths = writtenPaths(tool.schema.name, args, rootsOf(ctx))
-        try {
-          if (!(await guard.touchesGitData(paths))) return ''
-        } catch {
-          return ''
-        }
-        // The user already approved writing these git exec paths: what this call put
-        // there isn't asked about again (see ToolContext.protectedWriteApproved).
-        return gitGuardAfter(ctx, ctx.protectedWriteApproved === true ? paths : undefined)
+      // Judged before the write, from where its paths lead now (a file tool can't make a
+      // symlink), so an ordinary edit costs no snapshot at all. One that may land in git
+      // data gets a baseline first: it can be the run's first change.
+      const paths = writtenPaths(tool.schema.name, args, rootsOf(ctx))
+      let touches = true
+      try {
+        touches = await guard.touchesGitData(paths)
+      } catch {
+        // Unknown: check.
       }
+      if (!touches) return tool.execute(args, ctx)
+      await gitGuardBefore(ctx)
+      // The user already approved writing these git exec paths: what this call put there
+      // isn't asked about again (see ToolContext.protectedWriteApproved).
+      const after = (): Promise<string> => gitGuardAfter(ctx, ctx.protectedWriteApproved === true ? paths : undefined)
       let out: string
       try {
         out = await tool.execute(args, ctx)

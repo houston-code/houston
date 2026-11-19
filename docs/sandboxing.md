@@ -116,7 +116,7 @@ hardened against every one of these; see `hardenedGitArgs` in
 
 **Detect after each command, ask, and undo on request**
 ([`src/main/agent/gitGuard.ts`](../src/main/agent/gitGuard.ts)). Before the run's first
-shell command or file-tool write Houston snapshots, for each root: the hooks directory (by content hash
+shell command or file-tool write into git data Houston snapshots, for each root: the hooks directory (by content hash
 and mode, ignoring `*.sample`), the exec-capable keys in the repository's own config
 files (`config`, every `config.worktree`, one level of `include.path`), every
 `commondir`, the `.git` pointer file, and the same for each nested repository the index
@@ -189,7 +189,7 @@ breaking routine setup. It could come back as an opt-in strict mode.
 - **Background shells** are checked when their output is read, they are waited on, or
   they are stopped, so a change one makes after the run's last such call isn't reported.
   A background shell outlives the run that started it, and a later run's baseline is
-  taken at its first shell command or file write, so a change such a shell makes before
+  taken at its first shell command or file write into git data, so a change such a shell makes before
   then is taken as the starting state.
 - **Untracked nested repositories** aren't inspected: git doesn't enter them on its own,
   only when the user `cd`s into one, which is the same trust as running any other code

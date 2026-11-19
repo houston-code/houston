@@ -3644,13 +3644,13 @@ describe('run_shell git guard', () => {
       expect(() => git(['config', '--get', 'core.fsmonitor'])).toThrow()
     })
 
-    it('neither asks nor snapshots after an ordinary edit', { timeout: 30_000 }, async () => {
+    it('neither asks nor snapshots for an ordinary edit, even the run\'s first', { timeout: 30_000 }, async () => {
       git(['init', '-q'])
       const guard = new GitGuard([workspace])
       const ask = vi.fn()
       ctx = { ...ctx, gitGuard: guard, askGitGuard: ask }
-      await run('write_file', { path: 'a.txt', content: 'one\n' })
       const snapshot = vi.spyOn(guard, 'snapshot')
+      await run('write_file', { path: 'a.txt', content: 'one\n' })
       await run('write_file', { path: 'b.txt', content: 'two\n' })
       await run('edit_file', { path: 'a.txt', old_string: 'one', new_string: 'uno' })
       expect(snapshot).not.toHaveBeenCalled()

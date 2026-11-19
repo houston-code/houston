@@ -763,6 +763,18 @@ describe('GitGuard on real repositories', () => {
       expect(await guard.touchesGitData([join(sep, 'meta/info/exclude')])).toBe(true)
       expect(await guard.touchesGitData([join(sep, 'notes.txt')])).toBe(false)
     })
+
+    it('before any baseline, finds a root git dir with another name without a snapshot', async () => {
+      const sep = join(tmp, 'sep')
+      const store = join(tmp, 'store')
+      git(tmp, 'init', '-q', '--separate-git-dir', store, sep)
+      symlinkSync(store, join(sep, 'meta'), 'junction')
+      const guard = new GitGuard([sep])
+      const snapshot = vi.spyOn(guard, 'snapshot')
+      expect(await guard.touchesGitData([join(sep, 'meta/hooks/post-checkout')])).toBe(true)
+      expect(await guard.touchesGitData([join(sep, 'notes.txt')])).toBe(false)
+      expect(snapshot).not.toHaveBeenCalled()
+    })
   })
 
   describe('reviewGitChanges', () => {

