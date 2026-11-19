@@ -62,7 +62,7 @@ import { forgetSubAgentSessions } from './agent/subagentSessions'
 import { redactSecrets } from './agent/redact'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
-import { conversationRunningElsewhere } from './runMarkers'
+import { conversationRunningElsewhere, conversationRunningHere } from './runMarkers'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
 
@@ -550,17 +550,27 @@ interface WrittenChat {
   outdated: boolean
 }
 const written = new Map<string, WrittenChat>()
-/** Chats remembered at once. Each holds a copy of its message structure, so keep it to the few in use. */
+/**
+ * Chats remembered at once. Each holds a copy of its message structure (and, until its
+ * first save, the messages as read), so keep it to the few in use. A chat this process
+ * is running a turn in is never dropped, whatever the count: its run saves it after
+ * every step, and once dropped each save reads, hashes and re-remembers it, pushing out
+ * (and folding, a whole rewrite) another running chat. With more chats running than
+ * this (a few spawned sessions beside their parent), that cost every save. Keeping them
+ * costs little beyond what the runs already hold: the copies share the messages'
+ * strings with the run's own.
+ */
 const MAX_WRITTEN_CHATS = 4
 
 function rememberWritten(id: string, entry: WrittenChat): void {
   written.delete(id)
   written.set(id, entry)
   const evicted: [string, WrittenChat][] = []
-  for (const oldest of written.keys()) {
+  for (const [oldId, old] of written) {
     if (written.size <= MAX_WRITTEN_CHATS) break
-    evicted.push([oldest, written.get(oldest) as WrittenChat])
-    written.delete(oldest)
+    if (oldId === id || conversationRunningHere(oldId)) continue
+    evicted.push([oldId, old])
+    written.delete(oldId)
   }
   for (const [oldId, old] of evicted) foldEvicted(oldId, old)
 }

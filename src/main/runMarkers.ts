@@ -81,6 +81,11 @@ export function recordRunningConversations(ids: readonly string[]): void {
   }
 }
 
+/** Whether this process is running a turn in `conversationId` now. */
+export function conversationRunningHere(conversationId: string): boolean {
+  return running.includes(conversationId)
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0)

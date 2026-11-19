@@ -21,6 +21,7 @@ import {
   writeRewind
 } from './conversations'
 import { resetUserDataDir, setUserDataDir } from './userData'
+import { recordRunningConversations, resetRunMarkers } from './runMarkers'
 
 /**
  * The append-only log beside each chat's JSON file (see the layout note in
@@ -336,6 +337,39 @@ describe('folding the log into the JSON file', () => {
     for (const c of chats) {
       expect((JSON.parse(readFileSync(base(c.id), 'utf8')) as Conversation).messages).toEqual(c.messages)
     }
+  })
+
+  it('keeps every chat this process is running, so their saves never push each other out', () => {
+    // More chats running at once than the cache holds for idle ones: spawned sessions
+    // beside their parent.
+    const chats = Array.from({ length: 6 }, () => chat(2))
+    const idle = chat(2)
+    recordRunningConversations(chats.map((c) => c.id))
+    try {
+      for (const c of chats) {
+        c.messages.push({ role: 'assistant', content: `step 1 of ${c.id}` })
+        setMessages(c.id, [...c.messages])
+      }
+      const bases = chats.map((c) => stampOf(base(c.id)))
+      // Each step after the first only appends: no save reads another chat back in, or
+      // folds another chat's log by rewriting its JSON file.
+      for (let n = 2; n <= 3; n++) {
+        for (const c of chats) {
+          c.messages.push({ role: 'assistant', content: `step ${n} of ${c.id}` })
+          setMessages(c.id, [...c.messages])
+        }
+      }
+      expect(chats.map((c) => stampOf(base(c.id)))).toEqual(bases)
+      expect(chats.every((c) => existsSync(log(c.id)))).toBe(true)
+      // An idle chat is still let go as before.
+      setMessages(idle.id, [...idle.messages, { role: 'user', content: 'more' }])
+      for (const c of chats) setMessages(c.id, [...c.messages, { role: 'user', content: 'more' }])
+      expect(existsSync(log(idle.id))).toBe(false)
+    } finally {
+      recordRunningConversations([])
+      resetRunMarkers()
+    }
+    for (const c of chats) expect(getConversation(c.id)?.messages.at(-1)?.content).toBe('more')
   })
 
   it('leaves the log of a chat pushed out of the cache alone once another process wrote it', () => {

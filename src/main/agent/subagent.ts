@@ -568,7 +568,12 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     throw e
   }
   const stopContext = await hooks.stop({ status, report }).catch(() => undefined)
-  return stopContext ? `${report}\n\n${stopContext}` : report
+  if (!stopContext) return report
+  // A failed report ends with why it stopped, and a caller that only has the text (a
+  // parent agent's nested dispatch, a review, a side chat) tells the failure by that
+  // ending, so the hook's context goes before it rather than after.
+  const tail = FAILED_REPORT_TAIL.exec(report)
+  return tail ? `${report.slice(0, tail.index)}\n\n${stopContext}${tail[0]}` : `${report}\n\n${stopContext}`
 }
 
 async function runSubAgentSteps(opts: SubAgentOptions): Promise<string> {

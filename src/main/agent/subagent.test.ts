@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import type { SubagentStatus, SubagentStep } from '@shared/subagents'
 import { createSecretRedactor } from './redact'
-import { delegatedEvidenceSummary, runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
+import { delegatedEvidenceSummary, FAILED_REPORT_TAIL, runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
 import { idleTimeoutFetch } from '../providers/idle-fetch'
@@ -1807,6 +1807,46 @@ describe('runSubAgent lifecycle hooks (SubagentStart / SubagentStop)', () => {
     expect(r.calls.stops.map((s) => s.status)).toEqual(['aborted'])
     // The dispatcher's own onEnd still hears it.
     expect(statuses).toEqual(['aborted'])
+  })
+
+  it("keeps a failed report's ending last when Stop adds context, so the failure still reads as one", async () => {
+    const r = recorder(undefined, 'Logged by a hook.')
+    const report = await runSubAgent({
+      provider: scriptedProvider([
+        [
+          { type: 'text', text: 'Looking.' },
+          { type: 'tool_call', call: { id: 'l1', name: 'list_dir', arguments: { path: '.' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'error', message: 'boom', status: 400 }]
+      ]),
+      model: 'm',
+      workspace: ws,
+      prompt: 'x',
+      signal: new AbortController().signal,
+      lifecycleHooks: r.hooks
+    })
+    expect(report).toBe('Looking.\n\nLogged by a hook.\n\n[subagent stopped by a model error (boom); this is what it had]')
+    expect(FAILED_REPORT_TAIL.test(report)).toBe(true)
+
+    // A parent agent that dispatched it records the nested dispatch as failed.
+    const steps: SubagentStep[] = []
+    await runSubAgent({
+      provider: scriptedProvider([
+        [
+          { type: 'tool_call', call: { id: 'n1', name: 'dispatch_agent', arguments: { prompt: 'inner' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'outer report' }, { type: 'done', stopReason: 'end_turn' }]
+      ]),
+      model: 'm',
+      workspace: ws,
+      prompt: 'outer task',
+      signal: new AbortController().signal,
+      onStep: (s) => steps.push(s),
+      dispatchNested: async () => report
+    })
+    expect(steps.find((s) => s.tool === 'dispatch_agent' && s.ok !== undefined)?.ok).toBe(false)
   })
 
   it('runs Stop on a model error, with the error status', async () => {
