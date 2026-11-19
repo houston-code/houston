@@ -29,8 +29,16 @@ on:
   # Nightly on main: the full package matrix, including the macOS Intel leg that PRs and
   # queue candidates no longer run (scripts/ci-plan.mjs says why), and a refresh of the
   # main-scoped package caches, which those legs save on a miss.
+  #
+  # The cron is set well before the time we want the run. GitHub starts scheduled runs late
+  # under load, and in November 2026 every schedule here started 7 to 10 hours late: a 07:17
+  # UTC cron ran at 14:00-17:30 UTC, the busiest hours for the hosted macOS pool, where legs
+  # waited for a runner or never got one. 22:17 UTC lands the run around 05:00-08:00 UTC on
+  # that delay, quiet hours for macOS. If GitHub catches up and starts it on time, it runs in
+  # the US afternoon instead: retune against the actual start times (`gh run list -w ci.yml
+  # --event schedule`).
   schedule:
-    - cron: '17 7 * * *'
+    - cron: '17 22 * * *'
   # A manual run of the nightly matrix (`gh workflow run ci.yml`), to check a fix for a
   # nightly-only failure such as the Intel leg without waiting for the schedule. It has no
   # diff to plan from, so scripts/ci-plan.mjs gives it every leg and the action test. It
