@@ -277,6 +277,12 @@ export const IPC = {
   windowOpenChat: 'window:openChat',
   /** main → renderer: play an attention sound (the window is not focused). */
   attentionSound: 'attention:sound',
+  /** Renderer → main: show a sample desktop notification (Settings). */
+  notificationTest: 'notification:test',
+  /** Renderer → main: open the OS notification settings page (Settings). */
+  notificationOpenSettings: 'notification:openSettings',
+  /** Renderer → main: whether the OS has a notification settings page to open. */
+  notificationSettingsAvailable: 'notification:settingsAvailable',
   agentEvent: 'agent:event',
   // Session proposals (propose_session cards)
   /** Renderer → main: start a proposed session as its own chat. */

@@ -132,7 +132,13 @@ import { decideLegacyRulesNotice, legacyRulesNoticeApplies } from './globalRules
 import { dismissLegacyRulesNotice, isLegacyRulesNoticeDismissed } from './legacyRulesNotice'
 import { registerImportIpc } from './importIpc'
 import { MAX_MEMORY_NOTE } from '@shared/memory'
-import { notifyAgentEvent, workspaceLabel } from './notifications'
+import {
+  notificationSettingsUrl,
+  notifyAgentEvent,
+  openNotificationSettings,
+  sendTestNotification,
+  workspaceLabel
+} from './notifications'
 import { attentionSignals } from '@shared/notify'
 import {
   restoreCheckpoint,
@@ -811,6 +817,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
 
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
   handle(IPC.updateCheck, () => checkForUpdates())
+
+  // Settings > Notifications: a sample notification (which is what makes macOS ask
+  // for permission) and a shortcut to the OS page that allows or blocks them.
+  handle(IPC.notificationTest, () => sendTestNotification())
+  handle(IPC.notificationOpenSettings, () => openNotificationSettings())
+  handle(IPC.notificationSettingsAvailable, () => notificationSettingsUrl() !== null)
   handle(IPC.updateWhatsNew, () => takePendingWhatsNew())
   // "Restart to install" — apply a downloaded update now instead of on next quit.
   handle(IPC.updateInstall, () => installUpdate())

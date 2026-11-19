@@ -134,6 +134,55 @@ export function AppearanceSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   )
 }
 
+/**
+ * A sample notification plus a shortcut to the OS page that allows them. The OS can
+ * block Houston's notifications without Houston being told (macOS asks once, the
+ * first time one is shown), so this is how the user finds out and fixes it.
+ */
+function NotificationCheck(): JSX.Element {
+  const [hasOsPage, setHasOsPage] = useState(false)
+  const [status, setStatus] = useState<'sent' | 'unsupported' | 'error' | null>(null)
+  useEffect(() => {
+    void window.api
+      .notificationSettingsAvailable()
+      .then(setHasOsPage)
+      .catch(() => {})
+  }, [])
+  const sendTest = async (): Promise<void> => {
+    try {
+      setStatus((await window.api.sendTestNotification()) ? 'sent' : 'unsupported')
+    } catch {
+      setStatus('error')
+    }
+  }
+  return (
+    <div className="field">
+      <div className="field__row">
+        <button type="button" className="btn btn--sm" onClick={() => void sendTest()}>
+          Send test notification
+        </button>
+        {hasOsPage && (
+          <button
+            type="button"
+            className="btn btn--sm"
+            onClick={() => void window.api.openNotificationSettings().catch(() => {})}
+          >
+            Open system notification settings
+          </button>
+        )}
+      </div>
+      <p className="field__hint notification-check__status" role="status">
+        {status === 'sent' &&
+          (hasOsPage
+            ? 'Sent. If nothing appeared, your system is blocking Houston’s notifications: allow Houston in system notification settings, and check that Focus or Do Not Disturb isn’t holding them back.'
+            : 'Sent. If nothing appeared, check your desktop’s notification settings.')}
+        {status === 'unsupported' && 'This system can’t show desktop notifications.'}
+        {status === 'error' && 'Couldn’t send a test notification.'}
+      </p>
+    </div>
+  )
+}
+
 export function NotificationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
   return (
@@ -152,6 +201,7 @@ export function NotificationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
           window. On by default.
         </span>
       </label>
+      <NotificationCheck />
       <label className="field field--checkbox">
         <input
           type="checkbox"

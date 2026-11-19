@@ -2606,6 +2606,14 @@ button.conv__main:focus-visible {
   font-size: 12px;
 }
 
+/* ---- Settings → Notifications: test-notification result ---- */
+.notification-check__status {
+  margin: 6px 0 0;
+}
+.notification-check__status:empty {
+  margin: 0;
+}
+
 /* ---- Settings → Updates ---- */
 .updates-row {
   display: flex;

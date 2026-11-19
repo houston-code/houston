@@ -91,6 +91,13 @@ import type { RegistrySearchResult } from '@shared/mcpRegistry'
  */
 const api = {
   getVersion: (): Promise<string> => ipcRenderer.invoke(IPC.appGetVersion),
+  /** Show a sample desktop notification now; false when the OS can't show any. */
+  sendTestNotification: (): Promise<boolean> => ipcRenderer.invoke(IPC.notificationTest),
+  /** Open the OS notification settings page; false where there is none. */
+  openNotificationSettings: (): Promise<boolean> => ipcRenderer.invoke(IPC.notificationOpenSettings),
+  /** Whether the OS has a notification settings page Houston can open. */
+  notificationSettingsAvailable: (): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.notificationSettingsAvailable),
   /** Gather the /doctor health facts for the given workspace. */
   getDoctorFacts: (workspace: string): Promise<DoctorFacts> =>
     ipcRenderer.invoke(IPC.doctorFacts, workspace),
