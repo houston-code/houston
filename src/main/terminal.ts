@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { existsSync, statSync } from 'node:fs'
@@ -5,6 +6,7 @@ import * as pty from 'node-pty'
 import type { IPty } from 'node-pty'
 import { IPC } from '@shared/constants'
 import { SHELL_ESCAPE_MAX_CHARS, plainTerminalText } from '@shared/shellEscape'
+import { windowsKillCommands } from './sandbox/shared'
 
 /**
  * Registry of interactive terminals backing the in-app terminal panel.
@@ -171,13 +173,61 @@ export function resizeTerminal(id: string, cols: number, rows: number): void {
   if (cols > 0 && rows > 0) term.pty.resize(cols, rows)
 }
 
+/** node-pty's Windows agent, reached through its private field (see killPty). */
+interface WindowsPtyInternals {
+  _agent?: { _getConsoleProcessList?: () => Promise<number[]> }
+}
+
+/** Kill a process and everything it started (Windows), trying each taskkill location in turn. */
+function killWindowsTree(pid: number): void {
+  const [first, ...rest] = windowsKillCommands(pid)
+  const attempt = (cmd: typeof first | undefined, more: typeof rest): void => {
+    if (!cmd) return
+    execFile(cmd.file, cmd.args, { windowsHide: true }, (err) => {
+      if (err) attempt(more[0], more.slice(1))
+    })
+  }
+  attempt(first, rest)
+}
+
+/**
+ * Close a terminal's PTY.
+ *
+ * On Windows, node-pty 1.1's ConPTY kill() first lists the processes attached to the
+ * console by forking a Node helper (`child_process.fork`). The packaged app has the
+ * RunAsNode fuse off there (scripts/electron-fuses.mjs), so that fork throws: every
+ * terminal close logged an unhandled rejection, and the processes the list would have
+ * killed (ones that handle CTRL_CLOSE and stay up when the console closes) lingered.
+ * So the list step is replaced here: it kills the shell's whole tree with taskkill and
+ * hands node-pty nothing more to kill. node-pty's own bundled conpty.dll
+ * (`useConptyDll`) would skip the fork too, but it is marked experimental, swaps in a
+ * different console host, and still leaves such processes running.
+ */
+export function killPty(
+  p: IPty,
+  platform: NodeJS.Platform = process.platform,
+  killTree: (pid: number) => void = killWindowsTree
+): void {
+  if (platform === 'win32') {
+    const agent = (p as unknown as WindowsPtyInternals)._agent
+    if (agent && typeof agent._getConsoleProcessList === 'function') {
+      const pid = p.pid
+      agent._getConsoleProcessList = () => {
+        killTree(pid)
+        return Promise.resolve([])
+      }
+    }
+  }
+  p.kill()
+}
+
 /** Kill a terminal and drop it from the registry. Returns false if unknown. */
 export function killTerminal(id: string): boolean {
   const term = terminals.get(id)
   if (!term) return false
   if (term.flush !== null) clearImmediate(term.flush)
   terminals.delete(id)
-  term.pty.kill()
+  killPty(term.pty)
   return true
 }
 
@@ -207,7 +257,7 @@ export function terminalCount(): number {
 export function killAllTerminals(): void {
   for (const term of terminals.values()) {
     if (term.flush !== null) clearImmediate(term.flush)
-    term.pty.kill()
+    killPty(term.pty)
   }
   terminals.clear()
 }
