@@ -127,7 +127,7 @@ export function actionNames(ctx: BindingContext): string[] {
 
 /** Every chord built in, which a user binding can replace or take away (`null`). */
 export const DEFAULT_CHORDS: Readonly<Record<BindingContext, Readonly<Record<string, string>>>> = {
-  composer: { 'ctrl-x ctrl-e': 'external-edit' },
+  composer: { 'ctrl-x ctrl-e': 'external-edit', 'ctrl-x ctrl-p': 'expand-paste' },
   picker: {},
   transcript: {}
 }
@@ -677,23 +677,33 @@ export function createKeybindingStore(opts: {
       return () => w.close()
     })
   let timer: ReturnType<typeof setTimeout> | null = null
-  const stop = watch(dirname(opts.path), (name) => {
-    if (name !== null && name !== file) return
-    // A save is often several events (truncate, write, rename): read once they settle.
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = null
-      reload()
-    }, 100)
-    timer.unref?.()
-  })
+  let closed = false
+  const arm = (): (() => void) | null =>
+    watch(dirname(opts.path), (name) => {
+      if (name !== null && name !== file) return
+      // A save is often several events (truncate, write, rename): read once they settle.
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        reload()
+      }, 100)
+      timer.unref?.()
+    })
+  // Null when the directory did not exist yet (no ~/.houston at launch): tried again
+  // on each reload, which /keybindings does once it has created the file.
+  let stop = arm()
   return {
     get: () => current,
     problems: () => currentProblems,
-    reload,
+    reload: () => {
+      reload()
+      if (!stop && !closed) stop = arm()
+    },
     close: () => {
+      closed = true
       if (timer) clearTimeout(timer)
       stop?.()
+      stop = null
     }
   }
 }

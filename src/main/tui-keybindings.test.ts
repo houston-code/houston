@@ -230,6 +230,13 @@ describe('the chord layer', () => {
     expect(show(run(b, 'composer', ['ctrl-x', 'ctrl-e']).out)).toEqual(['bound:ctrl-x ctrl-e'])
   })
 
+  // With any binding set, Ctrl-X Ctrl-P stopped expanding a paste and moved Up instead.
+  it('keeps the built-in Ctrl-X Ctrl-P chord, which expands a paste', () => {
+    const r = run(b, 'composer', ['ctrl-x', 'ctrl-p']).out
+    expect(show(r)).toEqual(['bound:ctrl-x ctrl-p'])
+    expect(r[0]).toMatchObject({ action: { kind: 'action', name: 'expand-paste' } })
+  })
+
   it('lets the held keys go as typed when the chord does not complete', () => {
     expect(show(run(b, 'composer', ['ctrl-x', 'ctrl-a']).out)).toEqual(['pass:ctrl-x', 'pass:ctrl-a'])
     // …including when the next key starts a chord of its own.
@@ -252,8 +259,15 @@ describe('the chord layer', () => {
   })
 
   it('null unbinds a built-in chord, so its keys pass on their own', () => {
-    const off = parseKeybindings(JSON.stringify({ composer: { 'ctrl-x ctrl-e': null } })).bindings
+    // Ctrl-X starts two built-in chords: both go before it is a key of its own again.
+    const off = parseKeybindings(JSON.stringify({ composer: { 'ctrl-x ctrl-e': null, 'ctrl-x ctrl-p': null } })).bindings
     expect(show(run(off, 'composer', ['ctrl-x', 'ctrl-e']).out)).toEqual(['pass:ctrl-x', 'pass:ctrl-e'])
+    // One of them unbound: that chord does nothing, and the other still works.
+    const one = parseKeybindings(JSON.stringify({ composer: { 'ctrl-x ctrl-e': null } })).bindings
+    expect(run(one, 'composer', ['ctrl-x', 'ctrl-e']).out).toEqual([
+      { kind: 'bound', action: { kind: 'unbind' }, keys: 'ctrl-x ctrl-e' }
+    ])
+    expect(show(run(one, 'composer', ['ctrl-x', 'ctrl-p']).out)).toEqual(['bound:ctrl-x ctrl-p'])
   })
 
   it('an unbound key comes out as a binding that does nothing', () => {
@@ -372,6 +386,32 @@ describe('createKeybindingStore', () => {
     expect(s.get().composer.size).toBe(0)
     change('other.json')
     change('keybindings.json')
+    await new Promise((r) => setTimeout(r, 150))
+    expect(s.get().composer.size).toBe(1)
+    s.close()
+  })
+
+  // With no ~/.houston at launch the watch failed once and was never tried again, so
+  // edits to the file /keybindings then created were never picked up.
+  it('starts watching on a reload when the directory could not be watched at launch', async () => {
+    let dirExists = false
+    let onChange: ((file: string | null) => void) | null = null
+    let reads = 0
+    const s = createKeybindingStore({
+      path: '/h/.houston/keybindings.json',
+      read: () => (reads++ < 2 ? null : '{"composer": {"ctrl-t": "transcript"}}'),
+      watch: (_dir, cb) => {
+        if (!dirExists) return null
+        onChange = cb
+        return () => {}
+      },
+      report: () => {}
+    })
+    expect(onChange).toBeNull()
+    dirExists = true // /keybindings created the file, and its directory
+    s.reload()
+    expect(onChange).not.toBeNull()
+    onChange!('keybindings.json')
     await new Promise((r) => setTimeout(r, 150))
     expect(s.get().composer.size).toBe(1)
     s.close()

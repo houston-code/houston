@@ -210,6 +210,50 @@ function fwdWord(c: string[], i: number, big: boolean): number {
   return j
 }
 
+/**
+ * `w` as an operator's last word: it stops at the end of the line rather than taking
+ * the line break and the next line's first word with it (`dw` on a line's last word
+ * leaves the line break, as in vim). From an empty line it moves on as `w` does.
+ */
+function fwdWordInLine(c: string[], i: number, big: boolean): number {
+  if (i >= c.length || c[i] === '\n') return fwdWord(c, i, big)
+  const eol = c.indexOf('\n', i)
+  return Math.min(fwdWord(c, i, big), eol === -1 ? c.length : eol)
+}
+
+/**
+ * Where `cw`/`cW` on a non-blank reaches: vim changes to the end of the word, like
+ * `ce`, except that on a word's last character it stays put (`cw` on `a` in `a b`
+ * changes just `a`). Inclusive.
+ */
+function changeWordEnd(c: string[], i: number, count: number, big: boolean): number {
+  const n = c.length
+  const kind = (j: number): string => {
+    if (j >= n) return 'end'
+    const k = classOf(c[j])
+    return big && k !== 'blank' ? 'word' : k
+  }
+  let j = i
+  let stop = true
+  for (let left = count; left > 0; left--) {
+    const start = kind(j)
+    if (j + 1 >= n) return Math.max(0, n - 1)
+    j++
+    if (kind(j) === start && start !== 'blank') {
+      // Inside a word: on to its end.
+      while (j < n && kind(j) === start) j++
+    } else if (!stop || start === 'blank') {
+      // At a word's end (after the first count): the end of the next word.
+      while (j < n && kind(j) === 'blank') j++
+      const k = kind(j)
+      while (j < n && kind(j) === k) j++
+    }
+    j--
+    stop = false
+  }
+  return j
+}
+
 /** Start of the previous word (`b`/`B`). */
 function backWord(c: string[], i: number, big: boolean): number {
   let j = i - 1
@@ -325,7 +369,7 @@ function motion(
   s: EditorState,
   key: string,
   count: number,
-  ctx: { arg?: string; lastFind: FindSpec | null }
+  ctx: { arg?: string; lastFind: FindSpec | null; op?: string }
 ): MotionResult | null {
   const line = s.lines[s.row] ?? ''
   const lastRow = s.lines.length - 1
@@ -349,7 +393,12 @@ function motion(
     case 'W': {
       const c = flatten(s)
       let j = flatIndex(s)
-      for (let n = 0; n < count; n++) j = fwdWord(c, j, key === 'W')
+      const big = key === 'W'
+      // `cw` on a word changes to its end and keeps the blank after it (vim's special case).
+      if (ctx.op === 'c' && j < c.length && classOf(c[j]) !== 'blank') {
+        return { pos: posFromFlat(s.lines, changeWordEnd(c, j, count, big)), inclusive: true }
+      }
+      for (let n = 0; n < count; n++) j = ctx.op && n === count - 1 ? fwdWordInLine(c, j, big) : fwdWord(c, j, big)
       return { pos: posFromFlat(s.lines, j) }
     }
     case 'b':
@@ -730,7 +779,7 @@ function normalChar(vim: VimState, s: EditorState, ch: string): VimResult {
       const r2 = Math.min(s.lines.length - 1, s.row + count - 1)
       return applyOperator(vim, s, op, { linewise: true, r1, r2 })
     }
-    const mo = motion(s, cmd, count, { lastFind: vim.lastFind })
+    const mo = motion(s, cmd, count, { lastFind: vim.lastFind, op })
     if (!mo) return clear(s) // not a motion → the whole command is void, as in vim
     return applyOperator(vim, s, op, operatorRange(s, mo))
   }
@@ -780,7 +829,9 @@ function normalChar(vim: VimState, s: EditorState, ch: string): VimResult {
       return insert({ ...s, lines, col: 0 })
     }
     case 's': {
-      const cut = cutFlat(s, flatIndex(s), flatIndex(s) + count)
+      // Like `x`, a count reaches no further than the end of the line.
+      const a = flatIndex(s)
+      const cut = cutFlat(s, a, Math.min(a + count, a + (cpLen(s.lines[s.row] ?? '') - s.col)))
       return insert(cut.state, { register: cut.text, registerLinewise: false })
     }
     case 'x': {

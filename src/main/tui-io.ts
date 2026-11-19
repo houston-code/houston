@@ -315,6 +315,12 @@ export interface TerminalIoDeps {
    * for none. Never written in screen-reader mode.
    */
   progress?: ProgressSupport | null
+  /**
+   * Register the last-chance terminal restore for when the process exits. Defaults to
+   * `process.on('exit')` for the process's real terminal, and to none for an injected
+   * stream. Injectable for tests.
+   */
+  onProcessExit?: (fn: () => void) => void
 }
 
 /**
@@ -534,6 +540,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
 
   // The transcript viewer is on the alternate screen: output waits for it to close.
   let pagerOpen = false
+  /** A progress state other than 'clear' is showing in the terminal's tab or title. */
+  let progressShown = false
   let heldOutput: string[] = []
 
   // --- Spinner: a single redrawn line, erased before any real output. This is the
@@ -599,7 +607,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     // where the user is typing. The draft is one row however many lines it has: its
     // line breaks show as a mark.
     const width = columnsNow() - 1
-    const flat = oneLine(draft)
+    // Only the end of a long draft can show, so only the end is measured: a big paste
+    // measured whole cost most of a frame, every frame.
+    const tailLength = Math.max(256, 4 * width)
+    let tail = draft.length > tailLength ? draft.slice(-tailLength) : draft
+    if (tail !== draft && /^[\udc00-\udfff]/.test(tail)) tail = tail.slice(1)
+    const flat = oneLine(tail)
     let line = frame(statusLabel, flat)
     if (statusLabel && visibleWidth(line) > width) line = frame('', flat)
     if (flat && visibleWidth(line) > width) {
@@ -981,8 +994,13 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // user's shell in raw mode — pasting into it garbage — until they run `reset`.
   // Only for the process's real terminal: an injected (test) stream has no shell
   // to hand back, and registering a process-wide hook per instance would leak.
-  if (stdin === process.stdin && stdin.isTTY && typeof stdin.setRawMode === 'function') {
-    process.on('exit', () => {
+  const onProcessExit =
+    deps.onProcessExit ??
+    (stdin === process.stdin && stdin.isTTY && typeof stdin.setRawMode === 'function'
+      ? (fn: () => void): void => void process.on('exit', fn)
+      : undefined)
+  if (onProcessExit) {
+    onProcessExit(() => {
       try {
         stdin.removeListener('data', onWatchData)
         // Focus reporting MUST go off with us: left on, the user's shell receives
@@ -991,6 +1009,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         rawWrite(DISABLE_FOCUS_REPORTING)
         rawWrite(DISABLE_BRACKETED_PASTE)
         rawWrite(DISABLE_MODIFIED_KEYS)
+        // A vim composer's block cursor, and a tab's progress bar or status, would
+        // outlive us in the user's shell (a SIGTERM, an uncaught error).
+        if (openComposer) rawWrite(CURSOR_RESET)
+        if (progressShown && deps.progress) rawWrite(progressSequence('clear', deps.progress))
         // Leaving with the viewer open would strand the shell on the alternate screen.
         if (pagerOpen) rawWrite(SHOW_CURSOR + ALT_SCREEN_OFF)
         stdin.setRawMode(false)
@@ -1448,9 +1470,14 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               break
             case 'tab':
               if (!composer) break
+              // Paused, not just unheard: stdin keeps flowing, and keys typed while
+              // the completer works would be dropped. They wait, then arrive in order.
               stdin.removeListener('data', onData)
+              stdin.pause()
               void complete().finally(() => {
-                if (!done) stdin.on('data', onData)
+                if (done) return
+                stdin.on('data', onData)
+                stdin.resume()
               })
               return
             case 'external-edit':
@@ -1662,7 +1689,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         else pickMenu(menu, menuSel)
         return true
       }
-      const view = (withMenu = true): ReturnType<typeof renderEditor> => {
+      const view = (withMenu = true, windowed = true): ReturnType<typeof renderEditor> => {
         // The line under the cursor drives the menu: typing `/` shows what you can
         // run, without having to already know its name.
         if (withMenu && helpOverlay) {
@@ -1723,6 +1750,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         })
         // A draft taller than the screen (a long one handed back) shows the rows
         // around the cursor, so the redraw never climbs past the top of the screen.
+        // Not for the copy left in the scrollback once it is sent: that one is whole.
+        if (!windowed) return rendered
         return windowEditorView(rendered, below.length, deps.rows?.() ?? process.stdout.rows ?? 0)
       }
 
@@ -1827,6 +1856,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         rawWrite(ENABLE_BRACKETED_PASTE)
         // Shift-Enter for a new line, on terminals that can report it.
         rawWrite(ENABLE_MODIFIED_KEYS)
+        // The mode's cursor shape, from the first key: on opening, and on coming back
+        // from $EDITOR, the transcript viewer or a suspend (teardown reset it).
+        if (vimOn) rawWrite(vimCursor(vim.mode))
         stdin.on('data', onData)
         stopResize = onResize?.(onTerminalResize) ?? null
         // A suggestion that lands while the composer is open shows at once.
@@ -1845,7 +1877,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           // Leave the submitted message in the scrollback, exactly as readline did:
           // just the prompt and text, not the command menu that was open under it.
           if (echo && value !== null) {
-            const v = view(false)
+            const v = view(false, false)
             rawWrite(`${v.rows.join('\n')}\n`)
           }
         })
@@ -1891,7 +1923,6 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           if (done) return
           try {
             setup()
-            if (vimOn) rawWrite(vimCursor(vim.mode))
           } catch {
             /* best-effort: the read still settles through close/cancel */
           }
@@ -2210,9 +2241,14 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               suspendComposer()
               return
             case 'complete':
+              // Paused, not just unheard: stdin keeps flowing, and keys typed while
+              // the completer works would be dropped. They wait, then arrive in order.
               stdin.removeListener('data', onData)
+              stdin.pause()
               void runComplete().finally(() => {
-                if (!done) stdin.on('data', onData)
+                if (done) return
+                stdin.on('data', onData)
+                stdin.resume()
               })
               return
             case 'external-edit':
@@ -2519,6 +2555,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     progress: (state: ProgressState, label?: string) => {
       if (!deps.progress || screenReader) return
+      progressShown = state !== 'clear'
       rawWrite(progressSequence(state, deps.progress, label))
     },
     yieldComposer: () => {

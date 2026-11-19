@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Writable } from 'node:stream'
 import type { AgentEvent, ElicitationResult, PlanDecision } from '@shared/agent'
 import { spawn, spawnSync } from 'node:child_process'
 import {
+  editorCommand,
   guardTerminalExit,
   onFirstPrompt,
   resolveBackgroundEvent,
   runHeadlessEntry,
+  runEditor,
   runScheduleDaemonEntry,
   waitForBackgroundSessionsUnless,
   watchOutputClosed,
@@ -318,6 +320,49 @@ describe('onFirstPrompt', () => {
   it('leaves an io without a composer as it is', () => {
     const io = {}
     expect(onFirstPrompt(io, () => {})).toBe(io)
+  })
+})
+
+describe('the $VISUAL / $EDITOR hand-off', () => {
+  // `code --wait` (a .cmd shim on Windows) and an editor path with a space in it
+  // failed to start, and silently: split on spaces and spawned without a shell.
+  it('runs the editor through cmd.exe on Windows, with the file quoted', () => {
+    expect(editorCommand('code --wait', 'C:\\Users\\A B\\x.md', 'win32')).toEqual({
+      cmd: 'code --wait "C:\\Users\\A B\\x.md"',
+      args: [],
+      shell: true
+    })
+  })
+
+  it.skipIf(process.platform === 'win32')('runs a quoted editor path with a space and its flags, given the file as an argument', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston editor '))
+    try {
+      const ed = join(dir, 'my ed.sh')
+      writeFileSync(ed, '#!/bin/sh\nprintf \'%s|%s\' "$1" "$(basename "$2")" > "$2"\n')
+      chmodSync(ed, 0o755)
+      const file = join(dir, 'MESSAGE $(touch pwned).md')
+      writeFileSync(file, '')
+      const reports: string[] = []
+      expect(runEditor(`'${ed}' --wait`, file, { report: (l) => reports.push(l) })).toBe(true)
+      expect(readFileSync(file, 'utf8')).toBe('--wait|MESSAGE $(touch pwned).md')
+      expect(existsSync(join(dir, 'pwned'))).toBe(false)
+      expect(reports).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('says so when the editor cannot be started', () => {
+    const reports: string[] = []
+    expect(runEditor('no-such-editor-houston', join(tmpdir(), 'x.md'), { report: (l) => reports.push(l) })).toBe(false)
+    expect(reports.join('')).toContain('could not start your editor (no-such-editor-houston)')
+  })
+
+  it('reports a spawn error rather than returning quietly', () => {
+    const reports: string[] = []
+    const spawn = (() => ({ error: new Error('spawn EACCES'), status: null })) as unknown as typeof spawnSync
+    expect(runEditor('ed', 'x.md', { spawn, platform: 'win32', report: (l) => reports.push(l) })).toBe(false)
+    expect(reports).toEqual(['· could not start your editor (ed): spawn EACCES\n'])
   })
 })
 

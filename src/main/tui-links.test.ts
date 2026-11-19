@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import { fitColumns, renderMarkdownAnsi } from './markdown-ansi'
 import { makePainter } from './tui'
-import { isLinkableFile, markdownLinks, webLinkUrl, workspaceFileUrl, type MarkdownLinks } from './tui-links'
+import { isLinkableFile, markdownLinks, PROSE_PATH, webLinkUrl, workspaceFileUrl, type MarkdownLinks } from './tui-links'
 import { filterTerminalOutput, truncateVisible, visibleWidth, wrapAnsi } from './tui-wrap'
 
 const paint = makePainter(false)
@@ -108,6 +108,19 @@ describe('markdown links in the terminal', () => {
   it('wraps a linked paragraph by its visible text', () => {
     const out = render(`word ${'`src/a.ts`'} ${'more '.repeat(6).trim()}`, 20)
     for (const line of out.split('\n')) expect(visibleWidth(line)).toBeLessThanOrEqual(20)
+  })
+})
+
+describe('PROSE_PATH', () => {
+  // A match restarted after every `+`, scanning the rest of the run each time:
+  // 20 KB of `x+y/` took about 355 ms.
+  it('finds paths in a long run of path-shaped text in linear time', () => {
+    const run = 'x+y/'.repeat(5000)
+    const t0 = performance.now()
+    const found = [...run.matchAll(PROSE_PATH)]
+    expect(performance.now() - t0).toBeLessThan(50)
+    expect(found).toEqual([])
+    expect([...'see a+b/c.ts and src/x.ts:3'.matchAll(PROSE_PATH)].map((m) => m[1])).toEqual(['a+b/c.ts', 'src/x.ts:3'])
   })
 })
 

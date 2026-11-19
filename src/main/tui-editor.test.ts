@@ -318,6 +318,19 @@ describe('renderEditor', () => {
     expect(v.cursorCol).toBe(plain.cursorCol)
   })
 
+  // A tab went to the terminal as is and jumped to its next tab stop, while the
+  // cursor was placed as if it took one column.
+  it('draws a tab as spaces, with the cursor and marks after it where the text is', () => {
+    const state = setEditorText(initialEditorState(), 'a\tultrathink')
+    const v = renderEditor(state, { prompt: '> ', width: 40, paint: colour, marks: [[{ start: 2, end: 12 }]] })
+    expect(v.rows).toEqual([`> a    ${marked('ultrathink')}`])
+    expect(v.cursorCol).toBe(visibleWidth('> a    ultrathink'))
+    const found = run([{ type: 'search' }, type('x')], initialEditorState(['x\ty'])).state
+    const row = renderEditor(found, { prompt: '> ', width: 60, paint }).rows[0]
+    expect(row).toContain('x    y')
+    expect(row).not.toContain('\t')
+  })
+
   it('draws header rows above the prompt and counts them in the cursor row', () => {
     const { state } = run([type('hi')])
     const plain = renderEditor(state, { prompt: '> ', width: 40, paint })
