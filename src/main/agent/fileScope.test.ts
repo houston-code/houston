@@ -28,6 +28,7 @@ import {
   inGitScope,
   listScope,
   planRuns,
+  MAX_RUN_PATH_CHARS,
   planScope,
   runPathArgs
 } from './fileScope'
@@ -606,6 +607,22 @@ describe('helpers', () => {
       ['', 201]
     ])
     expect(runs.flatMap((r) => r.extraPaths)).toEqual(extras)
+  })
+
+  it('planRuns also caps each batch by length, so long paths fit a Windows command line', () => {
+    // 500 paths of ~200 characters is ~100,000: three times what Windows allows.
+    const long = Array.from({ length: 500 }, (_, i) => `${'deep/'.repeat(39)}file-${String(i).padStart(4, '0')}.ts`)
+    const runs = planRuns('src', long, 500)
+    expect(runs.length).toBeGreaterThan(2)
+    for (const r of runs.slice(1)) {
+      expect(r.extraPaths.join(' ').length).toBeLessThanOrEqual(MAX_RUN_PATH_CHARS)
+    }
+    expect(runs.flatMap((r) => r.extraPaths)).toEqual(long)
+    // A path with a space counts the quotes Windows wraps it in (3 + 2 + 1 space each).
+    const spaced = planRuns('', ['a b', 'c d', 'e f'], 500, false, 12)
+    expect(spaced.map((r) => r.extraPaths)).toEqual([['a b', 'c d'], ['e f']])
+    // A single path longer than the cap still gets a run.
+    expect(planRuns('', ['x'.repeat(50)], 500, false, 10).map((r) => r.extraPaths.length)).toEqual([1])
   })
 
   it('runPathArgs never drops the search root and never adds one to a batch', () => {

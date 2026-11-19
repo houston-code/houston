@@ -342,20 +342,41 @@ export class ScopeCache {
 }
 
 /**
+ * Characters of explicit paths one run may carry. Windows caps a whole command line at
+ * 32,767 characters (program, flags, pattern, and every path, each quoted when it has a
+ * space), so a batch of long paths failed the search outright; this leaves room for the
+ * rest. POSIX limits are far higher.
+ */
+export const MAX_RUN_PATH_CHARS = 24_000
+
+/**
  * Plan the runs of a search backend that honors ignore files: one that walks the
  * search root (unless `walk` is false), then `extraPaths` in batches small enough
- * to stay well under every platform's argv limit.
+ * to stay well under every platform's argv limit: at most `perRun` paths, and at most
+ * `maxChars` characters of them (a single longer path still gets a run of its own).
  */
 export function planRuns(
   searchRel: string,
   extraPaths: string[],
   perRun = 500,
-  walk = true
+  walk = true,
+  maxChars = MAX_RUN_PATH_CHARS
 ): { searchRel: string; extraPaths: string[] }[] {
   const runs = walk ? [{ searchRel, extraPaths: [] as string[] }] : []
-  for (let i = 0; i < extraPaths.length; i += perRun) {
-    runs.push({ searchRel: '', extraPaths: extraPaths.slice(i, i + perRun) })
+  let batch: string[] = []
+  let chars = 0
+  for (const p of extraPaths) {
+    // The separating space, and the quotes Windows adds around a path with a space.
+    const cost = p.length + 1 + (/\s/.test(p) ? 2 : 0)
+    if (batch.length > 0 && (batch.length >= perRun || chars + cost > maxChars)) {
+      runs.push({ searchRel: '', extraPaths: batch })
+      batch = []
+      chars = 0
+    }
+    batch.push(p)
+    chars += cost
   }
+  if (batch.length) runs.push({ searchRel: '', extraPaths: batch })
   return runs
 }
 
