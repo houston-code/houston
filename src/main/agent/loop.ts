@@ -115,6 +115,7 @@ import {
   getTool,
   PRESENT_PLAN_NAME,
   resolveInRoots,
+  rootsResolver,
   staleWriteRefusal,
   SHELL_NETWORK_DECLINED_NOTE,
   SHELL_NETWORK_GRANTED_NOTE,
@@ -234,7 +235,7 @@ import { gatherReadinessFacts, planReadiness, readinessNote } from './readiness'
 import { isSensitiveRead } from './sensitive-paths'
 import { lspManager } from './lsp/manager'
 import { afterWrite, captureBeforeWrite, type WriteSeamTarget } from './lsp/writeSeam'
-import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
+import { activeBackendId, isSandboxed, prepareSandbox, type EgressProxyEndpoints } from '../sandbox'
 import { egressEndpointsForRun, registerEgressRun } from './egress'
 import { formatFile } from './format'
 import {
@@ -1814,7 +1815,78 @@ export async function startRun(
     // indistinguishable from a bad address, so it gets the attempt count, not the
     // outage budget (see RetryBudget).
     let providerReached = false
-    const rules = await loadProjectRules(workspace)
+    // Cross-session memory (memoryStore.ts), unless turned off in Settings or for this run.
+    const memoryOn = settings.memoryEnabled !== false
+    const memory = memoryOn ? memoryStore({ workspace }) : undefined
+    // Whether this folder's ELEVATING project config (allow rules, hooks, MCP
+    // servers) is honored: only after the user's explicit trust consent, and only
+    // while the elevating subset still matches the fingerprint they consented to —
+    // a drift (e.g. a pull that adds a hook) drops back to untrusted.
+    const trustsProject = (elevatedHash: string): boolean =>
+      elevatedHash !== '' && folderTrustState(settings.trustedFolders, workspace, elevatedHash) === 'trusted'
+    const projectConfigLoad = loadProjectConfig(workspace)
+    // Built-in tools plus any tools from connected MCP servers (best effort).
+    // A trusted folder's project MCP servers join the user's own under a `proj-`
+    // id prefix (user servers win collisions); untrusted folders contribute none.
+    // The headless --mcp-config servers join for this run only, never saved.
+    // Stop ends the wait for a slow server; a server that is down is named to the user
+    // (once per change per chat), shown below once the redactor exists.
+    // The servers connect as soon as the project config says which of them this folder
+    // adds, alongside the loads below rather than after the prompt is built; the tools
+    // are awaited where the run first needs them.
+    const mcpNotices: string[] = []
+    const mcpToolDefsLoad = projectConfigLoad.then((config) =>
+      // A run that already ended (a load below failed) has released its servers, so
+      // it must not register them again.
+      runs.has(runId)
+        ? getMcpToolDefs(
+            mergeRunMcpServers(
+              trustsProject(config.elevatedHash)
+                ? mergeProjectMcpServers(settings.mcpServers, config.elevated.mcpServers)
+                : settings.mcpServers,
+              req.extraMcpServers
+            ),
+            runId,
+            { signal: abort.signal, noticeKey: conversationId ?? runId, onNotice: (m) => mcpNotices.push(m) }
+          )
+        : []
+    )
+    // Awaited below; this only keeps a failure that lands before then from being
+    // reported as unhandled.
+    mcpToolDefsLoad.catch(() => {})
+    // The run-start loads don't depend on each other, so they run at once rather than
+    // one after another: the project rules, the managed policy and project config, the
+    // custom agents and skills, the prompt snapshot (the git context, on a chat's first
+    // turn of the day), and the sandbox probe the prompt and toolset read below.
+    //
+    // Date + git/GitHub awareness and the saved-memory index folded into the prompt,
+    // captured once per conversation and reused on later runs so the system prompt
+    // (and with it the provider's cached history) survives the agent's own edits
+    // between turns; it is retaken only when the local date changes. githubContext is
+    // a pure PATH probe (no network), so the run start never triggers unapproved
+    // egress. Resolved before the toolset, which offers recall_memory only when the
+    // index lists something.
+    const [
+      rules,
+      managedPolicy,
+      projectConfig,
+      agents,
+      workspaceSkills,
+      { snapshot: promptSnapshot, fresh: freshSnapshot }
+    ] = await Promise.all([
+      loadProjectRules(workspace, { reuseDiscovery: true }),
+      loadManagedPolicy(),
+      projectConfigLoad,
+      loadAgents(workspace),
+      loadSkills(workspace),
+      resolvePromptSnapshot(
+        conversationId ? peekConversationHeader(conversationId)?.promptSnapshot : undefined,
+        localDateStamp(new Date()),
+        async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n'),
+        memory ? () => memoryIndexOrEmpty(memory) : undefined
+      ),
+      prepareSandbox()
+    ])
     // Permission-rule precedence, highest first. A matching deny wins in any tier;
     // otherwise the first matching allow or ask, in this order, decides:
     //   1. Admin managed policy — org-distributed, root-owned; deny/ask only.
@@ -1826,15 +1898,7 @@ export async function startRun(
     // their behalf. A TRUSTED folder's `allow` rules join at the LOWEST tier: they
     // fill gaps the user hasn't decided, but can never shadow a user (or guardrail)
     // rule for the same target. See managedPolicy.ts / projectConfig.ts.
-    const managedPolicy = await loadManagedPolicy()
-    const projectConfig = await loadProjectConfig(workspace)
-    // Whether this folder's ELEVATING project config (allow rules, hooks, MCP
-    // servers) is honored: only after the user's explicit trust consent, and only
-    // while the elevating subset still matches the fingerprint they consented to —
-    // a drift (e.g. a pull that adds a hook) drops back to untrusted.
-    const projectTrusted =
-      projectConfig.elevatedHash !== '' &&
-      folderTrustState(settings.trustedFolders, workspace, projectConfig.elevatedHash) === 'trusted'
+    const projectTrusted = trustsProject(projectConfig.elevatedHash)
     // The two guardrail tiers that outrank the user. A mid-run "Always allow/deny"
     // is spliced in just BELOW their count so live consent can never shadow an admin
     // or project rule (see the splice near the approval handler). The slice is also
@@ -1892,23 +1956,6 @@ export async function startRun(
     // *block* below reads `run.policy`, so toggling plan on/off mid-run still
     // gates tool calls live — only the prose the model already saw is fixed.
     const planMode = req.approvalPolicy === 'plan'
-    const agents = await loadAgents(workspace)
-    // Cross-session memory (memoryStore.ts), unless turned off in Settings or for this run.
-    const memoryOn = settings.memoryEnabled !== false
-    const memory = memoryOn ? memoryStore({ workspace }) : undefined
-    // Date + git/GitHub awareness and the saved-memory index folded into the prompt,
-    // captured once per conversation and reused on later runs so the system prompt
-    // (and with it the provider's cached history) survives the agent's own edits
-    // between turns; it is retaken only when the local date changes. githubContext is
-    // a pure PATH probe (no network), so the run start never triggers unapproved
-    // egress. Resolved before the toolset, which offers recall_memory only when the
-    // index lists something.
-    const { snapshot: promptSnapshot, fresh: freshSnapshot } = await resolvePromptSnapshot(
-      conversationId ? peekConversationHeader(conversationId)?.promptSnapshot : undefined,
-      localDateStamp(new Date()),
-      async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n'),
-      memory ? () => memoryIndexOrEmpty(memory) : undefined
-    )
     if (freshSnapshot && conversationId) {
       try {
         setPromptSnapshot(conversationId, promptSnapshot)
@@ -1966,7 +2013,7 @@ export async function startRun(
     // built-in tied to a tool this run doesn't offer (render-ui needs show_images)
     // is left out.
     const skills = withBuiltinSkills(
-      await loadSkills(workspace),
+      workspaceSkills,
       builtinNames
     )
     // Skills loaded this turn whose `allowed-tools` narrow what runs (see skillSpec.ts).
@@ -2077,25 +2124,8 @@ export async function startRun(
     // Which version of Houston's own instructions this run's replies came from, kept on
     // each one so saved chats can be compared across prompt changes (see promptId).
     runPromptId = promptId(promptInputs, builtinDefs.map((t) => t.schema))
-    // Built-in tools plus any tools from connected MCP servers (best effort).
-    // A trusted folder's project MCP servers join the user's own under a `proj-`
-    // id prefix (user servers win collisions); untrusted folders contribute none.
-    // The headless --mcp-config servers join for this run only, never saved.
-    // Stop ends the wait for a slow server; a server that is down is named to the user
-    // (once per change per chat), shown below once the redactor exists.
-    const mcpNotices: string[] = []
-    const mcpToolDefs = (
-      await getMcpToolDefs(
-        mergeRunMcpServers(
-          projectTrusted
-            ? mergeProjectMcpServers(settings.mcpServers, projectConfig.elevated.mcpServers)
-            : settings.mcpServers,
-          req.extraMcpServers
-        ),
-        runId,
-        { signal: abort.signal, noticeKey: conversationId ?? runId, onNotice: (m) => mcpNotices.push(m) }
-      )
-    ).filter((d) => toolOffered(req.toolScope, d.schema.name))
+    // The MCP tools, connected since the project config resolved (see mcpToolDefsLoad).
+    const mcpToolDefs = (await mcpToolDefsLoad).filter((d) => toolOffered(req.toolScope, d.schema.name))
     if (abort.signal.aborted) {
       emit({ type: 'done', stopReason: 'aborted' })
       return
@@ -3923,9 +3953,10 @@ export async function startRun(
     // last did (the user editing mid-run, a shell command, a subagent). Carried
     // across this conversation's turns, but only for files whose read or write is
     // still in the history the model is shown: a rewound, compacted, or evicted read
-    // no longer counts as seen. See FileReadTracker.
+    // no longer counts as seen. See FileReadTracker. The paths resolve exactly as
+    // resolvePath does, with the roots canonicalized once per pass over the history.
     const visibleFilePaths = (): Set<string> =>
-      pathsSeenInHistory(messages.slice(Math.max(cut, evictBefore)), resolvePath, patchPaths)
+      pathsSeenInHistory(messages.slice(Math.max(cut, evictBefore)), rootsResolver(roots), patchPaths)
     const fileTracker = fileTrackerForRun(conversationId, visibleFilePaths())
     // Drop the read records for files the model can no longer see (after eviction or
     // compaction), and the cached reads with them: a cached read_file hit doesn't run

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { execFile, execFileSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -12,6 +12,8 @@ import {
   isSafeGitRef,
   parseWorktreePorcelain,
   readBaseRelation,
+  type BaseRelation,
+  type GitExec,
 } from './git'
 
 describe('formatGitContext', () => {
@@ -200,6 +202,14 @@ describe('formatWorktreeContext', () => {
     expect(s).toContain('/repo/wt-a [feat/x] (current)')
     expect(s).toContain('/repo/wt-b [detached]')
     expect(s).not.toContain('/repo [main]') // main is not repeated in the linked list
+  })
+
+  it('marks current when the workspace uses backslashes and git lists forward slashes', () => {
+    const entries = [
+      { path: 'C:/repo', branch: 'main', detached: false, bare: false },
+      { path: 'C:/repo/wt-a', branch: 'feat/x', detached: false, bare: false }
+    ]
+    expect(formatWorktreeContext(entries, 'C:\\repo\\wt-a')).toContain('C:/repo/wt-a [feat/x] (current)')
   })
 
   it('marks current even with a trailing slash mismatch', () => {
@@ -518,6 +528,241 @@ describe('git config-driven execution hardening (real repo)', () => {
       expect(existsSync(marker)).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('gitContext lookups run as one round', () => {
+  const SHA = 'b'.repeat(40)
+  /**
+   * A fake git that answers a typical clone (on main, two commits behind origin/main)
+   * a moment later, and records each call's place in the chain: one more than the
+   * deepest call that had already answered when it started.
+   */
+  function chained(): { exec: GitExec; depth: () => number; calls: string[] } {
+    let answered = 0
+    let deepest = 0
+    const calls: string[] = []
+    const answer = (args: string[]): string => {
+      const key = args.join(' ')
+      if (key === 'rev-parse --abbrev-ref HEAD') return 'main\n'
+      if (key === 'rev-parse --abbrev-ref origin/HEAD') return 'origin/main\n'
+      if (args[0] === 'rev-parse' && args[1] === '--verify') return `${SHA}\n`
+      if (args[0] === 'status') return ' M a.ts\n'
+      if (args[0] === 'worktree') return 'worktree /ws\nHEAD x\nbranch refs/heads/main\n'
+      if (args[0] === 'merge-base') return `${SHA}\n`
+      if (args[0] === 'rev-list') return '2\n'
+      throw new Error(`unexpected: ${key}`)
+    }
+    const exec: GitExec = (args) => {
+      calls.push(args.join(' '))
+      const depth = answered + 1
+      deepest = Math.max(deepest, depth)
+      return new Promise((resolve) =>
+        setTimeout(() => {
+          answered = Math.max(answered, depth)
+          resolve(answer(args))
+        }, 2)
+      )
+    }
+    return { exec, depth: () => deepest, calls }
+  }
+
+  it('waits on two rounds of git (after the hardening probe), not a chain of five', async () => {
+    const git = chained()
+    const s = await gitContext('/ws', git.exec)
+    expect(s).toContain('branch "main"')
+    expect(s).toContain('Branch is 2 commits behind origin/main')
+    // Every lookup but merge-base and rev-list starts at once; those two need the base.
+    expect(git.depth()).toBe(2)
+    // The same lookups as before, none twice.
+    expect([...git.calls].sort()).toEqual(
+      [
+        'merge-base HEAD origin/main',
+        'rev-list --count HEAD..origin/main',
+        'rev-parse --abbrev-ref HEAD',
+        'rev-parse --abbrev-ref origin/HEAD',
+        'rev-parse --verify -q HEAD^{commit}',
+        'rev-parse --verify -q origin/main^{commit}',
+        'rev-parse --verify -q origin/master^{commit}',
+        'status --porcelain',
+        'worktree list --porcelain'
+      ].sort()
+    )
+  })
+
+  it('checks an origin/HEAD naming another branch in one more step only', async () => {
+    const exec = (args: string[]): Promise<string> => {
+      const key = args.join(' ')
+      if (key === 'rev-parse --abbrev-ref HEAD') return Promise.resolve('main\n')
+      if (key === 'rev-parse --abbrev-ref origin/HEAD') return Promise.resolve('origin/trunk\n')
+      if (key === 'rev-parse --verify -q origin/main^{commit}') return Promise.reject(new Error('missing'))
+      if (args[0] === 'rev-parse' && args[1] === '--verify') return Promise.resolve(`${SHA}\n`)
+      if (args[0] === 'merge-base') return Promise.resolve(`${SHA}\n`)
+      if (key === 'rev-list --count HEAD..origin/trunk') return Promise.resolve('4\n')
+      return Promise.resolve('')
+    }
+    expect(await gitContext('/ws', exec)).toContain('Branch is 4 commits behind origin/trunk')
+  })
+})
+
+describe('gitContext text matches the one-at-a-time lookups (real repos)', () => {
+  // The lookups as they ran before they were overlapped: the branch first, then the
+  // rest, with the base relation's steps one after another. The context goes into the
+  // system prompt, so it must come out byte-identical for the same repository state.
+  async function sequentialBaseRelation(workspace: string, exec: GitExec): Promise<BaseRelation | null> {
+    const verify = async (ref: string): Promise<boolean> =>
+      /^[0-9a-f]{7,64}$/.test((await exec(['rev-parse', '--verify', '-q', `${ref}^{commit}`], workspace).catch(() => '')).trim())
+    if (!(await verify('HEAD'))) return null
+    const head = (await exec(['rev-parse', '--abbrev-ref', 'origin/HEAD'], workspace).catch(() => '')).trim()
+    const candidates = [...new Set([head, 'origin/main', 'origin/master'])].filter(
+      (ref) => ref.startsWith('origin/') && isSafeGitRef(ref)
+    )
+    let base: string | null = null
+    for (const ref of candidates) {
+      if (await verify(ref)) {
+        base = ref
+        break
+      }
+    }
+    if (!base) return null
+    let mergeBase: string
+    try {
+      mergeBase = (await exec(['merge-base', 'HEAD', base], workspace)).trim()
+    } catch {
+      return { kind: 'unrelated', base }
+    }
+    if (!/^[0-9a-f]{7,64}$/.test(mergeBase)) return null
+    const count = Number.parseInt((await exec(['rev-list', '--count', `HEAD..${base}`], workspace).catch(() => '')).trim(), 10)
+    return Number.isFinite(count) ? { kind: 'behind', base, behind: count } : null
+  }
+
+  async function sequentialGitContext(workspace: string, exec: GitExec): Promise<string> {
+    let branch: string
+    try {
+      branch = (await exec(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).trim()
+    } catch {
+      try {
+        branch = (await exec(['symbolic-ref', '--short', '-q', 'HEAD'], workspace)).trim()
+      } catch {
+        return ''
+      }
+    }
+    if (!branch) return ''
+    const status = await exec(['status', '--porcelain'], workspace).catch(() => '')
+    const worktrees = await exec(['worktree', 'list', '--porcelain'], workspace)
+      .then((out) => formatWorktreeContext(parseWorktreePorcelain(out), workspace))
+      .catch(() => '')
+    const relation = await sequentialBaseRelation(workspace, exec).catch((): BaseRelation | null => null)
+    return [formatGitContext(branch, status), formatBaseContext(relation), worktrees].filter(Boolean).join('\n')
+  }
+
+  /** Plain git, for both implementations alike (the hardening is covered above). */
+  // Every git here checks out and reads files as committed. The hardened runner skips the
+  // system config, where Git for Windows turns on CRLF conversion, so a converted checkout
+  // would read as changed to it and clean to plain git.
+  const asCommitted = ['-c', 'core.autocrlf=false']
+  const plainExec: GitExec = (args, cwd) =>
+    new Promise((resolve, reject) => {
+      execFile('git', ['--no-pager', ...asCommitted, ...args], { cwd, timeout: 10_000 }, (err, stdout) =>
+        err ? reject(err) : resolve(stdout)
+      )
+    })
+
+  const run = (args: string[], cwd: string): void => {
+    execFileSync('git', [...asCommitted, ...args], { cwd, stdio: 'pipe' })
+  }
+  const commit = (cwd: string, file: string): void => {
+    writeFileSync(join(cwd, file), `${file}\n`)
+    run(['add', file], cwd)
+    run(['-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '-qm', file], cwd)
+  }
+
+  /** Assert both implementations agree on `dir`, and return the (shared) text. */
+  const same = async (dir: string): Promise<string> => {
+    const expected = await sequentialGitContext(dir, plainExec)
+    expect(await gitContext(dir, plainExec)).toBe(expected)
+    // The real, hardened runner reads the same answers.
+    expect(await gitContext(dir)).toBe(expected)
+    return expected
+  }
+
+  it('agrees across repository shapes', { timeout: 60_000 }, async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'houston-git-shapes-')))
+    try {
+      // Not a repository at all.
+      const plain = join(root, 'plain')
+      mkdirSync(plain)
+      expect(await same(plain)).toBe('')
+
+      // A fresh repository: no commits yet, one untracked file, no origin.
+      const fresh = join(root, 'fresh')
+      run(['init', '-q', '-b', 'main', fresh], root)
+      writeFileSync(join(fresh, 'new.txt'), 'x\n')
+      expect(await same(fresh)).toContain('branch "main"')
+
+      // Commits but no origin; then a dirty tree longer than the listed changes.
+      const local = join(root, 'local')
+      run(['init', '-q', '-b', 'main', local], root)
+      commit(local, 'a.txt')
+      expect(await same(local)).toContain('working tree clean')
+      for (let i = 0; i < 25; i++) writeFileSync(join(local, `f${i}.txt`), 'x\n')
+      expect(await same(local)).toContain('and 5 more')
+
+      // Detached HEAD.
+      run(['checkout', '-q', '--detach'], local)
+      expect(await same(local)).toContain('branch "HEAD"')
+
+      // A clone one commit behind origin/main (origin/HEAD names it).
+      const remote = join(root, 'remote')
+      const clone = join(root, 'clone')
+      run(['init', '-q', '-b', 'main', remote], root)
+      commit(remote, 'a.txt')
+      run(['clone', '-q', remote, clone], root)
+      commit(remote, 'b.txt')
+      run(['fetch', '-q'], clone)
+      expect(await same(clone)).toContain('Branch is 1 commit behind origin/main')
+
+      // A branch with no upstream, cut from the clone.
+      run(['checkout', '-q', '-b', 'topic'], clone)
+      expect(await same(clone)).toContain('branch "topic"')
+
+      // A linked worktree of the clone.
+      const linked = join(root, 'linked')
+      run(['worktree', 'add', '-q', '-b', 'side', linked], clone)
+      expect(await same(linked)).toContain('(current)')
+
+      // Unrelated history.
+      run(['checkout', '-q', '--orphan', 'old-history'], clone)
+      run(['rm', '-rfq', '.'], clone)
+      commit(clone, 'c.txt')
+      expect(await same(clone)).toContain('shares no history with origin/main')
+
+      // origin/HEAD naming a branch other than main or master.
+      const trunkRemote = join(root, 'trunk-remote')
+      const trunkClone = join(root, 'trunk-clone')
+      run(['init', '-q', '-b', 'trunk', trunkRemote], root)
+      commit(trunkRemote, 'a.txt')
+      run(['clone', '-q', trunkRemote, trunkClone], root)
+      commit(trunkRemote, 'b.txt')
+      commit(trunkRemote, 'c.txt')
+      run(['fetch', '-q'], trunkClone)
+      expect(await same(trunkClone)).toContain('Branch is 2 commits behind origin/trunk')
+
+      // No origin/HEAD at all, only origin/master (a remote added by hand and fetched).
+      const masterRemote = join(root, 'master-remote')
+      const byHand = join(root, 'by-hand')
+      run(['init', '-q', '-b', 'master', masterRemote], root)
+      commit(masterRemote, 'a.txt')
+      run(['init', '-q', '-b', 'master', byHand], root)
+      run(['remote', 'add', 'origin', masterRemote], byHand)
+      run(['fetch', '-q', 'origin'], byHand)
+      run(['checkout', '-q', '-b', 'work', 'origin/master'], byHand)
+      commit(masterRemote, 'b.txt')
+      run(['fetch', '-q', 'origin'], byHand)
+      expect(await same(byHand)).toContain('Branch is 1 commit behind origin/master')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
     }
   })
 })

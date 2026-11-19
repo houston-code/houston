@@ -72,6 +72,38 @@ function requireAddress(
 }
 
 /**
+ * Start loading the SDK the adapter for `kind` uses. Each adapter imports its SDK on
+ * its first request, so a provider never used loads none; but that import (tens of
+ * milliseconds to parse) then waited until the whole run start had finished. Started
+ * when the provider is created, it loads while the run assembles its prompt, and the
+ * adapter's own import resolves from the module cache. A failure is left for that
+ * import to report.
+ */
+function preloadSdk(kind: ProviderConfig['kind']): void {
+  const load = ((): Promise<unknown> => {
+    switch (kind) {
+      case 'anthropic':
+        return import('@anthropic-ai/sdk')
+      case 'openai':
+      case 'openai-compatible':
+      case 'azure-openai':
+        return import('openai')
+      case 'gemini':
+        return import('@google/genai')
+      case 'bedrock':
+        return import('@anthropic-ai/bedrock-sdk')
+      case 'vertex':
+        return import('@anthropic-ai/vertex-sdk')
+      case 'foundry':
+        return import('@anthropic-ai/foundry-sdk')
+      default:
+        return assertNever(kind, 'preloadSdk')
+    }
+  })()
+  load.catch(() => {})
+}
+
+/**
  * Build a ready-to-use provider for a configured provider, pulling its key from the
  * secrets store. Its requests record the rate-limit quota they report under the
  * provider's id (see quota.ts).
@@ -93,6 +125,7 @@ function buildProvider(config: ProviderConfig): Provider {
         : `No API key set for ${config.label}.`
     )
   }
+  preloadSdk(config.kind)
 
   switch (config.kind) {
     case 'anthropic':

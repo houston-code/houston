@@ -493,6 +493,23 @@ export function resolveInWorkspace(workspace: string, p: string): string {
  * containment boundary, so it must stay airtight.
  */
 export function resolveInRoots(roots: string[], p: string): string {
+  return resolveInRootsWith(roots, p, () => canonicalRoots(roots))
+}
+
+/**
+ * {@link resolveInRoots} for resolving many paths against the same roots in one
+ * synchronous pass (the file paths in a conversation's history, at run start): the
+ * same checks with the same answers, but the roots are canonicalized once for the
+ * pass instead of once per path. Make one per pass and drop it after, so a root that
+ * moves is seen by the next pass.
+ */
+export function rootsResolver(roots: string[]): (p: string) => string {
+  let realRoots: string[] | undefined
+  return (p) => resolveInRootsWith(roots, p, () => (realRoots ??= canonicalRoots(roots)))
+}
+
+/** {@link resolveInRoots}, with the roots' canonical paths supplied by `realRoots`. */
+function resolveInRootsWith(roots: string[], p: string, realRoots: () => string[]): string {
   if (typeof p !== 'string' || p.length === 0) throw new Error('A path is required.')
   if (roots.length === 0) throw new Error('No allowed roots configured.')
   const base = roots[0]
@@ -506,28 +523,36 @@ export function resolveInRoots(roots: string[], p: string): string {
   // (e.g. `innocent -> /Users/you/.ssh/authorized_keys`). These file tools run in
   // the main process, NOT the Seatbelt sandbox, so this realpath check is their
   // only confinement against symlink traversal.
-  if (!realpathWithinRoots(roots, abs)) {
+  if (!realpathWithinRoots(realRoots(), abs)) {
     throw new Error(`Path escapes the allowed roots via a symlink: ${p}`)
   }
   return abs
 }
 
 /**
- * Whether the canonical (symlink-resolved) location of `abs` lies within a root.
- * The target may not exist yet (a write/create), so we realpath the deepest
- * EXISTING ancestor — resolving every symlink in that prefix — then re-attach the
- * not-yet-existing tail and check containment. Roots are realpath'd too so a
- * non-canonical root (e.g. macOS `/var` -> `/private/var`) doesn't false-positive.
- * Fails closed on any realpath error other than a missing path (e.g. ELOOP).
+ * The roots' canonical paths, for {@link realpathWithinRoots}: realpath'd so a
+ * non-canonical root (macOS `/var` -> `/private/var`) doesn't false-positive. A root
+ * that can't be resolved is kept as given.
  */
-function realpathWithinRoots(roots: string[], abs: string): boolean {
-  const realRoots = roots.map((r) => {
+function canonicalRoots(roots: string[]): string[] {
+  return roots.map((r) => {
     try {
       return realpathSync(r)
     } catch {
       return r
     }
   })
+}
+
+/**
+ * Whether the canonical (symlink-resolved) location of `abs` lies within a root.
+ * The target may not exist yet (a write/create), so we realpath the deepest
+ * EXISTING ancestor — resolving every symlink in that prefix — then re-attach the
+ * not-yet-existing tail and check containment. `realRoots` are the roots realpath'd
+ * too (see {@link canonicalRoots}), so a non-canonical root doesn't false-positive.
+ * Fails closed on any realpath error other than a missing path (e.g. ELOOP).
+ */
+function realpathWithinRoots(realRoots: string[], abs: string): boolean {
   let tail = ''
   let probe = abs
   // Bound the walk: realpathSync already rejects true symlink cycles with ELOOP,

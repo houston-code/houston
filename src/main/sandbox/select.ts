@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import type { SandboxBackend } from './contract'
 import { SANDBOX_EXEC_PATH, SeatbeltBackend } from './darwin'
-import { BubblewrapBackend, probeBwrapUsable } from './linux'
+import { BubblewrapBackend, probeBwrapUsable, probeBwrapUsableAsync } from './linux'
 import { UnsandboxedBackend } from './unsandboxed'
 import { WindowsBackend } from './windows'
 
@@ -40,4 +40,21 @@ export function selectBackend(deps: SelectDeps = {}): SandboxBackend {
   // reports sandboxed:false. Other POSIX hosts fall back to the bare /bin/bash backend.
   if (platform === 'win32') return WindowsBackend
   return UnsandboxedBackend
+}
+
+export interface SelectAsyncDeps extends Omit<SelectDeps, 'bwrapUsable'> {
+  /** Whether bubblewrap is usable on Linux (default: the real asynchronous probe). Injectable for tests. */
+  bwrapUsableAsync?: () => Promise<boolean>
+}
+
+/**
+ * {@link selectBackend} without blocking the process: on Linux the bubblewrap probe
+ * runs as an asynchronous spawn, and its answer then decides exactly as the
+ * synchronous probe's would. Other hosts select as before (no spawn there).
+ */
+export async function selectBackendAsync(deps: SelectAsyncDeps = {}): Promise<SandboxBackend> {
+  const platform = deps.platform ?? process.platform
+  if (platform !== 'linux') return selectBackend(deps)
+  const usable = await (deps.bwrapUsableAsync ?? probeBwrapUsableAsync)()
+  return selectBackend({ ...deps, bwrapUsable: () => usable })
 }

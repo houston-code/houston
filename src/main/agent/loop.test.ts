@@ -105,6 +105,7 @@ import {
   type ScheduledRunInput
 } from './scheduler'
 import { ScopeCache } from './fileScope'
+import { resetReusedRulesDiscovery, settleReusedRulesDiscovery } from './rules'
 
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
@@ -465,7 +466,12 @@ beforeEach(() => {
   delete h.settings.doneEvidenceNote
   h.errorWriteFails = null
 })
-afterEach(() => {
+afterEach(async () => {
+  // A run schedules a refresh of the workspace's nested-rules listing, which runs git in
+  // it: let that finish before the workspace goes (Windows won't remove a directory a
+  // process is working in), and start the next test without it.
+  await settleReusedRulesDiscovery()
+  resetReusedRulesDiscovery()
   rmSync(ws, { recursive: true, force: true })
   h.mcpDefs = []
   h.probeTools = []

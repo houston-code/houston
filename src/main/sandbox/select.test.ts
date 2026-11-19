@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sandboxAvailable, selectBackend } from './select'
+import { sandboxAvailable, selectBackend, selectBackendAsync } from './select'
 
 // selectBackend/sandboxAvailable are tested via injected platform/exists — NEVER via
 // the host-bound backend the barrel resolves on first use (index.test.ts covers that).
@@ -52,5 +52,25 @@ describe('selectBackend', () => {
     const b = selectBackend({ platform: 'win32', exists: () => true })
     expect(b.id).toBe('windows')
     expect(b.sandboxed).toBe(false)
+  })
+})
+
+describe('selectBackendAsync', () => {
+  it('decides on linux exactly as selectBackend does for the same probe answer', async () => {
+    for (const usable of [true, false]) {
+      const b = await selectBackendAsync({ platform: 'linux', bwrapUsableAsync: async () => usable })
+      expect(b).toBe(selectBackend({ platform: 'linux', bwrapUsable: () => usable }))
+    }
+    expect((await selectBackendAsync({ platform: 'linux', bwrapUsableAsync: async () => false })).sandboxed).toBe(false)
+  })
+
+  it('never probes bubblewrap off linux', async () => {
+    const probe = async (): Promise<boolean> => {
+      throw new Error('probed')
+    }
+    for (const platform of ['darwin', 'win32', 'freebsd'] as const) {
+      const b = await selectBackendAsync({ platform, exists: () => true, bwrapUsableAsync: probe })
+      expect(b).toBe(selectBackend({ platform, exists: () => true }))
+    }
   })
 })

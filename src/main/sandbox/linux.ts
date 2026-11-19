@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { accessSync, constants as fsConstants, existsSync, realpathSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { posix } from 'node:path'
@@ -245,8 +245,33 @@ export interface BwrapProbeDeps {
   bwrapPath?: () => string | undefined
 }
 
+/** How long the bubblewrap probe may run before it is killed and counted as unusable. */
+const PROBE_TIMEOUT_MS = 3000
+
 const defaultProbeExec = (file: string, args: string[]): void => {
-  execFileSync(file, args, { timeout: 3000, stdio: 'ignore' })
+  execFileSync(file, args, { timeout: PROBE_TIMEOUT_MS, stdio: 'ignore' })
+}
+
+/**
+ * The probe's argv: the namespace operations a real launch uses (see
+ * {@link probeBwrapUsable}), running a no-op shell command.
+ */
+function probeArgs(shell: string): string[] {
+  return [
+    '--ro-bind',
+    '/',
+    '/',
+    '--dev',
+    '/dev',
+    '--proc',
+    '/proc',
+    '--unshare-pid',
+    '--unshare-net',
+    '--die-with-parent',
+    shell,
+    '-c',
+    ':'
+  ]
 }
 
 let cachedProbe: boolean | undefined
@@ -267,21 +292,7 @@ export function probeBwrapUsable(deps: BwrapProbeDeps = {}): boolean {
   if (!injected && cachedProbe !== undefined) return cachedProbe
   const exec = deps.exec ?? defaultProbeExec
   const shell = deps.shell ?? bwrapShell()
-  const args = [
-    '--ro-bind',
-    '/',
-    '/',
-    '--dev',
-    '/dev',
-    '--proc',
-    '/proc',
-    '--unshare-pid',
-    '--unshare-net',
-    '--die-with-parent',
-    shell,
-    '-c',
-    ':'
-  ]
+  const args = probeArgs(shell)
   // Probe the very file a launch will spawn, so "usable" is never judged on one
   // bwrap and the command run under another.
   const file = (deps.bwrapPath ?? bwrapPath)()
@@ -300,9 +311,91 @@ export function probeBwrapUsable(deps: BwrapProbeDeps = {}): boolean {
   return ok
 }
 
+/**
+ * Run `file` with `args`, output discarded, resolving whether it exited 0. The
+ * asynchronous twin of the probe's `execFileSync`, with the same outcomes: a missing
+ * binary, a non-zero exit, or a kill (including the `timeoutMs` one) is false. One
+ * that outlives even `giveUpMs` (it ignored the kill) is SIGKILLed and counted false
+ * too, rather than holding its caller forever. Never rejects. Exported for tests.
+ */
+export function runProbeCommand(
+  file: string,
+  args: string[],
+  timeoutMs = PROBE_TIMEOUT_MS,
+  giveUpMs = PROBE_TIMEOUT_MS + 1000
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let child: ChildProcess | undefined
+    let settled = false
+    const done = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(giveUp)
+      resolve(ok)
+    }
+    const giveUp = setTimeout(() => {
+      child?.kill('SIGKILL')
+      done(false)
+    }, giveUpMs)
+    giveUp.unref()
+    try {
+      child = spawn(file, args, { stdio: 'ignore', timeout: timeoutMs, windowsHide: true })
+    } catch {
+      done(false)
+      return
+    }
+    child.once('error', () => done(false))
+    child.once('exit', (code) => done(code === 0))
+  })
+}
+
+export interface BwrapAsyncProbeDeps {
+  /** Runs the probe command, resolving whether it succeeded. Injectable for tests. */
+  run?: (file: string, args: string[]) => Promise<boolean>
+  shell?: string
+  /** The resolved bwrap path, as for {@link probeBwrapUsable}. Injectable for tests. */
+  bwrapPath?: () => string | undefined
+}
+
+let pendingProbe: Promise<boolean> | undefined
+
+/**
+ * {@link probeBwrapUsable} without blocking the process: the same command, run on the
+ * same resolved bwrap file, and the same answer, from an asynchronous spawn, so a
+ * terminal client can probe at launch while it starts up instead of stalling its first
+ * run on a synchronous one. With no absolute PATH entry holding bwrap it is false and
+ * runs nothing. Shares the memoized result both ways: an answer either form already
+ * has is returned at once, and the first answer is the one kept (a synchronous probe
+ * that ran meanwhile, for a caller that could not wait, wins). Tests inject `run` and
+ * bypass the cache.
+ */
+export function probeBwrapUsableAsync(deps: BwrapAsyncProbeDeps = {}): Promise<boolean> {
+  const injected = deps.run !== undefined
+  if (!injected && cachedProbe !== undefined) return Promise.resolve(cachedProbe)
+  if (!injected && pendingProbe) return pendingProbe
+  const run = deps.run ?? runProbeCommand
+  const shell = deps.shell ?? bwrapShell()
+  // Probe the very file a launch will spawn, exactly as the synchronous probe does.
+  const file = (deps.bwrapPath ?? bwrapPath)()
+  const probe = (file === undefined ? Promise.resolve(false) : run(file, probeArgs(shell)))
+    .catch(() => false)
+    .then((ok) => {
+      if (injected) return ok
+      // Unless the cache was reset while this probe ran (a test seam).
+      if (pendingProbe === probe) {
+        pendingProbe = undefined
+        cachedProbe ??= ok
+      }
+      return cachedProbe ?? ok
+    })
+  if (!injected) pendingProbe = probe
+  return probe
+}
+
 /** Test seam: clear the memoized probe result and bwrap path. */
 export function resetBwrapProbeCache(): void {
   cachedProbe = undefined
+  pendingProbe = undefined
   cachedBwrapPath = undefined
 }
 

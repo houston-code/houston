@@ -534,4 +534,38 @@ describe('pathsSeenInHistory', () => {
     )
     expect([...seen].sort()).toEqual(['/w/a.ts', '/w/b.ts', '/w/p1.ts', '/w/p2.ts'])
   })
+
+  it('resolves each distinct path once, however often the history names it', () => {
+    const asked: string[] = []
+    const counting = (rel: string): string => {
+      asked.push(rel)
+      return resolvePath(rel)
+    }
+    const history = Array.from({ length: 500 }, (_, i) => ({
+      toolCalls: [
+        { name: i % 2 ? 'read_file' : 'edit_file', arguments: { path: `f${i % 5}.ts` } },
+        { name: 'read_file', arguments: { path: '../outside' } },
+        { name: 'apply_patch', arguments: { patch: 'P' } }
+      ]
+    }))
+    const seen = pathsSeenInHistory(history, counting, patchPaths)
+    // The same answer as resolving every call, path refused or not...
+    expect([...seen].sort()).toEqual(
+      ['/w/f0.ts', '/w/f1.ts', '/w/f2.ts', '/w/f3.ts', '/w/f4.ts', '/w/p1.ts', '/w/p2.ts'].sort()
+    )
+    // ...from one resolution per distinct path, the refused one included.
+    expect([...asked].sort()).toEqual(['../outside', 'f0.ts', 'f1.ts', 'f2.ts', 'f3.ts', 'f4.ts', 'p1.ts', 'p2.ts'].sort())
+  })
+
+  it('resolves afresh on every call, so a path that stops resolving drops out', () => {
+    let escaped = false
+    const flipping = (rel: string): string => {
+      if (escaped) throw new Error('escapes via a symlink')
+      return resolvePath(rel)
+    }
+    const history = [{ toolCalls: [{ name: 'read_file', arguments: { path: 'a.ts' } }] }]
+    expect([...pathsSeenInHistory(history, flipping, patchPaths)]).toEqual(['/w/a.ts'])
+    escaped = true
+    expect([...pathsSeenInHistory(history, flipping, patchPaths)]).toEqual([])
+  })
 })

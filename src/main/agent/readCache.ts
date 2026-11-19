@@ -529,11 +529,27 @@ export function pathsSeenInHistory(
   resolvePath: (rel: string) => string,
   patchPaths: (patch: string) => string[]
 ): Set<string> {
+  // A conversation reads and edits the same files over and over: each distinct path is
+  // resolved (a symlink-aware realpath walk) once per call rather than once per tool call.
+  const resolved = new Map<string, string | null>()
+  const resolveOnce = (rel: string): string => {
+    let abs = resolved.get(rel)
+    if (abs === undefined) {
+      try {
+        abs = resolvePath(rel)
+      } catch {
+        abs = null
+      }
+      resolved.set(rel, abs)
+    }
+    if (abs === null) throw new Error(`Path does not resolve: ${rel}`)
+    return abs
+  }
   const out = new Set<string>()
   for (const m of messages) {
     for (const call of m.toolCalls ?? []) {
       if (!FILE_SEEING_TOOLS.has(call.name)) continue
-      for (const abs of writePaths(call.name, call.arguments, resolvePath, patchPaths)) out.add(abs)
+      for (const abs of writePaths(call.name, call.arguments, resolveOnce, patchPaths)) out.add(abs)
     }
   }
   return out

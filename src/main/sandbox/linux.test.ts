@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   buildBwrapArgs,
   bwrapShell,
@@ -7,6 +9,9 @@ import {
   linuxTmpDirs,
   probeBwrapUsable,
   resolveBwrapPath,
+  probeBwrapUsableAsync,
+  resetBwrapProbeCache,
+  runProbeCommand,
   type BwrapArgsInput
 } from './linux'
 
@@ -250,6 +255,80 @@ describe('probeBwrapUsable bwrap path', () => {
       probeBwrapUsable({ exec: () => void (ran = true), shell: '/bin/sh', bwrapPath: () => undefined })
     ).toBe(false)
     expect(ran).toBe(false)
+  })
+})
+
+describe('probeBwrapUsableAsync', () => {
+  afterEach(() => {
+    resetBwrapProbeCache()
+  })
+
+  const bwrapPath = (): string => '/usr/bin/bwrap'
+
+  it('is true when the probe command succeeds, false when it fails', async () => {
+    expect(await probeBwrapUsableAsync({ run: async () => true, shell: '/bin/sh', bwrapPath })).toBe(true)
+    expect(await probeBwrapUsableAsync({ run: async () => false, shell: '/bin/sh', bwrapPath })).toBe(false)
+  })
+
+  it('counts a probe that fails in any other way as unusable', async () => {
+    const run = async (): Promise<boolean> => {
+      throw new Error('spawn EACCES')
+    }
+    expect(await probeBwrapUsableAsync({ run, shell: '/bin/sh', bwrapPath })).toBe(false)
+  })
+
+  it('runs exactly the synchronous probe command', async () => {
+    let syncCall: [string, string[]] | undefined
+    let asyncCall: [string, string[]] | undefined
+    const bwrapPath = (): string => '/usr/local/bin/bwrap'
+    probeBwrapUsable({ exec: (file, args) => void (syncCall = [file, args]), shell: '/bin/sh', bwrapPath })
+    await probeBwrapUsableAsync({
+      run: async (file, args) => ((asyncCall = [file, args]), true),
+      shell: '/bin/sh',
+      bwrapPath
+    })
+    expect(asyncCall).toEqual(syncCall)
+    expect(asyncCall?.[0]).toBe('/usr/local/bin/bwrap')
+  })
+
+  it('is false without running anything when no absolute PATH entry holds bwrap', async () => {
+    let ran = false
+    const run = async (): Promise<boolean> => ((ran = true), true)
+    expect(await probeBwrapUsableAsync({ run, shell: '/bin/sh', bwrapPath: () => undefined })).toBe(false)
+    expect(ran).toBe(false)
+  })
+
+  it("gives this host's synchronous answer, and shares it with the synchronous probe", async () => {
+    resetBwrapProbeCache()
+    const sync = probeBwrapUsable()
+    resetBwrapProbeCache()
+    const first = probeBwrapUsableAsync()
+    // Callers that ask while it runs share the one probe.
+    expect(probeBwrapUsableAsync()).toBe(first)
+    expect(await first).toBe(sync)
+    // Memoized both ways: the synchronous form now answers from it without a spawn.
+    expect(probeBwrapUsable()).toBe(sync)
+    expect(await probeBwrapUsableAsync()).toBe(sync)
+  })
+})
+
+describe('runProbeCommand', () => {
+  it('is true for a clean exit', async () => {
+    expect(await runProbeCommand(process.execPath, ['-e', ''])).toBe(true)
+  })
+
+  it('is false for a non-zero exit or a missing binary', async () => {
+    expect(await runProbeCommand(process.execPath, ['-e', 'process.exit(3)'])).toBe(false)
+    expect(await runProbeCommand(join(tmpdir(), 'houston-no-such-binary'), [])).toBe(false)
+  })
+
+  it('is false for a command killed at the timeout', { timeout: 10_000 }, async () => {
+    expect(await runProbeCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], 300, 5000)).toBe(false)
+  })
+
+  it('gives up on a command that ignores the kill, as unusable', { timeout: 10_000 }, async () => {
+    const stubborn = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"
+    expect(await runProbeCommand(process.execPath, ['-e', stubborn], 800, 1600)).toBe(false)
   })
 })
 

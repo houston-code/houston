@@ -112,7 +112,12 @@ export function formatWorktreeContext(entries: WorktreeEntry[], workspace: strin
   // The first entry is the main worktree; "linked" worktrees are the rest.
   const main = entries[0]
   if (!main || entries.length <= 1) return ''
-  const norm = (p: string): string => p.replace(/\/+$/, '')
+  // git lists worktree paths with forward slashes, Windows included, while the workspace
+  // comes in the platform's form, and Windows paths compare case-insensitively.
+  const norm = (p: string): string => {
+    const unified = p.replace(/\\/g, '/').replace(/\/+$/, '')
+    return process.platform === 'win32' ? unified.toLowerCase() : unified
+  }
   const ws = norm(workspace)
   let out = `Git worktrees: this repo has ${entries.length} worktrees; main worktree is at "${main.path}".`
   const linked = entries.slice(1)
@@ -160,6 +165,9 @@ export function formatBaseContext(rel: BaseRelation | null): string {
   return `Branch is ${rel.behind} commit${rel.behind === 1 ? '' : 's'} behind ${rel.base} (as of the last fetch).`
 }
 
+/** The remote default-branch names tried after (and usually named by) origin/HEAD, in order. */
+const FIXED_BASES = ['origin/main', 'origin/master']
+
 /**
  * The remote default branch (`origin/HEAD`, else `origin/main` / `origin/master`) and
  * HEAD's relation to it, from local refs only. null when there is no such ref, HEAD has
@@ -168,31 +176,40 @@ export function formatBaseContext(rel: BaseRelation | null): string {
 export async function readBaseRelation(workspace: string, exec: GitExec): Promise<BaseRelation | null> {
   const verify = async (ref: string): Promise<boolean> =>
     /^[0-9a-f]{7,64}$/.test((await exec(['rev-parse', '--verify', '-q', `${ref}^{commit}`], workspace).catch(() => '')).trim())
-  // These read-only lookups don't depend on each other, so they run at once; the
-  // answer is picked in the same order as checking them one by one.
-  const [headOk, head] = await Promise.all([
+  // These read-only lookups don't depend on each other, so they run at once: the two
+  // fixed candidates are checked alongside origin/HEAD rather than after it names its
+  // target, which is almost always one of them. The answer is picked in the same order
+  // as checking them one by one.
+  const [headOk, head, fixedValid] = await Promise.all([
     verify('HEAD'),
     exec(['rev-parse', '--abbrev-ref', 'origin/HEAD'], workspace)
       .catch(() => '')
-      .then((s) => s.trim())
+      .then((s) => s.trim()),
+    Promise.all(FIXED_BASES.map(verify))
   ])
   if (!headOk) return null
-  const candidates = [...new Set([head, 'origin/main', 'origin/master'])].filter(
+  const checked = new Map(FIXED_BASES.map((ref, i) => [ref, fixedValid[i]]))
+  const candidates = [...new Set([head, ...FIXED_BASES])].filter(
     (ref) => ref.startsWith('origin/') && isSafeGitRef(ref)
   )
-  const valid = await Promise.all(candidates.map(verify))
+  // Only an origin/HEAD naming some other branch still needs checking here.
+  const valid = await Promise.all(candidates.map((ref) => checked.get(ref) ?? verify(ref)))
   const base = candidates[valid.indexOf(true)] ?? null
   if (!base) return null
-  let mergeBase: string
-  try {
-    mergeBase = (await exec(['merge-base', 'HEAD', base], workspace)).trim()
-  } catch {
-    // Both refs resolve to commits (verified above), so a failing merge-base means
-    // there is no common ancestor.
-    return { kind: 'unrelated', base }
-  }
+  // Both need only `base`, so they run together; the count is read only once a
+  // common ancestor is known to exist, as when they ran one after the other.
+  const [mergeBase, counted] = await Promise.all([
+    exec(['merge-base', 'HEAD', base], workspace).then(
+      (s) => s.trim(),
+      () => null
+    ),
+    exec(['rev-list', '--count', `HEAD..${base}`], workspace).catch(() => '')
+  ])
+  // Both refs resolve to commits (verified above), so a failing merge-base means
+  // there is no common ancestor.
+  if (mergeBase === null) return { kind: 'unrelated', base }
   if (!/^[0-9a-f]{7,64}$/.test(mergeBase)) return null
-  const count = Number.parseInt((await exec(['rev-list', '--count', `HEAD..${base}`], workspace).catch(() => '')).trim(), 10)
+  const count = Number.parseInt(counted.trim(), 10)
   return Number.isFinite(count) ? { kind: 'behind', base, behind: count } : null
 }
 
@@ -207,21 +224,22 @@ export async function gitContext(workspace: string, injected?: GitExec): Promise
     shared.catch(() => {}) // awaited by the first command; see runGit
     exec = (args, cwd) => runGit(args, cwd, cwd === workspace ? shared : undefined)
   }
-  let branch: string
-  try {
-    branch = (await exec(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).trim()
-  } catch {
-    // rev-parse also fails on an unborn HEAD (fresh `git init`, no commits yet);
-    // the symbolic ref still names that branch.
-    try {
-      branch = (await exec(['symbolic-ref', '--short', '-q', 'HEAD'], workspace)).trim()
-    } catch {
-      return '' // not a git repo (or git unavailable)
-    }
-  }
-  if (!branch) return ''
-  // Independent of each other: run them together, then assemble in the fixed order.
-  const [status, worktrees, relation] = await Promise.all([
+  // None of these lookups needs another's answer, the branch name included, so they
+  // all start at once: a chat's first turn waits on one round of git processes (and the
+  // short tails a few of them have) rather than on a chain of six. The branch alone
+  // decides whether there is anything to report; the rest are read after it, in the
+  // fixed order.
+  const [branch, status, worktrees, relation] = await Promise.all([
+    exec(['rev-parse', '--abbrev-ref', 'HEAD'], workspace).then(
+      (out) => out.trim(),
+      // rev-parse also fails on an unborn HEAD (fresh `git init`, no commits yet);
+      // the symbolic ref still names that branch.
+      () =>
+        exec(['symbolic-ref', '--short', '-q', 'HEAD'], workspace).then(
+          (out) => out.trim(),
+          () => '' // not a git repo (or git unavailable)
+        )
+    ),
     // status failed (e.g. detached/edge state): still report the branch.
     exec(['status', '--porcelain'], workspace).catch(() => ''),
     // worktree listing is best-effort (old git, edge state): omit it.
@@ -231,6 +249,7 @@ export async function gitContext(workspace: string, injected?: GitExec): Promise
     // best-effort, like the worktree listing
     readBaseRelation(workspace, exec).catch((): BaseRelation | null => null)
   ])
+  if (!branch) return ''
   return [formatGitContext(branch, status), formatBaseContext(relation), worktrees].filter(Boolean).join('\n')
 }
 
