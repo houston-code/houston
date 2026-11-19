@@ -8,7 +8,8 @@ const dir = mkdtempSync(join(tmpdir(), 'houston-usershell-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 describe('captureUserShell', () => {
-  it('collects output and the exit code', async () => {
+  // POSIX shell syntax: on Windows the command runs under cmd.exe.
+  it.skipIf(process.platform === 'win32')('collects output and the exit code', async () => {
     const res = await captureUserShell(dir, 'echo hi; exit 3', { timeoutMs: 5000, maxBytes: 1000 })
     expect(res).toMatchObject({ exitCode: 3, stdout: 'hi\n', timedOut: false, truncated: false })
   })
