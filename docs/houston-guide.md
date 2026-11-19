@@ -3482,6 +3482,9 @@ to have them fire on time anyway.
 - **How its runs behave.** Each fires as a background chat, like one started from the
   terminal: anything that needs your approval is declined, and ask_user gets "use your
   best judgment". Open the chat afterwards to see what it did.
+- **Opening Houston while it runs.** On macOS the daemon is the app itself, so the Dock,
+  Finder, Spotlight and `houston://` links reach it first; it passes each one on to the
+  app, which opens (or comes forward) as usual.
 - **While Houston is open,** the app fires scheduled runs itself and the daemon waits.
   An occurrence is only ever fired once, whichever of them gets to it.
 - **Turning it off** stops the process and removes it from login. After an update
