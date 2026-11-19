@@ -82,12 +82,20 @@ export const HEADLESS_EXIT = {
   verify: 5
 } as const
 
-/** The termination signals a headless run stops cleanly on. */
-export type HeadlessSignal = 'SIGINT' | 'SIGTERM' | 'SIGHUP'
+/**
+ * What stops a headless run cleanly: a termination signal, or `SIGPIPE`, which stands
+ * for stdout's reader going away (the host sees the EPIPE write error; Node itself
+ * ignores the signal, so it is never subscribed to).
+ */
+export type HeadlessSignal = 'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGPIPE'
+/** The signals a host subscribes to. */
 export const HEADLESS_SIGNALS: readonly HeadlessSignal[] = ['SIGINT', 'SIGTERM', 'SIGHUP']
 
-/** The shell convention for a process stopped by a signal: 128 plus its number. */
-export const HEADLESS_SIGNAL_EXIT: Record<HeadlessSignal, number> = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 }
+/**
+ * The shell convention for a process stopped by a signal: 128 plus its number. A closed
+ * stdout exits 141, what the shell reports for a pipeline writer SIGPIPE stopped.
+ */
+export const HEADLESS_SIGNAL_EXIT: Record<HeadlessSignal, number> = { SIGHUP: 129, SIGINT: 130, SIGPIPE: 141, SIGTERM: 143 }
 
 /**
  * The version of the `--json` output contract: the `system`/`init` line, the

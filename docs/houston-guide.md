@@ -361,6 +361,7 @@ repository.
 | 4 | the final answer still didn't match `--output-schema` after the corrective round |
 | 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
 | 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `aborted`); a second signal exits at once |
+| 141 | stdout was closed by its reader (a pipe into `head`, say): the run is stopped the same way, with nothing more written to stdout |
 
 **Stopping Houston stops what the agent started.** When `-p`, `-i`, or `--acp` ends,
 normally or because the terminal closed or it was sent a signal, it stops the

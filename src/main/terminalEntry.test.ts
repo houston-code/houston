@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Writable } from 'node:stream'
 import type { AgentEvent, ElicitationResult, PlanDecision } from '@shared/agent'
 import { spawn, spawnSync } from 'node:child_process'
 import {
@@ -12,6 +13,7 @@ import {
   runHeadlessEntry,
   runScheduleDaemonEntry,
   waitForBackgroundSessionsUnless,
+  watchOutputClosed,
   watchTerminationSignals,
   wireTerminalSessionBackends
 } from './terminalEntry'
@@ -55,6 +57,26 @@ describe('watchTerminationSignals', () => {
     expect(exits).toEqual([130])
     stop()
     for (const s of ['SIGINT', 'SIGTERM', 'SIGHUP']) expect(emitter.listenerCount(s)).toBe(0)
+  })
+})
+
+describe('watchOutputClosed', () => {
+  /** A stdout whose reader has gone: every write fails with EPIPE. */
+  const brokenPipe = (): Writable =>
+    new Writable({
+      write: (_chunk, _enc, cb) => cb(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+    })
+
+  it('turns a closed pipe into one stop call instead of an uncaught error', async () => {
+    const out = brokenPipe()
+    const closed: string[] = []
+    const stop = watchOutputClosed(out, (e) => closed.push((e as NodeJS.ErrnoException).code ?? ''))
+    out.write('answer\n')
+    out.write('more\n')
+    await new Promise((r) => setImmediate(r))
+    expect(closed).toEqual(['EPIPE'])
+    stop()
+    expect(out.listenerCount('error')).toBe(0)
   })
 })
 
