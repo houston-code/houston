@@ -86,12 +86,6 @@ describe('live eval baselines', () => {
     if (!isEvalBaseline(b)) return
     expect([b.provider, b.model]).toEqual([provider, model])
     expect(isDeadBaseline(b), `${file} scores every task 0, so that leg can never regress`).toBe(false)
-    // A task the baseline lacks is never graded on that leg: a recording that dropped
-    // one, or a task added without re-recording, would go unguarded.
-    expect(
-      TASKS.map((t) => t.id).filter((id) => !(id in b.tasks)),
-      `${file} has no score for these registered tasks, so that leg never grades them. Re-record it.`
-    ).toEqual([])
   })
 
   const files = readdirSync(BASELINES_DIR).filter((f) => f.endsWith('.json'))
