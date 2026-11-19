@@ -225,6 +225,8 @@ export interface ReadlineLike {
   close(): void
   /** Type text into the open question as if the user had (node:readline's `write`). */
   write?(data: string): void
+  /** Redraw the open question's prompt and line (node:readline's `prompt(true)`). */
+  prompt?(preserveCursor?: boolean): void
 }
 
 export interface TerminalIoDeps {
@@ -1012,6 +1014,34 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   rl.on('close', () => {
     closed = true
     settle(null)
+  })
+  // Ctrl-Z at a sub-prompt (an approval's "Why not?", ask_user, /login, a [y/N]).
+  // readline reads that key itself, and with no 'SIGTSTP' listener it stops the
+  // process on its own and, on `fg`, pauses itself again: the prompt was left on
+  // screen with nothing reading the keyboard. Suspend the way the composer does
+  // instead: hand the terminal back cooked, and on `fg` take it again in raw mode
+  // and redraw the question with what was typed of the answer.
+  rl.on('SIGTSTP', () => {
+    if (closed || !questionAbort || platform === 'win32') return
+    const ask = questionAbort
+    rawWrite('\n')
+    rl.pause()
+    try {
+      if (stdin.isTTY && typeof stdin.setRawMode === 'function') stdin.setRawMode(false)
+    } catch {
+      /* best-effort: the shell gets a cooked terminal back */
+    }
+    suspendProcess(() => {
+      // The read ended (cancelled, EOF) while we were stopped: nothing to redraw.
+      if (closed || questionAbort !== ask) return
+      try {
+        if (stdin.isTTY && typeof stdin.setRawMode === 'function') stdin.setRawMode(true)
+      } catch {
+        /* best-effort: a cooked read still works, just with the double echo */
+      }
+      rl.resume()
+      rl.prompt?.(true)
+    })
   })
 
   // A normal echoed line read. Extracted so `readSecret` can reuse it as its

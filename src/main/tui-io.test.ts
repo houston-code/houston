@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { ULTRATHINK_HINT, ULTRATHINK_HINT_ALREADY, ULTRATHINK_HINT_NONE } from '@shared/ultrathink'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
@@ -1720,6 +1720,44 @@ describe('sub-prompts and the picker after the composer', () => {
     expect(before.lastIndexOf('raw:true')).toBeGreaterThan(before.lastIndexOf('raw:false'))
     f.submit('y')
     await expect(answer).resolves.toBe('y')
+  })
+
+  it('Ctrl-Z at a sub-prompt suspends, and after fg the prompt is redrawn and still answers', async () => {
+    // readline handled Ctrl-Z itself: it stopped the process and, on fg, paused its
+    // own input, so the question stayed on screen with nothing reading the keyboard.
+    const stdin = fakeTty()
+    const rlOut = new PassThrough()
+    const echoed: string[] = []
+    rlOut.on('data', (c: Buffer) => echoed.push(c.toString()))
+    // readline's own path would signal the real process: never let it here.
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      let resume: (() => void) | null = null
+      const io = createTerminalIo({
+        stdin,
+        createInterface: () => createInterface({ input: stdin, output: rlOut, terminal: true }) as unknown as ReadlineLike,
+        write: () => {},
+        columns: () => 80,
+        platform: 'darwin',
+        suspendProcess: (onContinue) => {
+          resume = onContinue
+        }
+      })
+      const answer = io.readLine('Why not? ')
+      stdin.push('too')
+      stdin.push('\x1a')
+      expect(kill).not.toHaveBeenCalled()
+      expect(resume).not.toBeNull()
+      expect(stdin.rawModes.at(-1)).toBe(false) // the shell gets a cooked terminal
+      echoed.length = 0
+      resume!()
+      expect(stdin.rawModes.at(-1)).toBe(true)
+      expect(echoed.join('')).toContain('Why not? too')
+      stdin.push(' risky\r')
+      await expect(answer).resolves.toBe('too risky')
+    } finally {
+      kill.mockRestore()
+    }
   })
 
   it('the picker keeps readline from walking its history on Up/Down', async () => {
