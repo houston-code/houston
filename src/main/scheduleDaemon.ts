@@ -139,3 +139,24 @@ export function appSchedulerRunning(dir?: string, alive?: (pid: number) => boole
 export function runningDaemonPid(dir?: string, alive?: (pid: number) => boolean, now?: () => number): number | null {
   return livePid(daemonPidPath(dir), alive, now)
 }
+
+/**
+ * Whether the daemon just woke from sleep (or the wall clock jumped): true for the
+ * first poll after a gap well past the scheduler's poll interval, once.
+ *
+ * While the machine sleeps the open app's marker isn't refreshed, so on waking it can
+ * read as older than {@link PID_STALE_MS} until the app's own heartbeat ticks again,
+ * and the daemon would take the occurrences that came due in the meantime from the
+ * app. Leaving that one poll alone gives the app's heartbeat ({@link PID_HEARTBEAT_MS},
+ * shorter than a poll) time to show it is still open; a closed app is no worse off,
+ * since the daemon fires at the next poll.
+ */
+export function wakeDetector(pollMs: number, now: () => number = Date.now): () => boolean {
+  let last: number | null = null
+  return () => {
+    const t = now()
+    const woke = last !== null && t - last > 2 * pollMs
+    last = t
+    return woke
+  }
+}

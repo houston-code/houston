@@ -50,8 +50,8 @@ import type { AgentEvent, ConversationMeta, SideChatTurn } from '@shared/agent'
 import { setSpawnBackend } from './agent/spawn'
 import { setSchedulerBackend } from './agent/scheduler'
 import { createSpawnBackend } from './spawnSession'
-import { createSchedulerService, fireViaSpawn, schedulesFilePath, type SchedulerService } from './schedulerService'
-import { appSchedulerRunning, daemonPidPath, holdPidFile } from './scheduleDaemon'
+import { POLL_MS, createSchedulerService, fireViaSpawn, schedulesFilePath, type SchedulerService } from './schedulerService'
+import { appSchedulerRunning, daemonPidPath, holdPidFile, wakeDetector } from './scheduleDaemon'
 import { createWorktree, removeWorktree } from './agent/worktree'
 import { readFlagFile, resolveSessionInputs } from './sessionFlags'
 import { launchDetached, urlOpener } from '../cli/openInApp'
@@ -1516,6 +1516,8 @@ export async function runScheduleDaemonEntry(
     out?: (s: string) => void
     /** Whether the desktop app's scheduler is up (tests). */
     appRunning?: () => boolean
+    /** The clock that tells a wake from sleep (tests). */
+    now?: () => number
   } = {}
 ): Promise<number> {
   const out = host.out ?? ((s: string) => void process.stdout.write(s))
@@ -1525,11 +1527,18 @@ export async function runScheduleDaemonEntry(
     return 0
   }
   const appRunning = host.appRunning ?? (() => appSchedulerRunning())
+  const justWoke = wakeDetector(POLL_MS, host.now)
   let deferring = false
   const backends = wireTerminalSessionBackends({
     startScheduler: true,
     notify: (m) => log.info(`schedule daemon: ${m}`),
     shouldFire: () => {
+      // After sleep the app's marker can look stale until its heartbeat catches up:
+      // leave this one poll to the app (see wakeDetector).
+      if (justWoke()) {
+        log.info('schedule daemon: woke from sleep; checking again at the next poll')
+        return false
+      }
       const app = appRunning()
       if (app !== deferring) {
         deferring = app

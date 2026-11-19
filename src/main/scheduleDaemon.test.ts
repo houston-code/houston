@@ -10,8 +10,10 @@ import {
   daemonPidPath,
   holdPidFile,
   livePid,
-  runningDaemonPid
+  runningDaemonPid,
+  wakeDetector
 } from './scheduleDaemon'
+import { POLL_MS } from './schedulerService'
 
 let dir: string
 beforeEach(() => {
@@ -119,5 +121,32 @@ describe('pid files', () => {
     expect(held.ok).toBe(true)
     expect(runningDaemonPid(dir)).toBe(process.pid)
     if (held.ok) held.release()
+  })
+})
+
+describe('wakeDetector', () => {
+  it("reads the open app's marker as gone after a sleep longer than the stale age, which is why the daemon waits", () => {
+    writeFileSync(appSchedulerPidPath(dir), '100')
+    const touched = statSync(appSchedulerPidPath(dir)).mtimeMs
+    // Asleep for an hour: the app's heartbeat hasn't run since.
+    expect(appSchedulerRunning(dir, alive, () => touched + 60 * 60_000)).toBe(false)
+  })
+
+  it('flags the first poll after a gap well past the poll interval, once', () => {
+    let t = 0
+    const justWoke = wakeDetector(POLL_MS, () => t)
+    expect(justWoke()).toBe(false) // the first poll has nothing to compare with
+    t += POLL_MS
+    expect(justWoke()).toBe(false)
+    t += 2 * POLL_MS // a slow tick is not a wake
+    expect(justWoke()).toBe(false)
+    t += 60 * 60_000 // an hour asleep
+    expect(justWoke()).toBe(true)
+    t += POLL_MS // the next poll goes ahead
+    expect(justWoke()).toBe(false)
+  })
+
+  it('leaves the next poll long enough for the app heartbeat to refresh its marker', () => {
+    expect(PID_HEARTBEAT_MS).toBeLessThan(POLL_MS)
   })
 })
