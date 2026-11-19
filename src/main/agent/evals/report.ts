@@ -145,6 +145,9 @@ function fmtVerdict(v: BaselineVerdict | undefined): string {
   switch (v.kind) {
     case 'regressed':
       return `  REGRESSED (baseline ${v.baseline.toFixed(2)}, now ${v.observed.toFixed(2)})`
+    case 'dropped':
+      // Printed so a real fall is visible, but within noise for one task: compareAggregate grades it.
+      return `  dropped (baseline ${v.baseline.toFixed(2)}, now ${v.observed.toFixed(2)}; within noise, not failed)`
     case 'improved':
       return `  improved (baseline ${v.baseline.toFixed(2)}, now ${v.observed.toFixed(2)} — re-record)`
     case 'unrecorded':

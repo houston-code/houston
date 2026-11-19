@@ -65,24 +65,27 @@ export interface TaskScore {
 }
 
 /**
- * How far a task may fall below its baseline before it counts as a regression.
+ * How far a task may fall below its baseline before it is reported as `dropped`.
  *
  * A live model is genuinely noisy: the same task can pass 3/3 one night and 2/3
  * the next without anything changing. At the default 3 attempts one flaked
- * attempt is a 0.33 drop, so this absorbs exactly one flake and fails on two.
- * Tightening it below 1/attempts makes every flake a red nightly, which trains
- * everyone to ignore the job — the failure mode this whole file exists to avoid.
- *
- * What it can't see, by construction: a task baselined at 0 or 1/3 can never regress,
- * and a drop spread one flake per task passes however many tasks it reaches (79/87 to
- * 70/87 as nine single flakes is nine `held` verdicts). {@link compareAggregate} is the
- * check for that; this one stays for a single task that collapses.
+ * attempt is a 0.33 drop, so this absorbs exactly one flake and reports two. A
+ * `dropped` task is printed in the scorecard and does NOT fail the run: see
+ * {@link compareToBaseline} for why only a collapse does.
  */
 export const DEFAULT_TOLERANCE = 0.34
 
 export type BaselineVerdict =
-  /** Scored materially below the baseline — the signal this benchmark exists for. */
+  /**
+   * Collapsed: every baseline attempt passed and no attempt passes now. The only
+   * per-task verdict that fails the run; see compareToBaseline.
+   */
   | { kind: 'regressed'; taskId: string; baseline: number; observed: number }
+  /**
+   * Fell past the tolerance without collapsing (3/3 to 1/3, 2/3 to 0/3). Reported, not
+   * failed: at three attempts a side a fall this size is ordinary noise.
+   */
+  | { kind: 'dropped'; taskId: string; baseline: number; observed: number }
   /** Scored above the baseline: not a failure, but the baseline is now stale. */
   | { kind: 'improved'; taskId: string; baseline: number; observed: number }
   /** Held its baseline (within tolerance). */
@@ -92,6 +95,23 @@ export type BaselineVerdict =
 
 /**
  * Grade a run against a baseline, one verdict per task scored.
+ *
+ * ONLY A COLLAPSE FAILS A SINGLE TASK. A task regresses when every baseline attempt
+ * passed and none of the run's did. Anything less is `dropped` (reported) or `held`.
+ *
+ * Why not "fell by more than one attempt", which this once was: at three attempts a side
+ * that is noise, not signal. The 2026-11-16 weekly Haiku run reded on semver-ranges (3/3
+ * to 1/3) and extraction-job-stuck (2/3 to 0/3) with no product change since the baseline
+ * was recorded that morning and the whole run held (76/87 against 77/87, p = 0.37). Pooled
+ * over both runs those tasks sit near 4/6 and 2/6, where those scores turn up about 26%
+ * and 30% of the time, and over 29 tasks the old rule reds roughly one weekly run in
+ * three or four with nothing changed. No per-task test can do better at this sample size:
+ * 3/3 against 0/3, the most extreme split there is, has a one-sided Fisher p of 0.05, so
+ * a per-task test held to the run-wide 1% could never fire at all.
+ *
+ * A collapse can: a task at a true 95% scores 0/3 about once in 8,000 runs, under 0.3% a
+ * week across every task baselined at 1. A broad fall, or one spread over tasks one or two
+ * attempts each, is {@link compareAggregate}'s to catch, and that is the gate sized at 1%.
  *
  * Tasks present in the baseline but absent from `scores` are ignored rather than
  * failed: that is a task being deleted or renamed, which the suite's own
@@ -109,8 +129,11 @@ export function compareToBaseline(
   return scores.map((s) => {
     const base = isProbeResultId(s.taskId) ? undefined : baseline.tasks[s.taskId]
     if (base === undefined) return { kind: 'unrecorded', taskId: s.taskId, observed: s.passRate }
-    if (s.passRate < base - tolerance) {
+    if (base >= 1 && s.passRate <= 0) {
       return { kind: 'regressed', taskId: s.taskId, baseline: base, observed: s.passRate }
+    }
+    if (s.passRate < base - tolerance) {
+      return { kind: 'dropped', taskId: s.taskId, baseline: base, observed: s.passRate }
     }
     if (s.passRate > base) return { kind: 'improved', taskId: s.taskId, baseline: base, observed: s.passRate }
     return { kind: 'held', taskId: s.taskId, baseline: base, observed: s.passRate }
@@ -128,7 +151,7 @@ export function regressions(verdicts: BaselineVerdict[]): Extract<BaselineVerdic
  *
  * SIZED FOR A WEEKLY RUN. At 1% a run that changed nothing reds about once in two years
  * of weekly runs, rare enough that a red gets read rather than re-run. At 5% it would be
- * one every five months or so: the ignored-nightly failure DEFAULT_TOLERANCE also avoids.
+ * one every five months or so: the ignored-nightly failure compareToBaseline also avoids.
  *
  * WHAT IT CAN AND CANNOT SEE at 29 tasks x 3 attempts a side. Simulated with per-task
  * rates near the Haiku baseline's (79/87) and the same extra failure rate on every
@@ -141,7 +164,7 @@ export function regressions(verdicts: BaselineVerdict[]): Extract<BaselineVerdic
  * so it is a backstop for a broad, sizeable fall, not a fine instrument: a change of a few
  * points is invisible to 87 attempts, and only more tasks or more attempts can see it
  * (smallestDetectableChange in stats.ts puts the 80% mark at about 18.5 points at three
- * attempts and 13.6 at five). The case the per-task tolerance misses does fail it: 79/87 to
+ * attempts and 13.6 at five). The case the per-task check misses does fail it: 79/87 to
  * 70/87 as nine single flakes has a mid-p of 0.008. A task baselined at 0 adds nothing
  * (it can't fall), and one at 1/3 can fall by one attempt only.
  *
@@ -175,8 +198,8 @@ export interface AggregateVerdict {
  * Grade the run as a whole: is it below the baseline by more than chance, across every
  * task it shares with it? Undefined when the two share no task.
  *
- * The per-task tolerance stays the first check (it names the one task that collapsed);
- * this one sees what it can't, a fall spread thinly over many tasks. Both sides are
+ * The per-task check names the one task that collapsed; this one sees what it can't, a
+ * fall short of a collapse, whether in one task or spread thinly over many. Both sides are
  * compared as rates, task by task, so a run at a different attempt count (eval-ab runs
  * two against the three-attempt baselines) is graded fairly. Tasks the baseline predates
  * are left out, like `unrecorded` ones above, and so are baseline tasks this run skipped

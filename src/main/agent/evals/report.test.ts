@@ -131,6 +131,15 @@ describe('baseline verdicts in the scorecard', () => {
     expect(out).toMatch(/new-task .* unrecorded \(not in the baseline yet\)/)
     expect(out).toMatch(/probe:p .* unrecorded \(a probe: never baselined\)/)
   })
+
+  it('marks a dropped task as within noise, apart from a regressed one', () => {
+    const out = formatReport({ driver: 'live', model: 'm', attempts: 3 }, [
+      { ...report('fell', 1 / 3), verdict: { kind: 'dropped', taskId: 'fell', baseline: 1, observed: 1 / 3 } },
+      { ...report('gone', 0), verdict: { kind: 'regressed', taskId: 'gone', baseline: 1, observed: 0 } }
+    ])
+    expect(out).toMatch(/fell .* dropped \(baseline 1\.00, now 0\.33; within noise, not failed\)/)
+    expect(out).toMatch(/gone .* REGRESSED \(baseline 1\.00, now 0\.00\)/)
+  })
 })
 
 describe('prompt stamp in the scorecard', () => {
