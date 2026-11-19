@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import { BINARY_SNIFF_BYTES } from './attachments'
 import { displayLines, numberedLine, numberWidth } from './line-numbers'
+import { openRegularFile } from './regularFile'
 
 /**
  * How `read_file` turns a text file into its numbered listing, without holding the
@@ -162,7 +163,10 @@ export async function streamNumberedRead(
     }
   }
 
-  const stream = createReadStream(abs, { highWaterMark: 64 * 1024 })
+  // Opened through openRegularFile: a FIFO or device swapped in after read_file's own
+  // check would otherwise block the open or stream forever.
+  const fd = await openRegularFile(abs)
+  const stream = createReadStream(abs, { fd, highWaterMark: 64 * 1024 })
   let head = Buffer.alloc(0)
   for await (const chunk of stream as AsyncIterable<Buffer>) {
     hash.update(chunk)

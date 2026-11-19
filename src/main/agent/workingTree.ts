@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
-import { realpathSync, statSync, readFileSync } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -14,6 +13,7 @@ import {
 import { classifyRemoteUrl, type RepoShipState } from '@shared/shipAction'
 import { runGitCapture, captureTry, uncommittedDiffBase } from './gitRead'
 import { findGitEntry, gitErrorLine } from './gitEntry'
+import { readRegularFileCapped, readRegularFileCappedSync } from './regularFile'
 
 /** Cap how many untracked files we read so a junk-filled tree can't stall the UI. */
 const MAX_UNTRACKED_FILES = 200
@@ -39,15 +39,19 @@ function looksBinary(buf: Buffer): boolean {
   return false
 }
 
-/** Read one untracked file into a FileDiff (or a note for binary/oversized/unreadable). */
+/**
+ * Read one untracked file into a FileDiff (or a note for binary/oversized/unreadable).
+ * Only a regular file is read, and never past the cap: an untracked symlink to a FIFO
+ * would block the read and one to a device such as /dev/zero would never end (its size
+ * reads as 0), so both show as unreadable.
+ */
 function readUntracked(root: string, rel: string): FileDiff {
   try {
-    const full = join(root, rel)
-    const size = statSync(full).size
-    if (size > MAX_FILE_BYTES) {
-      return untrackedToFileDiff(rel, null, { tooLargeKb: Math.round(size / 1024) })
+    const read = readRegularFileCappedSync(join(root, rel), MAX_FILE_BYTES)
+    if ('tooLarge' in read) {
+      return untrackedToFileDiff(rel, null, { tooLargeKb: Math.round(read.tooLarge / 1024) })
     }
-    const buf = readFileSync(full)
+    const { buf } = read
     if (looksBinary(buf)) return untrackedToFileDiff(rel, null, { binary: true })
     return untrackedToFileDiff(rel, buf.toString('utf8'))
   } catch {
@@ -66,9 +70,10 @@ const UNTRACKED_READS_AT_ONCE = 8
  */
 async function untrackedLineCount(root: string, rel: string): Promise<number> {
   try {
-    const full = join(root, rel)
-    if ((await stat(full)).size > MAX_FILE_BYTES) return 0
-    const buf = await readFile(full)
+    // A FIFO or device behind a symlink is refused, not read (see readUntracked).
+    const read = await readRegularFileCapped(join(root, rel), MAX_FILE_BYTES)
+    if ('tooLarge' in read) return 0
+    const { buf } = read
     if (looksBinary(buf)) return 0
     let lines = 0
     for (let i = buf.indexOf(0x0a); i !== -1; i = buf.indexOf(0x0a, i + 1)) lines++

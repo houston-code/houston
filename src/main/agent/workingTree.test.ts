@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -450,5 +461,65 @@ describe.skipIf(!hasGit)('a workspace in a subfolder of the repository', () => {
     // Same status line (still " M"), different size: only the stat tells them apart.
     writeFileSync(join(ws, 'f.txt'), 'three, longer\n')
     expect(await workingTreeFingerprint(ws)).not.toBe(before)
+  }, GIT_TIMEOUT)
+})
+
+// An untracked symlink to a FIFO or a device: git lists it like any untracked file, and
+// following it into a read would block forever (FIFO) or read until memory runs out
+// (/dev/zero, whose size reads as 0). POSIX only: Windows has neither.
+describe.skipIf(!hasGit || process.platform === 'win32')('untracked symlinks to special files', () => {
+  const GIT_TIMEOUT = 30_000
+  const fifos: string[] = []
+  afterEach(() => {
+    // Let go of any read that did block (the bug), so it doesn't pin a threadpool thread.
+    for (const f of fifos.splice(0)) {
+      try {
+        closeSync(openSync(f, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK))
+      } catch {
+        // no reader waiting
+      }
+    }
+  })
+
+  async function promptly<T>(p: Promise<T>, ms = 5000): Promise<T> {
+    let timer: NodeJS.Timeout | undefined
+    const hang = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`hung for ${ms} ms`)), ms)
+    })
+    try {
+      return await Promise.race([p, hang])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  function repoWithSpecialLinks(): string {
+    const dir = freshRepo()
+    commit(dir)
+    const fifoDir = mkdtempSync(join(tmpdir(), 'houston-fifo-'))
+    dirs.push(fifoDir)
+    const fifo = join(fifoDir, 'pipe')
+    execFileSync('mkfifo', [fifo])
+    fifos.push(fifo)
+    symlinkSync(fifo, join(dir, 'to-fifo'))
+    symlinkSync('/dev/zero', join(dir, 'to-zero'))
+    writeFileSync(join(dir, 'plain.txt'), 'one\ntwo\n')
+    return dir
+  }
+
+  it('the badge counts skip them instead of hanging or reading forever', async () => {
+    const dir = repoWithSpecialLinks()
+    const stats = await promptly(collectWorkingTreeStats(dir))
+    expect(stats.fileCount).toBe(3)
+    expect(stats.added).toBe(2)
+  }, GIT_TIMEOUT)
+
+  it('the change set lists them as unreadable without reading them', async () => {
+    const dir = repoWithSpecialLinks()
+    const full = await promptly(collectWorkingTreeChanges(dir))
+    const byPath = new Map(full.files.map((f) => [f.path, f]))
+    expect(byPath.get('to-fifo')?.note).toBe('Could not read file')
+    expect(byPath.get('to-zero')?.note).toBe('Could not read file')
+    expect(byPath.get('plain.txt')?.added).toBe(2)
   }, GIT_TIMEOUT)
 })

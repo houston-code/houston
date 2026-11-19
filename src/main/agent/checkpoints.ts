@@ -6,6 +6,7 @@ import { isRewindableTurn } from '@shared/rewind'
 import { writeFileAtomic } from '../atomic-write'
 import { resolveInRoots } from './tools'
 import { removeFileContained, writeFileContained } from './safeWrite'
+import { readRegularFile } from './regularFile'
 import { parsePatch } from './apply-patch'
 import { getUserDataDir } from '../userData'
 
@@ -452,9 +453,10 @@ async function readCapped(
 ): Promise<{ content: string | null; binary: boolean; capped: boolean }> {
   let buf: Buffer
   try {
-    buf = await fs.readFile(abs)
+    buf = await readRegularFile(abs)
   } catch {
-    return { content: null, binary: false, capped: false } // didn't exist / unreadable
+    // didn't exist / unreadable / not a regular file (a FIFO would block the read)
+    return { content: null, binary: false, capped: false }
   }
   if (buf.byteLength > MAX_SNAPSHOT_BYTES) return { content: null, binary: false, capped: true }
   const text = buf.toString('utf8')
