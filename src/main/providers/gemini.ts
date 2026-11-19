@@ -165,9 +165,14 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
 
 /**
  * The Gemini API version every client calls. SDK 3 changed its default from `v1beta` to
- * `v1`, and also reads GOOGLE_GENAI_API_VERSION when no version is set in code. Thinking
- * config, thought signatures and preview models are served on `v1beta`, so pin it here:
- * an SDK upgrade or a stray environment variable must not move the endpoint.
+ * `v1`, and also reads GOOGLE_GENAI_API_VERSION when no version is set in code, so pin it
+ * here: an SDK upgrade or a stray environment variable must not move the endpoint.
+ *
+ * Why not `v1`: it serves everything Houston sends (thinking config, thought-signed tool
+ * calls, `parametersJsonSchema` tools) for the shipped models, but as of 2026-11 it lists
+ * 27 chat models to `v1beta`'s 50. Every preview model (gemini-3.1-pro-preview, which
+ * older installs were seeded with) and the `-latest` aliases 404 there. Revisit when
+ * `v1` serves the models users pick; the live canary covers the shipped ones.
  */
 export const GEMINI_API_VERSION = 'v1beta'
 
