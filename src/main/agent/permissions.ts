@@ -1275,8 +1275,13 @@ function statementFedToClient(command: string): boolean {
  * main loop's approval gate and the subagent gate, so neither can judge benign a
  * call the other would have prompted for.
  */
-export function isSensitiveWrite(kind: ToolKind, toolName: string, args: Record<string, unknown>): boolean {
-  if (kind === 'write') return writesSensitivePath(toolName, args)
+export function isSensitiveWrite(
+  kind: ToolKind,
+  toolName: string,
+  args: Record<string, unknown>,
+  roots: string[]
+): boolean {
+  if (kind === 'write') return writesSensitivePath(toolName, args, roots)
   return (
     kind === 'shell' &&
     toolName === 'run_shell' &&

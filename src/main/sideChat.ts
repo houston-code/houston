@@ -365,7 +365,7 @@ export function sideChatGate(rules: PermissionRule[], roots: string[]): NonNulla
         'say what you would need to check and that the main chat can do it with approval.'
       )
     }
-    if (action !== 'allow' && isSensitiveRead(kind, args)) {
+    if (action !== 'allow' && isSensitiveRead(kind, args, roots)) {
       return (
         `Reading ${String(args.path)} needs the user's approval because it looks like a credential or ` +
         "secret file, and the side chat can't ask for it. Do not retry; answer without it."

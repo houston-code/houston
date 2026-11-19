@@ -1046,8 +1046,8 @@ export function renderApprovalPrompt(
     unsandboxed: '⚠ runs UNSANDBOXED (no OS confinement on this host)',
     sensitiveRead: '⚠ reads a credential/secret file (prompting even in full-auto)',
     protectedWrite:
-      '⚠ changes a project control file that can run code outside the sandbox (asks every time; "Allow for this chat" does not cover it)',
-    sensitiveWrite: '⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)'
+      '⚠ changes a project control file or git hook/config that can run code outside the sandbox (asks every time; "Allow for this chat" does not cover it)',
+    sensitiveWrite: '⚠ changes a credential/secret file (prompting even in full-auto)'
   }
   const warn = approvalWarnings(ev)
     .map((w) => `\n${paint(WARNING_TEXT[w], 'yellow', 'bold')}`)

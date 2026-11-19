@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isProtectedWrite, shellWritesProtectedPath } from './permissions'
@@ -125,6 +125,70 @@ describe('writesProtectedPath', () => {
     ).toBe(true)
     expect(writesProtectedPath('apply_patch', { patch: patch('*** Add File: src/a.ts', '+x') }, roots)).toBe(false)
     expect(writesProtectedPath('apply_patch', { patch: 'not a patch' }, roots)).toBe(false)
+  })
+})
+
+describe('writesProtectedPath on git exec paths', () => {
+  let repo: string
+  beforeEach(() => {
+    repo = realpathSync(mkdtempSync(join(tmpdir(), 'houston-gitexec-')))
+    mkdirSync(join(repo, '.git/hooks'), { recursive: true })
+    writeFileSync(join(repo, '.git/config'), '[core]\n')
+  })
+  afterEach(() => rmSync(repo, { recursive: true, force: true }))
+  const w = (path: string, roots: string[]): boolean => writesProtectedPath('write_file', { path }, roots)
+
+  it('treats a hook, the repo config, commondir, and the .git pointer as protected', () => {
+    for (const p of ['.git/hooks/pre-commit', '.git/config', '.git/config.worktree', '.git/commondir', 'sub/.git']) {
+      expect(w(p, [repo]), p).toBe(true)
+    }
+    expect(w('src/config.ts', [repo])).toBe(false)
+    expect(w('.git/info/exclude', [repo])).toBe(false)
+  })
+
+  it('sees through a symlink to .git, an existing file and a new one alike', () => {
+    symlinkSync('.git', join(repo, 'g'))
+    expect(w('g/config', [repo])).toBe(true)
+    expect(w('g/hooks/pre-commit', [repo])).toBe(true)
+    expect(w(join(repo, 'g/config'), [repo])).toBe(true)
+    // A link to a single file inside .git, and one whose target doesn't exist yet.
+    symlinkSync('.git/config', join(repo, 'settings.ini'))
+    symlinkSync('.git/hooks/post-merge', join(repo, 'dangling'))
+    expect(w('settings.ini', [repo])).toBe(true)
+    expect(w('dangling', [repo])).toBe(true)
+    // An ordinary file next to them, and a path under a folder that doesn't exist.
+    expect(w('g-notes.txt', [repo])).toBe(false)
+    expect(w('new/dir/file.ts', [repo])).toBe(false)
+  })
+
+  it('does not loop forever on a symlink cycle', () => {
+    symlinkSync('b', join(repo, 'a'))
+    symlinkSync('a', join(repo, 'b'))
+    expect(w('a/config', [repo])).toBe(false)
+  })
+
+  it('reads a Windows data-stream suffix or trailing dot as the plain name', () => {
+    expect(w('.git/config::$DATA', [repo])).toBe(true)
+    expect(w('.git/config:$DATA', [repo])).toBe(true)
+    expect(w('.git::$INDEX_ALLOCATION/hooks/pre-commit', [repo])).toBe(true)
+    expect(w('.git./config', [repo])).toBe(true)
+    expect(w('.husky/pre-commit::$DATA', [repo])).toBe(true)
+  })
+
+  it('sees through a Windows 8.3 short name for .git', () => {
+    // Simulated: Windows resolves `GIT~1` to `.git` only through the native realpath.
+    const native = realpathSync.native
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    realpathSync.native = ((p: string) => native(p.replace('GIT~1', '.git'))) as typeof native
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      expect(w('GIT~1/config', [repo])).toBe(true)
+      expect(w('GIT~1/hooks/pre-commit', [repo])).toBe(true)
+      expect(w('src/a.ts', [repo])).toBe(false)
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      realpathSync.native = native
+    }
   })
 })
 

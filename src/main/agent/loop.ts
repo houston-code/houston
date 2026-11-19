@@ -2870,7 +2870,7 @@ export async function startRun(
       ): Promise<string> => {
         const matched = matchRun(name, permissionSubject(name, gateArgs))
         if (matched === 'deny') return ruleDenialText(name, gateArgs)
-        const sensitiveRead = isSensitiveRead(kind, gateArgs)
+        const sensitiveRead = isSensitiveRead(kind, gateArgs, roots)
         // A command that leaves the workspace or can throw away work in the project asks
         // too: the dispatch is consent to edit, not to reset the tree or delete what the
         // user hasn't committed. Judged where the subagent's own shell sits (see
@@ -2883,7 +2883,7 @@ export async function startRun(
         const discardsWork = trip?.discards === true
         const ruleAction = trip ? trip.ruleAction : matched
         const protectedWrite = isProtectedWrite(kind, name, gateArgs, roots)
-        const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs) || protectedWrite
+        const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs, roots) || protectedWrite
         const mustApprove =
           kind === 'read'
             ? decideApproval({
@@ -3891,7 +3891,7 @@ export async function startRun(
         tool.kind,
         ruleAction,
         hasMatchingHook(call.name),
-        isSensitiveRead(tool.kind, call.arguments)
+        isSensitiveRead(tool.kind, call.arguments, roots)
       )
     }
 
@@ -5889,7 +5889,7 @@ export async function startRun(
             // isSensitivePath): reads normally never prompt, so this is the one gate
             // that keeps a committed `.env` or private key from flowing into the
             // transcript unasked.
-            const sensitiveRead = isSensitiveRead(tool.kind, execArgs)
+            const sensitiveRead = isSensitiveRead(tool.kind, execArgs, roots)
             // Writing one (a file tool targeting it, or a shell command redirecting into,
             // copying over, or removing it) prompts the same way: only the user can
             // restore a `.env` an agent overwrote.
@@ -5898,7 +5898,7 @@ export async function startRun(
             // code outside the sandbox later. Its card carries the sensitive-write warning
             // with its own reason.
             const protectedWrite = isProtectedWrite(tool.kind, call.name, execArgs, roots)
-            const sensitiveWrite = isSensitiveWrite(tool.kind, call.name, execArgs) || protectedWrite
+            const sensitiveWrite = isSensitiveWrite(tool.kind, call.name, execArgs, roots) || protectedWrite
             // Network consent is per-DESTINATION: "Allow for run" grants only this host,
             // so approving a fetch to one host never opens egress to every host. The
             // granted-host set stands in for the generic kind override on network calls.

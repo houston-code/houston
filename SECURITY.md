@@ -134,7 +134,12 @@ explicit `allow` rule for the path does. Those files run code outside the sandbo
 (an editor task, a direnv script, a git hook, a Houston plugin, a CI job) or change
 Houston's own settings for the folder. Like the other shell checks this reads the words
 a command names, so a path assembled from variables, or a write made after a `cd` into
-one of those folders, isn't seen.
+one of those folders, isn't seen. A file edit to a repository's git hooks, its
+`.git/config` or `config.worktree`, a `commondir` redirect, or a `.git` pointer file is
+held to the same rule. The file tools judge these, and credential files, both as
+written and at the path's real location (symlinks, a dangling one included, and
+Windows short names resolved, data-stream suffixes ignored), so a link such as
+`g -> .git` or `notes.txt -> .env` that a cloned repository carries doesn't hide one.
 
 A project's elevating configuration (its `allow` rules, hooks, and MCP servers from
 `.houston/settings.json`, and its `.houston/plugins/*.js` files) is honored only after

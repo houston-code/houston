@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import { isGitExecPath, isSensitivePath, isSensitiveRead, writesSensitivePath } from './sensitive-paths'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  isGitExecPath,
+  isGitExecPathAt,
+  isSensitivePath,
+  isSensitivePathAt,
+  isSensitiveRead,
+  writesSensitivePath
+} from './sensitive-paths'
 
 describe('isSensitivePath', () => {
   it('flags dotenv files', () => {
@@ -70,33 +80,33 @@ describe('isSensitivePath', () => {
 
 describe('isSensitiveRead', () => {
   it('flags a read-kind call whose path is a credential file', () => {
-    expect(isSensitiveRead('read', { path: '.env' })).toBe(true)
-    expect(isSensitiveRead('read', { path: 'keys/server.pem', pattern: 'BEGIN' })).toBe(true)
+    expect(isSensitiveRead('read', { path: '.env' }, [])).toBe(true)
+    expect(isSensitiveRead('read', { path: 'keys/server.pem', pattern: 'BEGIN' }, [])).toBe(true)
   })
 
   it('ignores ordinary paths, non-string paths, and non-read kinds', () => {
-    expect(isSensitiveRead('read', { path: 'src/index.ts' })).toBe(false)
-    expect(isSensitiveRead('read', { path: ['.env'] })).toBe(false)
-    expect(isSensitiveRead('read', {})).toBe(false)
+    expect(isSensitiveRead('read', { path: 'src/index.ts' }, [])).toBe(false)
+    expect(isSensitiveRead('read', { path: ['.env'] }, [])).toBe(false)
+    expect(isSensitiveRead('read', {}, [])).toBe(false)
     // A write to .env is gated by the write path's own approval, not this check.
-    expect(isSensitiveRead('write', { path: '.env' })).toBe(false)
+    expect(isSensitiveRead('write', { path: '.env' }, [])).toBe(false)
   })
 
   it('checks every entry of a show_images call', () => {
-    expect(isSensitiveRead('read', { images: [{ path: 'shots/a.png' }, { path: '.ssh/id_ed25519' }] })).toBe(true)
-    expect(isSensitiveRead('read', { images: [{ path: 'shots/a.png' }, { path: 'shots/b.png' }] })).toBe(false)
-    expect(isSensitiveRead('read', { images: [null, 'x', { path: 7 }] })).toBe(false)
-    expect(isSensitiveRead('read', { images: 'not-an-array' })).toBe(false)
-    expect(isSensitiveRead('read', { images: [{ path: 'a.png', compareWith: 'certs/server.key' }] })).toBe(true)
+    expect(isSensitiveRead('read', { images: [{ path: 'shots/a.png' }, { path: '.ssh/id_ed25519' }] }, [])).toBe(true)
+    expect(isSensitiveRead('read', { images: [{ path: 'shots/a.png' }, { path: 'shots/b.png' }] }, [])).toBe(false)
+    expect(isSensitiveRead('read', { images: [null, 'x', { path: 7 }] }, [])).toBe(false)
+    expect(isSensitiveRead('read', { images: 'not-an-array' }, [])).toBe(false)
+    expect(isSensitiveRead('read', { images: [{ path: 'a.png', compareWith: 'certs/server.key' }] }, [])).toBe(true)
   })
 })
 
 describe('writesSensitivePath', () => {
   it('checks the path of the single-file write tools', () => {
-    expect(writesSensitivePath('write_file', { path: '.env', content: 'A=1' })).toBe(true)
-    expect(writesSensitivePath('edit_file', { path: 'apps/api/.env.local' })).toBe(true)
-    expect(writesSensitivePath('write_file', { path: '.env.example', content: 'A=' })).toBe(false)
-    expect(writesSensitivePath('write_file', { path: 'src/env.ts' })).toBe(false)
+    expect(writesSensitivePath('write_file', { path: '.env', content: 'A=1' }, [])).toBe(true)
+    expect(writesSensitivePath('edit_file', { path: 'apps/api/.env.local' }, [])).toBe(true)
+    expect(writesSensitivePath('write_file', { path: '.env.example', content: 'A=' }, [])).toBe(false)
+    expect(writesSensitivePath('write_file', { path: 'src/env.ts' }, [])).toBe(false)
   })
 
   it('checks every path an apply_patch touches, including a move target', () => {
@@ -104,11 +114,11 @@ describe('writesSensitivePath', () => {
     const move = '*** Begin Patch\n*** Update File: tmp.txt\n*** Move to: .env\n@@\n-a\n+b\n*** End Patch'
     const del = '*** Begin Patch\n*** Delete File: certs/server.key\n*** End Patch'
     const plain = '*** Begin Patch\n*** Add File: README.md\n+hi\n*** End Patch'
-    expect(writesSensitivePath('apply_patch', { patch: add })).toBe(true)
-    expect(writesSensitivePath('apply_patch', { patch: move })).toBe(true)
-    expect(writesSensitivePath('apply_patch', { patch: del })).toBe(true)
-    expect(writesSensitivePath('apply_patch', { patch: plain })).toBe(false)
-    expect(writesSensitivePath('apply_patch', { patch: 'not a patch' })).toBe(false)
+    expect(writesSensitivePath('apply_patch', { patch: add }, [])).toBe(true)
+    expect(writesSensitivePath('apply_patch', { patch: move }, [])).toBe(true)
+    expect(writesSensitivePath('apply_patch', { patch: del }, [])).toBe(true)
+    expect(writesSensitivePath('apply_patch', { patch: plain }, [])).toBe(false)
+    expect(writesSensitivePath('apply_patch', { patch: 'not a patch' }, [])).toBe(false)
   })
 })
 
@@ -145,16 +155,72 @@ describe('isGitExecPath', () => {
 
 describe('writesSensitivePath on git exec paths', () => {
   it('prompts for a file-tool write to a hook or the repo config', () => {
-    expect(writesSensitivePath('write_file', { path: '.git/hooks/pre-commit' })).toBe(true)
-    expect(writesSensitivePath('edit_file', { path: '.git/config' })).toBe(true)
-    expect(writesSensitivePath('write_file', { path: 'src/config.ts' })).toBe(false)
+    expect(writesSensitivePath('write_file', { path: '.git/hooks/pre-commit' }, [])).toBe(true)
+    expect(writesSensitivePath('edit_file', { path: '.git/config' }, [])).toBe(true)
+    expect(writesSensitivePath('write_file', { path: 'src/config.ts' }, [])).toBe(false)
   })
 
   it('checks every apply_patch target, a move destination included', () => {
     const add = '*** Begin Patch\n*** Add File: .git/hooks/post-merge\n+#!/bin/sh\n*** End Patch'
-    expect(writesSensitivePath('apply_patch', { patch: add })).toBe(true)
+    expect(writesSensitivePath('apply_patch', { patch: add }, [])).toBe(true)
     const move =
       '*** Begin Patch\n*** Update File: notes.txt\n*** Move to: .git/commondir\n@@\n-a\n+b\n*** End Patch'
-    expect(writesSensitivePath('apply_patch', { patch: move })).toBe(true)
+    expect(writesSensitivePath('apply_patch', { patch: move }, [])).toBe(true)
+  })
+})
+
+describe('credential and git exec paths at their real location', () => {
+  let repo: string
+  beforeEach(() => {
+    repo = realpathSync(mkdtempSync(join(tmpdir(), 'houston-sensitive-')))
+    writeFileSync(join(repo, '.env'), 'A=1\n')
+    mkdirSync(join(repo, '.git'))
+    writeFileSync(join(repo, '.git/config'), '[core]\n')
+    writeFileSync(join(repo, 'plain.txt'), 'x\n')
+  })
+  afterEach(() => rmSync(repo, { recursive: true, force: true }))
+
+  it('flags a read through a symlink to .env, a file or a folder link alike', () => {
+    symlinkSync('.env', join(repo, 'notes.txt'))
+    mkdirSync(join(repo, 'keys'))
+    writeFileSync(join(repo, 'keys/server.pem'), 'k')
+    symlinkSync('keys', join(repo, 'stuff'))
+    expect(isSensitiveRead('read', { path: 'notes.txt' }, [repo])).toBe(true)
+    expect(isSensitiveRead('read', { path: join(repo, 'notes.txt') }, [repo])).toBe(true)
+    expect(isSensitiveRead('read', { path: 'stuff/server.pem' }, [repo])).toBe(true)
+    expect(isSensitiveRead('read', { images: [{ path: 'notes.txt' }] }, [repo])).toBe(true)
+    expect(isSensitiveRead('read', { path: 'plain.txt' }, [repo])).toBe(false)
+  })
+
+  it('flags a write through a symlink to .env or into .git, a dangling one included', () => {
+    symlinkSync('.env', join(repo, 'notes.txt'))
+    symlinkSync('.env.production', join(repo, 'later.txt'))
+    symlinkSync('.git', join(repo, 'g'))
+    expect(writesSensitivePath('write_file', { path: 'notes.txt' }, [repo])).toBe(true)
+    expect(writesSensitivePath('write_file', { path: 'later.txt' }, [repo])).toBe(true)
+    expect(writesSensitivePath('edit_file', { path: 'g/config' }, [repo])).toBe(true)
+    expect(isGitExecPathAt('g/config', [repo])).toBe(true)
+    expect(isSensitivePathAt('notes.txt', [repo])).toBe(true)
+  })
+
+  it('leaves ordinary and not-yet-existing workspace files alone', () => {
+    expect(isSensitivePathAt('plain.txt', [repo])).toBe(false)
+    expect(isSensitivePathAt('new/dir/file.ts', [repo])).toBe(false)
+    expect(isGitExecPathAt('src/config', [repo])).toBe(false)
+    expect(writesSensitivePath('write_file', { path: 'new.txt' }, [repo])).toBe(false)
+  })
+
+  it('does not flag every file of a workspace whose ancestor has a sensitive name', () => {
+    const ws = join(repo, '.ssh', 'proj')
+    mkdirSync(ws, { recursive: true })
+    writeFileSync(join(ws, 'readme.md'), 'x')
+    expect(isSensitivePathAt('readme.md', [ws])).toBe(false)
+  })
+
+  it('reads a Windows stream suffix or trailing dot as the plain name', () => {
+    expect(isSensitivePathAt('.env::$DATA', [repo])).toBe(true)
+    expect(isSensitivePathAt('server.pem.', [repo])).toBe(true)
+    expect(isGitExecPathAt('.git\\config::$DATA', [repo])).toBe(true)
+    expect(isGitExecPathAt('.git/config:$DATA', [repo])).toBe(true)
   })
 })
