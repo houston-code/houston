@@ -62,7 +62,13 @@ export type CommandPrepareResult =
 /** Caps on the record at the IPC boundary. It's display text, never instructions. */
 const MAX_LABEL = 120
 const MAX_DETAIL = 500
-const MAX_TYPED = 4000
+/**
+ * `typed` is what history recall, export, the pager, and rewind give back as the
+ * user's message, and a message with `@` mentions keeps all of it there (see
+ * mentionTurn), so its cap only guards against a malformed record: a cap a long
+ * message can reach would hand back a truncated message as if the user had sent it.
+ */
+const MAX_TYPED = 1_000_000
 const KINDS: readonly PromptInvocationKind[] = ['command', 'action', 'spawned']
 
 function clip(value: unknown, max: number): string | undefined {
@@ -176,14 +182,15 @@ export function mentionTurn(
   const body = [opts.task.trim(), ...opts.context].filter(Boolean).join('\n\n')
   const firstLine = typed.trim().split('\n')[0]?.trim() ?? ''
   const detail = clip(opts.describe.join(', '), MAX_DETAIL)
-  const typedClip = clip(typed, MAX_TYPED)
+  // The whole message: it is what the user wrote, recalled and resent as written.
+  const whole = typed.trim()
   return {
     text: opts.agent ? agentInvocationPrompt(opts.agent, body) : body,
     invokedAs: {
       kind: 'command',
       label: opts.agent ? `@agent-${opts.agent}` : (clip(firstLine, MAX_LABEL) ?? 'Message'),
       ...(detail ? { detail } : {}),
-      ...(typedClip ? { typed: typedClip } : {})
+      ...(whole ? { typed: whole } : {})
     }
   }
 }

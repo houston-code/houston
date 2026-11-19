@@ -5,6 +5,7 @@ import {
   commandTurn,
   mcpPromptTurn,
   invocationText,
+  mentionTurn,
   reviewCommentsTurn,
   sanitizeInvocation,
   shipTurn,
@@ -173,6 +174,20 @@ describe('invocationText', () => {
   it('prefers what the user typed, else the label', () => {
     expect(invocationText({ kind: 'command', label: '/review', typed: '/review now' })).toBe('/review now')
     expect(invocationText({ kind: 'action', label: 'Create PR' })).toBe('Create PR')
+  })
+})
+
+describe('mentionTurn', () => {
+  it('keeps the whole message as typed, however long, through the IPC boundary too', () => {
+    // History recall, export, the pager, and rewind hand `typed` back as the message the
+    // user sent; a clipped one came back cut off at 4,000 characters.
+    const long = `look at @src/a.ts:1-5 and then ${'explain this part of the log. '.repeat(400)}`.trim()
+    expect(long.length).toBeGreaterThan(10_000)
+    const turn = mentionTurn(long, { task: long, context: ['<file src/a.ts lines 1-5>'], describe: ['src/a.ts lines 1-5'] })
+    expect(turn.invokedAs.typed).toBe(long)
+    expect(sanitizeInvocation(turn.invokedAs)?.typed).toBe(long)
+    expect(invocationText(turn.invokedAs)).toBe(long)
+    expect(turn.invokedAs.label.length).toBeLessThanOrEqual(120) // the chip stays short
   })
 })
 
