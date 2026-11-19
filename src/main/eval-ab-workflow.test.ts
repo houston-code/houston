@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { load } from 'js-yaml'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { defaultProviders } from '@shared/defaults'
 import { baselineFileName } from './agent/evals/baseline'
 import { HARD_SUBSET, PROBES_SUBSET, resolveEvalConfig, selectTasks } from './agent/evals/config'
@@ -47,8 +47,32 @@ function writeTree(root: string, files: Record<string, string> = {}): void {
 }
 
 /**
+ * Stub bin dirs, one per distinct set of stubs, written once and reused by every step run.
+ * macOS assesses each newly written executable on its first exec, which can stall it for
+ * half a second or more; rewriting the stubs for every run pushed tests that run a step a
+ * dozen times past the test timeout. Stubs only read their env, so sharing them is safe.
+ */
+const stubRoot = mkdtempSync(join(tmpdir(), 'eval-ab-stubs-'))
+const stubBins = new Map<string, string>()
+afterAll(() => rmSync(stubRoot, { recursive: true, force: true }))
+
+function stubBin(stubs: Record<string, string>): string {
+  const key = JSON.stringify(Object.entries(stubs).sort(([a], [b]) => a.localeCompare(b)))
+  let bin = stubBins.get(key)
+  if (!bin) {
+    bin = join(stubRoot, String(stubBins.size))
+    mkdirSync(bin)
+    for (const [name, body] of Object.entries(stubs)) {
+      writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 })
+    }
+    stubBins.set(key, bin)
+  }
+  return bin
+}
+
+/**
  * Run one step's script the way the runner would, hermetically: bash with no startup files,
- * a temp HOME, only the system PATH plus `stubs` (executables written to a temp bin dir), a
+ * a temp HOME, only the system PATH plus `stubs` (executables in a shared temp bin dir, see stubBin), a
  * temp GITHUB_OUTPUT and GITHUB_STEP_SUMMARY, and the given env. `files` are written to the
  * working directory and `temp` under RUNNER_TEMP, and the `collect` paths (under RUNNER_TEMP)
  * are read back before the temp dir goes. Returns the exit status, the outputs it wrote, its
@@ -66,11 +90,7 @@ function runStep(
 ): { status: number | null; out: Record<string, string>; log: string; collected: Record<string, string | undefined> } {
   const dir = mkdtempSync(join(tmpdir(), 'eval-ab-step-'))
   try {
-    const bin = join(dir, 'bin')
-    mkdirSync(bin)
-    for (const [name, body] of Object.entries(opts.stubs ?? {})) {
-      writeFileSync(join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 })
-    }
+    const bin = stubBin(opts.stubs ?? {})
     const work = join(dir, 'work')
     mkdirSync(work)
     writeTree(work, opts.files)
