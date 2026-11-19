@@ -161,6 +161,9 @@ export function osc52Copy(text: string): string {
   return trustIn(trustedCopies, MAX_TRUSTED_COPIES, `\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`)
 }
 
+/** A code point drawn as an emoji, two columns, unless a VS15 asks for text. */
+const EMOJI_PRESENTATION = /\p{Emoji_Presentation}/u
+
 /**
  * Display columns a single code point occupies: 0 for combining/zero-width marks,
  * 2 for East-Asian wide + fullwidth glyphs and astral emoji, 1 otherwise. A
@@ -191,7 +194,9 @@ export function charWidth(cp: number): number {
     (cp >= 0xff00 && cp <= 0xff60) ||
     (cp >= 0xffe0 && cp <= 0xffe6) || // Fullwidth forms
     (cp >= 0x1f000 && cp <= 0x1faff) || // emoji & pictographs
-    (cp >= 0x20000 && cp <= 0x3fffd) // CJK Ext B+
+    (cp >= 0x20000 && cp <= 0x3fffd) || // CJK Ext B+
+    // The symbols drawn as emoji by default (✅ ❌ ⭐ ⚡ ⏳ ☕): terminals give them 2.
+    (cp >= 0x2100 && cp <= 0x2bff && EMOJI_PRESENTATION.test(String.fromCodePoint(cp)))
   ) {
     return 2
   }
@@ -240,7 +245,8 @@ export function clusterWidth(cluster: string): number {
  * U+2100-U+2BFF (letterlike, arrows, math, technical, box drawing, blocks, shapes,
  * symbols, dingbats, braille). None holds a combining mark, joiner, variation selector,
  * prepended mark or Hangul jamo (which join their neighbours), a surrogate, or a wide
- * character. Anything else is measured cluster by cluster.
+ * character, except the emoji-presentation symbols in U+2100-U+2BFF (✅, ⭐), which
+ * plainWidth checks for separately. Anything else is measured cluster by cluster.
  */
 const SINGLE_WIDTH =
   /^[\x20-\x7e\u{a0}-\u{2ff}\u{370}-\u{482}\u{48a}-\u{52f}\u{2010}-\u{2027}\u{2030}-\u{205e}\u{2070}-\u{20cf}\u{2100}-\u{2bff}]*$/u
@@ -252,7 +258,7 @@ export function visibleWidth(s: string): number {
 
 /** Visible column width of text with no escapes in it. */
 function plainWidth(text: string): number {
-  if (SINGLE_WIDTH.test(text)) return text.length
+  if (SINGLE_WIDTH.test(text) && !EMOJI_PRESENTATION.test(text)) return text.length
   let w = 0
   for (const g of graphemes(text)) w += clusterWidth(g)
   return w

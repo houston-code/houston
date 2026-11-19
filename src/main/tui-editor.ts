@@ -758,6 +758,21 @@ export function renderEditor(
   return { rows: [...above, ...view.rows], cursorRow: view.cursorRow + above.length, cursorCol: view.cursorCol }
 }
 
+/** What a tab is drawn as in the composer and its search row. */
+const TAB_SPACES = '    '
+
+function expandTabs(text: string): string {
+  return text.includes('\t') ? text.replace(/\t/g, TAB_SPACES) : text
+}
+
+/** Where string offset `off` of `raw` lands once its tabs are drawn as spaces. */
+function tabbedOffset(raw: string, off: number): number {
+  if (!raw.includes('\t')) return off
+  let tabs = 0
+  for (let k = 0; k < off && k < raw.length; k++) if (raw[k] === '\t') tabs++
+  return off + tabs * (TAB_SPACES.length - 1)
+}
+
 function renderEditorBody(s: EditorState, opts: Parameters<typeof renderEditor>[1]): EditorView {
   const width = Math.max(8, opts.width)
   if (s.search) {
@@ -765,12 +780,12 @@ function renderEditorBody(s: EditorState, opts: Parameters<typeof renderEditor>[
     // One row, never wider than the screen: the redraw counts this as a single row,
     // so a hit that wrapped (a long prompt, or a multi-line one with its newlines)
     // left copies of itself behind on every keystroke. A long query keeps its end.
-    const query = truncateVisibleStart(s.search.query, Math.max(1, width - 24))
+    const query = truncateVisibleStart(expandTabs(s.search.query), Math.max(1, width - 24))
     // Which match this is, so stepping through them (Ctrl-R / Up, Ctrl-S / Down) shows
     // where you are.
     const pos = searchPosition(s.history, s.search)
     const label = `(reverse-i-search)\`${query}'${pos ? ` ${pos.at}/${pos.of}` : ''}: `
-    const [first, ...more] = hit.split(/\r?\n/)
+    const [first, ...more] = expandTabs(hit).split(/\r?\n/)
     const shown = truncateVisible(more.length ? `${first} …` : first, Math.max(0, width - visibleWidth(label)))
     const row = opts.paint(label, 'dim') + shown
     return { rows: [row], cursorRow: 0, cursorCol: Math.min(width - 1, visibleWidth(label)) }
@@ -783,15 +798,18 @@ function renderEditorBody(s: EditorState, opts: Parameters<typeof renderEditor>[
   let cursorRow = 0
   let cursorCol = 0
 
-  s.lines.forEach((line, i) => {
+  s.lines.forEach((raw, i) => {
     const lead = i === 0 ? promptWidth : contWidth
+    // A tab is drawn as spaces: the terminal would move it to its next tab stop,
+    // which the width count (and so the cursor) knows nothing about.
+    const line = expandTabs(raw)
     const chunks = splitToWidth(line, width - lead)
     if (i === s.row) {
       // Cursor: which chunk holds `col`, and where in it. Walked chunk by chunk rather
       // than divided by the row width: a wide character is never split, so a row of
       // them can hold a column less than the width, and the division then put the
       // cursor ahead of where the text actually wraps.
-      let rest = visibleWidth(cpSlice(line, 0, s.col))
+      let rest = visibleWidth(expandTabs(cpSlice(raw, 0, s.col)))
       let chunkIndex = 0
       while (chunkIndex < chunks.length - 1 && rest >= visibleWidth(chunks[chunkIndex])) {
         rest -= visibleWidth(chunks[chunkIndex])
@@ -805,7 +823,7 @@ function renderEditorBody(s: EditorState, opts: Parameters<typeof renderEditor>[
         cursorCol = lead
       }
     }
-    const lineMarks = opts.marks?.[i] ?? []
+    const lineMarks = (opts.marks?.[i] ?? []).map((m) => ({ start: tabbedOffset(raw, m.start), end: tabbedOffset(raw, m.end) }))
     const markPaint = opts.markPaint ?? ((t: string) => opts.paint(t, 'bold', 'magenta'))
     let at = 0
     chunks.forEach((chunk, j) => {

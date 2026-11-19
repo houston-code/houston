@@ -27,6 +27,18 @@ describe('stripAnsi / visibleWidth', () => {
   })
 })
 
+describe('emoji-presentation symbols', () => {
+  // Terminals draw these two columns wide; counting them as one misplaced the
+  // composer's cursor and pushed table columns out of line.
+  it('measures them 2 wide, and the text symbols around them 1', () => {
+    for (const e of ['✅', '❌', '⭐', '⚡', '⏳', '☕']) expect(visibleWidth(e)).toBe(2)
+    expect(visibleWidth('✅ done')).toBe(7)
+    expect(visibleWidth('→ ✓ ★ ─')).toBe(7)
+    // VS15 asks for the text form, one column.
+    expect(visibleWidth('⭐\ufe0e')).toBe(1)
+  })
+})
+
 describe('stripControlChars / stripControlCharsKeepLines', () => {
   const hostile = 'a\x1b]52;c;ZXZpbA==\x07\tb\r\x1b[2K\x9bc\nd\x7f'
   it('drops every control character on one line', () => {
