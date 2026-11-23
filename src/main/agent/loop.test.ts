@@ -474,7 +474,8 @@ afterEach(async () => {
   // process is working in), and start the next test without it.
   await settleReusedRulesDiscovery()
   resetReusedRulesDiscovery()
-  rmSync(ws, { recursive: true, force: true })
+  // Windows can still hold the directory for a moment after the last process in it exits.
+  rmSync(ws, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   h.mcpDefs = []
   h.probeTools = []
   resetSubAgentSessions()
@@ -5801,7 +5802,9 @@ describe('ask_user', () => {
   })
 })
 
-describe('search scope memo (per run)', () => {
+// Each test here runs git and the real search tools several times, about a second on a
+// Windows runner and several times that on a loaded one.
+describe('search scope memo (per run)', { timeout: 20_000 }, () => {
   // A repository in the workspace, searched by the real search_files tool. Between
   // searches a tracked hidden file arrives, or lib/ becomes ignored (its kept.ts is
   // tracked, so still searched, and its loose.ts is not). A scope plan carried past

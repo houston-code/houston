@@ -20,8 +20,9 @@ beforeEach(() => {
   writeFileSync(join(outside, 'secret.txt'), 'outside\n')
 })
 afterEach(() => {
-  rmSync(ws, { recursive: true, force: true })
-  rmSync(outside, { recursive: true, force: true })
+  // Windows can still hold a directory for a moment after a stopped command in it exits.
+  rmSync(ws, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  rmSync(outside, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 const opts = (over: Partial<ExpandContextOptions> = {}): ExpandContextOptions => ({
