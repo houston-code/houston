@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent, Conversation, ConversationMeta } from '@shared/agent'
 import type { FileDiff } from '@shared/workingTree'
 import { defaultSettings } from '@shared/defaults'
@@ -517,6 +517,12 @@ describe('App putting a message back in a message box', () => {
 })
 
 describe('App closing Settings', () => {
+  // Settings is a lazy chunk and this is the only test here that opens it. Loading it cold
+  // inside the test can outlast findByRole's wait on a slow runner, so load it up front.
+  beforeAll(async () => {
+    await import('./components/SettingsModal')
+  }, 60_000)
+
   it('puts the saved theme back when Settings closes without saving the one it previewed', async () => {
     installApi(1, { saveSettings: vi.fn(async () => Promise.reject(new Error('disk full'))) })
     render(<App />)
