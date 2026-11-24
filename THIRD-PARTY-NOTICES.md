@@ -64,7 +64,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### @anthropic-ai/bedrock-sdk: 1.1.1
+### @anthropic-ai/bedrock-sdk: 1.1.2
 
 - License: Apache-2.0
 - Homepage: github:anthropics/anthropic-sdk-typescript
@@ -482,7 +482,7 @@ Apache License
    limitations under the License.
 ```
 
-### @anthropic-ai/sdk: 1.7.0
+### @anthropic-ai/sdk: 1.9.0
 
 - License: Apache-2.0
 - Homepage: github:anthropics/anthropic-sdk-typescript
@@ -691,7 +691,7 @@ Apache License
    limitations under the License.
 ```
 
-### @anthropic-ai/vertex-sdk: 1.1.2
+### @anthropic-ai/vertex-sdk: 1.1.3
 
 - License: Apache-2.0
 - Homepage: github:anthropics/anthropic-sdk-typescript
@@ -1945,7 +1945,7 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/core: 3.980.2
+### @aws-sdk/core: 3.981.0
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/core
@@ -2154,7 +2154,7 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/credential-provider-cognito-identity: 3.972.82
+### @aws-sdk/credential-provider-cognito-identity: 3.972.83
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-cognito-identity
@@ -2363,7 +2363,7 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/credential-provider-env: 3.972.83
+### @aws-sdk/credential-provider-env: 3.972.84
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-env
@@ -2572,12 +2572,12 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/credential-provider-http: 3.972.85
+### @aws-sdk/credential-provider-http: 3.972.86
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-http
 
-### @aws-sdk/credential-provider-ini: 3.973.28
+### @aws-sdk/credential-provider-ini: 3.973.30
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-ini
@@ -2786,12 +2786,12 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/credential-provider-login: 3.972.90
+### @aws-sdk/credential-provider-login: 3.972.92
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-login
 
-### @aws-sdk/credential-provider-node: 3.972.95
+### @aws-sdk/credential-provider-node: 3.972.97
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-node
@@ -3000,7 +3000,7 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/credential-provider-process: 3.972.83
+### @aws-sdk/credential-provider-process: 3.972.84
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-process
@@ -3209,7 +3209,7 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/credential-provider-sso: 3.973.27
+### @aws-sdk/credential-provider-sso: 3.973.28
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-sso
@@ -3418,7 +3418,7 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/credential-provider-web-identity: 3.972.89
+### @aws-sdk/credential-provider-web-identity: 3.972.90
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages-internal/credential-provider-web-identity
@@ -3627,7 +3627,7 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/credential-providers: 3.1165.0
+### @aws-sdk/credential-providers: 3.1170.0
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages/credential-providers
@@ -4463,7 +4463,7 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/nested-clients: 3.998.2
+### @aws-sdk/nested-clients: 3.998.3
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages/nested-clients
@@ -4886,7 +4886,7 @@ Apache License
    limitations under the License.
 ```
 
-### @aws-sdk/token-providers: 3.1165.0
+### @aws-sdk/token-providers: 3.1166.0
 
 - License: Apache-2.0
 - Homepage: https://github.com/aws/aws-sdk-js-v3/tree/main/packages/token-providers
@@ -7254,7 +7254,7 @@ Apache License
    limitations under the License.
 ```
 
-### @smithy/core: 3.39.0
+### @smithy/core: 3.41.0
 
 - License: Apache-2.0
 - Homepage: https://github.com/smithy-lang/smithy-typescript/tree/main/packages/core
@@ -20925,10 +20925,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### minimatch: 11.0.5
+### minimatch: 11.0.9
 
 - License: BlueOak-1.0.0
-- Homepage: git@github.com:isaacs/minimatch
+- Homepage: ssh://git@github.com/isaacs/minimatch
 
 ```text
 # Blue Oak Model License
@@ -21169,7 +21169,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### openai: 7.55.0
+### openai: 7.57.0
 
 - License: Apache-2.0
 - Homepage: github:openai/openai-node
@@ -22135,7 +22135,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### undici: 7.30.1
+### undici: 7.30.2
 
 - License: MIT
 - Homepage: https://undici.nodejs.org
