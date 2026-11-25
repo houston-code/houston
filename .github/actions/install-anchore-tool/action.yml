@@ -1,0 +1,59 @@
+name: Install an Anchore CLI (grype or syft)
+description: >-
+  Downloads one pinned grype or syft release for Linux x64, retrying through transient GitHub
+  errors, checks it against a pinned SHA-256, and returns its path as the `cmd` output (it is
+  not put on PATH). Replaces anchore's download-grype / download-syft actions, whose install.sh
+  first looks the tag up on github.com/anchore/<tool>/releases and gives up on a single HTTP 500
+  there (the scheduled vulnerability scan of 2026-11-25 failed that way, with nothing wrong in
+  the code).
+
+  Bumping a version: change `version` and `sha256` together at the call site. The hash is the
+  `<tool>_<version>_linux_amd64.tar.gz` line of that release's `<tool>_<version>_checksums.txt`.
+
+inputs:
+  tool:
+    description: 'grype or syft'
+    required: true
+  version:
+    description: 'Release to install, without the leading v (for example 0.115.0)'
+    required: true
+  sha256:
+    description: 'SHA-256 of <tool>_<version>_linux_amd64.tar.gz'
+    required: true
+
+outputs:
+  cmd:
+    description: 'Absolute path to the installed binary'
+    value: ${{ steps.install.outputs.cmd }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install ${{ inputs.tool }} ${{ inputs.version }}
+      id: install
+      shell: bash
+      env:
+        TOOL: ${{ inputs.tool }}
+        VERSION: ${{ inputs.version }}
+        SHA256: ${{ inputs.sha256 }}
+      run: |
+        set -euo pipefail
+        case "$TOOL" in grype|syft) ;; *) echo "::error::unknown tool '$TOOL' (expected grype or syft)"; exit 1 ;; esac
+        [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version '$VERSION' is not X.Y.Z"; exit 1; }
+        [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::sha256 is not 64 lowercase hex digits"; exit 1; }
+        if [ "$RUNNER_OS" != Linux ] || [ "$RUNNER_ARCH" != X64 ]; then
+          echo "::error::install-anchore-tool supports Linux x64 runners only (got $RUNNER_OS $RUNNER_ARCH)"
+          exit 1
+        fi
+        archive="${TOOL}_${VERSION}_linux_amd64.tar.gz"
+        url="https://github.com/anchore/${TOOL}/releases/download/v${VERSION}/${archive}"
+        dir="$RUNNER_TEMP/anchore-${TOOL}-${VERSION}"
+        mkdir -p "$dir"
+        # --retry-all-errors also retries the HTTP 5xx GitHub returns during an incident, and
+        # retry.sh covers an outage longer than curl's own retries.
+        "$GITHUB_ACTION_PATH/../../../scripts/retry.sh" curl -fsSL --retry 4 --retry-delay 5 \
+          --retry-all-errors --connect-timeout 20 -o "$dir/$archive" "$url"
+        echo "$SHA256  $dir/$archive" | sha256sum -c --strict --quiet -
+        tar -xzf "$dir/$archive" -C "$dir" "$TOOL"
+        "$dir/$TOOL" version
+        echo "cmd=$dir/$TOOL" >> "$GITHUB_OUTPUT"

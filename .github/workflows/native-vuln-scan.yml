@@ -64,24 +64,39 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.ref || github.sha }}
-      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      # Pin a Syft that supports SPDX 3.0 output, and a Grype new enough to read the CycloneDX
+      # it emits. Installed from checksummed release archives with retries, so a GitHub
+      # outage while downloading them doesn't fail the scan.
+      - uses: ./.github/actions/install-anchore-tool
+        id: syft
         with:
-          # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
-          syft-version: v1.46.0
+          tool: syft
+          version: 1.46.0
+          sha256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
+      - uses: ./.github/actions/install-anchore-tool
+        id: grype
+        with:
+          tool: grype
+          version: 0.115.0
+          sha256: 3fad92940650e514c0aa2dad83526942a055e210cec09a8a59d9c024adc2b90e
       - name: Generate production SBOM for scanning
-        run: syft scan file:./package-lock.json -o cyclonedx-json@1.6=sbom.cyclonedx.json
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+        run: |
+          "$SYFT" scan file:./package-lock.json -o cyclonedx-json@1.6=sbom.cyclonedx.json
+      - name: Fetch the vulnerability database
+        env:
+          GRYPE: ${{ steps.grype.outputs.cmd }}
+        run: scripts/retry.sh "$GRYPE" db update
+      # Findings assessed as not-exploitable are suppressed via the VEX document
+      # (.github/vex/houston.openvex.json, see .github/vex/README.md).
       - name: Scan SBOM for vulnerabilities (fail on fixable High/Critical)
-        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-        with:
-          sbom: sbom.cyclonedx.json
-          # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
-          grype-version: v0.115.0
-          # Findings assessed as not-exploitable are suppressed via the VEX document
-          # (.github/vex/houston.openvex.json, see .github/vex/README.md).
-          vex: .github/vex/houston.openvex.json
-          severity-cutoff: high
-          only-fixed: true
-          output-format: table
+        env:
+          GRYPE: ${{ steps.grype.outputs.cmd }}
+          GRYPE_DB_AUTO_UPDATE: 'false'
+        run: |
+          "$GRYPE" sbom:sbom.cyclonedx.json \
+            --only-fixed --vex .github/vex/houston.openvex.json --fail-on high -o table
 
   scan:
     timeout-minutes: 10
@@ -98,19 +113,26 @@ jobs:
       - uses: ./.github/actions/setup-node
         with:
           cache: 'false'
-      - uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+      # Same Grype as the release gates.
+      - uses: ./.github/actions/install-anchore-tool
         id: grype
         with:
-          # Same Grype as the release gates.
-          grype-version: v0.115.0
+          tool: grype
+          version: 0.115.0
+          sha256: 3fad92940650e514c0aa2dad83526942a055e210cec09a8a59d9c024adc2b90e
       # One snapshot per run, so the SBOM and the policy judge against the same metadata.
       - name: Fetch Electron release metadata
         run: curl -fsSL --retry 3 https://releases.electronjs.org/releases.json -o electron-releases.json
       - name: Build pre-build runtime SBOM
         run: node scripts/native-vuln-policy.mjs sbom --releases electron-releases.json -o sbom.native-runtime.cyclonedx.json
+      - name: Fetch the vulnerability database
+        env:
+          GRYPE: ${{ steps.grype.outputs.cmd }}
+        run: scripts/retry.sh "$GRYPE" db update
       - name: Scan with grype
         env:
           GRYPE: ${{ steps.grype.outputs.cmd }}
+          GRYPE_DB_AUTO_UPDATE: 'false'
         run: |
           "$GRYPE" sbom:sbom.native-runtime.cyclonedx.json \
             --only-fixed --vex .github/vex/houston.openvex.json \
