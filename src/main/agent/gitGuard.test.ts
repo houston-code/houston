@@ -242,7 +242,10 @@ function makeRepo(dir: string): void {
 
 const posix = process.platform !== 'win32'
 
-describe('GitGuard on real repositories', () => {
+// Each test here spawns real git several times, about 0.3-1.5 s per test on the Windows runner.
+// One timed out at the 5 s default in a busy merge-queue run (2026-11-19) with nothing wrong,
+// so the whole block gets room for a slow runner.
+describe('GitGuard on real repositories', { timeout: 30_000 }, () => {
   let tmp: string
   let ws: string
 
