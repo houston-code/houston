@@ -38,21 +38,28 @@ describe('dropOwnCompileCacheEnv', () => {
 
 describe('nodeVersionError', () => {
   it('returns null when the runtime is new enough', () => {
-    expect(nodeVersionError('v22.0.0')).toBeNull()
+    expect(nodeVersionError('v22.19.0')).toBeNull()
     expect(nodeVersionError('v24.3.1')).toBeNull()
     expect(nodeVersionError('v22.22.3')).toBeNull()
+    expect(nodeVersionError('v26.0.0')).toBeNull()
   })
 
   it('reports an actionable error on an older runtime', () => {
     const err = nodeVersionError('v18.19.0')
     expect(err).not.toBeNull()
-    expect(err).toContain('Node 22')
+    expect(err).toContain('Node 22.19')
     expect(err).toContain('v18.19.0')
   })
 
+  it('refuses a Node 22 release older than 22.19, which the bundled undici cannot load on', () => {
+    expect(nodeVersionError('v22.0.0')).toContain('Node 22.19 or newer')
+    expect(nodeVersionError('v22.18.9')).toContain('(this is v22.18.9)')
+  })
+
   it('honors a custom minimum', () => {
-    expect(nodeVersionError('v20.0.0', 22)).toContain('Node 22')
-    expect(nodeVersionError('v20.0.0', 20)).toBeNull()
+    expect(nodeVersionError('v20.0.0', '22')).toContain('Node 22')
+    expect(nodeVersionError('v20.0.0', '20')).toBeNull()
+    expect(nodeVersionError('v24.4.0', '24.5')).toContain('Node 24.5')
   })
 
   it('does not block on an unparseable version string', () => {

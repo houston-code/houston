@@ -105,7 +105,7 @@
           {
             "@type": "Question",
             "name": "Which operating systems does Houston support?",
-            "acceptedAnswer": { "@type": "Answer", "text": "macOS 13 Ventura or newer (Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+). A standalone terminal CLI also runs on macOS, Windows and Linux, x64 or Arm, with Node 22 or newer." }
+            "acceptedAnswer": { "@type": "Answer", "text": "macOS 13 Ventura or newer (Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+). A standalone terminal CLI also runs on macOS, Windows and Linux, x64 or Arm, with Node 22.19 or newer." }
           },
           {
             "@type": "Question",
@@ -284,7 +284,7 @@
           <li class="feature">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
             <h3>Desktop, terminal, or headless</h3>
-            <p>Use the desktop app, an interactive terminal session, or one-shot headless runs for scripts and CI. A single-file CLI runs anywhere Node 22+ does, ACP-capable editors can run it as their agent, and a GitHub Action reviews pull requests and fixes failed CI on your own runners.</p>
+            <p>Use the desktop app, an interactive terminal session, or one-shot headless runs for scripts and CI. A single-file CLI runs anywhere Node 22.19+ does, ACP-capable editors can run it as their agent, and a GitHub Action reviews pull requests and fixes failed CI on your own runners.</p>
           </li>
         </ul>
       </div>
@@ -328,11 +328,11 @@
 
         <p class="dl-hint" id="mac-arch-hint" hidden>Not sure which Mac you have? Open the Apple menu and choose About This Mac. If it lists a <strong>Chip</strong> (M1 or newer), get Apple Silicon. If it lists a <strong>Processor</strong>, get Intel.</p>
 
-        <p class="dl-hint" id="linux-arm-hint" hidden>On Linux for Arm? There is no desktop build for it yet, but the <a href="#cli">terminal CLI</a> runs there with Node 22 or newer.</p>
+        <p class="dl-hint" id="linux-arm-hint" hidden>On Linux for Arm? There is no desktop build for it yet, but the <a href="#cli">terminal CLI</a> runs there with Node 22.19 or newer.</p>
 
         <div class="cli-install" id="cli">
           <h3>Terminal CLI</h3>
-          <p>The same agent in your terminal, with no desktop app. Runs on macOS, Linux, and Windows, on x64 or Arm, with Node 22 or newer.</p>
+          <p>The same agent in your terminal, with no desktop app. Runs on macOS, Linux, and Windows, on x64 or Arm, with Node 22.19 or newer.</p>
           <dl class="cli-cmds">
             <div><dt>Homebrew <span>macOS, Linux</span></dt><dd><code>brew install <span>houston-code/tap/houston</span></code><button class="copy-btn" type="button" aria-label="Copy the Homebrew command" hidden>Copy</button></dd></div>
             <div><dt>npm <span>any OS</span></dt><dd><code>npm install -g <span>@houston-code/cli</span></code><button class="copy-btn" type="button" aria-label="Copy the npm command" hidden>Copy</button></dd></div>
@@ -403,7 +403,7 @@
           </details>
           <details class="faq-item">
             <summary>Which operating systems does Houston support?</summary>
-            <p>macOS 13 Ventura or newer (Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+). A standalone terminal CLI also runs on macOS, Windows and Linux, x64 or Arm, with Node 22 or newer.</p>
+            <p>macOS 13 Ventura or newer (Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+). A standalone terminal CLI also runs on macOS, Windows and Linux, x64 or Arm, with Node 22.19 or newer.</p>
           </details>
           <details class="faq-item">
             <summary>Is it safe to let an agent run code on my machine?</summary>

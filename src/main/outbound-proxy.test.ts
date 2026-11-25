@@ -6,7 +6,7 @@ import { join } from 'node:path'
 
 vi.mock('./logger', () => ({ log: { warn: vi.fn(), info: vi.fn() } }))
 
-import { Agent } from 'undici'
+import { Dispatcher1Wrapper } from 'undici'
 import {
   bypassesProxy,
   configureOutboundProxy,
@@ -139,7 +139,8 @@ describe('outboundDispatcher', () => {
 
   it('uses one shared direct agent with no proxy', () => {
     const direct = outboundDispatcher(null)
-    expect(direct).toBeInstanceOf(Agent)
+    // Wrapped so the runtime's bundled fetch, on an older undici, can drive it.
+    expect(direct).toBeInstanceOf(Dispatcher1Wrapper)
     expect(outboundDispatcher(null)).toBe(direct)
   })
 
@@ -149,6 +150,7 @@ describe('outboundDispatcher', () => {
     const direct = outboundDispatcher(null)
     const first = outboundDispatcher(a)
     expect(first).not.toBe(direct)
+    expect(first).toBeInstanceOf(Dispatcher1Wrapper)
     expect(outboundDispatcher(a)).toBe(first)
     expect(outboundDispatcher(b)).not.toBe(first)
     expect(outboundDispatcher(null)).toBe(direct)

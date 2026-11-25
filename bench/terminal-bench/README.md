@@ -23,7 +23,7 @@ the model provider, so it starts only from your shell, with your key, under a ca
 - **Docker**, with the daemon running and room for the task images (several GB each).
   The images are linux/amd64; on an Apple Silicon Mac they run under emulation, which is
   how the pilot ran.
-- **Node 22 or newer** on the host, for the kit's helpers.
+- **Node 22.19 or newer** on the host, for the kit's helpers.
 - **Harbor 0.26.0**, with the ACP client pinned to `agent-client-protocol` 0.9.0 (below).
 - **A provider key in the environment**: `ANTHROPIC_API_KEY` for `anthropic/` models,
   `OPENAI_API_KEY` for `openai/`, `GEMINI_API_KEY` for `gemini/`. `run.sh` reads it from the
@@ -57,7 +57,7 @@ uv tool install .    # or pip install . in a virtualenv
 `agent.json` launches `@houston-code/cli@latest`, and the newest release, 0.12.0, predates
 the ACP launch flags this kit depends on: its `--acp` ignores everything after it, so a run
 would get none of `--unattended`, `--full-auto`, `--effort` or `--max-turns`. Until a release
-carries them, build the CLI package from a checkout of `main` (Node 22 and `npm ci` first):
+carries them, build the CLI package from a checkout of `main` (Node 22.19+ and `npm ci` first):
 
 ```bash
 npm run build:cli                    # out/cli/houston-cli.cjs, the self-contained CLI

@@ -2,7 +2,7 @@
 
 Houston is an AI coding agent you run in your terminal. Bring your own model: Claude, GPT, Gemini, any OpenAI-compatible endpoint, or a local model.
 
-This package is the standalone CLI, a single self-contained file with no desktop app, no Chromium and no display server. It needs Node 22 or newer. If you prefer a desktop app, download it from [houstoncode.ai](https://houstoncode.ai).
+This package is the standalone CLI, a single self-contained file with no desktop app, no Chromium and no display server. It needs Node 22.19 or newer. If you prefer a desktop app, download it from [houstoncode.ai](https://houstoncode.ai).
 
 ```bash
 npm install -g @houston-code/cli
