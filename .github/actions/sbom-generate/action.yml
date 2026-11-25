@@ -9,10 +9,13 @@ description: >-
 runs:
   using: composite
   steps:
-    - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+    # Pin a Syft that supports SPDX 3.0 output.
+    - uses: ./.github/actions/install-anchore-tool
+      id: syft
       with:
-        # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
-        syft-version: v1.46.0
+        tool: syft
+        version: 1.46.0
+        sha256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
     # Scan the lockfile, not node_modules: syft honors its dev flags and needs no install to
     # enumerate. npm's built-in `npm sbom --omit dev` was tried first and silently
     # under-reported (56 of 73 production packages): npm dev-flags shared packages during
@@ -21,9 +24,11 @@ runs:
     # CISA FSCT3 minimum conformance requires (SPDX 2.3 has no field for either).
     - name: Generate and enrich
       shell: bash
+      env:
+        SYFT: ${{ steps.syft.outputs.cmd }}
       run: |
         set -euo pipefail
-        syft scan file:./package-lock.json \
+        "$SYFT" scan file:./package-lock.json \
           -o cyclonedx-json@1.6=sbom.cyclonedx.json \
           -o spdx-json=sbom.spdx.json \
           -o spdx-json@3.0=sbom.spdx3.json

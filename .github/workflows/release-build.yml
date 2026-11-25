@@ -280,10 +280,12 @@ jobs:
       - name: Install grype
         if: inputs.os == 'ubuntu-22.04'
         id: grype
-        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
+        uses: ./.github/actions/install-anchore-tool
         with:
-          # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
-          grype-version: v0.115.0
+          tool: grype
+          version: 0.115.0
+          sha256: 3fad92940650e514c0aa2dad83526942a055e210cec09a8a59d9c024adc2b90e
       - name: Scan binary SBOM + apply native-layer policy
         if: inputs.os == 'ubuntu-22.04'
         env:
