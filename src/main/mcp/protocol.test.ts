@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   ListRefresher,
+  McpRpcError,
   PendingRequests,
   MAX_LIST_ITEMS,
   MAX_LIST_PAGES,
@@ -150,6 +151,15 @@ describe('handleServerMessage', () => {
 })
 
 describe('PendingRequests', () => {
+  it("rejects with the server's error code and data kept", async () => {
+    const p = new PendingRequests()
+    const wait = p.wait(1, 'server/discover', 1_000)
+    p.settle(1, { id: 1, error: { code: -32022, message: 'Unsupported', data: { supported: ['x'] } } })
+    const err = await wait.catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(McpRpcError)
+    expect(err).toMatchObject({ message: 'Unsupported', code: -32022, data: { supported: ['x'] } })
+  })
+
   it('settles a response by id (result and error)', async () => {
     const p = new PendingRequests()
     const ok = p.wait(1, 'tools/list', 1000)

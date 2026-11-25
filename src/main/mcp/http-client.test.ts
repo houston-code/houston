@@ -637,7 +637,11 @@ describe('McpHttpClient protocol-version negotiation', () => {
     const client = new McpHttpClient(negotiatingFetch({ protocolVersion: '2025-03-26' }, posts, gets))
     await client.connect({ url: 'https://x/mcp' })
     await new Promise((r) => setTimeout(r, 10))
-    const [init, ...rest] = posts
+    // A 2026-07-28 discovery goes first; a server that is not one answers it with no
+    // discovery result, and the handshake falls back to initialize.
+    const [discover, init, ...rest] = posts
+    expect(discover.body.method).toBe('server/discover')
+    expect(discover.headers['mcp-protocol-version']).toBe('2026-07-28')
     expect(init.body.params).toMatchObject({
       protocolVersion: LATEST_PROTOCOL_VERSION,
       clientInfo: { name: 'Houston', version: PKG_VERSION }
@@ -655,7 +659,8 @@ describe('McpHttpClient protocol-version negotiation', () => {
     const client = new McpHttpClient(negotiatingFetch({ protocolVersion: '2025-06-18' }, posts, []))
     await client.connect({ url: 'https://x/mcp', onElicit })
     await new Promise((r) => setTimeout(r, 10))
-    expect((posts[0].body.params as { capabilities: unknown }).capabilities).toEqual({ elicitation: {} })
+    const init = posts.find((p) => p.body.method === 'initialize')!
+    expect((init.body.params as { capabilities: unknown }).capabilities).toEqual({ elicitation: {} })
     expect(replyTo(posts, 'el1')?.result).toEqual({ action: 'accept', content: { ok: true } })
     expect(posts.at(-1)?.headers['mcp-protocol-version']).toBe('2025-06-18')
     client.close()
@@ -674,7 +679,7 @@ describe('McpHttpClient protocol-version negotiation', () => {
     const posts: Post[] = []
     const client = new McpHttpClient(negotiatingFetch({ protocolVersion: '2099-01-01' }, posts, []))
     await expect(client.connect({ url: 'https://x/mcp' })).rejects.toThrow(McpUnsupportedProtocolError)
-    expect(posts.map((p) => p.body.method)).toEqual(['initialize'])
+    expect(posts.map((p) => p.body.method)).toEqual(['server/discover', 'initialize'])
   })
 })
 

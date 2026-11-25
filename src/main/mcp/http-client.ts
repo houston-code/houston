@@ -38,7 +38,19 @@ import {
   type McpListKind
 } from './protocol'
 import { withTraceContext } from './trace'
-import { SseEventBuffer, readCappedText, type SseEvent } from './sse-client'
+import { McpMessageTooLargeError, SseEventBuffer, readCappedText, type SseEvent } from './sse-client'
+import {
+  listenFilter,
+  mcpParamHeaders,
+  modernDiscoverError,
+  readDiscoverResult,
+  runWithInputs,
+  standardRequestHeaders,
+  withRequestMeta,
+  xMcpHeaderParams,
+  type ClientDeclaration,
+  type HeaderParam
+} from './stateless'
 
 /**
  * A minimal MCP client over the **streamable HTTP** transport (the remote
@@ -179,6 +191,10 @@ export class McpHttpClient implements McpConnection {
   /** The version agreed at initialize; set once the handshake answers. */
   private protocolVersion?: McpProtocolVersion
   private onElicit?: (params: unknown) => Promise<ElicitationWireResult>
+  /** The server speaks 2026-07-28 (see discover): per-request `_meta`, no session, no GET. */
+  private modern = false
+  /** Each listed tool's `x-mcp-header` parameters (2026-07-28 only). */
+  private toolHeaders = new Map<string, HeaderParam[]>()
   tools: McpToolInfo[] = []
   droppedTools: string[] = []
   listNotes: Partial<Record<McpListKind, string>> = {}
@@ -200,16 +216,17 @@ export class McpHttpClient implements McpConnection {
     this.url = opts.url
     this.extraHeaders = opts.headers ?? {}
     this.onElicit = opts.onElicit
-    const init = await this.rpc(
-      'initialize',
-      initializeParams({ elicitation: !!this.onElicit }),
-      INIT_TIMEOUT_MS
-    )
-    this.protocolVersion = negotiatedProtocolVersion(init)
-    // A server that negotiated down to a version without elicitation never gets
-    // an elicitation answer: its requests fall through to the -32601 decline.
-    if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
-    await this.notify('notifications/initialized', {})
+    let init = await this.discover()
+    if (init !== null) {
+      this.modern = true
+    } else {
+      init = await this.rpc('initialize', initializeParams({ elicitation: !!this.onElicit }), INIT_TIMEOUT_MS)
+      this.protocolVersion = negotiatedProtocolVersion(init)
+      // A server that negotiated down to a version without elicitation never gets
+      // an elicitation answer: its requests fall through to the -32601 decline.
+      if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
+      await this.notify('notifications/initialized', {})
+    }
     const listed = await this.fetchList('tools')
     this.setTools(listed)
 
@@ -239,20 +256,65 @@ export class McpHttpClient implements McpConnection {
     this.openNotificationStream()
   }
 
+  /**
+   * Ask the server which era it is, before anything else (2026-07-28 `server/discover`,
+   * sent with that revision's headers and `_meta`). Returns the discovery result when
+   * the server speaks 2026-07-28. A server that answers with one of the revision's own
+   * errors is modern too, and its error is thrown rather than retried as `initialize`
+   * (UnsupportedProtocolVersion names the versions it wants). A 401 is thrown as is, for
+   * sign-in. Anything else (an HTTP error, a JSON-RPC error of its own, an answer that is
+   * not a discovery result) is an older server: null, and the caller initializes.
+   */
+  private async discover(): Promise<unknown> {
+    try {
+      const res = await this.rpc('server/discover', withRequestMeta({}, this.declaration()), INIT_TIMEOUT_MS, {
+        modernHeaders: true
+      })
+      return readDiscoverResult(res) ? res : null
+    } catch (e) {
+      if (e instanceof McpUnauthorizedError) throw e
+      // An oversized reply says nothing about the server's era; asking again with
+      // initialize would only read another endless body.
+      if (e instanceof McpMessageTooLargeError) throw e
+      const modern = modernDiscoverError(e)
+      if (modern) throw modern
+      return null
+    }
+  }
+
+  /** What each 2026-07-28 request declares about this client. */
+  private declaration(): ClientDeclaration {
+    return { elicitation: !!this.onElicit }
+  }
+
+  /** A request that may need input on a 2026-07-28 server (see runWithInputs); sent once otherwise. */
+  private requestWithInputs(
+    method: string,
+    params: Record<string, unknown>,
+    opts: { progress?: boolean; signal?: AbortSignal } = {}
+  ): Promise<unknown> {
+    if (!this.modern) return this.rpc(method, params, CALL_TIMEOUT_MS, opts)
+    return runWithInputs((p) => this.rpc(method, p, CALL_TIMEOUT_MS, opts), params, {
+      method,
+      onElicit: this.onElicit,
+      signal: opts.signal
+    })
+  }
+
   /** Read a resource's contents by uri, flattened to text. */
   async readResource(uri: string, signal?: AbortSignal): Promise<string> {
-    const res = await this.rpc('resources/read', { uri }, CALL_TIMEOUT_MS, { signal })
+    const res = await this.requestWithInputs('resources/read', { uri }, { signal })
     return flattenMcpResourceContents(res) || '[no content]'
   }
 
   /** Fetch a prompt template by name, flattened to text. */
   async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<string> {
-    const res = await this.rpc('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, { signal })
+    const res = await this.requestWithInputs('prompts/get', { name, arguments: args ?? {} }, { signal })
     return flattenMcpPromptMessages(res) || '[no content]'
   }
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, images?: McpImageOptions): Promise<string> {
-    const res = (await this.rpc('tools/call', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, {
+    const res = (await this.requestWithInputs('tools/call', { name, arguments: args ?? {} }, {
       progress: true,
       signal
     })) as {
@@ -274,7 +336,23 @@ export class McpHttpClient implements McpConnection {
   /** Take a `tools/list` result, keeping only well-formed tools (see parseMcpToolList). */
   private setTools(listed: unknown): void {
     const dropped: string[] = []
-    this.tools = parseMcpToolList(listed, dropped)
+    let tools = parseMcpToolList(listed, dropped)
+    const headers = new Map<string, HeaderParam[]>()
+    if (this.modern) {
+      // 2026-07-28: a tool's x-mcp-header parameters are mirrored into headers on each
+      // call, and a tool whose annotations break the rules must be left out.
+      tools = tools.filter((t) => {
+        const read = xMcpHeaderParams(t.inputSchema)
+        if ('problem' in read) {
+          dropped.push(`tool "${t.name}": ${read.problem}`)
+          return false
+        }
+        if (read.params.length) headers.set(t.name, read.params)
+        return true
+      })
+    }
+    this.tools = tools
+    this.toolHeaders = headers
     this.droppedTools = dropped
   }
 
@@ -286,7 +364,23 @@ export class McpHttpClient implements McpConnection {
 
   // ---- transport internals ----
 
-  private headers(): Record<string, string> {
+  private headers(payload: { method?: string; params?: unknown }, modern: boolean): Record<string, string> {
+    if (modern) {
+      // 2026-07-28: the version, method and name mirrored from the body, plus a tool's
+      // x-mcp-header parameters; no session.
+      const method = payload.method ?? ''
+      const params = payload.params as { name?: unknown; arguments?: unknown } | undefined
+      const toolParams =
+        method === 'tools/call' && typeof params?.name === 'string' ? this.toolHeaders.get(params.name) : undefined
+      const args = params?.arguments && typeof params.arguments === 'object' ? (params.arguments as Record<string, unknown>) : {}
+      return {
+        ...this.extraHeaders,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        ...standardRequestHeaders(method, params),
+        ...(toolParams ? mcpParamHeaders(toolParams, args) : {})
+      }
+    }
     return {
       ...this.extraHeaders,
       'content-type': 'application/json',
@@ -302,30 +396,37 @@ export class McpHttpClient implements McpConnection {
     method: string,
     params: unknown,
     timeoutMs: number,
-    opts: { progress?: boolean; signal?: AbortSignal } = {}
+    opts: { progress?: boolean; signal?: AbortSignal; modernHeaders?: boolean } = {}
   ): Promise<unknown> {
     if (this.closed) throw new Error('MCP HTTP client is closed')
     // Stopped before it went out: nothing to send, and nothing to cancel.
     if (opts.signal?.aborted) throw mcpCancelledError(method)
     const id = this.nextId++
+    const modern = this.modern || opts.modernHeaders === true
     // Ask for progress on long calls: a server that reports it keeps the call's
     // inactivity clock (see PendingRequests) from expiring mid-work.
-    const sent = opts.progress
-      ? { ...(params as Record<string, unknown>), _meta: { progressToken: id } }
+    const withProgress = opts.progress
+      ? {
+          ...(params as Record<string, unknown>),
+          _meta: { ...((params as { _meta?: Record<string, unknown> })?._meta ?? {}), progressToken: id }
+        }
       : params
+    // A 2026-07-28 server reads the version and capabilities from every request.
+    const sent = this.modern ? withRequestMeta(withProgress, this.declaration()) : withProgress
     const result = this.pending.wait(id, method, timeoutMs, undefined, {
       signal: opts.signal,
-      // Dropping the response stream is not a cancel under streamable HTTP: the server
-      // is told explicitly, on its own POST.
+      // Before 2026-07-28, dropping the response stream is not a cancel under streamable
+      // HTTP: the server is told explicitly, on its own POST. From 2026-07-28 closing the
+      // stream is the cancel (the transfer is aborted once the request settles, below).
       onCancel: () => {
-        if (!this.closed) void this.fireAndForget(cancelledNotification(id))
+        if (!this.closed && !modern) void this.fireAndForget(cancelledNotification(id))
       }
     })
     const controller = new AbortController()
     // Stop the transfer once the request settles, whichever way: the response
     // arrived (no need to drain the rest), it timed out, was cancelled, or the client closed.
     void result.catch(() => {}).finally(() => controller.abort())
-    void this.performPost(id, method, { jsonrpc: '2.0', id, method, params: withTraceContext(sent) }, controller).catch(
+    void this.performPost(id, method, { jsonrpc: '2.0', id, method, params: withTraceContext(sent) }, controller, modern).catch(
       (e) => this.pending.reject(id, e as Error)
     )
     return result
@@ -335,16 +436,18 @@ export class McpHttpClient implements McpConnection {
   private async performPost(
     id: number,
     method: string,
-    payload: unknown,
-    controller: AbortController
+    payload: { method?: string; params?: unknown; [key: string]: unknown },
+    controller: AbortController,
+    modern = false
   ): Promise<void> {
     const res = await this.fetchFn(this.url, {
       method: 'POST',
-      headers: this.headers(),
+      headers: this.headers(payload, modern),
       body: JSON.stringify(payload),
       signal: controller.signal
     })
-    const sid = res.headers.get('mcp-session-id')
+    // 2026-07-28 has no sessions: a session id a server sends anyway is not kept.
+    const sid = modern ? null : res.headers.get('mcp-session-id')
     if (sid) this.sessionId = sid
     if (res.status === 401) {
       await readCappedText(res).catch(() => '')
@@ -372,7 +475,8 @@ export class McpHttpClient implements McpConnection {
     const contentType = res.headers.get('content-type') ?? ''
     if (contentType.includes('text/event-stream') && res.body) {
       const cursor = await this.readEventStream(res.body)
-      if (this.pending.has(id)) await this.resumeAfterClose(id, cursor, controller)
+      // 2026-07-28 streams are not resumable: a broken one loses the request.
+      if (this.pending.has(id) && !modern) await this.resumeAfterClose(id, cursor, controller)
       if (this.pending.has(id)) {
         this.pending.reject(id, new Error(`MCP ${method} failed: stream ended without a response`))
       }
@@ -531,15 +635,17 @@ export class McpHttpClient implements McpConnection {
     void (async () => {
       let reopen = true
       try {
-        const res = await this.fetchFn(this.url, {
-          method: 'GET',
-          headers: {
-            ...this.streamHeaders(),
-            // Resume where the last stream stopped: the server replays what it missed.
-            ...(this.notifyCursor.lastEventId !== undefined ? { 'last-event-id': this.notifyCursor.lastEventId } : {})
-          },
-          signal: controller.signal
-        })
+        const res = this.modern
+          ? await this.openListenStream(controller)
+          : await this.fetchFn(this.url, {
+              method: 'GET',
+              headers: {
+                ...this.streamHeaders(),
+                // Resume where the last stream stopped: the server replays what it missed.
+                ...(this.notifyCursor.lastEventId !== undefined ? { 'last-event-id': this.notifyCursor.lastEventId } : {})
+              },
+              signal: controller.signal
+            })
         if (res.status === 404 && this.sessionId) {
           // The session expired (as on a POST): the manager reconnects from scratch.
           await readCappedText(res).catch(() => '')
@@ -573,6 +679,28 @@ export class McpHttpClient implements McpConnection {
     })()
   }
 
+  /**
+   * 2026-07-28 replaces the GET stream with `subscriptions/listen`: a POST whose SSE
+   * response stays open and carries the change notifications asked for (the lists the
+   * server declared). Its notifications go through the same dispatcher, so they drive
+   * the same re-fetches; the request is never entered as pending, so no timeout ends it.
+   */
+  private openListenStream(controller: AbortController): Promise<Response> {
+    const id = this.nextId++
+    const payload = {
+      jsonrpc: '2.0',
+      id,
+      method: 'subscriptions/listen',
+      params: withRequestMeta({ notifications: listenFilter(this.capable) }, this.declaration())
+    }
+    return this.fetchFn(this.url, {
+      method: 'POST',
+      headers: this.headers(payload, true),
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    })
+  }
+
   /** Reopen the notification stream after a backoff, unless the client closed meanwhile. */
   private scheduleStreamReopen(controller: AbortController): void {
     if (this.closed || controller.signal.aborted) return
@@ -597,7 +725,7 @@ export class McpHttpClient implements McpConnection {
       try {
         const res = await this.fetchFn(this.url, {
           method: 'POST',
-          headers: this.headers(),
+          headers: this.headers(payload as { method?: string; params?: unknown }, this.modern),
           body: JSON.stringify(payload),
           signal: controller.signal
         })

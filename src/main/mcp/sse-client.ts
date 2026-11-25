@@ -104,6 +104,9 @@ export type FetchFn = (url: string, init: RequestInit) => Promise<Response>
  */
 export const MAX_MCP_MESSAGE_CHARS = 64 * 1024 * 1024
 
+/** A reply or event past MAX_MCP_MESSAGE_CHARS: the request it answered fails with this. */
+export class McpMessageTooLargeError extends Error {}
+
 /**
  * A response body as text, read at most `max` characters deep. `Response.text()`
  * buffers whatever the server sends, so a hostile or broken server answering a POST
@@ -125,7 +128,7 @@ export async function readCappedText(res: Response, max = MAX_MCP_MESSAGE_CHARS)
     chars += text.length
     if (chars > max) {
       await reader.cancel().catch(() => {})
-      throw new Error(`MCP server sent a response larger than ${max / 1024 / 1024} MB`)
+      throw new McpMessageTooLargeError(`MCP server sent a response larger than ${max / 1024 / 1024} MB`)
     }
     parts.push(text)
   }
@@ -157,7 +160,7 @@ export class SseEventBuffer {
     this.chars += text.length
     if (!/\r?\n\r?\n/.test(probe)) {
       if (this.chars > MAX_MCP_MESSAGE_CHARS) {
-        throw new Error(`MCP server sent an event larger than ${MAX_MCP_MESSAGE_CHARS / 1024 / 1024} MB`)
+        throw new McpMessageTooLargeError(`MCP server sent an event larger than ${MAX_MCP_MESSAGE_CHARS / 1024 / 1024} MB`)
       }
       return []
     }
